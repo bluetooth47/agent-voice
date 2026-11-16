@@ -200,3 +200,28 @@ class TestCommandChannel:
             assert daemon.take_command() is None
         finally:
             d.rmdir()
+
+
+def test_the_turn_after_a_stop_is_not_thrown_away(daemon, monkeypatch):
+    """Driven through the real frame loop. A stop left `_interrupt` set after
+    the turn it stopped; answer() clears it, but the check for a stop pressed
+    during transcription runs before answer(), so the next request -- wake
+    word and all -- was discarded as "interrupted before sending" and had to
+    be said a second time."""
+    from test_states import _drive_one_turn
+
+    loud = b"\x00\x40" * 3200
+
+    def on_answer(n, text):
+        if n == 1:
+            daemon._interrupt.set()          # F8 while it was answering
+            daemon.pipe.woke = False         # the next wake word
+            for _ in range(2):
+                daemon._frames.put(loud)
+            return False
+        return True
+
+    daemon.agent = FakeAgent([])
+    sent = _drive_one_turn(daemon, monkeypatch, "what time is it",
+                           on_answer=on_answer)
+    assert sent == ["what time is it"] * 2, "the request after a stop was dropped"

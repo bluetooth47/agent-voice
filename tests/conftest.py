@@ -36,6 +36,17 @@ runtime.SHELL_JSON = _SANDBOX / "shell.json"
 import pytest  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _no_sound_server(monkeypatch):
+    """Where the sound is going is a fact about the machine running the
+    suite, so no test asks it. Barge-in on a headset is on by default, and
+    without this every refresh() a test drives would spawn the developer's
+    own pactl -- passing or failing by whether their headphones were on.
+    test_headset keeps a reference to the real function for its own cases."""
+    import headset
+    monkeypatch.setattr(headset, "default_output", lambda: None)
+
+
 @pytest.fixture
 def sandbox() -> Path:
     """The scratch root the XDG variables point into."""

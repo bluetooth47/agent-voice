@@ -167,9 +167,10 @@ for two things.
    Super+Alt+Space. The panel then reads MICROPHONE OFF and says how to
    start listening again. See *Mute, not stop* below for why this is the
    control you want rather than the switch.
-4. **Interrupt.** Press F8 while it is replying, or Super+Ctrl+Space, or
-   the stop button in the panel. Deliberately not voice-triggered -- see
-   below.
+4. **Interrupt.** On a headset, just talk over it: it stops, and what you
+   say is your next request, with no wake word. Through speakers, press F8
+   while it is replying, or Super+Ctrl+Space, or the stop button in the
+   panel -- voice cannot work there, see below.
 
 ### Knowing where it is without looking
 
@@ -267,9 +268,18 @@ still muted afterwards, and if you had not, it starts listening again.
 Nothing is saved and restored around a lock, so there is no stored copy
 to fall out of step with.
 
-### Why you cannot interrupt by voice
+### Why you cannot interrupt by voice through speakers
 
-The obvious design is to say "stop" over the reply. Measured on this
+On a headset you can, and it is on by default (**Let me interrupt by
+talking on a headset**, `bargeOnHeadset`): the daemon asks PipeWire where
+the sound is going, and when it is headphones or a headset it listens over
+the reply. Measured on a Bluetooth headset, our own voice reached its
+microphone as digital silence (bench/FINDINGS.md §21). When it hears you,
+it stops speaking, stops the agent, and keeps listening: what you said over
+it, from its first word, becomes the next turn. A bare "stop" is a turn
+like any other "stop" and is discarded.
+
+Through speakers, the obvious design is to say "stop" over the reply. Measured on this
 hardware -- one laptop microphone about a foot from the speaker it is
 listening to, at a normal listening volume -- that does not work:
 

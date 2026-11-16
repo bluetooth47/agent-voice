@@ -664,3 +664,30 @@ to PortAudio's thread) and the sound then ran for its full length -- 60, 160
 and 290ms -- while the caller went on. The first call in a fresh process took
 1429ms, which is importing sounddevice and initialising PortAudio; the daemon
 has done both for the microphone before any sound is played.
+
+## 21. On a headset, barge-in has nothing to fight
+
+Measured 2026-11-15 on the current development machine (not the MacBook of
+§11), output and input both on a Bluetooth headset: OpenRun Pro 2 by Shokz,
+HFP (`headset-head-unit`), PipeWire. A Piper reply was played into the ears
+while the headset's own microphone recorded, and `BargeIn` was fed what it
+heard -- the same script as §11's bleed measurement.
+
+  our own voice, as the headset mic heard it   median -180 dBFS (digital
+                                               silence), peak -71.2 dBFS
+  BargeIn at factor 1.1, 1.5 and 2.0           fired on our voice: never
+  gate                                         -38.4 dBFS (the floor)
+
+The headset cancels its own echo before the audio leaves it, so the 24 dB
+of headroom §11 could not find is more like 100. That is the case `bargeIn`
+was written for and could not be turned on for by default, because the
+daemon had no way to know it was in it. Now it asks: `headset.py` reads the
+default sink from `pactl` (two spawns, 23ms, done on the idle poll) and
+`bargeOnHeadset`, on by default, listens over the reply when it is a headset
+or headphones.
+
+Not measured: the user's voice level *during* playback. Some HFP headsets
+attenuate the microphone while they play (half-duplex echo suppression),
+which would make talking over the reply harder than talking into silence.
+If it does not stop for you on a headset, that is the first thing to check,
+with `bargeFactor` the knob.

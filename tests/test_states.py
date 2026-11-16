@@ -554,7 +554,7 @@ def test_the_stand_in_matches_the_real_measurement():
     assert np is not None
 
 
-def _drive_one_turn(daemon, monkeypatch, said, *, logs=False):
+def _drive_one_turn(daemon, monkeypatch, said, *, logs=False, on_answer=None):
     """Run the real frame loop over a scripted utterance.
 
     The loop is the one place the gate could not be driven, so it was the one
@@ -565,7 +565,11 @@ def _drive_one_turn(daemon, monkeypatch, said, *, logs=False):
 
     Nothing else about the loop is faked: the levels go through the real
     `frame_db`, the endpointing is the real energy arithmetic, and the frames
-    are the real size. Returns everything printed.
+    are the real size.
+
+    `on_answer(n, text)` is called for each turn that reaches the agent, and
+    the drive ends when it returns true -- or at the first, without one. The
+    texts sent are returned.
     """
     import json as _json
     import sys as _sys
@@ -696,13 +700,20 @@ def _drive_one_turn(daemon, monkeypatch, said, *, logs=False):
     monkeypatch.setattr(wake_listen, "frame_db", _rms_db)
     for name in ("refresh", "reconcile_lock", "reconcile_yield"):
         monkeypatch.setattr(daemon, name, lambda *a, **k: None)
-    monkeypatch.setattr(daemon, "answer",
-                        lambda *a, **k: (_ for _ in ()).throw(Done()))
+    sent: list[str] = []
+
+    def answer(text, last, clock=None):
+        sent.append(text)
+        if on_answer is None or on_answer(len(sent), text):
+            raise Done()
+
+    monkeypatch.setattr(daemon, "answer", answer)
     monkeypatch.setattr("sys.stdout.isatty", lambda: False, raising=False)
 
     threading.Thread(target=watchdog, daemon=True).start()
     with _pytest.raises(Done):
         daemon.run(device=None)
+    return sent
 
 
 def test_the_frame_loop_withholds_the_words_it_transcribed(

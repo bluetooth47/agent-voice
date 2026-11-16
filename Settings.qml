@@ -1182,8 +1182,20 @@ Item {
 
               Toggle {
                 width: parent.width
-                label: "Let me interrupt by talking"
-                description: "Stop speaking when it hears you over it. Measure " +
+                label: "Let me interrupt by talking on a headset"
+                description: "On headphones it stops as soon as you talk over " +
+                             "it, and what you say is your next request."
+                checked: root.setting("bargeOnHeadset", true) === true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.persist("bargeOnHeadset",
+                    root.setting("bargeOnHeadset", true) === true ? "false" : "true", true)
+              }
+
+              Toggle {
+                width: parent.width
+                label: "On speakers too"
+                description: "Laptop speakers usually drown you out. Measure " +
                              "first with: agentvoice calibrate"
                 checked: root.setting("bargeIn", false) === true
                 foreground: root.foreground
@@ -1194,7 +1206,8 @@ Item {
 
               KnobRow {
                 width: parent.width
-                visible: root.setting("bargeIn", false) === true
+                visible: root.setting("bargeIn", false) === true ||
+                         root.setting("bargeOnHeadset", true) === true
                 scrollTarget: formScroll
                 label: "How much louder you must be"
                 unit: "%"
@@ -1208,9 +1221,10 @@ Item {
               Text {
                 width: parent.width
                 wrapMode: Text.WordWrap
-                text: "No spoken phrase can interrupt a reply: the microphone is " +
-                      "ignored while it talks, and at a normal volume its own " +
-                      "voice reaches the mic as loudly as yours anyway. " +
+                text: "Through speakers, talking cannot interrupt a reply: at a " +
+                      "normal volume its own voice reaches the mic as loudly " +
+                      "as yours, so the microphone is ignored while it talks. " +
+                      "On a headset that problem is gone. " +
                       "Saying \"stop\" or \"never mind\" cancels a turn it has " +
                       "not taken yet — useful when the wake word fires by " +
                       "mistake, so nothing is sent to the agent."

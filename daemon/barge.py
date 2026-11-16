@@ -12,11 +12,12 @@ detector answers the first half and an energy gate calibrated to our own
 bleed answers the second. The approach is Atzingen/hey-jarvis's; the numbers
 below are ours.
 
-It is off by default, because on the machine it was written on it does not
-work: every gate that hears the user also fires on our own output, since the
-two arrive at the same level. Somewhere with a headset, or a microphone that
-is not beside the speaker, it works well -- so it is offered with a way to
-find out rather than a promise. `agentvoice calibrate` says which you have.
+Through speakers it is off by default, because on the machine it was written
+on it does not work: every gate that hears the user also fires on our own
+output, since the two arrive at the same level. On a headset it works well,
+and the daemon now notices one by itself (headset.py, `bargeOnHeadset`). A
+microphone that is merely not beside the speaker is offered with a way to
+find out rather than a promise: `agentvoice calibrate` says which you have.
 """
 from __future__ import annotations
 

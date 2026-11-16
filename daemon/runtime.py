@@ -51,6 +51,7 @@ DEFAULTS = {
     "keepHistory": True,
     "livePartials": "auto",
     "bargeIn": False,
+    "bargeOnHeadset": True,
     # Every declared setting needs a default here: the check script requires
     # one, `omarchy bar set` needs something to compare against, and the
     # daemon has to run with no plugin installed and no config file at all.
@@ -95,6 +96,7 @@ TOML_ALIASES = {
     "wakeConfidence": ("audio", "wake_confidence"),
     "livePartials": ("stt", "live_partials"),
     "bargeIn": ("audio", "barge_in"),
+    "bargeOnHeadset": ("audio", "barge_on_headset"),
     "useVerifier": ("wake", "use_verifier"),
     "hud": ("ui", "hud"),
     "hudLingerMs": ("ui", "hud_linger_ms"),

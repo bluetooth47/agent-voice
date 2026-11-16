@@ -27,6 +27,7 @@ daemon/agentvoice.toml. Both are re-read between utterances.
 from __future__ import annotations
 
 import argparse
+import collections
 import contextlib
 import json
 import os
@@ -48,6 +49,7 @@ from adapters.base import speech_safe  # noqa: E402
 import failure  # noqa: E402
 from chimes import Chimes  # noqa: E402
 from eager import Utterance, sounds_finished  # noqa: E402
+import headset  # noqa: E402
 from speech_text import (  # noqa: E402
     as_prompt, is_stop_command, safe_for_terminal,
 )
@@ -585,6 +587,21 @@ CHIME_TAIL_S = 0.1
 #: enough that a stale announcement cannot hold the microphone shut.
 LOCK_HOLD_S = 10.0
 
+#: How often the idle poll asks where the sound is going: headphones go on
+#: and come off between turns, and asking spawns pactl twice (23ms).
+OUTPUT_TTL_S = 10.0
+#: How old that answer may be before a reply asks again itself, in front of
+#: a sentence. Only reached after a long chain of follow-ups, which keep the
+#: loop out of the idle poll.
+OUTPUT_STALE_S = 60.0
+
+#: Frames kept from before barge-in fired, to start the capture with: 600ms.
+#: The detector needs about 100ms of speech and drains in 200ms frames, so
+#: the person's first word can be two frames back from the one that tripped
+#: it. On a headset the extra is silence; through speakers it may hold a
+#: word of our own, which Whisper has to read past.
+BARGE_PREROLL_FRAMES = 3
+
 
 def other_recorders(our_pid: int) -> list[str] | None:
     """Names of anything else capturing audio right now.
@@ -790,14 +807,27 @@ class Daemon:
         self._chime_until = 0.0
         RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
         (RUNTIME_DIR / "pid").write_text(str(os.getpid()))
-        # Barge-in is not possible acoustically on this class of hardware:
-        # at a normal listening volume our own playback reaches the mic at
-        # the same level as the user's voice (SNR +1.2 dB), and detection
-        # falls to 5/20. PipeWire's echo canceller fixes that but needs ~30s
-        # of continuous output to converge, which is longer than a reply. So
-        # an interrupt is an explicit act -- a keybind, or the Stop button.
+        # Barge-in is not possible acoustically through laptop speakers: at
+        # a normal listening volume our own playback reaches the mic at the
+        # same level as the user's voice (SNR +1.2 dB), and detection falls
+        # to 5/20. PipeWire's echo canceller fixes that but needs ~30s of
+        # continuous output to converge, which is longer than a reply. So
+        # there an interrupt is an explicit act -- a keybind, or the Stop
+        # button. On a headset the problem is gone, and `bargeOnHeadset`
+        # listens over the reply by itself; see headset.py for the numbers.
         self._interrupt = threading.Event()
         self._barge = None
+        #: What the person said over the reply, once barge-in has stopped it:
+        #: the frames that tripped the detector and a little before. Not None
+        #: means "they are talking", so the queue behind it is kept rather
+        #: than dropped as echo, and the run loop opens a capture with this
+        #: at its start instead of waiting for the wake word.
+        self._barged: list[bytes] | None = None
+        #: The last answer from headset.default_output(), and when it was
+        #: asked: a pactl round trip is 23ms and sits in front of a sentence,
+        #: so it is not asked per sentence.
+        self._output: tuple[bool, str] | None = None
+        self._output_at = 0.0
         #: Depth of `_watching_session()`, which is entered for the whole of a
         #: turn and again inside `speak()`.
         self._watchers = 0
@@ -1268,6 +1298,10 @@ class Daemon:
         # detection threshold that never reached the running engine.
         self.reconcile_voice()
         self.pipe.reconcile_vocab()
+        # Outside the guard: headphones going on is not a setting change.
+        # Asked here, on the idle poll, so that the answer is already known
+        # when a reply starts and the 23ms is never in front of a word.
+        self.reconcile_output()
         # Off means gone, not merely paused: someone who turns it off is
         # saying they do not want the session's words kept, including the
         # ones already kept. Outside the guard, so it also holds for a file
@@ -1318,6 +1352,13 @@ class Daemon:
         playback. Processing them afterwards would feed our own voice to the
         wake word -- which is exactly how a speaking assistant wakes itself.
         """
+        if self._barged is not None and self.listening:
+            # Not echo: the person talked over us and is still talking. What
+            # is in the queue is the rest of what they are saying, and the
+            # run loop picks it up from here. A lock or a mute makes
+            # `listening` false, and then it is dropped like anything else.
+            self._deaf_until = 0.0
+            return
         self._deaf_until = time.time() + tail_ms / 1000.0
         if self._frames is None:
             return
@@ -1444,25 +1485,82 @@ class Daemon:
                 # dies mid-sentence; the run loop polls both of these too.
                 pass
 
+    def reconcile_output(self, max_age: float = None) -> bool:
+        """Whether the sound is going to a headset, asked at most every
+        `max_age` seconds (OUTPUT_TTL_S unless told otherwise).
+
+        Only asked when the answer matters: with `bargeIn` on it is not
+        needed, and with `bargeOnHeadset` off nothing reads it.
+        """
+        if self.cfg.get_bool("bargeIn") or not self.cfg.get_bool("bargeOnHeadset"):
+            return False
+        now = time.time()
+        if now - self._output_at > (OUTPUT_TTL_S if max_age is None else max_age):
+            self._output_at = now
+            self._output = headset.default_output()
+            # Said when it changes, not on every poll: the journal then
+            # records when the headset went on and came off, which is what
+            # explains a reply that did or did not stop for somebody.
+            if self._output is None:
+                self.say_once("output", f"  {DIM}cannot tell where the sound "
+                              f"is going (no pactl?), so it cannot be "
+                              f"interrupted by voice{OFF}")
+            elif self._output[0]:
+                self.say_once("output", f"  {CYA}sound is going to "
+                              f"{self._output[1]} — talk over it to "
+                              f"interrupt{OFF}")
+            else:
+                self.say_once("output", f"  {DIM}sound is going to "
+                              f"{self._output[1]} — not a headset, so it "
+                              f"cannot be interrupted by voice{OFF}")
+        return bool(self._output and self._output[0])
+
+    def barge_wanted(self) -> bool:
+        """Whether to listen for the person over this reply.
+
+        Always, with `bargeIn`: that is somebody who ran `agentvoice
+        calibrate` and was told their room can take it. Otherwise only when
+        the sound is going to a headset and `bargeOnHeadset` is on, which it
+        is by default -- there our own voice never reaches the microphone,
+        so the reason barge-in is off everywhere else does not apply.
+
+        The headset answer comes from the idle poll. This only asks again
+        when that answer is old enough to have missed a whole conversation
+        of follow-ups, which do not pass through the idle poll.
+        """
+        if self.cfg.get_bool("bargeIn"):
+            return True
+        return self.reconcile_output(max_age=OUTPUT_STALE_S)
+
     def _barge_watch(self):
         """A callable Speaker checks between chunks, or None when off.
 
-        Off by default and for a measured reason: where the microphone sits
-        beside the speaker, every gate that hears the user also fires on our
-        own output, because the two arrive at the same level. `agentvoice
-        calibrate` says which kind of room this is.
+        Off by default through speakers and for a measured reason: where the
+        microphone sits beside the speaker, every gate that hears the user
+        also fires on our own output, because the two arrive at the same
+        level. `agentvoice calibrate` says which kind of room this is. On a
+        headset it is on unless `bargeOnHeadset` is turned off.
         """
-        if not self.cfg.get_bool("bargeIn") or self._frames is None:
+        if self._frames is None or not self.barge_wanted():
             return None
         if self._barge is None:
             try:
                 from barge import BargeIn
                 self._barge = BargeIn(factor=self.cfg.get_int("bargeFactor") / 100.0)
             except Exception as e:
-                print(f"  {YEL}barge-in unavailable: {e}{OFF}")
+                # Said once: on by default now, and an install without
+                # openWakeWord (which carries the VAD) would otherwise say
+                # this before every sentence of every reply.
+                self.say_once("barge", f"  {YEL}barge-in unavailable: {e}{OFF}")
                 return None
         self._barge.factor = self.cfg.get_int("bargeFactor") / 100.0
         self._barge.reset()
+        # The last few frames the detector was fed. When it fires, these hold
+        # the start of what the person said: it needs about 100ms of speech
+        # to be sure, the frames are 200ms long, and the first word is the
+        # one that tells the agent what they meant.
+        recent: collections.deque[bytes] = collections.deque(
+            maxlen=BARGE_PREROLL_FRAMES)
 
         def watch() -> bool:
             # Drain whatever the microphone captured while that chunk played.
@@ -1471,14 +1569,25 @@ class Daemon:
                     pcm = self._frames.get_nowait()
                 except Exception:
                     return False
+                recent.append(pcm)
                 if self._barge.feed(pcm):
                     print(f"  {YEL}heard you over us — stopping{OFF}")
+                    self._barged = list(recent)
                     self._interrupt.set()
                     if self.agent:
                         self.agent.cancel()
                     return True
 
         return watch
+
+    def take_barge(self) -> list[bytes] | None:
+        """What the person said over the reply, once; None if they did not.
+
+        Only while listening: a lock or a mute between the barge and the run
+        loop getting here means it is discarded, not carried into a capture.
+        """
+        barged, self._barged = self._barged, None
+        return barged if self.listening else None
 
     def chime(self, name: str) -> None:
         """Play one of the short sounds, if they are on and we are listening.
@@ -1595,6 +1704,7 @@ class Daemon:
         clock = dict(clock or {})
         tail_ms = self.cfg.get_int("echoTailMs")
         self._interrupt.clear()
+        self._barged = None
         if not self.agent:
             if self.speaker:
                 self.state.publish("speaking", **last)
@@ -1804,6 +1914,7 @@ class Daemon:
                         utt.abandon()
                     phase, buf, cap = "capture", b"", self.pipe.new_capture()
                     utt = self.pipe.new_utterance()
+                    self._interrupt.clear()     # see the wake branch
                     self.prime_agent()
                     woke_at = last_voice = time.time()
                     heard = False
@@ -1893,6 +2004,14 @@ class Daemon:
                               flush=True)
                         phase, buf, cap = "capture", b"", self.pipe.new_capture()
                         utt = self.pipe.new_utterance()
+                        # A stop belongs to the turn it stopped. The flag
+                        # outlived it: answer() clears it on entry, but the
+                        # check for a stop pressed during transcription comes
+                        # before answer(), so the first request after any
+                        # stop was discarded as "interrupted before sending"
+                        # and had to be said twice. Cleared wherever a capture
+                        # opens, which is after anything it could belong to.
+                        self._interrupt.clear()
                         # Now, while you are still talking, rather than when
                         # there is finally a prompt: a slow agent start is
                         # then hidden behind your own sentence.
@@ -1994,6 +2113,7 @@ class Daemon:
 
                 audio_ms = len(buf) / 32.0
                 follow_up = False
+                barged = None
                 if audio_ms < self.pipe.min_utterance_ms:
                     print(f"{cursor_home()}  {DIM}(too short, discarded){OFF}"
                           f"{' ' * 40}")
@@ -2082,14 +2202,51 @@ class Daemon:
                         # are all settings, which is where that trade-off
                         # belongs.
                         follow_up = self.arm_follow_up()
+                        # Talked over: stopped like any interrupt, so no
+                        # follow-up window -- but the person is mid-sentence,
+                        # and what they are saying is the next turn.
+                        barged = self.take_barge()
                     else:
                         follow_up = False
                     print()
 
                 utt = None
+                if barged is not None:
+                    # Straight into a capture, seeded with the start of what
+                    # was said over the reply; the rest is still in the queue,
+                    # because deafen() kept it. No wake word: barge-in already
+                    # decided this was the person talking, and making them say
+                    # it again to finish their sentence is what "interrupt"
+                    # does not mean. Not the verifier either, for the same
+                    # reason a follow-up skips it -- the reply that was talked
+                    # over came from a turn that passed it.
+                    phase, buf, cap = "capture", b"", self.pipe.new_capture()
+                    utt = self.pipe.new_utterance()
+                    self._interrupt.clear()     # see the wake branch
+                    self.prime_agent()
+                    self._deaf_until = 0.0
+                    for early in barged:
+                        buf += early
+                        if cap is not None:
+                            cap.AcceptWaveform(early)
+                        utt.add(early, self.voiced(frame_db(early)))
+                    woke_at = last_voice = time.time()
+                    # Already heard: the lead-in timer is for somebody who
+                    # has not started, and this person has. Silence from here
+                    # endpoints the turn as usual -- so a bare "stop" is a
+                    # short turn that is_stop_command() then discards.
+                    heard = True
+                    active_lead_in = self.pipe.lead_in_ms
+                    last = _empty_turn()
+                    shown_partial = ""
+                    print(f"  {GRN}● go on{OFF}  {DIM}(talked over the reply"
+                          f" — listening){OFF}", flush=True)
+                    self.state.publish("capture", **last)
+                    continue
                 if follow_up and self.listening:
                     phase, buf, cap = "capture", b"", self.pipe.new_capture()
                     utt = self.pipe.new_utterance()
+                    self._interrupt.clear()     # see the wake branch
                     # Usually a no-op: the agent that just answered is still
                     # running. It matters after a stop or a failed turn, which
                     # leave nothing running.

@@ -659,9 +659,9 @@ Panel {
         }
       }
 
-      // Barge-in cannot work acoustically here -- the microphone sits beside
-      // the speaker -- so stopping is an explicit act, and this is where
-      // somebody looks for it.
+      // Barge-in cannot work acoustically through speakers -- the microphone
+      // sits beside them -- so stopping is an explicit act there, and this
+      // is where somebody looks for it. (On a headset, talking works too.)
       //
       // It used to be the word "stop" in the panel's dimmed caption colour,
       // on the left with everything else, which made the most important
