@@ -75,7 +75,8 @@ ShellRoot {
 
     function slider(node) {
       if (!node) return null
-      if (node.liveValue !== undefined && node.dragging !== undefined) return node
+      // PanelSlider has liveValue; ui/VoiceSlider has shown.
+      if (node.dragging !== undefined && (node.liveValue !== undefined || node.knobSize !== undefined)) return node
       for (var i = 0; i < node.children.length; i++) {
         var s = slider(node.children[i]); if (s) return s
       }
@@ -88,7 +89,7 @@ ShellRoot {
       onTriggered: {
         var s = win.slider(knob)
         if (!s) return
-        var line = "handle=" + Math.round(s.liveValue) + " label=" + Math.round(knob.shown)
+        var line = "handle=" + Math.round(s.liveValue !== undefined ? s.liveValue : s.shown) + " label=" + Math.round(knob.shown)
                    + " value=" + knob.value + " dragging=" + s.dragging
                    + " listY=" + Math.round(list.contentY)
         if (line !== win.last) console.warn("PREVIEW", Date.now() % 100000, line)
@@ -97,6 +98,8 @@ ShellRoot {
     }
 
     TestEvent { id: input }
+
+    function external(v) { knob.value = v }
 
     function at(fraction) {
       var s = slider(knob)
@@ -118,13 +121,26 @@ ShellRoot {
         run(4000 + j * 20, function() { var s = w.slider(knob); input.mouseMove(s, w.at(0.3) + j * 8, s.height / 2 - j * 5, -1, Qt.LeftButton, Qt.NoModifier) })
       })(j)
       run(4400, function() { var s = w.slider(knob); console.warn("PREVIEW B release"); input.mouseRelease(s, w.at(0.3) + 120, s.height / 2 - 75, Qt.LeftButton, Qt.NoModifier, -1) })
-      run(5500, function() { knob.value = 12000; console.warn("PREVIEW external set 12000") })
-      for (var k = 0; k < steps.length; k++) (function(st) {
-        var tm = Qt.createQmlObject('import QtQuick; Timer { }', w)
-        tm.interval = st.t
-        tm.triggered.connect(st.f)
-        tm.start()
-      })(steps[k])
+      run(5500, function() { win.external(12000); console.warn("PREVIEW external set 12000") })
+      started = Date.now()
+      clock.start()
+    }
+
+    // One clock running the schedule, rather than a Timer per step.
+    property real started: 0
+    property int next: 0
+    Timer {
+      id: clock
+      interval: 10
+      repeat: true
+      onTriggered: {
+        var t = Date.now() - win.started
+        while (win.next < win.steps.length && win.steps[win.next].t <= t) {
+          win.steps[win.next].f()
+          win.next++
+        }
+        if (win.next >= win.steps.length) stop()
+      }
     }
   }
 }

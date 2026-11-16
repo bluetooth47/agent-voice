@@ -5,20 +5,26 @@ import qs.Commons
 // undefined. Omarchy's own QML writes Commons.Color for the same reason.
 import qs.Commons as Commons
 import qs.Ui
+import "ui"
 
 // A labelled slider that reports its value with a unit and only commits on
 // release, so dragging does not fire `omarchy bar set` on every frame.
-// Shared by the bar panel and the settings overlay.
+//
+// The slider is ui/VoiceSlider rather than Omarchy's PanelSlider, which
+// snapped back to the old value on release, let the handle and the number
+// disagree mid-drag, and could be left stuck mid-drag by the scrolling page
+// (see VoiceSlider for the measurements). The number beside the label can be
+// clicked and typed into.
 Column {
   id: knob
 
-  // Passed straight through to PanelSlider, which is Omarchy's own control
-  // and takes it. Nothing here sets it -- both callers are overlays, not
-  // bar items -- so it is null in practice and kept because the component
-  // it forwards to declares it.
+  // Kept so existing callers that pass it still load. Unused: VoiceSlider
+  // reads the theme itself.
   property QtObject bar: null
   property color foreground: Commons.Color.foreground
-  property color dim: Qt.darker(foreground, 1.55)
+  // Translucent rather than Qt.darker: darker is dimmer only on a dark
+  // theme, and on a light one made every hint as black as the label.
+  property color dim: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.6)
   property string fontFamily: Style.font.family
 
   property string label: ""
@@ -28,109 +34,116 @@ Column {
   property real maximum: 1
   property real stepSize: 1
   property string unit: "ms"
+  // NaN for none. When set, a double click on the slider goes back to it.
+  property real defaultValue: NaN
   // Names for the notches, from `minimum` up, for a slider that picks one of
-  // a few named choices rather than a number. Shown in place of the number.
+  // a few named choices rather than a number. Shown in place of the number,
+  // and the number cannot be typed.
   property var labels: []
 
-  // The Flickable this row lives in, so a wheel event over the slider scrolls
-  // the list instead of changing the setting. Optional: when it is not set,
-  // the enclosing Flickable is found by walking up. Nine of ten callers passed
-  // it and the tenth did not, and the one that did not swallowed the wheel
-  // outright -- the pointer had only to cross that row for scrolling to stop.
-  // A default nobody has to remember cannot be forgotten.
+  // The Flickable a wheel over the slider scrolls. Found by walking up when
+  // not given.
   property Flickable scrollTarget: null
-
-  readonly property Flickable effectiveScrollTarget: scrollTarget || _findFlickable()
-
-  function _findFlickable() {
-    var p = knob.parent
-    while (p) {
-      if (p instanceof Flickable) return p
-      p = p.parent
-    }
-    return null
-  }
 
   signal committed(real value)
 
-  property real shown: value
-  onValueChanged: shown = value
+  readonly property real shown: slider.shown
 
-  // PanelSlider rounds to an integer when `integer` is set but does not snap
-  // to `step` -- that only governs its wheel handling -- so dragging produced
-  // values like 4035ms against a 500ms step. Quantise here, for the label and
-  // for what gets written.
-  function snap(v) {
-    var n = Math.round((v - knob.minimum) / knob.stepSize)
-    return Math.max(knob.minimum,
-                    Math.min(knob.maximum, knob.minimum + n * knob.stepSize))
+  function display(v) {
+    if (labels.length > 0)
+      return String(labels[Math.max(0, Math.min(labels.length - 1, Math.round(v - minimum)))])
+    return Math.round(v) + unit
   }
+
   spacing: Style.space(2)
 
-  Row {
+  Item {
     width: parent.width
+    height: Math.max(labelText.implicitHeight, valueText.implicitHeight, entry.implicitHeight)
+
     Text {
+      id: labelText
+      anchors.left: parent.left
+      anchors.right: valueBox.left
+      anchors.verticalCenter: parent.verticalCenter
       text: knob.label
       color: knob.foreground
       font.family: knob.fontFamily
       font.pixelSize: Style.font.body
-      width: parent.width - valueText.width
       elide: Text.ElideRight
     }
-    Text {
-      id: valueText
-      text: knob.labels.length > 0
-            ? String(knob.labels[Math.max(0, Math.min(knob.labels.length - 1,
-                                  Math.round(knob.shown - knob.minimum)))])
-            : Math.round(knob.shown) + knob.unit
-      color: knob.dim
-      font.family: knob.fontFamily
-      font.pixelSize: Style.font.body
+
+    Item {
+      id: valueBox
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      width: entry.visible ? entry.width : valueText.implicitWidth
+      height: parent.height
+
+      Text {
+        id: valueText
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+        visible: !entry.visible
+        text: knob.display(knob.shown)
+        color: valueHover.containsMouse ? knob.foreground : knob.dim
+        font.family: knob.fontFamily
+        font.pixelSize: Style.font.body
+        font.underline: valueHover.containsMouse && knob.labels.length === 0
+        MouseArea {
+          id: valueHover
+          anchors.fill: parent
+          anchors.margins: -Style.space(4)
+          hoverEnabled: true
+          enabled: knob.labels.length === 0 && knob.enabled
+          cursorShape: Qt.IBeamCursor
+          onClicked: {
+            entry.text = String(Math.round(knob.shown))
+            entry.visible = true
+            entry.forceActiveFocus()
+            entry.selectAll()
+          }
+        }
+      }
+
+      // Type an exact number. Enter saves (snapped to the step and clamped),
+      // Escape or clicking away leaves it as it was.
+      TextInput {
+        id: entry
+        visible: false
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+        width: Style.space(70)
+        horizontalAlignment: TextInput.AlignRight
+        color: knob.foreground
+        selectionColor: Commons.Color.accent
+        selectedTextColor: Commons.Color.background
+        font.family: knob.fontFamily
+        font.pixelSize: Style.font.body
+        validator: IntValidator { bottom: -1000000; top: 1000000 }
+        onAccepted: {
+          var v = parseInt(text, 10)
+          visible = false
+          if (!isNaN(v)) slider.choose(v)
+        }
+        Keys.onEscapePressed: visible = false
+        onActiveFocusChanged: if (!activeFocus) visible = false
+      }
     }
   }
 
-  PanelSlider {
+  VoiceSlider {
     id: slider
     width: parent.width
-    bar: knob.bar
+    enabled: knob.enabled
+    value: knob.value
     minimum: knob.minimum
     maximum: knob.maximum
-    step: knob.stepSize
-    integer: true
-    value: knob.value
-    onMoved: function(v) { knob.shown = knob.snap(v) }
-    onReleased: function(v) {
-      var snapped = knob.snap(v)
-      knob.shown = snapped
-      // Writing the snapped value feeds back through `value`, so the handle
-      // settles on the notch rather than wherever the pointer stopped.
-      knob.committed(snapped)
-    }
-
-    // PanelSlider's own wheel handler steps the value and then fires
-    // released(), which here means a write to shell.json -- so scrolling the
-    // settings list past a slider silently changed the setting under the
-    // pointer. This sits above that handler and turns the wheel back into
-    // scrolling. Declared last so it stacks on top, and NoButton so press and
-    // drag still reach the slider underneath.
-    MouseArea {
-      anchors.fill: parent
-      acceptedButtons: Qt.NoButton
-      onWheel: function(wheel) {
-        var f = knob.effectiveScrollTarget
-        // Accept only what can be acted on. Accepting first and returning on a
-        // missing target consumed the event and scrolled nothing, which is how
-        // this was reported: not a slider that moved when it should not, but a
-        // page that stopped moving.
-        if (!f) {
-          wheel.accepted = false
-          return
-        }
-        wheel.accepted = true
-        var limit = Math.max(0, f.contentHeight - f.height)
-        f.contentY = Math.max(0, Math.min(limit, f.contentY - wheel.angleDelta.y))
-      }
-    }
+    stepSize: knob.stepSize
+    defaultValue: knob.defaultValue
+    foreground: knob.foreground
+    scrollTarget: knob.scrollTarget
+    onCommitted: function(v) { knob.committed(v) }
   }
 
   Text {

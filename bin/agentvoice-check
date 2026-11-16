@@ -56,7 +56,11 @@ out=$(python3 - "$ROOT" <<'PY'
 import json, pathlib, re, sys
 root = pathlib.Path(sys.argv[1])
 declared = {k["key"] for k in json.loads((root/"manifest.json").read_text())["barWidget"]["schema"]}
-qml = (root/"Settings.qml").read_text()
+# The settings overlay and, as it is split up, its pages. Not ui/: those are
+# building blocks that know no setting by name, and a key mentioned there
+# would be a key drawn nowhere in particular.
+qml = (root/"Settings.qml").read_text() + "".join(
+    p.read_text() for p in sorted((root/"pages").glob("*.qml")))
 missing = sorted(k for k in declared if not re.search(r'["\']' + re.escape(k) + r'["\']', qml))
 print(" ".join(missing))
 PY
@@ -159,7 +163,9 @@ out=$(python3 - "$ROOT" <<'QQ'
 import pathlib, re, sys
 root = pathlib.Path(sys.argv[1])
 bad = []
-for name in ("Settings.qml", "Panel.qml"):
+files = ["Settings.qml", "Panel.qml"] + [str(p.relative_to(root)) for p in
+         sorted((root / "pages").glob("*.qml")) + sorted((root / "ui").glob("*.qml"))]
+for name in files:
     lines = (root / name).read_text().splitlines()
     for i, line in enumerate(lines):
         if "omarchy-launch-floating-terminal-with-presentation" not in line:
@@ -172,6 +178,34 @@ QQ
 )
 if [[ -n ${out// } ]]; then say "nested bash -c eats the launcher's args" "FAIL: $out"; fail=1
 else say "no nested bash -c in a launcher command" "ok"; fi
+
+# ui/ is imported as a directory with a qmldir, so a component missing from
+# the qmldir is "not a type" to everything that uses it -- but only under
+# `qs -p` (the preview) and any loader that honours the qmldir strictly, while
+# the live shell's plain file import finds it anyway. A component that works
+# on this machine and nowhere else is the shape every install bug here had.
+out=$(python3 - "$ROOT" <<'QQ'
+import pathlib, sys
+root = pathlib.Path(sys.argv[1]) / "ui"
+if not root.is_dir():
+    print(""); sys.exit()
+files = {p.name for p in root.glob("*.qml")}
+listed = {}
+qmldir = root / "qmldir"
+if qmldir.exists():
+    for line in qmldir.read_text().splitlines():
+        parts = line.split()
+        if len(parts) == 3 and parts[2].endswith(".qml"):
+            listed[parts[2]] = parts[0]
+bad = [f"{f} not in ui/qmldir" for f in sorted(files - set(listed))]
+bad += [f"ui/qmldir lists missing {f}" for f in sorted(set(listed) - files)]
+bad += [f"ui/qmldir names {f} as {n}" for f, n in sorted(listed.items())
+        if f in files and n != f[:-4]]
+print("; ".join(bad))
+QQ
+)
+if [[ -n ${out// } ]]; then say "ui/qmldir out of step with ui/" "FAIL: $out"; fail=1
+else say "ui/qmldir lists every component" "ok"; fi
 
 # 8. no comment directly after a line-continuation backslash. `bash -n` accepts
 # it, and what it means is that the continuation joins to the comment: the

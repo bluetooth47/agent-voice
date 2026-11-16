@@ -1,0 +1,8 @@
+AgentCard 1.0 AgentCard.qml
+LevelMeter 1.0 LevelMeter.qml
+SegmentedChoice 1.0 SegmentedChoice.qml
+SettingRow 1.0 SettingRow.qml
+SettingsStore 1.0 SettingsStore.qml
+SidebarNav 1.0 SidebarNav.qml
+StatusCard 1.0 StatusCard.qml
+VoiceSlider 1.0 VoiceSlider.qml

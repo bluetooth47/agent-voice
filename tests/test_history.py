@@ -252,9 +252,12 @@ def test_no_qml_reads_a_colour_through_a_bare_color():
     theme, so every colour read through it was undefined -- and the QML check
     had been failing on exactly this, 25 times, for a while. Omarchy's own
     files write Commons.Color."""
-    for qml in ROOT.glob("*.qml"):
+    files = [*ROOT.glob("*.qml"), *ROOT.glob("ui/*.qml"), *ROOT.glob("pages/*.qml"),
+             *ROOT.glob("bench/preview/targets/*.qml")]
+    assert len(files) > 5, "found almost no QML -- the glob is wrong, not the code clean"
+    for qml in files:
         bare = re.findall(r"(?<![\w.])Color\.\w+", _code(qml))
-        assert not bare, f"{qml.name} reads the theme through a bare Color: {bare}"
+        assert not bare, f"{qml.relative_to(ROOT)} reads the theme through a bare Color: {bare}"
 
 
 def test_the_readout_no_longer_cuts_the_text_off():
