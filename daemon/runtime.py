@@ -96,6 +96,7 @@ DEFAULTS = {
     "logSpeech": False,
     "followUpMs": 7000,
     "voice": "lessac-medium",
+    "agentsPanel": True,
 }
 
 # The TOML predates the plugin and uses snake_case under sections. Kept working
@@ -141,6 +142,7 @@ TOML_ALIASES = {
     "yieldToRecorders": ("wake", "yield_to_recorders"),
     "logSpeech": ("ui", "log_speech"),
     "followUpMs": ("timing", "follow_up_ms"),
+    "agentsPanel": ("ui", "agents_panel"),
 }
 
 
@@ -469,6 +471,9 @@ class StateFile:
         # so the panel can render what the running agent actually supports
         # instead of keeping its own copy of that knowledge and drifting.
         self._context: dict = {}
+        #: Given every payload written, after it is written. The daemon sets
+        #: it to keep Omarchy's Agents panel in step; see agents_panel.py.
+        self.mirror = None
 
     def describe(self, **fields) -> None:
         """Set the sticky fields merged into every subsequent publish."""
@@ -509,6 +514,11 @@ class StateFile:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_text(json.dumps(payload))
         tmp.replace(self.path)
+        if self.mirror is not None:
+            try:
+                self.mirror(payload)
+            except Exception as e:      # a side panel must never stop the readout
+                print(f"agents panel: {type(e).__name__}: {e}", flush=True)
 
     @property
     def current(self) -> str:

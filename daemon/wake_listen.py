@@ -49,6 +49,7 @@ from adapters.base import speech_safe  # noqa: E402
 from crew import (  # noqa: E402
     FLOOR_LEASE_S, FOLLOW_UP_STALE_S, Persona, View, route,
 )
+from agents_panel import AgentsPanel, program_label, slug  # noqa: E402
 import failure  # noqa: E402
 from chimes import Chimes  # noqa: E402
 from eager import Utterance, sounds_finished  # noqa: E402
@@ -992,6 +993,11 @@ class Daemon:
         signal.signal(signal.SIGUSR2, self._on_interrupt)
         if state is not None and hasattr(state, "overlay"):
             state.overlay = self._compose
+        #: Omarchy's Agents panel, kept in step with every write of the state
+        #: file. Set by main(); None in tests and --simulate.
+        self.panel = None
+        if state is not None and hasattr(state, "mirror"):
+            state.mirror = self._mirror_panel
 
     # --- which agent ---------------------------------------------------------
 
@@ -2408,6 +2414,70 @@ class Daemon:
             })
         return {"crew": out}
 
+    def panel_agents(self, payload: dict) -> list[dict]:
+        """Every agent as agents_panel.py draws it, from the payload just
+        written and the agents' own state.
+
+        The payload's state is the one line on screen, which with several
+        agents may be another agent's; the microphone's own state is kept
+        apart in `_mic_shown`, and each agent's activity is its own.
+        """
+        mic = self._mic_shown[0] if self.crew_mode else str(payload.get("state", "off"))
+        hearing = mic in ("capture", "transcribing", "followup")
+        who = str(payload.get("who", "") or "")
+        main = self._main
+        if self.crew_mode:
+            main_activity = main.state if main.busy else "idle"
+        else:
+            main_activity = mic if mic in ("thinking", "speaking") else "idle"
+        program = getattr(main.agent, "name", "") or ""
+        main_effort = getattr(main.agent, "effort", None) or ""
+        if main_effort not in tuple(getattr(main.agent, "efforts", tuple)()):
+            main_effort = ""
+        oww = getattr(self.pipe, "_oww", None) is not None
+        phrase = (self.cfg.get_str("owwModel").replace("_", " ") if oww
+                  else getattr(self.pipe, "phrase", "") or self.cfg.get_str("phrase"))
+        out = [{
+            "key": "main",
+            # Named for what answers it: "Claude Code (voice)". The wake
+            # phrase is already in its status line.
+            "label": program_label(program) if program else "Agent Voice",
+            "program": program,
+            "model": getattr(main.agent, "model", None) or "",
+            # Read off the main agent itself, not effort_in_force(): this can
+            # run on another agent's turn thread, where self.agent is theirs.
+            "effort": main_effort,
+            "level": self.cfg.level_for(program) if program else "",
+            "phrase": phrase,
+            "activity": main_activity,
+            "hearing": hearing and who in ("", main.name),
+            "problem": "" if program else (payload.get("posture") or ""),
+        }]
+        unheard = dict(getattr(self.pipe, "unheard", {}) or {})
+        agents = getattr(self.cfg, "agents", None)
+        for spec in (agents() if callable(agents) else []):
+            name = spec["name"]
+            p = self.crew.get(name)
+            a = p.agent if p is not None else None
+            out.append({
+                "key": slug(name),
+                "label": name.title(),
+                "program": spec.get("agent", "") if a is not None else "",
+                "model": getattr(a, "model", None) or spec.get("model") or "",
+                "effort": getattr(a, "effort", None) or spec.get("effort") or "",
+                "level": spec.get("level", ""),
+                "phrase": name,
+                "activity": (p.state if p is not None and p.busy else "idle"),
+                "hearing": hearing and who == name,
+                "problem": unheard.get(name, "") or (p.problem if p is not None else ""),
+            })
+        return out
+
+    def _mirror_panel(self, payload: dict) -> None:
+        if self.panel is not None:
+            self.panel.publish(str(payload.get("state", "off")),
+                               self.panel_agents(payload))
+
     def _out(self):
         """Where the current turn publishes its state. See crew.View."""
         if not self._in_turn():
@@ -3220,10 +3290,14 @@ def main() -> int:
                   f"; echoing instead{OFF}")
 
     state = StateFile()
+    panel = None
     try:
         daemon = Daemon(cfg, pipe, state, speaker, agent)
         if args.simulate:
             return run_simulated(pipe, speaker, args.simulate, daemon)
+        # Not under --simulate: a simulated run is not an agent anybody can
+        # talk to, and must not appear in the panel as one.
+        panel = daemon.panel = AgentsPanel(enabled=lambda: cfg.get_bool("agentsPanel"))
         # Only for the live loop: a simulated turn has no room to chime into.
         # Built whether or not the setting is on, because it can be switched
         # on while running; rendering the three sounds costs a few ms.
@@ -3234,6 +3308,8 @@ def main() -> int:
         return 0
     finally:
         state.clear()
+        if panel is not None:
+            panel.stopped()
         # The unit keeps its runtime directory across restarts, so a pidfile
         # left behind here is a pid some unrelated process will eventually be
         # given -- and `agentvoice mic` sends SIGUSR1 to whatever it names,

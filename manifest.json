@@ -61,7 +61,8 @@
       "hudLingerMs": 2000,
       "useVerifier": true,
       "yieldToRecorders": true,
-      "logSpeech": false
+      "logSpeech": false,
+      "agentsPanel": true
     },
     "schema": [
       {
@@ -264,6 +265,13 @@
         "label": "Write what is said to the system log",
         "defaultValue": false,
         "description": "Off by default. The journal keeps entries for weeks, so logging replies means a transcript of what the agent told you -- file contents, key names, anything it read -- sits there until it rotates. Timings, wake events and errors are always logged; this is only the words. Turn it on when diagnosing something, and a terminal still shows them either way."
+      },
+      {
+        "key": "agentsPanel",
+        "type": "bool",
+        "label": "Show each voice agent in Omarchy's Agents panel",
+        "defaultValue": true,
+        "description": "One section per voice agent, saying what it is doing and, on hover, what it runs on. Off removes them. Their prompts and tokens are already counted under the agent's own program, so they add nothing to the panel's totals."
       },
       {
         "key": "followUpMs",

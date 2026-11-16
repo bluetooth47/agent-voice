@@ -7,7 +7,7 @@ installed on the box a natural voice interface: wake word or push to
 talk in, spoken replies out. Claude Code is the first target, not the
 only one.
 
-![The Agent Voice panel, open in the Omarchy bar: the switch on, the phrase it is waiting for, the permission posture for this folder, and the last exchange with how long it took](preview.png)
+![Left, the bar panel: the switch, the microphone level against its gate with a Mute button, the agents, five quick switches, the voice, what the agent may do, and the last exchange. Right, the settings on their Overview page: the service, the microphone, each agent and what it is doing, and the last exchange](preview.png)
 
 Omarchy already ships dictation. Voxtype gives it push to talk on F9,
 running whisper.cpp locally, with a Dictation indicator in the bar.
@@ -46,7 +46,7 @@ The widget and the engine are two installs, because Omarchy runs
 nothing on a plugin's behalf: `plugin add` clones a directory and
 `plugin remove` deletes one, with no hook in between. So the widget owns
 both halves instead. Add it, open it, and it offers to install the
-engine; the settings screen has a **Remove Agent Voice** button that
+engine; the settings' **About** page has a **Remove Agent Voice** button that
 takes the engine, the service and the widget off in one go.
 
 The engine installs into `~/.local/share/agentvoice/app` rather than
@@ -57,7 +57,7 @@ link a checkout there instead of copying it.
 
 ### Removing it
 
-The button in the settings screen is the whole thing. By hand:
+The button on the settings' About page is the whole thing. By hand:
 
 ```bash
 ~/.local/share/agentvoice/app/install.sh --uninstall
@@ -215,8 +215,9 @@ The conversation is the session's exchanges, newest at the bottom, with a
 line where each new conversation began, which turns failed or were stopped,
 and how long each took to answer. The text is selectable, so a path or a
 command the agent read out can be copied rather than retyped. Open it from
-the panel (**conversation**), from the readout, or from the link at the top
-of the settings; in a terminal, `agentvoice history`.
+the panel's **Conversation** button, from the readout, or from the
+**Conversation** button at the top of the settings; in a terminal,
+`agentvoice history`.
 
 It is kept beside the state file, in the runtime directory: memory only,
 readable by you alone, gone when you log out, never the journal and never
@@ -247,7 +248,8 @@ Super+Space is Omarchy's application launcher and stays that way.
 
 ### More than one agent
 
-Settings → **More agents** adds agents beside the main one, up to eight.
+Settings → **Agents** → **Add an agent** adds agents beside the main one,
+up to eight.
 Each is woken by its own name and has its own program, model, effort,
 voice, permission level and folder, and its own conversation. Say
 "computer" for the main agent and "jarvis" for the one called jarvis.
@@ -276,6 +278,29 @@ An extra agent's permission level and folder are its own. Trusting the main
 agent does not trust the others, and the permission hook is told which
 agent it is guarding. One it cannot find in the settings, or one whose
 program has changed since, is asked about rather than allowed.
+
+### In Omarchy's Agents panel
+
+Each voice agent also gets a section in Omarchy's own Agents panel, the one
+behind the robot icon: "Claude Code (voice)" for the main agent, "Sarah
+(voice)" for one called sarah. The line on its right says what it is doing
+-- *Listening for “sarah”*, *Thinking…*, *Speaking*, *Off* -- and the info
+mark beside its name says what it runs on, what it may do, and how many voice
+turns it has had today.
+
+That panel draws any record it finds in `~/.local/state/omarchy/agents/usage/`,
+so this changes nothing of Omarchy's: the daemon writes one
+`agentvoice-<name>.json` per agent, renamed into place, at most once a second
+and only when something on it changed. A new agent appears the next time the
+panel is opened, which is when it looks for new records. Stopping the service
+leaves the sections saying *Off*; removing an agent removes its section; the
+uninstaller removes them all.
+
+They add nothing to the panel's token and prompt totals. A voice turn runs the
+agent's own CLI, and that CLI's usage is already counted under its own
+section; counting it again here would show every spoken prompt twice. Turn the
+sections off under Settings → **Display** → **Show each voice agent there**,
+or hide one with Omarchy's own per-agent switch.
 
 ### Mute, not stop
 
@@ -880,8 +905,13 @@ utterance with and without your verifier and needs none of the above.
 ```
 agent-voice/              <- also the plugin directory once installed
   manifest.json           kinds: bar-widget + overlay
-  Panel.qml               bar icon, state, last exchange, switch
-  Settings.qml            the knobs, as a themed overlay
+  Panel.qml               bar icon and its panel: switch, mute, agents,
+                          quick switches, last exchange
+  Hud.qml                 the readout beside the bar during a turn
+  Settings.qml            the overlay: shared state, the conversation view,
+                          the permission prompt, and the page frame
+  pages/                  one file per settings page, Overview to About
+  ui/                     the controls the pages are built from
   KnobRow.qml             shared slider row
   install.sh
   requirements.txt                   core: vosk, whisper, piper
@@ -894,6 +924,8 @@ agent-voice/              <- also the plugin directory once installed
     wake_listen.py        the loop: wake -> capture -> agent -> speech
     runtime.py            config, state file, speech
     speech_text.py        markdown -> speakable prose, sentence chunking
+    crew.py               more than one agent: who is talking to whom
+    agents_panel.py       each agent as a section in Omarchy's Agents panel
     verifier.py           train and load a personal verifier
     adapters/             base contract + claude_code, codex, gemini, ...
     agentvoice.toml       fallback config for non-Omarchy machines
@@ -902,6 +934,7 @@ agent-voice/              <- also the plugin directory once installed
     agentvoice.service.in systemd user unit template
   tests/                  pytest suite, run by bin/agentvoice-check
   bench/                  hardware benchmark and findings
+  bench/preview/          render one QML surface beside the live shell
 ```
 
 Everything the installer downloads -- interpreter, wheels, models, trained

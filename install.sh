@@ -311,6 +311,10 @@ if [[ $UNINSTALL == 1 ]]; then
 
   rm -rf "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/agentvoice"
 
+  # The sections in Omarchy's Agents panel. After the service has stopped,
+  # because stopping is when the daemon writes them one last time, as Off.
+  rm -f "${XDG_STATE_HOME:-$HOME/.local/state}"/omarchy/agents/usage/agentvoice-*.json
+
   remove_keybinds
 
   # Existing and holding something are different questions, and the first one

@@ -109,6 +109,16 @@ into the twelve-box scroll it was split out of. Building blocks with no
 setting names in them live in `ui/`. Both folders need their `qmldir` kept in
 step (the check script does it).
 
+Omarchy's Agents panel shows each voice agent from a record the daemon
+writes (`daemon/agents_panel.py`). That panel is Omarchy's and is never
+edited: what a section can show is a name, the plan text on its right and a
+hover note, so the live status goes in the plan text. Its token and prompt
+fields stay zero, because the agent's own collector already counts the CLI a
+voice turn runs. The same scratch-directory trick renders the real panel:
+copy `/usr/share/omarchy/shell/plugins/agents` beside `Commons` and `Ui`, put
+records in `$XDG_STATE_HOME/omarchy/agents/usage/`, and stub
+`omarchy-agent-usage-update` on PATH so opening it runs no collector.
+
 ## Read the theme through `Commons.Color`, never a bare `Color`
 
 Under Qt 6.12 a bare `Color` is QtQuick's own value-type helper, and
@@ -131,7 +141,11 @@ beside the real shell and touches nothing of it.
 synthetic mouse events (QtTest's `TestEvent`), so nobody's real pointer
 moves. `--arg '{"page":"agents","agent":"main"}'` opens a page, `popup`
 draws the bar widget's popup with no bar behind it, and `clicks` drives
-real controls and logs what each one wrote. It never takes the keyboard (Exclusive focus is rewritten to None in
+real controls and logs what each one wrote. `--state FILE` draws it as if
+the service were running with that state file (`bench/preview/states/
+showcase.json` is the one `preview.png` was made from): the file goes into a
+scratch runtime directory and `agentvoice` becomes a stub that only answers
+`is-active`. It never takes the keyboard (Exclusive focus is rewritten to None in
 its copies) and never writes shell.json (`omarchy bar set` is stubbed to a
 log). Two things it found out the hard way: a directory under `qs -p` needs a
 `qmldir` before its files see each other as types, and a Timer placed

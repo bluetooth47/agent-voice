@@ -62,6 +62,7 @@ def _env(home: Path, **overrides) -> dict[str, str]:
         "XDG_DATA_HOME": str(home / "data"),
         "XDG_CONFIG_HOME": str(home / "config"),
         "XDG_RUNTIME_DIR": str(home / "run"),
+        "XDG_STATE_HOME": str(home / "state"),
     }
     env.update(overrides)
     return env
@@ -122,6 +123,21 @@ def test_uninstall_completes_from_inside_the_directory_it_removes(tmp_path):
     assert not (data / "models").exists()
     assert not (tmp_path / ".local" / "bin" / "agentvoice").exists()
     assert not (tmp_path / "config" / "systemd" / "user" / "agentvoice.service").exists()
+
+
+def test_uninstall_takes_its_sections_out_of_the_agents_panel(tmp_path):
+    """Its own records go; every other agent's stays."""
+    app = _install_tree(tmp_path)
+    usage = tmp_path / "state" / "omarchy" / "agents" / "usage"
+    usage.mkdir(parents=True)
+    (usage / "agentvoice-main.json").write_text("{}")
+    (usage / "agentvoice-sarah.json").write_text("{}")
+    (usage / "claude.json").write_text("{}")
+
+    done = _run(app, tmp_path, "--uninstall", "--yes")
+
+    assert done.returncode == 0, done.stderr
+    assert sorted(p.name for p in usage.iterdir()) == ["claude.json"]
 
 
 def test_uninstall_leaves_a_command_it_did_not_install(tmp_path):

@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 _SANDBOX = Path(tempfile.mkdtemp(prefix="agentvoice-tests-"))
 
-for var in ("XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR"):
+for var in ("XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR", "XDG_STATE_HOME"):
     d = _SANDBOX / var.lower()
     d.mkdir(parents=True, exist_ok=True)
     os.environ[var] = str(d)

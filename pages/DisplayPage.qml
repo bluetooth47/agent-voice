@@ -65,6 +65,29 @@ Column {
 
   SettingsGroup {
     width: parent.width
+    title: "OMARCHY'S AGENTS PANEL"
+    foreground: page.s.foreground
+    fontFamily: page.s.fontFamily
+
+    ToggleRow {
+      width: parent.width
+      label: "Show each voice agent there"
+      hint: "A section per agent, saying what it is doing. Hover its info mark for what it runs on."
+      help: "A new agent appears the next time that panel is opened. Their prompts and " +
+            "tokens are already counted under the agent's own program, so they add " +
+            "nothing to the panel's totals. Off removes the sections; Omarchy's own " +
+            "per-agent switch hides them too."
+      checked: page.s.setting("agentsPanel", true) === true
+      changed: page.s.changed("agentsPanel")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onToggled: page.s.put("agentsPanel", !checked)
+      onReset: page.s.resetKey("agentsPanel")
+    }
+  }
+
+  SettingsGroup {
+    width: parent.width
     title: "PRIVACY"
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
