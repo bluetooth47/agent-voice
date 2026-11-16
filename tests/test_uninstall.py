@@ -458,8 +458,9 @@ def test_no_systemctl_call_can_end_the_install():
 
 def test_the_widget_removal_is_a_flag_not_a_shell_chain():
     """Shell logic assembled in a QML string is how --uninstall became $0."""
+    from qml_sources import page
     settings = (ROOT / "Settings.qml").read_text()
-    block = settings[settings.index('text: "Remove Agent Voice'):]
+    block = settings[settings.index("function removeEverything()"):]
     block = block[:block.index("root.dismiss()")]
     # Comments only, stripped -- an earlier version of this test matched the
     # `&&` in the comment explaining that the `&&` had been removed.
@@ -469,6 +470,10 @@ def test_the_widget_removal_is_a_flag_not_a_shell_chain():
     assert "--uninstall --with-widget" in command
     assert "omarchy plugin remove" not in command, "back to chaining in QML"
     assert "&&" not in command
+    # And the button on the About page is what calls it.
+    about = page("About")
+    button = about[about.index('text: "Remove Agent Voice'):]
+    assert "page.s.removeEverything()" in button[:button.index("\n      }")]
 
 
 def test_with_widget_reports_a_folder_that_survived(tmp_path):

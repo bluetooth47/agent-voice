@@ -93,6 +93,8 @@ Rectangle {
         font.family: card.fontFamily
         font.pixelSize: Style.font.body
         font.bold: true
+        wrapMode: Text.WordWrap
+        maximumLineCount: 2
         elide: Text.ElideRight
       }
       Text {
@@ -103,6 +105,8 @@ Rectangle {
         color: card.dim
         font.family: card.fontFamily
         font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
+        maximumLineCount: 2
         elide: Text.ElideRight
       }
     }

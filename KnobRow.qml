@@ -29,6 +29,13 @@ Column {
 
   property string label: ""
   property string description: ""
+  // The long explanation, folded behind a "?" beside the label (as
+  // ui/SettingRow does), so the page is not a wall of paragraphs.
+  property string help: ""
+  property bool helpOpen: false
+  // Shows a "reset" link beside the label; clicking it emits reset().
+  property bool changed: false
+  signal reset()
   property real value: 0
   property real minimum: 0
   property real maximum: 1
@@ -61,16 +68,60 @@ Column {
     width: parent.width
     height: Math.max(labelText.implicitHeight, valueText.implicitHeight, entry.implicitHeight)
 
-    Text {
-      id: labelText
+    Row {
       anchors.left: parent.left
       anchors.right: valueBox.left
+      anchors.rightMargin: Style.space(8)
       anchors.verticalCenter: parent.verticalCenter
-      text: knob.label
-      color: knob.foreground
-      font.family: knob.fontFamily
-      font.pixelSize: Style.font.body
-      elide: Text.ElideRight
+      spacing: Style.space(8)
+
+      Text {
+        id: labelText
+        width: Math.min(implicitWidth, parent.width - extras.width - parent.spacing)
+        text: knob.label
+        color: knob.foreground
+        font.family: knob.fontFamily
+        font.pixelSize: Style.font.body
+        elide: Text.ElideRight
+      }
+
+      Row {
+        id: extras
+        anchors.verticalCenter: labelText.verticalCenter
+        spacing: Style.space(8)
+
+        Text {
+          visible: knob.help !== ""
+          text: knob.helpOpen ? "×" : "?"
+          color: helpHover.containsMouse || knob.helpOpen ? knob.foreground : knob.dim
+          font.family: knob.fontFamily
+          font.pixelSize: Style.font.caption
+          MouseArea {
+            id: helpHover
+            anchors.fill: parent
+            anchors.margins: -Style.space(5)
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: knob.helpOpen = !knob.helpOpen
+          }
+        }
+        Text {
+          visible: knob.changed && knob.enabled
+          text: "reset"
+          color: resetHover.containsMouse ? knob.foreground : knob.dim
+          font.family: knob.fontFamily
+          font.pixelSize: Style.font.caption
+          font.underline: resetHover.containsMouse
+          MouseArea {
+            id: resetHover
+            anchors.fill: parent
+            anchors.margins: -Style.space(5)
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: knob.reset()
+          }
+        }
+      }
     }
 
     Item {
@@ -155,5 +206,23 @@ Column {
     font.family: knob.fontFamily
     font.pixelSize: Style.font.caption
     bottomPadding: Style.space(4)
+  }
+
+  Text {
+    width: parent.width
+    visible: knob.helpOpen && knob.help !== ""
+    text: knob.help
+    wrapMode: Text.WordWrap
+    textFormat: Text.PlainText
+    color: knob.dim
+    font.family: knob.fontFamily
+    font.pixelSize: Style.font.caption
+    leftPadding: Style.space(8)
+    bottomPadding: Style.space(4)
+    Rectangle {
+      width: Math.max(1, Style.space(2))
+      height: parent.height
+      color: Qt.rgba(knob.foreground.r, knob.foreground.g, knob.foreground.b, 0.25)
+    }
   }
 }

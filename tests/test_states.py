@@ -117,7 +117,9 @@ def test_stopping_during_transcription_discards_the_turn():
 # The only way to stop verifying was to delete the .joblib, which also threw
 # away the twenty-five recordings behind it.
 
-SETTINGS = (ROOT / "Settings.qml").read_text()
+from qml_sources import overlay, page
+
+SETTINGS = overlay()
 
 
 def test_the_daemon_honours_the_setting():
@@ -137,14 +139,16 @@ def test_switching_it_off_rebuilds_the_engine():
 def test_the_three_states_are_distinguishable_on_screen():
     """In use, trained-but-off, and never trained. Reading the middle one as
     the last would send someone back to redo work they had already done."""
-    # By content, not by title: this box has been called YOUR VOICE and then
-    # TRAIN WAKE WORD TO YOUR VOICE, and will be called something else again.
-    start = SETTINGS.index("The stock wake models are speaker independent")
-    box = SETTINGS[start:SETTINGS.index("SettingsGroup {", start)]
+    # By content, not by title: this box has been called YOUR VOICE, TRAIN
+    # WAKE WORD TO YOUR VOICE and ONLY YOUR VOICE, and will be called
+    # something else again.
+    listening = page("Listening")
+    at = listening.index('label: "Only wake for my voice"')
+    box = listening[listening.rindex("SettingsGroup {", 0, at):]
+    box = box[:box.index("SettingsGroup {", 20)]
     assert "In use for" in box
-    assert "switched " in box and "The training is kept." in box
-    assert "No verifier for" in box
-    assert 'label: "Only wake for my voice"' in box
+    assert "switched off" in box and "The training is kept." in box
+    assert "Not trained for" in box
 
 
 def test_the_banner_does_not_call_a_disabled_verifier_missing():
@@ -170,7 +174,7 @@ def test_it_defaults_to_on():
     import json
     manifest = json.loads((ROOT / "manifest.json").read_text())
     assert manifest["barWidget"]["defaults"]["useVerifier"] is True
-    assert 'root.setting("useVerifier", true)' in SETTINGS, \
+    assert 'page.s.setting("useVerifier", true)' in SETTINGS, \
         "the QML fallback must agree with the manifest"
 
 
@@ -459,7 +463,8 @@ def test_the_setting_exists_in_all_three_places():
         "it has to be off by default or it is not a privacy setting"
     import runtime
     assert runtime.DEFAULTS["logSpeech"] is False
-    assert '"logSpeech"' in (ROOT / "Settings.qml").read_text()
+    from qml_sources import overlay
+    assert '"logSpeech"' in overlay()
 
 
 def test_a_whole_turn_runs_with_the_words_withheld(daemon, capsys, monkeypatch):
@@ -872,17 +877,21 @@ def test_the_stop_is_the_loudest_thing_in_the_panel():
     like I have a stop button." The capability was always there -- it kills
     the agent's process group, not just the talking -- and it was drawn as
     the word "stop" in the dimmed caption colour, on the left, among the
-    readouts. Nothing about that said what it was for.
+    readouts. Nothing about that said what it was for. Now it is a button the
+    width of the panel, in the alarm colour.
     """
     panel = _uncommented(PANEL)
 
-    at = panel.index("STOP")
-    block = panel[max(0, at - 1200):at + 400]
+    at = panel.index('text: "STOP"')
+    block = panel[panel.rindex("Button {", 0, at):]
+    block = block[:block.index("\n        }")]
     assert "voice.urgent" in block, \
         "the stop is drawn in a status colour like everything around it"
-    assert "anchors.right: parent.right" in block, \
-        "it is still inline on the left with the readouts"
-    assert "\\u{f06d7}" in panel, \
+    assert "width: parent.width" in block, "it should span the panel"
+    assert "bordered: true" in block, "a button, not a word"
+    assert "visible: voice.vTurnRunning" in block
+    assert "voice.stopTurn()" in block
+    assert "\\u{f06d7}" in block, \
         "no stop sign -- the octagon is from the same Material Design set " \
         "as the bar icon, so it renders wherever those do"
 

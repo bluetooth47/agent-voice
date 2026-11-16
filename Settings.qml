@@ -9,16 +9,36 @@ import qs.Commons
 // undefined. Omarchy's own QML writes Commons.Color for the same reason.
 import qs.Commons as Commons
 import qs.Ui
+import "ui"
+import "pages"
 
 // Agent Voice settings, as a themed overlay.
 //
-// The bar panel is for glancing at state; this is for changing things. Nine
-// knobs in a popup anchored to a 26px bar icon was too cramped to read, and
-// the knobs that matter are ones you set once rather than watch.
+// The bar panel is for glancing at state and the few switches you flip
+// often; this is for everything else. It used to be one 560px scrolling page
+// of twelve boxes in no particular order -- agent settings in three of them,
+// the wake word in four -- and the complaint was the obvious one: settings
+// scattered and disconnected. Now a sidebar of pages, each holding one
+// subject, in pages/*.qml:
 //
-// Every value persists through `omarchy bar set duaneoca.agentvoice <key>`,
-// which writes the widget's entry in shell.json -- the same file the daemon
-// watches, so a change lands on the next utterance without a restart.
+//   Overview      what is happening, and anything that needs fixing
+//   Agents        every agent as the same card, main one included
+//   Listening     wake word, engine, microphone gate, verifier
+//   Conversation  follow-ups, timings, talking over it
+//   Voice         speech out, transcription
+//   Display       the readout, the conversation log, privacy, keys
+//   About         version, engine status, repair and removal
+//
+// This file holds what every page shares: the settings store, the daemon's
+// state, what is on disk, and the functions that launch things. A page gets
+// it all as `s`. It is also, as before, the conversation view and the
+// permission prompt, because the plugin has one overlay entry point and the
+// summon payload picks.
+//
+// Every value persists through `omarchy bar set duaneoca.agentvoice <key>`
+// (ui/SettingsStore), which writes the widget's entry in shell.json -- the
+// same file the daemon watches, so a change lands on the next utterance
+// without a restart.
 Item {
   id: root
 
@@ -26,9 +46,11 @@ Item {
   property var manifest: null
   property bool opened: false
 
-  // The plugin gets one overlay entry point, so this file is both the settings
-  // screen and the permission prompt. The summon payload picks.
+  // "settings", "history" or "permission". The summon payload picks.
   property string mode: "settings"
+  // Which settings page, and which agent's card to open on the Agents page.
+  property string page: "overview"
+  property string focusAgent: ""
   property var request: ({})
   property int secondsLeft: 0
   // True once a verdict has been written for the request on screen, so
@@ -42,21 +64,55 @@ Item {
   property color borderColor: Commons.Color.menu.border
   property var borderSpec: Border.surfaceSpec("menu", "border", borderColor, Math.max(1, Style.space(2)))
   property color scrim: Commons.Color.menu.scrim
-  readonly property color dim: Qt.darker(foreground, 1.5)
+  property color accent: Commons.Color.accent
+  property color urgent: Commons.Color.urgent
+  // Translucent rather than Qt.darker: darker is dimmer only on a dark
+  // theme, and on a light one made every hint as black as the label.
+  readonly property color dim: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.6)
+  readonly property color faint: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.18)
   property string fontFamily: Style.font.menuFamily
 
-  // --- live daemon state, for the level meter -------------------------------
-  property real levelDb: -99
-  property string vState: "off"
+  readonly property var pages: [
+    { id: "overview",     label: "Overview",     icon: "\u{f0570}", badge: problems.length > 0 ? String(problems.length) : "" },
+    { id: "agents",       label: "Agents",       icon: "\u{f06a9}", badge: agentProblems > 0 ? "!" : "" },
+    { id: "listening",    label: "Listening",    icon: "\u{f036c}" },
+    { id: "conversation", label: "Conversation", icon: "\u{f0b79}" },
+    { id: "voice",        label: "Voice",        icon: "\u{f057e}" },
+    { id: "display",      label: "Display",      icon: "\u{f0379}" },
+    { id: "about",        label: "About",        icon: "\u{f02fd}" }
+  ]
 
-  // --- settings, read from shell.json via the CLI ---------------------------
+  // --- settings ---------------------------------------------------------------
   // An overlay is not a bar widget, so it has no `settings` property injected.
-  // Reading shell.json directly keeps one source of truth.
-  property var cfg: ({})
-  function setting(key, fallback) {
-    var v = cfg[key]
-    return v === undefined || v === null ? fallback : v
+  // The store reads shell.json itself, shows a change the moment it is made,
+  // and writes one at a time; see ui/SettingsStore.
+  SettingsStore {
+    id: store
+    defaults: root.defaults
   }
+  readonly property alias store: store
+  readonly property var cfg: store.view
+
+  // The manifest's defaults, for the "reset" links. Read from the file rather
+  // than from `manifest`, which the shell does not always pass.
+  property var defaults: ({})
+  property string version: ""
+  FileView {
+    path: String(Qt.resolvedUrl("manifest.json")).replace(/^file:\/\//, "")
+    printErrors: false
+    onLoaded: {
+      try {
+        var m = JSON.parse(text())
+        root.defaults = (m.barWidget && m.barWidget.defaults) || {}
+        root.version = String(m.version || "")
+      } catch (e) {}
+    }
+  }
+
+  function setting(key, fallback) { return store.get(key, fallback) }
+  function put(key, value) { store.set(key, value) }
+  function changed(key) { return !store.isDefault(key) }
+  function resetKey(key) { store.reset(key) }
 
   readonly property var phraseOptions: [
     "hey computer", "okay computer", "hey agent", "hey claude", "okay claude",
@@ -77,8 +133,7 @@ Item {
   // falls back to it if openWakeWord is chosen and missing. That fallback is
   // silent from here, though, so the settings would offer an engine that
   // cannot run and then show its model picker, threshold and verifier while
-  // Vosk was actually listening. Same failure as offering a voice that is not
-  // downloaded, and found by asking the same question of it.
+  // Vosk was actually listening.
   property bool owwAvailable: true
   Process {
     id: scanOww
@@ -92,11 +147,11 @@ Item {
   }
 
   readonly property var engineOptions: [
-    { label: "Vosk — any phrase, weaker rejection", value: "vosk" },
-    { label: root.owwAvailable
-               ? "openWakeWord — four phrases, better rejection"
-               : "openWakeWord — four phrases, better rejection  (not installed)",
-      value: "openwakeword" }
+    { label: "Vosk", value: "vosk",
+      tooltip: "Any phrase, and your other agents' names. Weaker at rejecting sound-alikes." },
+    { label: root.owwAvailable ? "openWakeWord" : "openWakeWord (not installed)",
+      value: "openwakeword",
+      tooltip: "Four phrases, better rejection, and a verifier trained on your voice." }
   ]
   // Which voices are actually on disk. install.sh fetches one by default
   // and the one the settings ask for; the rest are 60MB each and arrive
@@ -125,6 +180,9 @@ Item {
     return root.voicesOnDisk.indexOf(value) >= 0 ? label
                                                  : label + "  (not downloaded)"
   }
+  function voiceMissing(value) {
+    return root.voicesOnDisk.length > 0 && root.voicesOnDisk.indexOf(value) < 0
+  }
 
   readonly property var rawVoiceOptions: [
     { label: "Lessac — female, medium", value: "lessac-medium" },
@@ -143,31 +201,192 @@ Item {
     }
     return out
   }
-  readonly property var modelOptions: ["tiny.en", "base.en", "small.en"]
+  function voiceName(value) {
+    for (var i = 0; i < root.rawVoiceOptions.length; i++)
+      if (root.rawVoiceOptions[i].value === value)
+        return root.rawVoiceOptions[i].label.split(" — ")[0]
+    return value
+  }
 
-  readonly property bool conversation: setting("conversationMode", true)
-  readonly property bool yieldToRecorders: setting("yieldToRecorders", true)
-  readonly property bool logSpeech: setting("logSpeech", false)
+  // --- the daemon's state -----------------------------------------------------
+  property real levelDb: -99
+  property string vState: "off"
+  property string lastTranscript: ""
+  property string lastReply: ""
+  property string lastWho: ""
+  property int lastLatencyMs: 0
   // Published by the daemon, because what a level means depends on what the
   // running agent can honour and only the daemon knows that.
   property string vAgent: ""
   property string permissionLevel: "ask"
   property string vPosture: ""
-  property var agentLevels: ["ask", "trusted"]
+  // What the running agent can honour. All three until the daemon says
+  // otherwise, so the choice is not narrowed to two while the service is off;
+  // the daemon then holds an agent that cannot ask read-only, and says so.
+  property var agentLevels: ["ask", "edits", "trusted"]
   property bool vRemembers: true
   property string vOverriding: ""
   property bool vGoverned: true
   property bool vVerifier: false
   property bool vTakesModel: false
   // The effort levels the running agent takes with its model, lowest first,
-  // as the daemon works them out. Empty means no slider: an older model, an
-  // agent with no such flag, or an endpoint.
+  // as the daemon works them out. Empty means no effort control.
   property var vEfforts: []
   // The extra agents as the daemon sees them: per name, the effort levels its
   // model takes, the permission levels its program can honour, and why it
-  // cannot be woken or cannot answer, if so. The settings themselves are in
-  // `voiceAgents` below; this is only what the daemon knows about them.
+  // cannot be woken or cannot answer, if so.
   property var vCrew: []
+  // name -> what that agent is doing ("idle", "thinking", "speaking"), with
+  // more than one agent.
+  property var vLive: ({})
+
+  // Omarchy's default agent, read from the file `omarchy default agent`
+  // writes, so the main agent has a name while the service is stopped.
+  property string defaultAgent: ""
+  FileView {
+    id: defaultAgentFile
+    path: root.configHome + "/omarchy/defaults/agent"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: defaultAgentFile.reload()
+    onLoaded: root.defaultAgent = String(text()).trim()
+    onLoadFailed: root.defaultAgent = ""
+  }
+  readonly property string mainAgent: vAgent !== "" ? vAgent : defaultAgent
+  readonly property bool usingEndpoint: String(setting("endpointUrl", "")) !== ""
+                                        && String(setting("endpointModel", "")) !== ""
+
+  // systemd is the authority on whether the daemon is up; the state file only
+  // says what it is doing, and a stale one outlives a crashed daemon.
+  property bool serviceActive: false
+  property bool serviceBusy: false
+  property bool engineInstalled: true
+  // Why a switch did nothing, when it did nothing. See CLAUDE.md: a control
+  // that does nothing must say why.
+  property string note: ""
+
+  Process {
+    id: enginePresent
+    command: ["bash", "-c", "command -v agentvoice >/dev/null && echo yes || echo no"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var found = String(text).trim() === "yes"
+        if (found && !root.engineInstalled) root.note = ""
+        root.engineInstalled = found
+      }
+    }
+  }
+  Process {
+    id: activeProbe
+    command: ["agentvoice", "is-active"]
+    stdout: StdioCollector {
+      onStreamFinished: root.serviceActive = String(text).trim() === "yes"
+    }
+  }
+  Timer {
+    interval: 2000
+    running: root.opened
+    repeat: true
+    triggeredOnStart: true
+    onTriggered: {
+      if (!enginePresent.running) enginePresent.running = true
+      if (root.engineInstalled) {
+        if (!activeProbe.running) activeProbe.running = true
+      } else {
+        root.serviceActive = false
+      }
+      // Same recovery as the panel: a first install has no state file to
+      // watch, so the watch never attaches and the screen never updates.
+      if (root.vState === "off") stateFile.reload()
+    }
+  }
+
+  // Start or stop the service. The one way in from this screen, so the one
+  // guard: no engine, no toggle, and a reason on screen.
+  function toggleService() {
+    if (!root.engineInstalled) {
+      root.note = "The voice engine is not installed yet. Install it from About."
+      return
+    }
+    root.note = ""
+    root.serviceBusy = true
+    serviceToggle.running = true
+  }
+  Process {
+    id: serviceToggle
+    command: ["agentvoice", "toggle"]
+    property bool exited: false
+    onExited: exited = true
+    // `running` going false, not onExited: a spawn that never started emits
+    // no exit, and would leave the switch busy for good.
+    onRunningChanged: if (!running) {
+      root.serviceBusy = false
+      if (!exited) root.note = "Could not run `agentvoice`. The engine may have been removed."
+      exited = false
+      activeProbe.running = true
+    }
+  }
+
+  // Release or re-engage the microphone, leaving the service warm.
+  function toggleMic() {
+    if (!root.engineInstalled) {
+      root.note = "The voice engine is not installed yet. Install it from About."
+      return
+    }
+    if (!root.serviceActive) return
+    root.note = ""
+    micToggle.running = true
+  }
+  Process { id: micToggle; command: ["agentvoice", "mic"] }
+
+  readonly property bool turnRunning: serviceActive
+                                      && (vState === "speaking" || vState === "thinking"
+                                          || vState === "transcribing")
+  function stopTurn() {
+    if (!root.engineInstalled || !root.turnRunning) return
+    interrupt.running = true
+  }
+  Process { id: interrupt; command: ["agentvoice", "interrupt"] }
+
+  // What the service is doing, in words, for the Overview and the cards.
+  readonly property string stateLabel: {
+    if (!engineInstalled) return "Not installed"
+    if (!serviceActive) return "Off"
+    if (vState === "locked") return "Closed while the screen is locked"
+    if (vState === "capture") return "Listening to you"
+    if (vState === "followup") return "Still listening"
+    if (vState === "transcribing") return "Transcribing"
+    if (vState === "thinking") return "Thinking"
+    if (vState === "speaking") return "Speaking"
+    if (vState === "listening") return "Waiting for “" + activePhrase + "”"
+    if (vState === "yielded") return "Another app is recording"
+    if (vState === "off") return "Microphone off"
+    return "Starting"
+  }
+  readonly property string stateTone: {
+    if (!engineInstalled) return "alert"
+    if (!serviceActive || vState === "off" || vState === "locked" || vState === "yielded") return "idle"
+    if (vState === "capture" || vState === "followup") return "alert"
+    if (vState === "listening") return "active"
+    return "busy"
+  }
+
+  // What one agent is doing, by name. "" is the main agent.
+  function agentStatus(name) {
+    if (!serviceActive) return "off"
+    var live = root.vLive || {}
+    if (name !== "" && live[name] !== undefined) return String(live[name])
+    if (name === "" && (root.lastWho === "" || Object.keys(live).length === 0)) {
+      if (vState === "thinking" || vState === "speaking" || vState === "transcribing") return vState
+    }
+    if (vState === "locked" || vState === "off" || vState === "yielded") return "paused"
+    return "idle"
+  }
+  function statusTone(status) {
+    if (status === "thinking" || status === "speaking" || status === "transcribing") return "busy"
+    if (status === "off" || status === "paused") return "idle"
+    return "active"
+  }
 
   // --- more agents ------------------------------------------------------------
   // Each one is woken by its own name and has its own program, model,
@@ -186,6 +405,11 @@ Item {
     { label: "Antigravity", value: "agy" },
     { label: "Copilot", value: "copilot" }
   ]
+  function programLabel(value) {
+    for (var i = 0; i < programOptions.length; i++)
+      if (programOptions[i].value === value) return programOptions[i].label
+    return value
+  }
   // Names that suggest themselves for a new agent, every one a word the
   // wake engine knows. The first not already taken is offered.
   readonly property var nameSuggestions: [
@@ -199,160 +423,6 @@ Item {
     return ({})
   }
 
-  function saveAgents(list) {
-    persist("voiceAgents", JSON.stringify(list), true)
-  }
-
-  function updateAgent(index, key, value) {
-    var list = []
-    for (var i = 0; i < root.voiceAgents.length; i++) {
-      var copy = {}
-      var a = root.voiceAgents[i] || {}
-      for (var k in a) copy[k] = a[k]
-      if (i === index) copy[key] = value
-      list.push(copy)
-    }
-    saveAgents(list)
-  }
-
-  function addAgent() {
-    if (root.voiceAgents.length >= root.maxAgents) return
-    var taken = {}
-    var mine = root.activePhrase.split(" ")
-    for (var m = 0; m < mine.length; m++) taken[mine[m]] = true
-    for (var i = 0; i < root.voiceAgents.length; i++)
-      taken[String((root.voiceAgents[i] || {}).name || "")] = true
-    var name = ""
-    for (var j = 0; j < root.nameSuggestions.length && name === ""; j++)
-      if (!taken[root.nameSuggestions[j]]) name = root.nameSuggestions[j]
-    var list = root.voiceAgents.slice()
-    list.push({ name: name, agent: "claude", model: "", effort: "", voice: "",
-                level: "ask", projectDir: "" })
-    saveAgents(list)
-  }
-
-  function removeAgent(index) {
-    var list = root.voiceAgents.slice()
-    list.splice(index, 1)
-    saveAgents(list)
-  }
-
-  function agentModelChoices(program, current) {
-    var out = [{ label: "Default  (whatever " + program + " uses on its own)", value: "" }]
-    var presets = root.modelPresets[program] || []
-    var known = current === ""
-    for (var i = 0; i < presets.length; i++) {
-      out.push(presets[i])
-      if (presets[i].value === current) known = true
-    }
-    if (!known) out.push({ label: current + "  (custom)", value: current })
-    out.push({ label: "Other…", value: "__other__" })
-    return out
-  }
-
-  function agentLevelChoices(levels) {
-    var out = []
-    var list = levels && levels.length ? levels : ["ask", "edits", "trusted"]
-    for (var i = 0; i < list.length; i++) {
-      var v = String(list[i])
-      if (v === "trusted") out.push({ label: "Trust everything in its folder", value: v })
-      else if (v === "edits") out.push({ label: "Edits in its folder are fine, ask for commands", value: v })
-      else out.push({ label: list.indexOf("edits") >= 0 ? "Ask before every change"
-                                                        : "Read-only, never act unasked",
-                      value: "ask" })
-    }
-    return out
-  }
-
-  // The phrase actually being listened for. Both engines keep their own
-  // key and the inactive one stays in shell.json, so reading the raw
-  // setting would name a phrase nothing is listening for.
-  readonly property string activePhrase:
-    root.usingOww ? String(root.setting("owwModel", "hey_jarvis")).replace(/_/g, " ")
-                  : String(root.setting("phrase", "hey computer"))
-  readonly property string projectDir: setting("projectDir", "")
-
-  // Levels are stored per agent: trust is a judgement about one program's
-  // capabilities, and letting it survive `omarchy default agent` would hand
-  // the next one a decision nobody made about it.
-  function setLevel(value) {
-    var all = {}
-    var current = cfg["permissions"]
-    if (current && typeof current === "object")
-      for (var k in current) all[k] = current[k]
-    if (root.vAgent === "") return
-    all[root.vAgent] = value
-    persist("permissions", JSON.stringify(all), true)
-  }
-
-  // Per agent, like the level: a model name means something to one CLI and
-  // nothing to the next, so it must not follow `omarchy default agent`.
-  function agentModel() {
-    var all = cfg["agentModels"]
-    if (!all || typeof all !== "object" || root.vAgent === "") return ""
-    var v = all[root.vAgent]
-    return typeof v === "string" ? v : ""
-  }
-
-  function setModel(value) {
-    var all = {}
-    var current = cfg["agentModels"]
-    if (current && typeof current === "object")
-      for (var k in current) all[k] = current[k]
-    if (root.vAgent === "") return
-    var v = String(value).trim()
-    if (v === "") delete all[root.vAgent]
-    else all[root.vAgent] = v
-    persist("agentModels", JSON.stringify(all), true)
-  }
-
-  // Per agent, like the model it depends on.
-  function agentEffort() {
-    var all = cfg["agentEfforts"]
-    if (!all || typeof all !== "object" || root.vAgent === "") return ""
-    var v = all[root.vAgent]
-    return typeof v === "string" ? v : ""
-  }
-
-  function setEffort(value) {
-    var all = {}
-    var current = cfg["agentEfforts"]
-    if (current && typeof current === "object")
-      for (var k in current) all[k] = current[k]
-    if (root.vAgent === "") return
-    if (value === "") delete all[root.vAgent]
-    else all[root.vAgent] = value
-    persist("agentEfforts", JSON.stringify(all), true)
-  }
-
-  readonly property var effortNames: ({
-    "low": "Low", "medium": "Medium", "high": "High",
-    "xhigh": "Extra high", "max": "Max"
-  })
-  // Notch 0 is the default; 1..n are the levels this model takes.
-  readonly property var effortLabels: {
-    var out = ["Default"]
-    for (var i = 0; i < root.vEfforts.length; i++) {
-      var e = String(root.vEfforts[i])
-      out.push(root.effortNames[e] || e)
-    }
-    return out
-  }
-  readonly property int effortIndex: root.vEfforts.indexOf(root.agentEffort()) + 1
-
-  function levelOption(value) {
-    if (value === "trusted") return { label: "Trust everything here", value: "trusted" }
-    if (value === "edits") return { label: "Edits here are fine, ask for commands", value: "edits" }
-    return { label: root.agentLevels.indexOf("edits") >= 0
-                    ? "Ask before every change" : "Read-only, never act unasked",
-             value: "ask" }
-  }
-  readonly property var levelOptions: {
-    var out = []
-    for (var i = 0; i < root.agentLevels.length; i++)
-      out.push(levelOption(String(root.agentLevels[i])))
-    return out
-  }
   // The model dropdown. Known aliases per agent, then whatever custom name is
   // already saved (so it stays selectable), then "Other…" for typing one.
   // "Other…" is a local UI state, never persisted: picking it only reveals
@@ -365,26 +435,59 @@ Item {
       { label: "Haiku — fastest", value: "haiku" }
     ]
   })
-  property bool customModel: false
-  readonly property var agentModelOptions: {
-    var cur = root.agentModel()
-    var out = [{ label: "Default  (whatever " + (root.vAgent || "the agent") +
-                        " uses on its own)", value: "" }]
-    var presets = root.modelPresets[root.vAgent] || []
-    var known = cur === ""
+  function agentModelChoices(program, current) {
+    var out = [{ label: "Default  (whatever " + (program || "the agent") + " uses on its own)", value: "" }]
+    var presets = root.modelPresets[program] || []
+    var known = current === ""
     for (var i = 0; i < presets.length; i++) {
       out.push(presets[i])
-      if (presets[i].value === cur) known = true
+      if (presets[i].value === current) known = true
     }
-    if (!known) out.push({ label: cur + "  (custom)", value: cur })
+    if (!known) out.push({ label: current + "  (custom)", value: current })
     out.push({ label: "Other…", value: "__other__" })
     return out
   }
-  onVAgentChanged: customModel = false
 
-  readonly property bool speakReplies: setting("speakReplies", true)
-  readonly property bool chimes: setting("chimes", true)
-  readonly property bool keepHistory: setting("keepHistory", true)
+  readonly property var effortNames: ({
+    "low": "Low", "medium": "Medium", "high": "High",
+    "xhigh": "Extra high", "max": "Max"
+  })
+  // Segmented-choice options for an effort list: Default, then each level.
+  function effortChoices(efforts) {
+    var out = [{ value: "", label: "Default" }]
+    for (var i = 0; i < efforts.length; i++) {
+      var e = String(efforts[i])
+      out.push({ value: e, label: root.effortNames[e] || e })
+    }
+    return out
+  }
+
+  function levelLabel(value, levels) {
+    if (value === "trusted") return "Trust everything"
+    if (value === "edits") return "Edits are fine"
+    return (levels || []).indexOf("edits") >= 0 || !levels ? "Ask first" : "Read-only"
+  }
+  function levelChoices(levels) {
+    var out = []
+    var list = levels && levels.length ? levels : ["ask", "edits", "trusted"]
+    for (var i = 0; i < list.length; i++) {
+      var v = String(list[i])
+      out.push({ value: v, label: levelLabel(v, list),
+                 tooltip: v === "trusted" ? "Nothing is asked. A spoken sentence can edit files and run commands."
+                        : v === "edits" ? "Source files in its folder are edited without asking; commands still ask."
+                        : "Every change is asked about on screen." })
+    }
+    return out
+  }
+
+  // The phrase actually being listened for. Both engines keep their own
+  // key and the inactive one stays in shell.json, so reading the raw
+  // setting would name a phrase nothing is listening for.
+  readonly property string activePhrase:
+    root.usingOww ? String(root.setting("owwModel", "hey_jarvis")).replace(/_/g, " ")
+                  : String(root.setting("phrase", "hey computer"))
+  readonly property string projectDir: String(setting("projectDir", ""))
+
   readonly property string engine: setting("engine", "vosk")
   readonly property bool usingOww: engine === "openwakeword"
   // Selected *and* able to run. The daemon falls back to Vosk when
@@ -393,16 +496,56 @@ Item {
   // off the setting -- otherwise the page describes an engine that is not
   // running.
   readonly property bool owwLive: usingOww && owwAvailable
+  readonly property bool keepHistory: setting("keepHistory", true) === true
 
+  // --- what needs fixing --------------------------------------------------------
+  // One list, drawn on the Overview with a link to the page that fixes each.
+  // Every entry here is something that makes a control silently not do what
+  // it says; each used to be a red paragraph somewhere down the old page.
+  readonly property int agentProblems: {
+    var n = 0
+    for (var i = 0; i < problems.length; i++) if (problems[i].page === "agents") n++
+    return n
+  }
+  readonly property var problems: {
+    var out = []
+    if (!engineInstalled)
+      out.push({ text: "The voice engine is not installed yet.", page: "about" })
+    if (usingOww && !owwAvailable)
+      out.push({ text: "openWakeWord is chosen but not installed, so Vosk is listening instead.",
+                 page: "listening" })
+    var voice = String(setting("voice", "lessac-medium"))
+    if (voiceMissing(voice))
+      out.push({ text: "The voice “" + voiceName(voice) + "” is not downloaded, so another is speaking.",
+                 page: "voice" })
+    if (projectDir.trim() === "" && permissionLevel === "edits" && !usingEndpoint)
+      out.push({ text: "“Edits are fine” has no project folder, so every change is still asked about.",
+                 page: "agents", agent: "main" })
+    if (usingOww && voiceAgents.length > 0)
+      out.push({ text: "openWakeWord hears only its own phrase, so your other agents cannot be woken.",
+                 page: "listening" })
+    for (var i = 0; i < vCrew.length; i++) {
+      var c = vCrew[i] || {}
+      if (String(c.problem || "") !== "")
+        out.push({ text: String(c.name) + ": " + String(c.problem), page: "agents", agent: String(c.name) })
+    }
+    if (setting("conversationMode", true) === true && !vRemembers && serviceActive)
+      out.push({ text: (mainAgent || "This agent") + " starts fresh every turn, so follow-ups have no memory.",
+                 page: "conversation" })
+    return out
+  }
+
+  // --- opening, and moving between pages ---------------------------------------
   function open(payloadJson) {
     mode = "settings"
     var wanted = ""
+    var p = {}
     try {
-      var p = JSON.parse(payloadJson || "{}")
+      p = JSON.parse(payloadJson || "{}") || {}
       if (p.mode === "permission") mode = "permission"
       if (p.mode === "history") mode = "history"
       if (p.id) wanted = String(p.id)
-    } catch (e) {}
+    } catch (e) { p = {} }
 
     opened = true
     if (mode === "permission") {
@@ -421,18 +564,29 @@ Item {
                                     : ["agentvoice", "pending"]
       pendingProbe.running = true
     } else {
+      // A deep link: {"page": "agents", "agent": "sarah"} opens that card.
+      if (mode === "settings") goTo(String(p.page || "overview"), String(p.agent || ""))
       showPage(mode)
     }
   }
 
-  // Between the settings and the conversation, from the link in the header
-  // as well as from open(). Not to or from a permission prompt: that card is
-  // a question with a countdown, and wandering off it is not an answer.
-  function showPage(page) {
-    mode = page
-    cfgReload.running = true
+  function goTo(pageId, agent) {
+    var known = false
+    for (var i = 0; i < pages.length; i++) if (pages[i].id === pageId) known = true
+    page = known ? pageId : "overview"
+    focusAgent = agent || ""
+    mode = "settings"
+    Qt.callLater(function() { if (pageScroll) pageScroll.contentY = 0 })
+  }
+
+  // Between the settings and the conversation, from the header as well as
+  // from open(). Not to or from a permission prompt: that card is a question
+  // with a countdown, and wandering off it is not an answer.
+  function showPage(m) {
+    mode = m
+    store.reload()
     stateFile.reload()
-    if (page === "history") {
+    if (m === "history") {
       historyFile.reload()
       historyList.following = true
       Qt.callLater(historyList.positionViewAtEnd)
@@ -537,8 +691,8 @@ Item {
   // Closed the moment the screen locks. This is a layer-shell surface, and
   // the HUD's own notes say those draw over the lock screen -- which with
   // this page open would put the whole session's conversation above a
-  // locked machine.
-  onVStateChanged: if (vState === "locked" && opened && mode === "history") close()
+  // locked machine. The Overview shows the last exchange, so it goes too.
+  onVStateChanged: if (vState === "locked" && opened && mode !== "permission") close()
 
   function answer(verdict) {
     if (!request || !request.id) { close(); return }
@@ -631,50 +785,43 @@ Item {
 
   Process { id: fetcher }
 
-  function persist(key, value, json) {
-    setter.command = ["omarchy", "bar", "set", "duaneoca.agentvoice",
-                      key, String(value)].concat(json ? ["--json"] : [])
-    setter.running = true
+  // Pick a voice, and fetch it if it is not on disk. Shared by the main
+  // voice and every agent's, so a voice chosen anywhere arrives.
+  function chooseVoice(v) {
+    if (v !== "" && root.voiceMissing(v)) root.fetchVoice(v)
   }
 
-  Process {
-    id: setter
-    onExited: cfgReload.running = true
+  function trainVerifier() {
+    // Switching to an engine that is not installed changes nothing a user
+    // can see -- the daemon just falls back again. Send them to the
+    // installer instead, which is the actual precondition.
+    if (!root.owwAvailable) { root.fetchNow(["--oww"]); return }
+    if (!root.usingOww) { root.put("engine", "openwakeword"); return }
+    trainer.command = ["omarchy-launch-floating-terminal-with-presentation",
+                       "agentvoice-train-verifier"]
+    trainer.running = true
+    root.dismiss()
   }
-
-  // shell.json changes from more than one place: this screen, the panel's own
-  // switch, `omarchy bar set`, and a refresh. This screen only re-read it when
-  // it was opened or when it wrote, so anything changed underneath an open
-  // screen stayed invisible here while the panel -- which the bar updates live
-  // -- showed the new value. The two then disagreed, which is exactly the kind
-  // of thing a settings screen must never do about permissions.
-  FileView {
-    id: cfgFile
-    path: (Quickshell.env("XDG_CONFIG_HOME")
-           || ((Quickshell.env("HOME") || "") + "/.config")) + "/omarchy/shell.json"
-    watchChanges: true
-    printErrors: false
-    onFileChanged: {
-      cfgFile.reload()
-      cfgReload.running = true
-    }
-  }
-
-  // shell.json is the store; jq pulls out just this widget's entry.
-  Process {
-    id: cfgReload
-    command: ["bash", "-c",
-      "jq -c '[.bar.layout[]?[]? | select(.id==\"duaneoca.agentvoice\")][0] // {}' " +
-      "\"${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json\" 2>/dev/null || echo '{}'"]
-    stdout: StdioCollector {
-      onStreamFinished: {
-        try { root.cfg = JSON.parse(String(text).trim() || "{}") }
-        catch (e) { root.cfg = ({}) }
-      }
-    }
-  }
-
   Process { id: trainer }
+
+  // Last on the About page, and the only red control in the overlay. Removal
+  // lives inside the settings it removes because nothing runs on the way
+  // out: `omarchy plugin remove` is an rm -rf with no hook, so the only
+  // moment this can clean up after itself is while it exists.
+  function removeEverything() {
+    // One command, no shell logic. The launcher already does `cmd="$*"` and
+    // re-wraps it in its own `bash -c`, and a second one here swallowed the
+    // flag as $0 -- which ran this as a fresh *install* instead. The widget
+    // removal is --with-widget, so the script can check afterwards that it
+    // actually happened. XDG_DATA_HOME, not ~/.local/share: that is where
+    // install.sh puts it.
+    remover.command = ["omarchy-launch-floating-terminal-with-presentation",
+                       root.shq(root.dataHome + "/agentvoice/app/install.sh") +
+                       " --uninstall --with-widget"]
+    remover.running = true
+    root.dismiss()
+  }
+  Process { id: remover }
 
   // Custom .onnx wake models the user has trained and dropped in.
   Process {
@@ -696,16 +843,6 @@ Item {
     }
   }
 
-  // Same recovery as the panel: a first install has no state file to watch,
-  // so the watch never attaches and the screen never updates. A sibling of
-  // the FileView, not a child -- its default property takes an adapter.
-  Timer {
-    interval: 2000
-    running: root.opened && root.vState === "off"
-    repeat: true
-    onTriggered: stateFile.reload()
-  }
-
   FileView {
     id: stateFile
     path: (Quickshell.env("XDG_RUNTIME_DIR") || "/run/user/1000") + "/agentvoice/state"
@@ -717,7 +854,11 @@ Item {
       try {
         var d = JSON.parse(text())
         root.vState = String(d.state || "off")
-        if (d.level_db !== undefined) root.levelDb = d.level_db
+        root.levelDb = d.level_db !== undefined ? d.level_db : -99
+        if (d.transcript !== undefined) root.lastTranscript = String(d.transcript)
+        if (d.reply !== undefined) root.lastReply = String(d.reply)
+        if (d.latency_ms !== undefined) root.lastLatencyMs = Math.round(d.latency_ms)
+        root.lastWho = d.who !== undefined ? String(d.who) : ""
         if (d.agent !== undefined) root.vAgent = String(d.agent)
         if (d.level !== undefined) root.permissionLevel = String(d.level)
         if (d.posture !== undefined) root.vPosture = String(d.posture)
@@ -728,13 +869,17 @@ Item {
         if (d.verifier !== undefined) root.vVerifier = (d.verifier === true)
         if (d.takes_model !== undefined) root.vTakesModel = (d.takes_model === true)
         // Reset when absent rather than kept: with no agent running the
-        // field is not published, and a slider left over from the last one
+        // field is not published, and a control left over from the last one
         // would be a control that does nothing.
         root.vEfforts = Array.isArray(d.efforts) ? d.efforts : []
         root.vCrew = Array.isArray(d.crew) ? d.crew : []
+        root.vLive = (d.live && typeof d.live === "object") ? d.live : ({})
       } catch (e) {}
     }
   }
+
+  // The scroller the current page sits in, for sliders' wheel handling.
+  property Flickable pageScroll: null
 
   PanelWindow {
     id: window
@@ -762,15 +907,16 @@ Item {
     BorderSurface {
       id: card
       anchors.centerIn: parent
-      // The conversation gets more room than the settings: it is text to
-      // read, and the whole point of it was that the popup had too little.
-      width: Math.min(Style.space(root.mode === "history" ? 680 : 560),
+      // The settings get a sidebar and room beside it; the conversation is
+      // text to read; the prompt is one question.
+      width: Math.min(Style.space(root.mode === "history" ? 680
+                                  : root.mode === "permission" ? 560 : 880),
                       parent.width - Style.gapsOut * 2)
       height: root.mode === "permission"
               ? Math.min(Style.space(300), parent.height - Style.gapsOut * 2)
               : root.mode === "history"
                 ? Math.min(Style.space(760), parent.height - Style.gapsOut * 2)
-                : Math.min(Style.space(660), parent.height - Style.gapsOut * 2)
+                : Math.min(Style.space(700), parent.height - Style.gapsOut * 2)
       radius: Style.cornerRadius
       color: root.background
       borderSpec: root.borderSpec
@@ -779,6 +925,15 @@ Item {
       MouseArea { anchors.fill: parent }
 
       Keys.onEscapePressed: root.dismiss()
+      // Ctrl+1..7 jump to a page, from anywhere in the settings.
+      Keys.onPressed: function(e) {
+        if (root.mode !== "settings" || !(e.modifiers & Qt.ControlModifier)) return
+        var n = e.key - Qt.Key_1
+        if (n >= 0 && n < root.pages.length) {
+          root.goTo(root.pages[n].id, "")
+          e.accepted = true
+        }
+      }
       focus: root.opened
 
       Column {
@@ -787,43 +942,50 @@ Item {
         anchors.margins: Style.spacing.panelPadding
         spacing: Style.spacing.md
 
-        Row {
+        Item {
           width: parent.width
-          spacing: Style.space(12)
+          height: Math.max(titleText.implicitHeight, headerButtons.implicitHeight)
+
           Text {
+            id: titleText
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
             text: root.mode === "permission" ? "Allow this?"
                   : root.mode === "history" ? "Conversation" : "Agent Voice"
-            color: root.mode === "permission" ? Commons.Color.urgent : root.foreground
+            color: root.mode === "permission" ? root.urgent : root.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.title
             font.bold: true
-            width: parent.width - hint.width - parent.spacing
-                   - (switcher.visible ? switcher.width + parent.spacing : 0)
           }
-          // The other page. Not on a permission prompt -- see showPage().
-          Text {
-            id: switcher
-            visible: root.mode !== "permission"
+
+          Row {
+            id: headerButtons
+            anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            text: root.mode === "history" ? "settings ›" : "conversation ›"
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            MouseArea {
-              anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
+            spacing: Style.space(12)
+
+            // The other page. Not on a permission prompt -- see showPage().
+            Button {
+              id: switcher
+              visible: root.mode !== "permission"
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.mode === "history" ? "Settings" : "Conversation"
+              iconText: root.mode === "history" ? "\u{f0493}" : "\u{f0b79}"
+              fontFamily: root.fontFamily
+              foreground: root.foreground
+              bordered: true
               onClicked: root.showPage(root.mode === "history" ? "settings" : "history")
             }
-          }
-          Text {
-            id: hint
-            anchors.verticalCenter: parent.verticalCenter
-            text: root.mode === "permission"
-                  ? "denied in " + root.secondsLeft + "s"
-                  : "esc to close"
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
+            Text {
+              id: hint
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.mode === "permission"
+                    ? "denied in " + root.secondsLeft + "s"
+                    : "esc to close"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
           }
         }
 
@@ -856,7 +1018,7 @@ Item {
             visible: (root.request.note || "") !== ""
             text: root.request.note || ""
             textFormat: Text.PlainText
-            color: Commons.Color.urgent
+            color: root.urgent
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
           }
@@ -872,7 +1034,7 @@ Item {
                              Math.max(Style.space(44),
                                       cmd.implicitHeight + Style.space(16)))
             radius: Style.cornerRadius
-            color: Qt.darker(root.background, 1.25)
+            color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
             borderSpec: root.borderSpec
 
             Flickable {
@@ -917,7 +1079,7 @@ Item {
                   + (cmdScroll.contentHeight > cmdScroll.height
                      ? " · scroll to read it all" : "")
             textFormat: Text.PlainText
-            color: (root.request.truncated || 0) > 0 ? Commons.Color.urgent : root.dim
+            color: (root.request.truncated || 0) > 0 ? root.urgent : root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
           }
@@ -928,11 +1090,13 @@ Item {
             Button {
               text: "Deny"
               fontFamily: root.fontFamily
+              bordered: true
               onClicked: root.answer("deny")
             }
             Button {
               text: "Allow once"
               fontFamily: root.fontFamily
+              bordered: true
               onClicked: root.answer("allow")
             }
           }
@@ -947,1365 +1111,120 @@ Item {
           }
         }
 
-        Flickable {
-          id: formScroll
+        // --- settings: the sidebar and the page beside it ---------------
+        Item {
+          id: settingsArea
           visible: root.mode === "settings"
           width: parent.width
-          height: body.height - y - Style.spacing.md
-          contentWidth: width
-          contentHeight: form.implicitHeight
-          clip: true
-          boundsBehavior: Flickable.StopAtBounds
-          // The configuration every other scrolling panel in Omarchy uses --
-          // nine of them attach a ScrollBar, and this one did not. A bare
-          // Flickable handles the wheel itself and moves a short, momentum-less
-          // step; with a ScrollBar attached the Controls wheel handling applies,
-          // which is what those panels feel like. This page was the outlier.
-          flickableDirection: Flickable.VerticalFlick
-          interactive: contentHeight > height
-          // Namespaced: a plain `import QtQuick.Controls` shadows Omarchy's
-          // own Button, Toggle and Dropdown with the Controls types of the
-          // same names. qs.Ui is imported last so it wins at runtime, but
-          // qmllint cannot tell, and neither can a reader.
-          QQC.ScrollBar.vertical: QQC.ScrollBar { policy: QQC.ScrollBar.AsNeeded }
+          height: body.height - y
 
+          SidebarNav {
+            id: sidebar
+            anchors.left: parent.left
+            anchors.top: parent.top
+            width: Style.space(170)
+            pages: root.pages
+            current: root.page
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onPicked: function(id) { root.goTo(id, "") }
+          }
+
+          // Things that are not a page: what failed to save, and why a
+          // switch did nothing. Under the sidebar so they never push the
+          // page about.
           Column {
-            id: form
-            width: parent.width
-            spacing: Style.spacing.md
+            anchors.left: parent.left
+            anchors.bottom: parent.bottom
+            width: sidebar.width
+            spacing: Style.space(6)
 
-            // The switch first, because it is the one people reach for, and the
-            // duration with it, because the two are one setting described twice:
-            // how long it stays governs nothing when it is not shown. Split
-            // across the page they were the same mistake as a follow-up window
-            // sitting apart from "keep listening after a reply".
-            SettingsGroup {
-              width: parent.width
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              title: "ON-SCREEN READOUT"
-
-              Toggle {
-                width: parent.width
-                label: "Show what it heard and what it answered"
-                description: "A panel by the bar while it works, from the wake word " +
-                             "until shortly after the answer. It cannot take the " +
-                             "keyboard from what you are typing."
-                checked: root.setting("hud", true) === true
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.persist("hud",
-                    root.setting("hud", true) === true ? "false" : "true", true)
-              }
-
-              KnobRow {
-                width: parent.width
-                // The knob hides, not the box: the box holds the switch now, so
-                // hiding it would take away the only way to turn the thing back
-                // on. Same shape as the follow-up window under "keep listening".
-                visible: root.setting("hud", true) === true
-                scrollTarget: formScroll
-                foreground: root.foreground; fontFamily: root.fontFamily
-                label: "How long it stays afterwards"
-                unit: "ms"
-                description: "Measured from the end of the exchange, including the " +
-                             "follow-up window. Zero closes it immediately."
-                value: root.setting("hudLingerMs", 2000)
-                minimum: 0; maximum: 10000; stepSize: 500
-                onCommitted: function(v) { root.persist("hudLingerMs", v, true) }
-              }
-            }
-
-            // Grouped rather than separated. Ten sections divided by rules had
-            // become easy to get lost in, and a rule only says something changed;
-            // a box says these belong together -- which matters most where a knob
-            // is meaningless without the switch above it.
-            SettingsGroup {
-              width: parent.width
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              title: "WHILE YOU INTERACT WITH IT"
-
-              Toggle {
-                width: parent.width
-                label: "Speak replies aloud"
-                description: "Off leaves the reply as text in the panel."
-                checked: root.speakReplies
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.persist("speakReplies",
-                                        root.speakReplies ? "false" : "true", true)
-              }
-
-              Toggle {
-                width: parent.width
-                label: "Sounds for listening, heard and done"
-                description: "A rising tone when the wake word lands, a soft " +
-                             "one when it has heard the end of what you said, " +
-                             "and a chime when a long task finishes -- so you " +
-                             "know where it is without looking. Push-to-talk " +
-                             "gets no opening tone; the key is the signal."
-                checked: root.chimes
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.persist("chimes",
-                                        root.chimes ? "false" : "true", true)
-              }
-
-              Toggle {
-                width: parent.width
-                label: "Keep this session's conversation"
-                description: "Every exchange, for the conversation view -- " +
-                             "open it from the panel, or by clicking the " +
-                             "readout. Kept in memory only, readable by you " +
-                             "alone, and gone when you log out. Off deletes " +
-                             "what is already kept."
-                checked: root.keepHistory
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.persist("keepHistory",
-                                        root.keepHistory ? "false" : "true", true)
-              }
-
-              Toggle {
-                width: parent.width
-                label: "Keep listening after a reply"
-                description: "Carry on without repeating the wake word. Say " +
-                             "\"stop\", \"cancel that\" or \"never mind\" to end it, " +
-                             "or just stay quiet."
-                checked: root.conversation
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.persist("conversationMode",
-                                        root.conversation ? "false" : "true", true)
-              }
-
-              Toggle {
-                width: parent.width
-                label: "Step aside when another app records"
-                description: "Stop listening while something else is using " +
-                             "the microphone -- dictation, a call, a " +
-                             "recorder -- and start again when it finishes. " +
-                             "Without this, saying the wake phrase while " +
-                             "dictating elsewhere makes the agent answer out " +
-                             "loud into what you are dictating. Your own mute " +
-                             "is untouched either way."
-                checked: root.yieldToRecorders
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.persist("yieldToRecorders",
-                                        root.yieldToRecorders ? "false" : "true",
-                                        true)
-              }
-
-              Toggle {
-                width: parent.width
-                label: "Write what is said to the system log"
-                description: "Off by default. The journal keeps entries for " +
-                             "weeks, so logging replies leaves a transcript " +
-                             "of everything the agent read out -- file " +
-                             "contents, key names -- sitting there until it " +
-                             "rotates. Timings, wake events and errors are " +
-                             "always logged; this is only the words. Turn it " +
-                             "on to diagnose something."
-                checked: root.logSpeech
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.persist("logSpeech",
-                                        root.logSpeech ? "false" : "true", true)
-              }
-
-              // Left on rather than switched off for a backend that forgets:
-              // it still saves the wake word, which is half of what it is for.
-              // What it cannot do is follow on, and that failure is silent --
-              // the window opens, it listens, it answers from nothing.
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                visible: root.conversation && !root.vRemembers
-                text: (root.vAgent === "" ? "This agent" : root.vAgent) +
-                      " starts fresh on every turn, so this saves you the wake " +
-                      "word and nothing more. Asking \"what did you mean by " +
-                      "that?\" will get an answer to a question it has never seen."
-                color: Commons.Color.urgent
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              KnobRow {
-                width: parent.width
-                visible: root.conversation
-                scrollTarget: formScroll
-                foreground: root.foreground; fontFamily: root.fontFamily
-                label: "Follow-up window"
-                description: "How long it keeps listening after speaking before " +
-                             "it needs the wake word again."
-                value: root.setting("followUpMs", 7000)
-                minimum: 2000; maximum: 20000; stepSize: 500
-                onCommitted: function(v) { root.persist("followUpMs", v, true) }
-              }
-            }
-
-            // The directory and what is allowed in it are one decision, not
-            // two: a permission level with no root to apply to means nothing,
-            // and changing where the agent works without revisiting what it
-            // may do there is how you end up trusting the wrong folder.
             Text {
               width: parent.width
+              visible: store.error !== ""
               wrapMode: Text.WordWrap
-              visible: !root.vGoverned
-              text: "⚠  Not in use right now. The endpoint answering works on " +
-                    "its own machine, in a directory it chooses — these two " +
-                    "settings govern an agent started here, and reach nothing " +
-                    "over there. Restrain that one where it runs."
-              color: Commons.Color.urgent
+              text: store.error
+              textFormat: Text.PlainText
+              color: root.urgent
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
             }
-            SettingsGroup {
+            Text {
               width: parent.width
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              title: "AGENT PROJECT FOLDER AND PERMISSIONS"
-
-              TextField {
-                width: parent.width
-                text: root.projectDir
-                placeholderText: "~  (your home directory)"
-                foreground: root.foreground
-                font.family: root.fontFamily
-                onEditingFinished: {
-                  if (text !== root.projectDir) root.persist("projectDir", text, false)
-                }
-              }
-
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: "Where the agent works. Everything it reads, writes or runs " +
-                      "happens here. Changing it starts a new conversation, because " +
-                      "the agent keeps its history per project."
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              // Left empty, the agent still starts in the home directory --
-              // but home is not a project, and "edits" will not write
-              // unasked there. Said here because the silent version of this
-              // was the worst of both: a blanket grant over .bashrc, the
-              // systemd units and shell.json, which is where this very
-              // setting lives.
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                visible: root.projectDir.trim() === ""
-                         && root.permissionLevel === "edits"
-                text: "⚠  No folder set, so there is nothing for “edits” to be " +
-                      "inside: every change is prompted until you name one. " +
-                      "Your home directory is not accepted as a project — it " +
-                      "holds the file this permission level is stored in."
-                color: Commons.Color.urgent
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              Dropdown {
-                width: parent.width
-                visible: root.vTakesModel
-                showLabel: true
-                label: "Model for " + root.vAgent
-                fontFamily: root.fontFamily
-                foreground: root.foreground
-                options: root.agentModelOptions
-                value: root.customModel ? "__other__" : root.agentModel()
-                onChanged: function(v) {
-                  if (v === "__other__") { root.customModel = true; return }
-                  root.customModel = false
-                  if (v !== root.agentModel()) root.setModel(v)
-                }
-              }
-
-              TextField {
-                width: parent.width
-                visible: root.vTakesModel && root.customModel
-                text: root.agentModel()
-                placeholderText: "type a model name or full model id"
-                foreground: root.foreground
-                font.family: root.fontFamily
-                onEditingFinished: {
-                  if (text.trim() !== root.agentModel()) root.setModel(text)
-                }
-              }
-
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                visible: root.vTakesModel
-                text: "Only for voice; your other sessions keep their own model. " +
-                      "For Claude: sonnet, opus, haiku or a full model id. " +
-                      "Changing it starts a new conversation." +
-                      (root.agentModel() !== ""
-                       && !/^[A-Za-z0-9][A-Za-z0-9._:\/@\[\]-]{0,127}$/.test(root.agentModel())
-                       ? "  ⚠  Not accepted as a model name, so the default is in use." : "")
-                textFormat: Text.PlainText
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              // Only drawn when the model in force takes an effort level, and
-              // with only the notches it takes: the daemon publishes them.
-              KnobRow {
-                width: parent.width
-                visible: root.vEfforts.length > 0
-                scrollTarget: formScroll
-                foreground: root.foreground; fontFamily: root.fontFamily
-                label: "Effort for " + root.vAgent
-                labels: root.effortLabels
-                unit: ""
-                description: "How hard it thinks before it answers. Lower answers " +
-                             "sooner; higher works harder on difficult asks. Default " +
-                             "leaves it to " + root.vAgent + ". Changing it keeps the " +
-                             "conversation." +
-                             (root.agentEffort() !== "" && root.effortIndex === 0
-                              ? "  ⚠  The level saved for this agent is not one this " +
-                                "model takes, so the default is in use." : "")
-                value: root.effortIndex
-                minimum: 0; maximum: root.vEfforts.length; stepSize: 1
-                onCommitted: function(v) {
-                  var i = Math.round(v)
-                  root.setEffort(i < 1 ? "" : String(root.vEfforts[i - 1]))
-                }
-              }
-
-              Dropdown {
-                width: parent.width
-                showLabel: true
-                label: root.vAgent === "" ? "Permission level"
-                                          : "Permission level for " + root.vAgent
-                fontFamily: root.fontFamily
-                foreground: root.foreground
-                options: root.levelOptions
-                value: root.permissionLevel
-                onChanged: function(v) { root.setLevel(v) }
-              }
-
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: (root.vPosture !== "" ? "In force: " + root.vPosture + ".  " : "")
-                      + (root.agentLevels.indexOf("edits") < 0
-                         ? (root.vAgent === "" ? "" : root.vAgent + " cannot put a " +
-                            "question on screen, so it is held read-only instead and " +
-                            "may refuse work rather than ask. Only the trusted level " +
-                            "changes that.")
-                         : root.permissionLevel === "edits"
-                         ? "Source files inside the project can be edited without " +
-                           "asking. Commands, web fetches and anything outside it " +
-                           "still prompt — and so do files that make something else " +
-                           "run, like .git/hooks, .envrc or .claude/settings.json."
-                         : root.permissionLevel === "trusted"
-                         ? "Nothing is asked. A spoken sentence can edit files and run " +
-                           "commands here with nothing able to stop it."
-                         : "Every change is prompted, and so is anything that " +
-                           "reaches the network or your own MCP servers. Reading " +
-                           "is free except for keys, credentials and shell " +
-                           "history. An unanswered prompt is denied.")
-                color: root.permissionLevel === "trusted" ? Commons.Color.urgent : root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                visible: root.vOverriding !== ""
-                text: "⚠  This endpoint is answering instead of " + root.vOverriding +
-                      ", which is what Omarchy's own settings are set to. Clear " +
-                      "both boxes below to go back to it."
-                color: Commons.Color.urgent
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
+              visible: root.note !== ""
+              wrapMode: Text.WordWrap
+              text: root.note
+              textFormat: Text.PlainText
+              color: root.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
             }
-
-            SettingsGroup {
-              width: parent.width
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              title: "MORE AGENTS"
-
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: "Your main agent answers to “" + root.activePhrase + "”. " +
-                      "Add more, each woken by its own name, with its own model, " +
-                      "voice, permission level, folder and conversation. They can " +
-                      "work at the same time; they speak one at a time, and never " +
-                      "over you. Start a sentence with a name to talk to that agent " +
-                      "from anywhere, including a follow-up."
-                textFormat: Text.PlainText
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                visible: root.usingOww && root.voiceAgents.length > 0
-                text: "⚠  openWakeWord hears only its own phrase, so these agents " +
-                      "cannot be woken. Switch the wake engine to Vosk to use them."
-                textFormat: Text.PlainText
-                color: Commons.Color.urgent
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              Repeater {
-                model: root.voiceAgents
-
-                delegate: Column {
-                  id: card
-                  required property var modelData
-                  required property int index
-                  width: parent ? parent.width : 0
-                  spacing: Style.spacing.sm
-
-                  readonly property string name: String(modelData.name || "")
-                  readonly property string program: String(modelData.agent || "claude")
-                  readonly property string model: String(modelData.model || "")
-                  readonly property string effort: String(modelData.effort || "")
-                  readonly property var info: root.crewInfo(card.name)
-                  readonly property var efforts: Array.isArray(card.info.efforts)
-                                                 ? card.info.efforts : []
-                  property bool customModel: false
-
-                  Rectangle {
-                    width: parent.width
-                    height: 1
-                    visible: card.index > 0
-                    color: Qt.darker(root.foreground, 2.2)
-                  }
-
-                  TextField {
-                    width: parent.width
-                    text: card.name
-                    placeholderText: "a name — the word that wakes it"
-                    foreground: root.foreground
-                    font.family: root.fontFamily
-                    onEditingFinished: {
-                      var v = text.trim().toLowerCase()
-                      if (v !== card.name) root.updateAgent(card.index, "name", v)
-                    }
-                  }
-
-                  Text {
-                    width: parent.width
-                    wrapMode: Text.WordWrap
-                    visible: String(card.info.problem || "") !== ""
-                             || (card.name !== "" && !/^[a-z]+( [a-z]+){0,2}$/.test(card.name))
-                    text: "⚠  " + (String(card.info.problem || "") !== ""
-                                   ? String(card.info.problem)
-                                   : "A name is one to three plain words, letters only.")
-                    textFormat: Text.PlainText
-                    color: Commons.Color.urgent
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                  }
-
-                  Dropdown {
-                    width: parent.width
-                    showLabel: true
-                    label: "Program"
-                    fontFamily: root.fontFamily
-                    foreground: root.foreground
-                    options: root.programOptions
-                    value: card.program
-                    onChanged: function(v) {
-                      if (v !== card.program) {
-                        card.customModel = false
-                        root.updateAgent(card.index, "agent", v)
-                      }
-                    }
-                  }
-
-                  Dropdown {
-                    width: parent.width
-                    visible: card.info.takes_model !== false
-                    showLabel: true
-                    label: "Model for " + (card.name || "this agent")
-                    fontFamily: root.fontFamily
-                    foreground: root.foreground
-                    options: root.agentModelChoices(card.program, card.model)
-                    value: card.customModel ? "__other__" : card.model
-                    onChanged: function(v) {
-                      if (v === "__other__") { card.customModel = true; return }
-                      card.customModel = false
-                      if (v !== card.model) root.updateAgent(card.index, "model", v)
-                    }
-                  }
-
-                  TextField {
-                    width: parent.width
-                    visible: card.customModel && card.info.takes_model !== false
-                    text: card.model
-                    placeholderText: "type a model name or full model id"
-                    foreground: root.foreground
-                    font.family: root.fontFamily
-                    onEditingFinished: {
-                      if (text.trim() !== card.model)
-                        root.updateAgent(card.index, "model", text.trim())
-                    }
-                  }
-
-                  KnobRow {
-                    width: parent.width
-                    visible: card.efforts.length > 0
-                    scrollTarget: formScroll
-                    foreground: root.foreground; fontFamily: root.fontFamily
-                    label: "Effort for " + (card.name || "this agent")
-                    labels: {
-                      var out = ["Default"]
-                      for (var i = 0; i < card.efforts.length; i++) {
-                        var e = String(card.efforts[i])
-                        out.push(root.effortNames[e] || e)
-                      }
-                      return out
-                    }
-                    unit: ""
-                    description: "How hard it thinks before it answers. Changing it " +
-                                 "keeps the conversation."
-                    value: card.efforts.indexOf(card.effort) + 1
-                    minimum: 0; maximum: card.efforts.length; stepSize: 1
-                    onCommitted: function(v) {
-                      var i = Math.round(v)
-                      root.updateAgent(card.index, "effort",
-                                       i < 1 ? "" : String(card.efforts[i - 1]))
-                    }
-                  }
-
-                  Dropdown {
-                    width: parent.width
-                    showLabel: true
-                    label: "Voice"
-                    fontFamily: root.fontFamily
-                    foreground: root.foreground
-                    options: [{ label: "Same as the main agent", value: "" }]
-                             .concat(root.voiceOptions)
-                    value: String(card.modelData.voice || "")
-                    onChanged: function(v) {
-                      if (v !== String(card.modelData.voice || ""))
-                        root.updateAgent(card.index, "voice", v)
-                    }
-                  }
-
-                  Dropdown {
-                    width: parent.width
-                    showLabel: true
-                    label: "Permission level for " + (card.name || "this agent")
-                    fontFamily: root.fontFamily
-                    foreground: root.foreground
-                    options: root.agentLevelChoices(card.info.levels)
-                    value: String(card.modelData.level || "ask")
-                    onChanged: function(v) {
-                      if (v !== String(card.modelData.level || "ask"))
-                        root.updateAgent(card.index, "level", v)
-                    }
-                  }
-
-                  TextField {
-                    width: parent.width
-                    text: String(card.modelData.projectDir || "")
-                    placeholderText: "its folder  (empty: your home directory)"
-                    foreground: root.foreground
-                    font.family: root.fontFamily
-                    onEditingFinished: {
-                      if (text !== String(card.modelData.projectDir || ""))
-                        root.updateAgent(card.index, "projectDir", text)
-                    }
-                  }
-
-                  Text {
-                    width: parent.width
-                    wrapMode: Text.WordWrap
-                    text: (String(card.info.posture || "") !== ""
-                           ? "In force: " + card.info.posture + ".  " : "") +
-                          (String(card.modelData.level || "ask") === "trusted"
-                           ? "Nothing is asked. A sentence starting with “" +
-                             card.name + "” can edit files and run commands in its " +
-                             "folder with nothing able to stop it."
-                           : "Its own level and folder: what you allow the main agent " +
-                             "does not carry over.")
-                    textFormat: Text.PlainText
-                    color: String(card.modelData.level || "ask") === "trusted"
-                           ? Commons.Color.urgent : root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                  }
-
-                  Button {
-                    text: "Remove " + (card.name || "this agent")
-                    fontFamily: root.fontFamily
-                    onClicked: root.removeAgent(card.index)
-                  }
-                }
-              }
-
-              Button {
-                text: root.voiceAgents.length >= root.maxAgents
-                      ? "That is the most there can be (" + root.maxAgents + ")"
-                      : "Add an agent"
-                fontFamily: root.fontFamily
-                enabled: root.voiceAgents.length < root.maxAgents
-                onClicked: root.addAgent()
-              }
-            }
-
-            SettingsGroup {
-              width: parent.width
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              title: "KEY BINDINGS AND INTERRUPTIONS"
-
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                textFormat: Text.StyledText
-                text: "<b>Hold F8</b> and speak, release when you are done — no " +
-                      "wake word needed.<br>" +
-                      "<b>Press F8</b> while it is replying to stop it. So does " +
-                      "<b>Super+Ctrl+Space</b>, or the stop button in the panel.<br>" +
-                      "<b>Super+Alt+Space</b> releases the microphone entirely."
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              Toggle {
-                width: parent.width
-                label: "Let me interrupt by talking on a headset"
-                description: "On headphones it stops as soon as you talk over " +
-                             "it, and what you say is your next request."
-                checked: root.setting("bargeOnHeadset", true) === true
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.persist("bargeOnHeadset",
-                    root.setting("bargeOnHeadset", true) === true ? "false" : "true", true)
-              }
-
-              Toggle {
-                width: parent.width
-                label: "On speakers too"
-                description: "Laptop speakers usually drown you out. Measure " +
-                             "first with: agentvoice calibrate"
-                checked: root.setting("bargeIn", false) === true
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.persist("bargeIn",
-                    root.setting("bargeIn", false) === true ? "false" : "true", true)
-              }
-
-              KnobRow {
-                width: parent.width
-                visible: root.setting("bargeIn", false) === true ||
-                         root.setting("bargeOnHeadset", true) === true
-                scrollTarget: formScroll
-                label: "How much louder you must be"
-                unit: "%"
-                description: "Above its own voice, before it stops. Higher is " +
-                             "harder to trigger by accident and on purpose."
-                value: root.setting("bargeFactor", 150)
-                minimum: 110; maximum: 400; stepSize: 10
-                onCommitted: function(v) { root.persist("bargeFactor", v, true) }
-              }
-
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: "Through speakers, talking cannot interrupt a reply: at a " +
-                      "normal volume its own voice reaches the mic as loudly " +
-                      "as yours, so the microphone is ignored while it talks. " +
-                      "On a headset that problem is gone. " +
-                      "Saying \"stop\" or \"never mind\" cancels a turn it has " +
-                      "not taken yet — useful when the wake word fires by " +
-                      "mistake, so nothing is sent to the agent."
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-            }
-
-            SettingsGroup {
-              width: parent.width
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              title: "WAKE WORD"
-
-              Dropdown {
-                width: parent.width
-                showLabel: true
-                label: "Engine"
-                fontFamily: root.fontFamily
-                foreground: root.foreground
-                options: root.engineOptions
-                value: root.engine
-                onChanged: function(v) {
-                  root.persist("engine", v, false)
-                  if (v === "openwakeword" && !root.owwAvailable)
-                    root.fetchNow(["--oww"])
-                }
-              }
-
-              // The state that had no representation here at all. Choosing
-              // openWakeWord without the package installed left the daemon
-              // falling back to Vosk while this page went on showing an
-              // openWakeWord model, threshold and verifier. The controls below
-              // now follow what is actually listening; this says why.
-              Column {
-                width: parent.width
-                spacing: Style.space(4)
-                visible: root.usingOww && !root.owwAvailable
-
-                Text {
-                  width: parent.width
-                  wrapMode: Text.WordWrap
-                  text: "openWakeWord is not installed, so Vosk is listening instead. " +
-                        "It was offered during install and can be added now — about " +
-                        "154MB, and it brings real rejection plus verifiers trained " +
-                        "from your own voice."
-                  color: Commons.Color.urgent
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-
-                Button {
-                  text: "Try installing openWakeWord again…"
-                  fontFamily: root.fontFamily
-                  onClicked: {
-                    root.fetchNow(["--oww"])
-                  }
-                }
-              }
-
-              // One dropdown per engine rather than one that swaps its options.
-              // Swapping left the previous engine's value displayed -- picking
-              // "hey claude" under Vosk and then switching engines still showed
-              // "hey claude", which openWakeWord has no model for.
-              Dropdown {
-                width: parent.width
-                visible: !root.owwLive
-                showLabel: true
-                label: "Phrase"
-                fontFamily: root.fontFamily
-                foreground: root.foreground
-                options: root.phraseOptions
-                value: root.setting("phrase", "hey computer")
-                onChanged: function(v) { root.persist("phrase", v, false) }
-              }
-
-              Dropdown {
-                width: parent.width
-                visible: root.owwLive
-                showLabel: true
-                label: "Phrase"
-                fontFamily: root.fontFamily
-                foreground: root.foreground
-                options: root.owwOptions
-                value: root.setting("owwModel", "hey_jarvis")
-                onChanged: function(v) { root.persist("owwModel", v, false) }
-              }
-
-              Text {
-                width: parent.width
-                visible: root.owwLive
-                wrapMode: Text.WordWrap
-                text: "Only these ship pretrained. A different phrase means training " +
-                      "your own model — see TRAINING YOUR OWN PHRASE below."
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              KnobRow {
-                width: parent.width
-                scrollTarget: formScroll
-                visible: root.owwLive
-                foreground: root.foreground; fontFamily: root.fontFamily
-                label: "Detection threshold"
-                unit: "%"
-                description: "Measured on a 2014 MacBook Pro: the real phrase peaks near 99 and a " +
-                             "phonetically similar phrase near 90, so 90 rejects " +
-                             "the near miss and still fires reliably."
-                value: root.setting("owwThresholdPct", 90)
-                minimum: 10; maximum: 99; stepSize: 1
-                onCommitted: function(v) { root.persist("owwThresholdPct", v, true) }
-              }
-
-              KnobRow {
-                width: parent.width
-                scrollTarget: formScroll
-                visible: !root.owwLive
-                foreground: root.foreground; fontFamily: root.fontFamily
-                label: "Grammar confidence"
-                unit: "%"
-                description: "Weak against phonetic neighbours by nature: a grammar " +
-                             "must pick between the phrase and anything-else, so " +
-                             "\"hey cloud\" scores as high as \"hey claude\". Switch " +
-                             "engines if a phone keeps waking it."
-                value: root.setting("wakeConfidencePct", 70)
-                minimum: 0; maximum: 100; stepSize: 5
-                onCommitted: function(v) { root.persist("wakeConfidencePct", v, true) }
-              }
-            }
-
-            SettingsGroup {
-              width: parent.width
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              title: "TRAIN WAKE WORD TO YOUR VOICE"
-
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: "The stock wake models are speaker independent, so a podcast " +
-                      "or phone saying the phrase gets through. A verifier trained " +
-                      "on your voice is the only layer that knows who is talking."
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              // Whether one is in force was known only to a log line. Training
-              // one and seeing the screen unchanged reads as the training
-              // having failed.
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                visible: root.owwLive
-                // Three states, not two. A trained verifier that is switched
-                // off read as "no verifier yet" -- the one message that would
-                // send someone back to redo work they had already done.
-                text: root.vVerifier
-                      ? "\u2713  In use for “" + root.activePhrase + "”. Only your " +
-                        "voice saying it gets through."
-                      : root.setting("useVerifier", true) !== true
-                        ? "Trained for \u201c" + root.activePhrase + "\u201d and switched " +
-                          "off below, so anyone can wake it. The training is kept."
-                        : "No verifier for \u201c" + root.activePhrase + "\u201d yet \u2014 anyone " +
-                          "saying the phrase can wake it. Verifiers are per phrase, " +
-                          "so training a new wake word means training a new one."
-                color: root.vVerifier ? root.foreground : root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              // The switch that had no switch. `use_verifier` has existed in
-              // OwwWake since it was written and nothing ever passed it, so the
-              // only way to stop verifying was to delete the .joblib -- a file
-              // operation that also threw the training away. It matters most for
-              // someone else at this computer: the verifier is built to reject
-              // them, so from their side the machine ignores them and nothing
-              // says why.
-              Toggle {
-                width: parent.width
-                visible: root.owwLive
-                label: "Only wake for my voice"
-                description: "Off lets anyone wake it. Your training stays on disk."
-                checked: root.setting("useVerifier", true) === true
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.persist("useVerifier",
-                    root.setting("useVerifier", true) === true ? "false" : "true", true)
-              }
-
-              // A disabled button that does nothing when clicked reads as a bug,
-              // not as a precondition -- so on Vosk there is no dead control
-              // here at all. The button becomes the fix instead: it switches the
-              // engine, which is the thing that was missing.
-              Button {
-                text: root.owwLive ? "Train a verifier from your voice…"
-                                   : !root.owwAvailable
-                                     ? "Install openWakeWord to enable this"
-                                     : "Switch to openWakeWord to enable this"
-                fontFamily: root.fontFamily
-                onClicked: {
-                  // Switching to an engine that is not installed changes nothing
-                  // a user can see -- the daemon just falls back again. Send them
-                  // to the installer instead, which is the actual precondition.
-                  if (!root.owwAvailable) {
-                    root.fetchNow(["--oww"])
-                    return
-                  }
-                  if (!root.usingOww) {
-                    root.persist("engine", "openwakeword", false)
-                    return
-                  }
-                  trainer.command = ["omarchy-launch-floating-terminal-with-presentation",
-                                     "agentvoice-train-verifier"]
-                  trainer.running = true
-                  root.dismiss()
-                }
-              }
-
-              Text {
-                width: parent.width
-                visible: !root.owwLive
-                wrapMode: Text.WordWrap
-                text: "Verifiers attach to an openWakeWord model. Vosk has no model " +
-                      "to attach one to, so training is unavailable while it is selected."
-                color: Commons.Color.urgent
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-            }
-
-            SettingsGroup {
-              width: parent.width
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              title: "TRAINING YOUR OWN WAKE WORD"
-              visible: root.owwLive
-
-              Text {
-                visible: root.owwLive
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: "A verifier refines an existing model; it cannot create a new " +
-                      "phrase. For a phrase openWakeWord was not shipped with, train " +
-                      "one in a Colab notebook — about 2.5 hours on the free tier, " +
-                      "90 minutes on Colab Pro. You edit two lines: the phrase and " +
-                      "the output name.\n\n" +
-                      "Only the small classifier head is trained; the feature models " +
-                      "it sits on ship with openWakeWord and do not change. That is " +
-                      "why it is quick, and why training is network-bound rather " +
-                      "than GPU-bound."
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              Button {
-                visible: root.owwLive
-                text: "Open the training notebook…"
-                fontFamily: root.fontFamily
-                onClicked: Quickshell.execDetached(["omarchy-launch-browser",
-                  "https://github.com/alfiedennen/openwakeword-colab-2026"])
-              }
-
-              Text {
-                visible: root.owwLive
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: "Upstream's own notebook has not been maintained since 2023; " +
-                      "this one is patched for current Python and torchaudio.\n\n" +
-                      "Save the .onnx it gives you into " +
-                      "~/.local/share/agentvoice/wakewords/ and it appears in the " +
-                      "phrase list above, ready for its own verifier. Check it with " +
-                      "'agentvoice monitor' before trusting it: this ships " +
-                      "openwakeword 0.4.0, and a model built against a newer one " +
-                      "should load but has not been proven to."
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-            }
-
-            SettingsGroup {
-              width: parent.width
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              title: "MICROPHONE"
-
-              // Not a setting, deliberately: it is a security property, and a
-              // setting is a thing that gets switched off once and forgotten.
-              // Said here because behaviour nobody can see is behaviour
-              // nobody trusts -- and because "why did it stop answering"
-              // has exactly one answer worth printing.
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: "The microphone closes while the screen is locked, and " +
-                      "opens again when you unlock. Locking does not change " +
-                      "the switch above: if you had released the microphone " +
-                      "before locking, it stays released afterwards."
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              // Named, so the bars inside address it directly. They reached it
-              // through parent.parent, which resolves at runtime and silently
-              // breaks the moment anything is nested between -- and which the
-              // linter cannot check, because `parent` is only ever an Item.
-              Item {
-                id: meter
-                width: parent.width
-                height: Style.space(18)
-                readonly property real span: 60
-                readonly property real levelFrac: Math.max(0, Math.min(1, (root.levelDb + span) / span))
-                readonly property real gateFrac: Math.max(0, Math.min(1, (root.setting("micThresholdDb", -38) + span) / span))
-                readonly property bool gateOpen: root.levelDb >= root.setting("micThresholdDb", -38)
-
-                Rectangle {
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: parent.width
-                  height: Style.space(8)
-                  radius: height / 2
-                  color: Qt.darker(root.background, 1.4)
-                  Rectangle {
-                    width: Math.max(0, parent.width * meter.levelFrac)
-                    height: parent.height
-                    radius: parent.radius
-                    color: meter.gateOpen ? root.foreground : Qt.darker(root.foreground, 2.2)
-                  }
-                }
-                Rectangle {
-                  x: meter.width * meter.gateFrac
-                  width: Math.max(2, Style.space(2))
-                  height: meter.height
-                  color: Commons.Color.urgent
-                }
-              }
-
-              KnobRow {
-                width: parent.width
-                scrollTarget: formScroll
-                foreground: root.foreground; fontFamily: root.fontFamily
-                label: "Microphone gate"
-                unit: " dBFS"
-                // Rewritten because it led with what the setting does *not* do
-                // on openWakeWord and left the reader to infer what it does.
-                // It has one job on both engines -- deciding which frames count
-                // as you talking, which is what ends your turn -- and one extra
-                // on Vosk.
-                description: "Where your voice stops and the room starts. " +
-                             "Anything above the line counts as you talking, so " +
-                             "this is what ends your turn: once you have been " +
-                             "under the line for \u201cPause that ends a turn\u201d " +
-                             "in TIMING, it stops listening. Set it too low " +
-                             "and room noise holds the turn open; too high and a " +
-                             "quiet word cuts you off. The bar above is the live " +
-                             "level and the red mark is this setting — talk " +
-                             "normally and put the line under it." +
-                             (root.owwLive ? "" :
-                               " On Vosk it also gates the wake word: quieter " +
-                               "frames never reach the grammar, so the phrase " +
-                               "cannot be matched against room noise.")
-                value: root.setting("micThresholdDb", -38)
-                minimum: -60; maximum: -20; stepSize: 1
-                onCommitted: function(v) { root.persist("micThresholdDb", v, true) }
-              }
-            }
-
-            SettingsGroup {
-              width: parent.width
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              title: "TIMING"
-
-              KnobRow {
-                width: parent.width
-                scrollTarget: formScroll
-                foreground: root.foreground; fontFamily: root.fontFamily
-                label: "Time to start speaking"
-                description: "After the wake word it waits this long for you to " +
-                             "make a sound. If you do not, it gives up quietly " +
-                             "and goes back to listening for the wake word. Once " +
-                             "you start talking this no longer applies — the " +
-                             "pause below ends the turn instead. Err generous: " +
-                             "being cut off before you have started is the most " +
-                             "irritating way this can fail."
-                value: root.setting("leadInMs", 5000)
-                minimum: 1000; maximum: 15000; stepSize: 500
-                onCommitted: function(v) { root.persist("leadInMs", v, true) }
-              }
-
-              KnobRow {
-                width: parent.width
-                scrollTarget: formScroll
-                foreground: root.foreground; fontFamily: root.fontFamily
-                label: "Pause that ends a turn"
-                value: root.setting("trailingSilenceMs", 1200)
-                minimum: 400; maximum: 4000; stepSize: 100
-                onCommitted: function(v) { root.persist("trailingSilenceMs", v, true) }
-              }
-
-              KnobRow {
-                width: parent.width
-                scrollTarget: formScroll
-                foreground: root.foreground; fontFamily: root.fontFamily
-                label: "Shorter pause when you sound finished"
-                description: "Whisper works through what you said at each " +
-                             "pause, so by the time you stop it usually has " +
-                             "the words already. When they read as a finished " +
-                             "sentence, this much quiet ends the turn instead " +
-                             "of the full pause above. Trailing off, or " +
-                             "stopping on a word like \"and\" or \"the\", " +
-                             "still waits the full pause. 0 turns it off."
-                value: root.setting("quickEndMs", 800)
-                minimum: 0; maximum: 2000; stepSize: 100
-                onCommitted: function(v) { root.persist("quickEndMs", v, true) }
-              }
-
-              KnobRow {
-                width: parent.width
-                scrollTarget: formScroll
-                foreground: root.foreground; fontFamily: root.fontFamily
-                label: "Deaf period after speaking"
-                description: "One microphone beside the speakers cannot win against " +
-                             "its own output, so the mic goes deaf while the voice " +
-                             "talks and for this long after."
-                value: root.setting("echoTailMs", 350)
-                minimum: 0; maximum: 1500; stepSize: 50
-                onCommitted: function(v) { root.persist("echoTailMs", v, true) }
-              }
-
-              KnobRow {
-                width: parent.width
-                scrollTarget: formScroll
-                foreground: root.foreground; fontFamily: root.fontFamily
-                label: "Ignore a turn shorter than"
-                description: "Measured on the whole recording — the wake word to " +
-                             "the end of the pause — not on the speech inside " +
-                             "it. It throws away a turn too short to hold " +
-                             "anything, which in practice means a wake word that " +
-                             "fired on a noise. With the pause above at its " +
-                             "default this rarely triggers, since any finished " +
-                             "turn already contains that much silence; it starts " +
-                             "to matter once you shorten the pause."
-                value: root.setting("minUtteranceMs", 400)
-                minimum: 0; maximum: 2000; stepSize: 100
-                onCommitted: function(v) { root.persist("minUtteranceMs", v, true) }
-              }
-
-              KnobRow {
-                width: parent.width
-                scrollTarget: formScroll
-                foreground: root.foreground; fontFamily: root.fontFamily
-                label: "Hard ceiling on one turn"
-                description: "A microphone stuck open stops here rather than " +
-                             "recording forever."
-                value: root.setting("maxUtteranceMs", 30000)
-                minimum: 5000; maximum: 120000; stepSize: 5000
-                onCommitted: function(v) { root.persist("maxUtteranceMs", v, true) }
-              }
-            }
-
-            SettingsGroup {
-              width: parent.width
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              title: "SPEECH"
-
-              Dropdown {
-                width: parent.width
-                showLabel: true
-                label: "Transcription model"
-                fontFamily: root.fontFamily
-                foreground: root.foreground
-                options: root.modelOptions
-                value: root.setting("model", "tiny.en")
-                onChanged: function(v) { root.persist("model", v, false) }
-              }
-
-              Dropdown {
-                width: parent.width
-                showLabel: true
-                label: "Live transcript while you speak"
-                fontFamily: root.fontFamily
-                foreground: root.foreground
-                options: [
-                  { label: "auto — only when it is free", value: "auto" },
-                  { label: "on — costs 114MB",            value: "on" },
-                  { label: "off",                          value: "off" }
-                ]
-                value: root.setting("livePartials", "auto")
-                onChanged: function(v) { root.persist("livePartials", v, false) }
-              }
-
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: "Rough text shown as you talk, before Whisper returns. It " +
-                      "needs the Vosk model resident. On the Vosk wake engine " +
-                      "that model is already loaded, so it is free; on " +
-                      "openWakeWord it is an extra 114MB."
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              Dropdown {
-                width: parent.width
-                showLabel: true
-                label: "Spoken voice"
-                fontFamily: root.fontFamily
-                foreground: root.foreground
-                options: root.voiceOptions
-                value: root.setting("voice", "lessac-medium")
-                onChanged: function(v) {
-                  root.persist("voice", v, false)
-                  if (root.voicesOnDisk.length > 0
-                      && root.voicesOnDisk.indexOf(v) < 0)
-                    root.fetchVoice(v)
-                }
-              }
-
-              // Choosing the voice already starts this. The banner and button are
-              // for afterwards: a download declined, a terminal closed, no network
-              // at the time. Without them the only way back would be to pick a
-              // different voice and pick this one again.
-              Column {
-                width: parent.width
-                spacing: Style.space(4)
-                visible: root.voicesOnDisk.length > 0
-                         && root.voicesOnDisk.indexOf(
-                              root.setting("voice", "lessac-medium")) < 0
-
-                Text {
-                  width: parent.width
-                  wrapMode: Text.WordWrap
-                  text: "\u201c" + root.setting("voice", "lessac-medium") +
-                        "\u201d is not on this machine, so it is speaking in " +
-                        "one that is. Voices are about 60MB each."
-                  color: Commons.Color.urgent
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-
-                Button {
-                  // Names the voice, as the dropdown does. Passing no name left
-                  // it to install.sh to read the setting, which is a race the
-                  // flag exists to avoid.
-                  text: "Try the download again\u2026"
-                  fontFamily: root.fontFamily
-                  onClicked: root.fetchVoice(
-                      root.setting("voice", "lessac-medium"))
-                }
-              }
-            }
-
-            SettingsGroup {
-              width: parent.width
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              title: "MODEL API ENDPOINT (OPTIONAL)"
-
-              TextField {
-                width: parent.width
-                text: root.setting("endpointUrl", "")
-                placeholderText: "http://your-machine:11434/v1"
-                foreground: root.foreground
-                font.family: root.fontFamily
-                onEditingFinished: {
-                  if (text !== root.setting("endpointUrl", ""))
-                    root.persist("endpointUrl", text, false)
-                }
-              }
-
-              TextField {
-                width: parent.width
-                text: root.setting("endpointModel", "")
-                placeholderText: "model name, e.g. llama3.2"
-                foreground: root.foreground
-                font.family: root.fontFamily
-                onEditingFinished: {
-                  if (text !== root.setting("endpointModel", ""))
-                    root.persist("endpointModel", text, false)
-                }
-              }
-
-              Toggle {
-                width: parent.width
-                visible: root.setting("endpointUrl", "") !== ""
-                label: "This endpoint is an agent"
-                description: "Tick when it can run commands or change files on " +
-                             "its own host, as Hermes can. agentvoice cannot tell " +
-                             "from the URL, so it claims nothing about the far " +
-                             "end unless you say — and gives it longer to answer, " +
-                             "because an agent goes quiet while it runs tools."
-                checked: root.setting("endpointIsAgent", false) === true
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.persist("endpointIsAgent",
-                    root.setting("endpointIsAgent", false) === true
-                      ? "false" : "true", true)
-              }
-
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: "Any OpenAI-compatible endpoint — Ollama, LM Studio, vLLM, " +
-                      "OpenAI, xAI, Hermes. Set both boxes and it answers instead " +
-                      "of the desktop's agent.\n" +
-                      "agentvoice offers it no tools and gates nothing, so the " +
-                      "permission level above does not reach it. What the endpoint " +
-                      "itself can do is not visible from here: Ollama cannot touch " +
-                      "anything, while Hermes has a terminal and a filesystem on " +
-                      "its host. That is what the tickbox is for.\n" +
-                      "Ollama and LM Studio need no key. For one that does, the " +
-                      "login keyring is the best place — it unlocks when you log " +
-                      "in and only this session can read it:\n" +
-                      "  secret-tool store --label=agentvoice \\\n" +
-                      "      service agentvoice endpoint api.openai.com\n" +
-                      "Keyed by host and port, so two services on one machine do " +
-                      "not share a key. Failing that, " +
-                      "~/.config/agentvoice/endpoint.key. Never in this settings " +
-                      "file — it is the desktop's config and gets copied around."
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-            }
-
-            PanelSeparator { width: parent.width; foreground: root.foreground }
-
-            // Last on the page, and the only red control on it. Removal lives
-            // inside the settings it removes because nothing runs on the way
-            // out: `omarchy plugin remove` is an rm -rf with no hook, so the
-            // only moment this can clean up after itself is while it exists.
-            Button {
-              text: "Remove Agent Voice…"
-              fontFamily: root.fontFamily
-              foreground: Commons.Color.urgent
-              accent: Commons.Color.urgent
-              onClicked: {
-                // One command, no shell logic. The launcher already does
-                // `cmd="$*"` and re-wraps it in its own `bash -c`, and a second
-                // one here swallowed the flag as $0 -- which ran this as a fresh
-                // *install* instead. The widget removal used to be chained on
-                // with `&&`; it is --with-widget now, so the script can check
-                // afterwards that it actually happened.
-                // XDG_DATA_HOME, not ~/.local/share: that is where install.sh
-                // puts it, and with the variable set this button used to run
-                // a script that was not there.
-                remover.command = ["omarchy-launch-floating-terminal-with-presentation",
-                                   root.shq(root.dataHome +
-                                            "/agentvoice/app/install.sh") +
-                                   " --uninstall --with-widget"]
-                remover.running = true
-                root.dismiss()
-              }
-            }
-
             Text {
               width: parent.width
               wrapMode: Text.WordWrap
-              text: "Removes the engine, the service and the widget in one go. " +
-                    "Your trained verifiers, recordings and API keys are kept, " +
-                    "and it says where they are on the way out."
+              text: "ctrl+1–7 to switch pages"
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
             }
-
-            Process { id: remover }
-
-            Item { width: 1; height: Style.space(12) }
           }
+
+          Rectangle {
+            id: rule
+            anchors.left: sidebar.right
+            anchors.leftMargin: Style.space(14)
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            width: 1
+            color: root.faint
+          }
+
+          Flickable {
+            id: formScroll
+            anchors.left: rule.right
+            anchors.leftMargin: Style.space(18)
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            contentWidth: width
+            contentHeight: pageLoader.implicitHeight + Style.space(16)
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            // The configuration every other scrolling panel in Omarchy uses --
+            // with a ScrollBar attached the Controls wheel handling applies,
+            // rather than a bare Flickable's short, momentum-less step.
+            flickableDirection: Flickable.VerticalFlick
+            interactive: contentHeight > height
+            // Namespaced: a plain `import QtQuick.Controls` shadows Omarchy's
+            // own Button, Toggle and Dropdown with the Controls types of the
+            // same names. qs.Ui is imported last so it wins at runtime, but
+            // qmllint cannot tell, and neither can a reader.
+            QQC.ScrollBar.vertical: QQC.ScrollBar { policy: QQC.ScrollBar.AsNeeded }
+            Component.onCompleted: root.pageScroll = formScroll
+
+            Loader {
+              id: pageLoader
+              width: formScroll.width - Style.space(14)
+              // Built when shown and dropped when left: seven pages of
+              // controls bound to live state, of which one is ever on screen.
+              active: root.opened && root.mode === "settings"
+              sourceComponent: root.page === "agents" ? agentsPage
+                             : root.page === "listening" ? listeningPage
+                             : root.page === "conversation" ? conversationPage
+                             : root.page === "voice" ? voicePage
+                             : root.page === "display" ? displayPage
+                             : root.page === "about" ? aboutPage
+                             : overviewPage
+            }
+          }
+
+          Component { id: overviewPage;     OverviewPage { s: root } }
+          Component { id: agentsPage;       AgentsPage { s: root } }
+          Component { id: listeningPage;    ListeningPage { s: root } }
+          Component { id: conversationPage; ConversationPage { s: root } }
+          Component { id: voicePage;        VoicePage { s: root } }
+          Component { id: displayPage;      DisplayPage { s: root } }
+          Component { id: aboutPage;        AboutPage { s: root } }
         }
 
         // --- the conversation -----------------------------------------
@@ -2386,6 +1305,7 @@ Item {
                       + (turn.agent !== "" ? " · " + turn.agent : "")
                       + (turn.latency > 0
                          ? " · answered in " + (turn.latency / 1000).toFixed(1) + "s" : "")
+                textFormat: Text.PlainText
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -2445,7 +1365,7 @@ Item {
               Text {
                 visible: turn.failed !== "" || turn.stopped
                 text: turn.failed !== "" ? "failed" : "stopped part-way"
-                color: turn.failed !== "" ? Commons.Color.urgent : root.dim
+                color: turn.failed !== "" ? root.urgent : root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
               }
@@ -2462,7 +1382,7 @@ Item {
                   ? "Nothing yet this session.\n\nEach exchange appears here " +
                     "as it ends, and is kept in memory until you log out."
                   : "Keeping the conversation is off.\n\nTurn it on in " +
-                    "settings, under While you interact with it."
+                    "Settings, under Display."
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
@@ -2492,6 +1412,7 @@ Item {
               visible: historyModel.count > 0
               text: root.confirmClear ? "Clear it all?" : "Clear"
               fontFamily: root.fontFamily
+              bordered: true
               onClicked: {
                 if (!root.confirmClear) {
                   root.confirmClear = true

@@ -327,4 +327,6 @@ def test_the_setting_exists_in_all_three_places():
     assert any(s["key"] == "bargeOnHeadset" for s in widget["schema"])
     assert DEFAULTS["bargeOnHeadset"] is True
     assert "bargeOnHeadset" in TOML_ALIASES
-    assert 'root.setting("bargeOnHeadset"' in (root / "Settings.qml").read_text()
+    from qml_sources import overlay
+    assert 's.setting("bargeOnHeadset", true)' in overlay()
+    assert 's.put("bargeOnHeadset"' in overlay()

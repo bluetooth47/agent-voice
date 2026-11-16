@@ -68,7 +68,9 @@ trap cleanup EXIT INT TERM
 cp -r "$shell_src/Commons" "$shell_src/Ui" "$tmp/"
 mkdir -p "$tmp/plugin" "$tmp/bin"
 cp "$repo"/*.qml "$tmp/plugin/"
+cp "$repo/manifest.json" "$tmp/plugin/"
 [ -d "$repo/ui" ] && cp -r "$repo/ui" "$tmp/plugin/ui"
+[ -d "$repo/pages" ] && cp -r "$repo/pages" "$tmp/plugin/pages"
 # Under qs -p a directory without a qmldir does not see its own siblings as
 # types ("KnobRow is not a type" from inside Settings.qml), so give it one.
 for f in "$tmp"/plugin/*.qml; do

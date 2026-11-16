@@ -185,4 +185,5 @@ def test_the_setting_exists_in_all_three_places():
     manifest = json.loads((root / "manifest.json").read_text())
     assert "chimes" in {k["key"] for k in manifest["barWidget"]["schema"]}
     assert manifest["barWidget"]["defaults"]["chimes"] is runtime.DEFAULTS["chimes"]
-    assert '"chimes"' in (root / "Settings.qml").read_text()
+    from qml_sources import overlay
+    assert '"chimes"' in overlay()

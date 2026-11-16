@@ -95,10 +95,19 @@ the last two:
 1. `manifest.json` → `barWidget.schema` and `barWidget.defaults`
 2. `daemon/runtime.py` → `DEFAULTS`, and `TOML_ALIASES` if it belongs in the
    fallback config
-3. `Settings.qml` → an actual control
+3. a page in `pages/` → an actual control, written with `s.put("key", ...)`
 
 Skipping step 3 gives a setting that works from `omarchy bar set` and is
 invisible in the UI. That has happened.
+
+The overlay is `Settings.qml` -- the shared state, the store, the functions
+that launch things, the conversation view and the permission prompt -- plus
+one file per sidebar page in `pages/`, each handed the overlay as `s`. Each
+key is changed on exactly one page (`test_settings_pages.py`); put it on the
+page whose subject it is, not wherever there is room, or the page drifts back
+into the twelve-box scroll it was split out of. Building blocks with no
+setting names in them live in `ui/`. Both folders need their `qmldir` kept in
+step (the check script does it).
 
 ## Read the theme through `Commons.Color`, never a bare `Color`
 
@@ -120,7 +129,9 @@ beside the real shell and touches nothing of it.
 --shots 8 settings` walks the whole settings page a screenful at a time,
 `--theme flexoki-light` checks a light theme, and `knob` drives a slider with
 synthetic mouse events (QtTest's `TestEvent`), so nobody's real pointer
-moves. It never takes the keyboard (Exclusive focus is rewritten to None in
+moves. `--arg '{"page":"agents","agent":"main"}'` opens a page, `popup`
+draws the bar widget's popup with no bar behind it, and `clicks` drives
+real controls and logs what each one wrote. It never takes the keyboard (Exclusive focus is rewritten to None in
 its copies) and never writes shell.json (`omarchy bar set` is stubbed to a
 log). Two things it found out the hard way: a directory under `qs -p` needs a
 `qmldir` before its files see each other as types, and a Timer placed

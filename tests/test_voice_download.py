@@ -11,7 +11,10 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SETTINGS = (ROOT / "Settings.qml").read_text()
+from qml_sources import overlay, overlay_files, page
+
+SETTINGS = overlay()
+VOICE = page("Voice")
 DAEMON = (ROOT / "daemon" / "wake_listen.py").read_text()
 
 
@@ -22,22 +25,29 @@ DAEMON = (ROOT / "daemon" / "wake_listen.py").read_text()
 # only these caught it.
 
 def _voice_dropdown() -> str:
-    start = SETTINGS.index('root.persist("voice", v, false)')
-    return SETTINGS[SETTINGS.rindex("Dropdown {", 0, start):
-                    SETTINGS.index("}", start)]
+    start = VOICE.index('page.s.put("voice", v)')
+    return VOICE[VOICE.rindex("Dropdown {", 0, start):VOICE.index("}", start)]
 
 
 def _download_offer() -> str:
-    start = SETTINGS.index("visible: root.voicesOnDisk.length > 0")
-    return SETTINGS[SETTINGS.rindex("Column {", 0, start):
-                    SETTINGS.index("\n              }", start)]
+    start = VOICE.index("visible: page.s.voiceMissing(page.voice)")
+    return VOICE[VOICE.rindex("Column {", 0, start):
+                 VOICE.index("\n    }", start)]
+
+
+def _function(name: str) -> str:
+    body = SETTINGS[SETTINGS.index(f"function {name}("):]
+    return body[:body.index("\n  }")]
 
 
 def test_a_voice_that_is_not_on_disk_can_be_downloaded():
     """Choosing it is the request; the button is the way back if that failed."""
-    assert "root.fetchVoice" in _voice_dropdown(), "choosing must fetch it"
+    assert "page.s.chooseVoice(v)" in _voice_dropdown(), "choosing must fetch it"
+    assert "root.fetchVoice" in _function("chooseVoice")
     offer = _download_offer()
-    assert "root.fetchVoice" in offer, "and there must be a way to retry"
+    assert "page.s.fetchVoice" in offer, "and there must be a way to retry"
+    # An extra agent's voice goes through the same path.
+    assert "page.s.chooseVoice(v)" in page("Agents")
 
 
 def test_the_voice_name_is_named_on_the_command_line():
@@ -75,7 +85,7 @@ def test_every_launcher_argument_is_quoted():
     assert "shq(argv[i])" in body, "each argument has to be quoted"
     assert 'Quickshell.env("HOME") +' not in body, "and so does the path"
 
-    for qml in ("Settings.qml", "Panel.qml"):
+    for qml in overlay_files() + ["Panel.qml"]:
         text = (ROOT / qml).read_text()
         for call in re.finditer(
                 r'"omarchy-launch-floating-terminal-with-presentation",'
@@ -92,11 +102,10 @@ def test_every_launcher_argument_is_quoted():
 
 
 def test_the_offer_appears_only_when_it_is_missing():
-    offer = _download_offer()
-    visible = offer[offer.index("visible:"):]
-    visible = visible[:visible.index("\n\n")]
-    assert "< 0" in visible, "shown when the voice is absent from the list"
-    assert "voicesOnDisk.length > 0" in visible, \
+    assert "voiceMissing(page.voice)" in _download_offer()
+    missing = _function("voiceMissing")
+    assert "< 0" in missing, "shown when the voice is absent from the list"
+    assert "voicesOnDisk.length > 0" in missing, \
         "an empty probe result must not claim every voice is missing"
 
 
@@ -118,14 +127,14 @@ def test_the_installer_is_called_with_a_flag_it_accepts():
     regions = [SETTINGS[m.start():SETTINGS.index("}", m.start())]
                for m in re.finditer(r"function fetch(Now|Voice)", SETTINGS)]
     regions += [m.group(1) for m in re.finditer(r"fetchNow\(\[([^\]]*)\]", SETTINGS)]
-    for qml in ("Settings.qml", "Panel.qml"):
+    for qml in overlay_files() + ["Panel.qml"]:
         text = (ROOT / qml).read_text()
         regions += [text[m.start():m.start() + 400] for m in re.finditer(
             r'"omarchy-launch-floating-terminal-with-presentation"', text)]
 
     found = set()
     for region in regions:
-        for flag in re.findall(r'--([a-z-]+)', region):
+        for flag in re.findall(r'--([a-z][a-z-]*)', region):
             found.add(flag)
             assert flag in accepted, f"install.sh does not accept --{flag}"
     assert {"oww", "voice", "no-keybinds", "uninstall"} <= found, found

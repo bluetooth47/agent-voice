@@ -213,7 +213,8 @@ class TestTheSetting:
 
         import runtime
         assert "yieldToRecorders" in runtime.DEFAULTS
-        assert '"yieldToRecorders"' in (ROOT / "Settings.qml").read_text()
+        from qml_sources import overlay
+        assert '"yieldToRecorders"' in overlay()
 
     def test_the_panel_says_it_comes_back_on_its_own(self):
         """Unlike a mute, there is nothing to click: telling someone to click

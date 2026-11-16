@@ -184,28 +184,31 @@ else say "no nested bash -c in a launcher command" "ok"; fi
 # `qs -p` (the preview) and any loader that honours the qmldir strictly, while
 # the live shell's plain file import finds it anyway. A component that works
 # on this machine and nowhere else is the shape every install bug here had.
+# pages/ the same way: Settings.qml imports it as a directory too.
 out=$(python3 - "$ROOT" <<'QQ'
 import pathlib, sys
-root = pathlib.Path(sys.argv[1]) / "ui"
-if not root.is_dir():
-    print(""); sys.exit()
-files = {p.name for p in root.glob("*.qml")}
-listed = {}
-qmldir = root / "qmldir"
-if qmldir.exists():
-    for line in qmldir.read_text().splitlines():
-        parts = line.split()
-        if len(parts) == 3 and parts[2].endswith(".qml"):
-            listed[parts[2]] = parts[0]
-bad = [f"{f} not in ui/qmldir" for f in sorted(files - set(listed))]
-bad += [f"ui/qmldir lists missing {f}" for f in sorted(set(listed) - files)]
-bad += [f"ui/qmldir names {f} as {n}" for f, n in sorted(listed.items())
-        if f in files and n != f[:-4]]
+bad = []
+for name in ("ui", "pages"):
+    root = pathlib.Path(sys.argv[1]) / name
+    if not root.is_dir():
+        continue
+    files = {p.name for p in root.glob("*.qml")}
+    listed = {}
+    qmldir = root / "qmldir"
+    if qmldir.exists():
+        for line in qmldir.read_text().splitlines():
+            parts = line.split()
+            if len(parts) == 3 and parts[2].endswith(".qml"):
+                listed[parts[2]] = parts[0]
+    bad += [f"{f} not in {name}/qmldir" for f in sorted(files - set(listed))]
+    bad += [f"{name}/qmldir lists missing {f}" for f in sorted(set(listed) - files)]
+    bad += [f"{name}/qmldir names {f} as {n}" for f, n in sorted(listed.items())
+            if f in files and n != f[:-4]]
 print("; ".join(bad))
 QQ
 )
-if [[ -n ${out// } ]]; then say "ui/qmldir out of step with ui/" "FAIL: $out"; fail=1
-else say "ui/qmldir lists every component" "ok"; fi
+if [[ -n ${out// } ]]; then say "a qmldir out of step with its folder" "FAIL: $out"; fail=1
+else say "ui/ and pages/ qmldir list every file" "ok"; fi
 
 # 8. no comment directly after a line-continuation backslash. `bash -n` accepts
 # it, and what it means is that the continuation joins to the comment: the

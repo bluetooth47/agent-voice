@@ -141,7 +141,8 @@ def test_both_settings_exist_in_all_three_places():
     manifest = json.loads((ROOT / "manifest.json").read_text())
     declared = {k["key"] for k in manifest["barWidget"]["schema"]}
     defaults = manifest["barWidget"]["defaults"]
-    settings = (ROOT / "Settings.qml").read_text()
+    from qml_sources import overlay
+    settings = overlay()
 
     for key in ("hud", "hudLingerMs"):
         assert key in declared, f"{key} missing from the manifest schema"
@@ -191,37 +192,35 @@ def test_the_readout_renders_the_reply():
     assert "reply: voice.lastReply" in block
 
 
-def test_the_switch_is_in_the_group_the_page_opens_with():
+def test_the_switch_opens_the_first_group_on_its_page():
     """It began at the end of TALKING TO IT, a section otherwise about keys,
     where the person who asked for it could not find it. Then its own section.
-    Then, asked for again, first on the page -- which is where a switch people
-    reach for belongs, above anything with a section header.
+    Then, asked for again, first on the page. The settings are pages now, and
+    it opens the first group of Display, the page named for it.
     """
-    settings = _code(ROOT / "Settings.qml")
-    toggle = settings.index('label: "Show what it heard and what it answered"')
-    # It sits inside the first group, so it must come before every *later*
-    # group's title -- and before the second title on the page, which is the
-    # first one it is not itself inside.
-    titles = [m.start() for m in re.finditer(r'\n\s+title: "[A-Z]', settings)]
+    from qml_sources import page
+    display = _code(ROOT / "pages" / "DisplayPage.qml")
+    toggle = display.index('label: "Show what it heard and what it answered"')
+    # Group titles are capitals; the page's own title is not one of them.
+    titles = [m.start() for m in re.finditer(r'\n\s+title: "[A-Z][A-Z &-]+"', display)]
     assert len(titles) > 1, "the page should be grouped"
-    assert toggle < titles[1], "the switch has fallen below another group"
+    assert titles[0] < toggle < titles[1], "the switch has fallen below another group"
 
-    # The duration stays below, and its header and separator go when the
-    # readout is off, or there are two rules with nothing between them.
     # The switch and the one number it governs are a single setting described
-    # twice: how long it stays means nothing when it is not shown. They live in
-    # one box, the first on the page.
-    readout = settings.index('title: "ON-SCREEN READOUT"')
-    box = settings[readout:settings.index("SettingsGroup {", readout)]
+    # twice: how long it stays means nothing when it is not shown. One box.
+    readout = display.index('title: "ON-SCREEN READOUT"')
+    box = display[readout:display.index("SettingsGroup {", readout)]
     assert "hudLingerMs" in box, "the duration belongs with its switch"
-    assert readout < toggle < settings.index("hudLingerMs"), \
+    assert readout < toggle < display.index("hudLingerMs"), \
         "the switch should open the box its duration sits in"
 
-    # And the knob hides rather than the box, or turning the readout off would
-    # take away the only way to turn it back on.
+    # And the knob is dimmed rather than the box hidden, or turning the
+    # readout off would take away the only way to turn it back on. Dimmed
+    # rather than hidden at all, so the page does not jump.
     knob = box[box.index("KnobRow {"):]
-    assert 'visible: root.setting("hud", true) === true' in knob
-    assert 'visible: root.setting("hud", true) === true' not in box[:box.index("KnobRow {")]
+    assert 'enabled: page.s.setting("hud", true) === true' in knob
+    assert "visible:" not in box[:box.index("KnobRow {")]
+    assert page("Display")
 
 
 def test_no_dead_flag_is_left_behind():
@@ -240,8 +239,8 @@ def test_the_settings_page_scrolls_like_every_other_omarchy_panel():
     handling applies instead -- which is what those panels feel like.
     """
     settings = _code(ROOT / "Settings.qml")
-    flick = settings[settings.index("Flickable {"):]
-    flick = flick[:flick.index("Column {")]
+    flick = settings[settings.index("id: formScroll"):]
+    flick = flick[:flick.index("Loader {")]
     assert "ScrollBar.vertical" in flick, "no scrollbar, so no Controls wheel step"
     assert "flickableDirection: Flickable.VerticalFlick" in flick
     assert "interactive: contentHeight > height" in flick

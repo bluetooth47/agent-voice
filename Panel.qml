@@ -7,6 +7,7 @@ import qs.Commons
 // undefined. Omarchy's own QML writes Commons.Color for the same reason.
 import qs.Commons as Commons
 import qs.Ui
+import "ui"
 
 // Agent Voice bar widget: one icon, one panel, one switch.
 //
@@ -33,7 +34,9 @@ Panel {
   // --- Theme ------------------------------------------------------------------
   readonly property color fg: bar ? bar.foreground : Commons.Color.foreground
   readonly property color urgent: bar ? bar.urgent : Commons.Color.urgent
-  readonly property color dim: Qt.darker(fg, 1.55)
+  // Translucent rather than Qt.darker: darker is dimmer only on a dark
+  // theme, and on a light one made every hint as black as the label.
+  readonly property color dim: Qt.rgba(fg.r, fg.g, fg.b, 0.6)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   // --- Daemon state -----------------------------------------------------------
@@ -265,11 +268,6 @@ Panel {
   }
   readonly property color permissionColor:
     voice.permissionLevel === "trusted" ? voice.urgent : voice.dim
-  readonly property string permissionLabel:
-    (voice.vAgent === "" ? "" : voice.vAgent + " · ")
-    + (voice.vPosture !== "" ? voice.vPosture : "asks before every change")
-    + (voice.vRemembers ? "" : " · does not remember")
-    + (voice.vOverriding === "" ? "" : " · instead of " + voice.vOverriding)
 
   // systemd is the authority on whether the daemon exists; the state file only
   // says what it is doing. Both are needed: a stale state file outlives a
@@ -344,8 +342,10 @@ Panel {
         if (d.ms !== undefined) voice.lastMs = Math.round(d.ms)
         if (d.audio_s !== undefined) voice.lastAudioS = d.audio_s
         if (d.latency_ms !== undefined) voice.lastLatencyMs = Math.round(d.latency_ms)
-        // level_db is in the state file for `agentvoice status` and the
-        // monitor; the panel does not draw a meter, so it is not read here.
+        // Drawn on the panel's level meter; absent when nothing is listening.
+        voice.levelDb = d.level_db !== undefined ? d.level_db : -99
+        if (d.levels !== undefined) voice.agentLevels = d.levels
+        voice.agentLive = (d.live && typeof d.live === "object") ? d.live : ({})
         if (d.reply !== undefined) voice.lastReply = String(d.reply)
         // Absent with a single agent, and then cleared rather than kept: a
         // name left over from when there were several would be wrong.
@@ -420,14 +420,180 @@ Panel {
     onOpenConversation: conversation.running = true
   }
 
+  // --- what the popup adds -----------------------------------------------------
+  // The popup used to show a switch, a state line and the last thing heard,
+  // with "settings" and "conversation" as two caption-sized words in the
+  // corner: nothing to change, nothing to pick, and no sign of which of your
+  // agents was doing what. Now: the microphone level, a stop button big
+  // enough to find in a hurry, every agent and what it is doing, the five
+  // switches people flip day to day, the voice, and the main agent's
+  // permission level. Everything else stays in the overlay.
+
+  property real levelDb: -99
+  // name -> what that agent is doing, with more than one agent.
+  property var agentLive: ({})
+  property var agentLevels: ["ask", "edits", "trusted"]
+
+  // One copy of the settings for the popup's own controls, so a switch shows
+  // its new position the moment it is clicked instead of after shell.json
+  // comes back (ui/SettingsStore). Reads fall through to the bar's own
+  // `settings` until the store has loaded.
+  SettingsStore { id: store }
+  function pref(key, fallback) {
+    return store.loaded ? store.get(key, fallback) : voice.setting(key, fallback)
+  }
+
+  // Omarchy's default agent, from the file `omarchy default agent` writes,
+  // so the main agent has a name while the service is stopped.
+  property string defaultAgent: ""
+  FileView {
+    id: defaultAgentFile
+    path: voice.configHome + "/omarchy/defaults/agent"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: defaultAgentFile.reload()
+    onLoaded: voice.defaultAgent = String(text()).trim()
+    onLoadFailed: voice.defaultAgent = ""
+  }
+  readonly property string mainAgent: vAgent !== "" ? vAgent : defaultAgent
+  readonly property bool usingEndpoint: String(pref("endpointUrl", "")) !== ""
+                                        && String(pref("endpointModel", "")) !== ""
+  readonly property var crew: {
+    var v = pref("voiceAgents", [])
+    return Array.isArray(v) ? v : []
+  }
+
+  // The main agent's level as saved for it, else as the daemon reports it.
+  readonly property string mainLevel: {
+    var all = pref("permissions", {})
+    var v = all && typeof all === "object" ? all[voice.mainAgent] : undefined
+    return typeof v === "string" && v !== "" ? v : voice.permissionLevel
+  }
+  // Stored per agent, like the overlay does: trust is a judgement about one
+  // program, and must not follow `omarchy default agent` to the next.
+  function setMainLevel(value) {
+    if (voice.mainAgent === "") return
+    var all = {}
+    var current = pref("permissions", {})
+    if (current && typeof current === "object")
+      for (var k in current) all[k] = current[k]
+    all[voice.mainAgent] = value
+    store.set("permissions", all)
+  }
+  // Moving to "trusted" from a popup takes a second click.
+  property bool trustPending: false
+
+  function agentState(name) {
+    if (!voice.serviceActive) return "off"
+    var live = voice.agentLive || {}
+    if (name !== "" && live[name] !== undefined) return String(live[name])
+    if (name === "" && Object.keys(live).length === 0) {
+      if (vState === "thinking" || vState === "speaking" || vState === "transcribing") return vState
+    }
+    if (vState === "locked" || vState === "off" || vState === "yielded") return "paused"
+    return "idle"
+  }
+
+  readonly property var voiceOptions: [
+    { label: "Lessac — female", value: "lessac-medium" },
+    { label: "Lessac — female, low", value: "lessac-low" },
+    { label: "Amy — female", value: "amy-medium" },
+    { label: "Ryan — male", value: "ryan-medium" },
+    { label: "Joe — male", value: "joe-medium" },
+    { label: "HFC — male", value: "hfc_male-medium" }
+  ]
+
+  // The five switches flipped day to day. Each is also on its page in the
+  // overlay; these write the same keys through the same store.
+  readonly property var quickToggles: [
+    { key: "speakReplies",     label: "Speak replies",  icon: "\u{f057e}", fallback: true },
+    { key: "conversationMode", label: "Keep listening", icon: "\u{f0b79}", fallback: true },
+    { key: "hud",              label: "Readout",        icon: "\u{f0379}", fallback: true },
+    { key: "chimes",           label: "Chimes",         icon: "\u{f009a}", fallback: true },
+    { key: "bargeOnHeadset",   label: "Headset interrupt", icon: "\u{f02cb}", fallback: true }
+  ]
+
+  // --- keyboard ---------------------------------------------------------------
+  // One cursor over the actionable things, in reading order, the way
+  // Omarchy's own panels move: j/k or the arrows, Enter to act, Esc to close.
+  property bool cursorActive: false
+  property int cursor: 0
+  readonly property var targets: {
+    var out = []
+    if (voice.engineInstalled) out.push("service")
+    if (voice.serviceActive) out.push("mic")
+    if (voice.vTurnRunning) out.push("stop")
+    out.push("agent:")
+    for (var c = 0; c < voice.crew.length; c++) out.push("agent:" + String(voice.crew[c].name || ""))
+    for (var i = 0; i < voice.quickToggles.length; i++) out.push("toggle:" + voice.quickToggles[i].key)
+    out.push("conversation")
+    out.push("settings")
+    return out
+  }
+  function cursorOn(name) { return voice.cursorActive && voice.targets[voice.cursor] === name }
+  function moveCursor(d) {
+    if (!voice.cursorActive) { voice.cursorActive = true; return }
+    voice.cursor = Math.max(0, Math.min(voice.targets.length - 1, voice.cursor + d))
+  }
+  function activate(name) {
+    if (name === "service") voice.toggleService()
+    else if (name === "mic") voice.toggleMic()
+    else if (name === "stop") voice.stopTurn()
+    else if (name === "conversation") { conversation.running = true; voice.close() }
+    else if (name === "settings") voice.summon({})
+    else if (name.indexOf("agent:") === 0)
+      voice.summon({ page: "agents", agent: name.slice(6) === "" ? "main" : name.slice(6) })
+    else if (name.indexOf("toggle:") === 0) {
+      var key = name.slice(7)
+      store.set(key, !(voice.pref(key, true) === true))
+    }
+  }
+  onTargetsChanged: if (cursor >= targets.length) cursor = Math.max(0, targets.length - 1)
+  onOpenedChanged: if (!opened) { cursorActive = false; trustPending = false }
+
+  // Open the overlay, on a page: {"page": "agents", "agent": "sarah"}.
+  function summon(payload) {
+    summoner.command = ["omarchy-shell", "shell", "summon", "duaneoca.agentvoice",
+                        JSON.stringify(payload || {})]
+    summoner.running = true
+    voice.close()
+  }
+
+  // A switch tile: icon and label, filled when on.
+  component QuickToggle: Button {
+    property string key: ""
+    property bool on: false
+    selected: on
+    bordered: true
+    leftAlign: true
+    focusable: false
+    foreground: voice.fg
+    fontFamily: voice.fontFamily
+  }
+
   KeyboardPanel {
     id: panel
     anchorItem: button
     owner: voice
     bar: voice.bar
     open: voice.opened
-    contentWidth: Style.space(360)
-    contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(560))
+    focusTarget: panel.loadedContent
+    contentWidth: Style.space(400)
+    contentHeight: panel.fittedContentHeight(panel.loadedContentHeight, Style.space(680))
+
+    content: PanelKeyCatcher {
+      id: keyCatcher
+      anchors.fill: parent
+      implicitHeight: content.implicitHeight
+      onMoveRequested: function(dx, dy) { voice.moveCursor(dy !== 0 ? dy : dx) }
+      onActivateRequested: if (voice.cursorActive) voice.activate(voice.targets[voice.cursor])
+      onCloseRequested: voice.close()
+      onTabRequested: function(direction) { voice.switchPanel(direction) }
+      onTextKey: function(t) {
+        // m: the microphone, s: stop, the two things wanted in a hurry.
+        if (t === "m" || t === "M") voice.toggleMic()
+        else if (t === "s" || t === "S") voice.stopTurn()
+      }
 
     Column {
       id: content
@@ -450,9 +616,6 @@ Panel {
           // right click on the bar icon and a keybind, and neither announces
           // itself: the person this was built for had been stopping the whole
           // service and starting it again instead, not knowing either existed.
-          // The icon already says whether the microphone is open, so making
-          // the thing that says it the thing that changes it is the shortest
-          // route between the question and the answer.
           Item {
             implicitWidth: glyph.implicitWidth
             implicitHeight: glyph.implicitHeight
@@ -481,31 +644,14 @@ Panel {
           ToggleSwitch {
             // The offer below says the engine is a separate install and that
             // a switch which cannot turn anything on should not be shown.
-            // It was still shown: the hero is never hidden, so the switch sat
-            // above that offer and inviting a click that could only fail.
             visible: voice.engineInstalled
             checked: voice.serviceActive
             busy: voice.busy
+            hasCursor: voice.cursorOn("service")
             foreground: voice.fg
             onToggled: voice.toggleService()
           }
         }
-      }
-
-      // Said where somebody who has just muted it will be looking. Only then:
-      // a hint that is always on screen stops being read.
-      Text {
-        width: parent.width
-        wrapMode: Text.WordWrap
-        visible: voice.serviceActive
-                 && (voice.vState === "off" || voice.vState === "yielded")
-        text: voice.vState === "yielded"
-              ? "Listening again as soon as it stops."
-              : "Click the microphone to start listening again."
-        textFormat: Text.PlainText
-        color: voice.dim
-        font.family: voice.fontFamily
-        font.pixelSize: Style.font.caption
       }
 
       // Why a switch did nothing, when it did nothing. Takes no space at all
@@ -514,68 +660,14 @@ Panel {
       Text {
         width: parent.width
         wrapMode: Text.WordWrap
-        visible: voice.note !== ""
-        text: voice.note
+        visible: voice.note !== "" || store.error !== ""
+        text: voice.note !== "" ? voice.note : store.error
         // Untrusted only in the sense that everything shown here is, but the
         // rule in this file has no exceptions.
         textFormat: Text.PlainText
         color: voice.urgent
         font.family: voice.fontFamily
         font.pixelSize: Style.font.caption
-      }
-
-      // The MouseArea is the container rather than an overlay: a child with
-      // anchors.fill inside a Column disables the Column outright, which is
-      // how this block came to be written, shipped, and invisible.
-      MouseArea {
-        width: parent.width
-        height: projectRows.implicitHeight
-        hoverEnabled: true
-        cursorShape: Qt.PointingHandCursor
-        onClicked: { settings.running = true; voice.close() }
-
-        Column {
-          id: projectRows
-          width: parent.width
-          spacing: Style.space(3)
-
-          Row {
-            width: parent.width
-            spacing: Style.spacing.sm
-            visible: voice.vGoverned
-            Text {
-              text: "\uf07b"
-              color: voice.dim
-              font.family: voice.fontFamily
-              font.pixelSize: Style.font.body
-            }
-            Text {
-              width: parent.width - Style.space(22)
-              elide: Text.ElideMiddle
-              text: voice.projectLabel
-              color: voice.fg
-              font.family: voice.fontFamily
-              font.pixelSize: Style.font.body
-            }
-          }
-
-          Row {
-            width: parent.width
-            spacing: Style.spacing.sm
-            Text {
-              text: "\uf023"
-              color: voice.permissionColor
-              font.family: voice.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-            Text {
-              text: voice.permissionLabel
-              color: voice.permissionColor
-              font.family: voice.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-          }
-        }
       }
 
       // The engine is a separate, larger install. Offer it rather than
@@ -602,6 +694,7 @@ Panel {
 
         Button {
           text: "Install the voice engine…"
+          bordered: true
           fontFamily: voice.fontFamily
           onClicked: {
             // Quoted, and XDG_CONFIG_HOME rather than ~/.config: the launcher
@@ -617,21 +710,289 @@ Panel {
         }
       }
 
+      // --- the live strip ---
+      // The microphone as a level, a mute that says what it does, and while
+      // a turn runs, the stop button.
+      Column {
+        width: parent.width
+        spacing: Style.space(8)
+        visible: voice.serviceActive
+
+        Row {
+          width: parent.width
+          spacing: Style.space(10)
+
+          LevelMeter {
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width - micButton.width - parent.spacing
+            levelDb: voice.levelDb
+            gateDb: voice.pref("micThresholdDb", -38)
+            idleText: voice.vState === "yielded" ? "lent to another app — back when it stops"
+                      : voice.vState === "locked" ? "closed while the screen is locked"
+                      : voice.vState === "off" ? "microphone off" : ""
+            foreground: voice.fg
+            fontFamily: voice.fontFamily
+          }
+          Button {
+            id: micButton
+            anchors.verticalCenter: parent.verticalCenter
+            text: voice.vState === "off" ? "Unmute" : "Mute"
+            iconText: voice.vState === "off" ? "\u{f036d}" : "\u{f036c}"
+            bordered: true
+            hasCursor: voice.cursorOn("mic")
+            foreground: voice.fg
+            fontFamily: voice.fontFamily
+            tooltipText: "Release the microphone and keep the service warm (m)"
+            onClicked: voice.toggleMic()
+          }
+        }
+
+        // Said where somebody who has just muted it will be looking. Only
+        // then: a hint that is always on screen stops being read. Lent to
+        // another app is different: nothing here is waiting for a click.
+        Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          visible: voice.vState === "off" || voice.vState === "yielded"
+          text: voice.vState === "yielded"
+                ? "Listening again as soon as it stops."
+                : "Unmute, or click the microphone above, to start listening again."
+          textFormat: Text.PlainText
+          color: voice.dim
+          font.family: voice.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+
+        // Barge-in cannot work acoustically through speakers -- the
+        // microphone sits beside them -- so stopping is an explicit act
+        // there, and this is where somebody looks for it. It was once the
+        // word "stop" in a caption colour; reported from use: "if I asked the
+        // agent to do something very destructive by accident I might panic,
+        // and I don't feel like I have a stop button." Full width, the
+        // theme's alarm colour, and an octagon from the same icon set as the
+        // bar icon. It kills the agent's whole process group, not just the
+        // talking.
+        Button {
+          width: parent.width
+          visible: voice.vTurnRunning
+          text: "STOP" + (voice.lastWho !== "" ? "  " + voice.lastWho : "")
+          iconText: "\u{f06d7}"
+          bordered: true
+          hasCursor: voice.cursorOn("stop")
+          foreground: voice.urgent
+          accent: voice.urgent
+          fontFamily: voice.fontFamily
+          fontSize: Math.round(Style.font.body * 1.15)
+          onClicked: voice.stopTurn()
+        }
+      }
+
+      // --- agents ---
+      // One chip per agent: who, and what it is doing. A click opens that
+      // agent's card in the overlay.
+      Flow {
+        width: parent.width
+        spacing: Style.space(6)
+        visible: voice.engineInstalled
+
+        Repeater {
+          model: [""].concat(voice.crew.map(function(a) { return String((a || {}).name || "") }))
+          Button {
+            required property string modelData
+            readonly property string st: voice.agentState(modelData)
+            readonly property bool busyNow: st === "thinking" || st === "speaking" || st === "transcribing"
+            text: (modelData === "" ? (voice.usingEndpoint ? "endpoint" : (voice.mainAgent || "agent")) : modelData)
+                  + "  ·  " + st
+            iconText: busyNow ? "\u{f0e4e}" : "\u{f06a9}"
+            bordered: true
+            selected: busyNow
+            hasCursor: voice.cursorOn("agent:" + modelData)
+            foreground: voice.fg
+            fontFamily: voice.fontFamily
+            fontSize: Style.font.caption
+            tooltipText: modelData === "" ? "Answers to “" + voice.activePhrase + "”" : "Answers to “" + modelData + "”"
+            onClicked: voice.summon({ page: "agents", agent: modelData === "" ? "main" : modelData })
+          }
+        }
+      }
+
+      PanelSeparator { width: parent.width; foreground: voice.fg }
+
+      // --- quick toggles ---
+      Grid {
+        id: toggles
+        width: parent.width
+        columns: 2
+        columnSpacing: Style.space(6)
+        rowSpacing: Style.space(6)
+
+        Repeater {
+          model: voice.quickToggles
+          QuickToggle {
+            required property var modelData
+            width: (toggles.width - toggles.columnSpacing) / 2
+            key: modelData.key
+            on: voice.pref(modelData.key, modelData.fallback) === true
+            text: modelData.label
+            iconText: modelData.icon
+            hasCursor: voice.cursorOn("toggle:" + modelData.key)
+            onClicked: store.set(key, !on)
+          }
+        }
+      }
+
+      // --- quick pickers ---
+      Column {
+        width: parent.width
+        spacing: Style.space(8)
+
+        Item {
+          width: parent.width
+          height: voicePicker.height
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Voice"
+            color: voice.pref("speakReplies", true) === true ? voice.fg : voice.dim
+            font.family: voice.fontFamily
+            font.pixelSize: Style.font.body
+          }
+          Dropdown {
+            id: voicePicker
+            anchors.right: parent.right
+            width: Style.space(220)
+            showLabel: false
+            enabled: voice.pref("speakReplies", true) === true
+            fontFamily: voice.fontFamily
+            foreground: voice.fg
+            options: voice.voiceOptions
+            value: voice.pref("voice", "lessac-medium")
+            // A voice not on disk is fetched by the overlay, which knows
+            // what is there and can say so; the popup only picks.
+            onChanged: function(v) { if (v !== voice.pref("voice", "lessac-medium")) store.set("voice", v) }
+          }
+        }
+
+        Column {
+          width: parent.width
+          spacing: Style.space(4)
+          visible: !voice.usingEndpoint && voice.mainAgent !== ""
+
+          Text {
+            text: "What " + voice.mainAgent + " may do"
+            color: voice.fg
+            font.family: voice.fontFamily
+            font.pixelSize: Style.font.body
+          }
+          SegmentedChoice {
+            width: parent.width
+            options: {
+              var out = []
+              for (var i = 0; i < voice.agentLevels.length; i++) {
+                var v = String(voice.agentLevels[i])
+                out.push({ value: v,
+                           label: v === "trusted" ? "Trust all" : v === "edits" ? "Edits ok"
+                                  : voice.agentLevels.indexOf("edits") >= 0 ? "Ask first" : "Read-only" })
+              }
+              return out
+            }
+            value: voice.trustPending ? "trusted" : voice.mainLevel
+            foreground: voice.fg
+            accent: voice.mainLevel === "trusted" ? voice.urgent : Commons.Color.accent
+            fontFamily: voice.fontFamily
+            onCommitted: function(v) {
+              if (v === "trusted") { voice.trustPending = true; return }
+              voice.trustPending = false
+              voice.setMainLevel(v)
+            }
+          }
+          Row {
+            visible: voice.trustPending
+            spacing: Style.space(8)
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Run anything, unasked?"
+              color: voice.urgent
+              font.family: voice.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            Button {
+              text: "Trust it"
+              bordered: true
+              foreground: voice.urgent
+              accent: voice.urgent
+              fontFamily: voice.fontFamily
+              onClicked: { voice.trustPending = false; voice.setMainLevel("trusted") }
+            }
+            Button {
+              text: "Cancel"
+              bordered: true
+              foreground: voice.fg
+              fontFamily: voice.fontFamily
+              onClicked: voice.trustPending = false
+            }
+          }
+          // Where, as well as what: the level means nothing without the
+          // folder it applies to.
+          Text {
+            width: parent.width
+            elide: Text.ElideMiddle
+            text: (voice.vGoverned ? "in " + voice.projectLabel + " · " : "")
+                  + (voice.vPosture !== "" ? voice.vPosture
+                     : voice.mainLevel === "trusted" ? "nothing is asked"
+                     : voice.mainLevel === "edits" ? "edits without asking, asks for commands"
+                     : "asks before every change")
+                  + (voice.vRemembers ? "" : " · does not remember")
+                  + (voice.vOverriding === "" ? "" : " · instead of " + voice.vOverriding)
+            textFormat: Text.PlainText
+            color: voice.permissionColor
+            font.family: voice.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+      }
+
+      // --- last exchange ---
       // What it last heard. On screen, because the whole problem with an
       // interface you cannot see is being unsure whether it understood you.
+      // Folded to a few lines; the conversation view has the rest.
       Column {
+        id: lastExchange
         width: parent.width
         spacing: Style.space(4)
         visible: voice.lastTranscript !== ""
+        property bool expanded: false
 
-        PanelSectionHeader {
-          text: "LAST HEARD"
-          foreground: voice.dim
-          fontFamily: voice.fontFamily
+        Item {
+          width: parent.width
+          height: lastHeader.implicitHeight
+          PanelSectionHeader {
+            id: lastHeader
+            text: "LAST HEARD" + (voice.lastWho !== "" ? " · " + voice.lastWho.toUpperCase() : "")
+            foreground: voice.dim
+            fontFamily: voice.fontFamily
+          }
+          Text {
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            text: lastExchange.expanded ? "less" : "more"
+            color: moreHover.containsMouse ? voice.fg : voice.dim
+            font.family: voice.fontFamily
+            font.pixelSize: Style.font.caption
+            MouseArea {
+              id: moreHover
+              anchors.fill: parent
+              anchors.margins: -Style.space(6)
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: lastExchange.expanded = !lastExchange.expanded
+            }
+          }
         }
         Text {
           width: parent.width
           wrapMode: Text.WordWrap
+          maximumLineCount: lastExchange.expanded ? 1000 : 2
+          elide: Text.ElideRight
           text: voice.lastTranscript
           // Not AutoText: this is a transcript of speech and of a model's
           // reply, so it is attacker-shaped input as far as the bar is
@@ -641,7 +1002,22 @@ Panel {
           font.family: voice.fontFamily
           font.pixelSize: Style.font.body
         }
+        // The agent's answer, so the panel is a transcript of the exchange
+        // rather than only of your half of it.
         Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          visible: voice.lastReply !== ""
+          maximumLineCount: lastExchange.expanded ? 1000 : 3
+          elide: Text.ElideRight
+          text: "→ " + voice.lastReply
+          textFormat: Text.PlainText
+          color: voice.dim
+          font.family: voice.fontFamily
+          font.pixelSize: Style.font.body
+        }
+        Text {
+          visible: lastExchange.expanded
           text: voice.lastAudioS.toFixed(1) + "s audio · whisper " + voice.lastMs + "ms" +
                 (voice.lastLatencyMs > 0
                  ? " · answered in " + (voice.lastLatencyMs / 1000).toFixed(1) + "s" : "")
@@ -649,147 +1025,46 @@ Panel {
           font.family: voice.fontFamily
           font.pixelSize: Style.font.caption
         }
-
-        // The agent's answer, so the panel is a transcript of the exchange
-        // rather than only of your half of it.
-        Text {
-          width: parent.width
-          wrapMode: Text.WordWrap
-          visible: voice.lastReply !== ""
-          topPadding: Style.space(6)
-          text: "→ " + voice.lastReply
-          textFormat: Text.PlainText
-          color: voice.dim
-          font.family: voice.fontFamily
-          font.pixelSize: Style.font.body
-        }
-      }
-
-      // Barge-in cannot work acoustically through speakers -- the microphone
-      // sits beside them -- so stopping is an explicit act there, and this
-      // is where somebody looks for it. (On a headset, talking works too.)
-      //
-      // It used to be the word "stop" in the panel's dimmed caption colour,
-      // on the left with everything else, which made the most important
-      // control in the interface look like a footnote. Reported from use, in
-      // the words that matter: "if I asked the agent to do something very
-      // destructive by accident I might panic, and I don't feel like I have a
-      // stop button." The capability was there -- it kills the agent's whole
-      // process group, not just the talking -- and nothing about the way it
-      // was drawn said so.
-      //
-      // Right-aligned, because that is where an action sits when the rest of
-      // the panel is a readout; `urgent` because it is the theme's own alarm
-      // colour and the one thing here that is not a status; and an octagon
-      // from the same Material Design set as the bar icon, so it renders
-      // wherever those do rather than relying on a second icon font.
-      Item {
-        width: parent.width
-        height: stopRow.implicitHeight
-        visible: voice.vTurnRunning
-
-        Row {
-          id: stopRow
-          anchors.right: parent.right
-          spacing: Style.space(6)
-
-          Text {
-            anchors.verticalCenter: parent.verticalCenter
-            text: "\u{f06d7}"
-            color: voice.urgent
-            font.family: voice.fontFamily
-            font.pixelSize: Math.round(Style.font.body * 1.35)
-          }
-          Text {
-            anchors.verticalCenter: parent.verticalCenter
-            text: "STOP"
-            color: voice.urgent
-            font.family: voice.fontFamily
-            font.pixelSize: Style.font.body
-            font.bold: true
-          }
-        }
-
-        // Only as wide as the control. Anchored to the row rather than
-        // filling the Item, because a full-width hit area means a stray
-        // click anywhere on that line kills the turn.
-        MouseArea {
-          anchors.fill: stopRow
-          anchors.margins: -Style.space(6)
-          hoverEnabled: true
-          cursorShape: Qt.PointingHandCursor
-          onClicked: voice.stopTurn()
-        }
       }
 
       PanelSeparator { width: parent.width; foreground: voice.fg }
 
-      // The knobs used to live here. Nine of them in a popup anchored to a
-      // 26px bar icon was unreadable, and they are settings you change once
-      // rather than watch, so they moved to the overlay. What stays is what
-      // you glance at: state, the last exchange, and the switch.
+      // Real buttons, where there used to be two words in the caption
+      // colour that few people noticed were links.
       Row {
         width: parent.width
-        spacing: Style.spacing.md
+        spacing: Style.space(8)
 
-        Text {
-          text: "“" + voice.activePhrase + "” · "
-                + (voice.usingOww ? "openWakeWord" : "vosk") + " · " + voice.model
-                + (voice.speakReplies ? " · " + voice.voiceName : " · muted")
-          color: voice.dim
-          font.family: voice.fontFamily
-          font.pixelSize: Style.font.caption
-          width: parent.width - gear.width - talk.width - Style.spacing.md * 2
-          elide: Text.ElideRight
-        }
-
-        // The whole session, not just the last exchange above.
-        Text {
-          id: talk
-          text: "\uf086   conversation"
-          color: talkHover.containsMouse ? voice.fg : voice.dim
-          font.family: voice.fontFamily
-          font.pixelSize: Style.font.caption
-          MouseArea {
-            id: talkHover
-            anchors.fill: parent
-            anchors.margins: -Style.space(6)
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: {
-              conversation.running = true
-              voice.close()
-            }
+        Button {
+          width: (parent.width - parent.spacing) / 2
+          text: "Conversation"
+          iconText: "\u{f0b79}"
+          bordered: true
+          hasCursor: voice.cursorOn("conversation")
+          foreground: voice.fg
+          fontFamily: voice.fontFamily
+          onClicked: {
+            conversation.running = true
+            voice.close()
           }
         }
-
-        Text {
-          id: gear
-          text: "\uf013   settings"
-          color: gearHover.containsMouse ? voice.fg : voice.dim
-          font.family: voice.fontFamily
-          font.pixelSize: Style.font.caption
-          MouseArea {
-            id: gearHover
-            anchors.fill: parent
-            anchors.margins: -Style.space(6)
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: {
-              settings.running = true
-              voice.close()
-            }
-          }
+        Button {
+          width: (parent.width - parent.spacing) / 2
+          text: "All settings"
+          iconText: "\u{f0493}"
+          bordered: true
+          hasCursor: voice.cursorOn("settings")
+          foreground: voice.fg
+          fontFamily: voice.fontFamily
+          onClicked: voice.summon({})
         }
       }
     }
+    }
   }
 
-  // The overlay is the same plugin, summoned by id.
-  Process {
-    id: settings
-    command: ["omarchy-shell", "shell", "summon", "duaneoca.agentvoice", "{}"]
-  }
+  // The overlay is the same plugin, summoned by id, with a page to open.
+  Process { id: summoner }
 
   // The same overlay, on its conversation page.
   Process {

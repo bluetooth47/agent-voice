@@ -28,7 +28,8 @@ Column {
 
   property string title: ""
   property color foreground: Commons.Color.foreground
-  readonly property color dim: Qt.darker(foreground, 1.4)
+  // Translucent rather than Qt.darker, which is black on a light theme.
+  readonly property color dim: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.6)
   property string fontFamily: Style.font.family
   // Outer padding inside the box. Named because the height below depends on
   // it twice and a mismatch clips the last control.

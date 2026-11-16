@@ -106,7 +106,8 @@ class TestConfigAgents:
         assert manifest["barWidget"]["defaults"]["voiceAgents"] == []
         assert DEFAULTS["voiceAgents"] == []
         assert "voiceAgents" in TOML_ALIASES
-        assert "voiceAgents" in (ROOT / "Settings.qml").read_text()
+        from qml_sources import overlay
+        assert "voiceAgents" in overlay()
 
 
 # --- who a sentence is for ----------------------------------------------------

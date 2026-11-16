@@ -16,7 +16,10 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SETTINGS = (ROOT / "Settings.qml").read_text()
+from qml_sources import overlay, page
+
+SETTINGS = overlay()
+LISTENING = page("Listening")
 
 
 def test_the_daemon_falls_back_rather_than_dying():
@@ -61,28 +64,39 @@ def test_engine_specific_controls_follow_what_is_running_not_what_is_set():
     # but not live". Anything else keying off the setting is describing an
     # engine that may not be running.
     bare = [l.strip() for l in SETTINGS.splitlines()
-            if re.match(r"visible: !?root\.usingOww\s*$", l.strip())]
+            if re.match(r"visible: !?(root|page\.s)\.usingOww\s*$", l.strip())]
     assert bare == [], bare
-    assert SETTINGS.count("visible: root.owwLive") >= 6
+    # Both phrase pickers, both detection knobs, the training box, the
+    # verifier switch and the verifier card all follow what is running.
+    assert LISTENING.count("page.s.owwLive") >= 7
 
 
 def test_the_not_installed_state_is_visible_somewhere():
     """It used to have no representation at all: the page looked identical to a
     working openWakeWord install while Vosk answered."""
-    assert "visible: root.usingOww && !root.owwAvailable" in SETTINGS
-    assert "openWakeWord is not installed" in SETTINGS
+    assert "visible: page.s.usingOww && !page.s.owwAvailable" in LISTENING
+    assert "openWakeWord is not installed" in LISTENING
+    # And the Overview lists it among the things that need fixing.
+    problems = SETTINGS[SETTINGS.index("readonly property var problems:"):]
+    problems = problems[:problems.index("\n  }")]
+    assert "usingOww && !owwAvailable" in problems
 
 
 def test_nothing_offers_to_switch_to_an_engine_that_is_not_there():
     """Switching to a missing engine changes nothing a user can see -- the
     daemon falls back again -- so the offer must be to install it."""
-    assert "Install openWakeWord to enable this" in SETTINGS
+    assert "Install openWakeWord to enable this" in LISTENING
     # Choosing the engine now starts the install itself, so the button is the
     # way back from a download that did not finish rather than the way in.
-    assert "Try installing openWakeWord again" in SETTINGS
-    engine = SETTINGS[SETTINGS.index("options: root.engineOptions"):]
-    engine = engine[:engine.index("\n              }")]
-    assert "root.fetchNow" in engine, "selecting the engine must fetch it"
+    assert "Try installing openWakeWord again" in LISTENING
+    engine = LISTENING[LISTENING.index("options: page.s.engineOptions"):]
+    engine = engine[:engine.index("\n      }")]
+    assert "page.s.fetchNow" in engine, "selecting the engine must fetch it"
+    # The verifier button's own route there.
+    train = SETTINGS[SETTINGS.index("function trainVerifier()"):]
+    train = train[:train.index("\n  }")]
+    assert train.index("owwAvailable") < train.index("usingOww"), \
+        "a missing package is sent to the installer before any engine switch"
 
 
 def test_the_installer_is_called_with_flags_it_accepts():
@@ -104,13 +118,13 @@ def test_the_training_section_is_openwakeword_only():
     """A Colab notebook, a .onnx to drop in, and a phrase list this engine
     ships -- none of it applies to Vosk, which takes any phrase and needs no
     training, yet all of it was on screen while Vosk was selected."""
-    start = SETTINGS.index("a Colab notebook")
+    start = LISTENING.index("a Colab notebook")
     # One condition on the box, rather than one per child. The box is what is
     # on screen, so hiding it hides the section -- and a child that forgets the
     # condition can no longer leak out of a hidden section.
-    box = SETTINGS.rindex("SettingsGroup {", 0, start)
-    head = SETTINGS[box:SETTINGS.index("\n\n", start)]
-    assert "visible: root.owwLive" in head, head
+    box = LISTENING.rindex("SettingsGroup {", 0, start)
+    head = LISTENING[box:LISTENING.index("\n\n", box)]
+    assert "visible: page.s.owwLive" in head, head
 
 
 # --- optional means not asked for ------------------------------------------
@@ -159,19 +173,18 @@ def test_the_install_says_where_to_get_it():
     assert "Engine in the Agent Voice settings" in script
 
 
-def test_speech_comes_before_the_optional_endpoint():
-    """The endpoint is optional and belongs last; speech is not.
-
-    Asserted because the two have been reordered twice by hand and the comment
-    introducing the endpoint block still said "speech" from the first move.
+def test_the_endpoint_is_what_the_main_agent_runs_on():
+    """It was a section of its own at the bottom of the page, "MODEL API
+    ENDPOINT (OPTIONAL)", although what it does is replace the main agent:
+    set both boxes and it answers instead of Omarchy's default. So it is now
+    a choice on the main agent's card, and clearing it is choosing Omarchy's
+    agent again.
     """
-    # Located by what each box contains, not by its title. Titles are prose and
-    # have been rewritten twice; a test that spells them out fails for the wrong
-    # reason every time someone improves the wording.
-    speech = SETTINGS.index('label: "Transcription model"')
-    endpoint = SETTINGS.index('"endpointUrl"')
-    assert speech < endpoint, "speech should come before the optional endpoint"
-
-    titles = [m.start() for m in re.finditer(r'\n\s+title: "', SETTINGS)]
-    last_box = max(titles)
-    assert last_box < endpoint, "the endpoint should be in the last box on the page"
+    agents = page("Agents")
+    card = agents[agents.index("id: mainCard"):agents.index("Repeater {")]
+    assert '"endpointUrl"' in card and '"endpointModel"' in card
+    assert '"endpointIsAgent"' in card
+    runs_on = card[card.index('label: "Runs on"'):]
+    runs_on = runs_on[:runs_on.index("\n    }")]
+    assert 'page.s.put("endpointUrl", "")' in runs_on, \
+        "choosing Omarchy's agent must clear the endpoint, or it keeps answering"

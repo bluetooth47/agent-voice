@@ -249,4 +249,5 @@ def test_the_setting_exists_in_all_three_places():
     assert keys["quickEndMs"]["min"] == 0, "0 is how it is turned off"
     assert manifest["barWidget"]["defaults"]["quickEndMs"] == \
         runtime.DEFAULTS["quickEndMs"]
-    assert '"quickEndMs"' in (root / "Settings.qml").read_text()
+    from qml_sources import overlay
+    assert '"quickEndMs"' in overlay()

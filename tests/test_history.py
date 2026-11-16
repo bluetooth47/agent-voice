@@ -198,7 +198,8 @@ def test_the_setting_exists_in_all_three_places():
     assert "keepHistory" in {k["key"] for k in manifest["barWidget"]["schema"]}
     assert manifest["barWidget"]["defaults"]["keepHistory"] is \
         runtime.DEFAULTS["keepHistory"]
-    assert '"keepHistory"' in (ROOT / "Settings.qml").read_text()
+    from qml_sources import overlay
+    assert '"keepHistory"' in overlay()
 
 
 # --- agentvoice history ------------------------------------------------------------
@@ -304,9 +305,13 @@ def test_the_conversation_page_reads_the_file_the_daemon_writes():
 
 
 def test_the_conversation_page_closes_when_the_screen_locks():
+    """The conversation, and the Overview's last exchange, are on a surface
+    that draws over the lock screen. Everything but a permission prompt goes:
+    the prompt is a question with a countdown, and silence denies it."""
     handler = SETTINGS[SETTINGS.index("onVStateChanged:"):]
     handler = handler[:handler.index("\n")]
-    assert '"locked"' in handler and '"history"' in handler and "close()" in handler
+    assert '"locked"' in handler and "close()" in handler
+    assert 'mode !== "permission"' in handler
 
 
 def _blocks(src: str, opener: str) -> list[str]:

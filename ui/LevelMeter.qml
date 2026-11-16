@@ -66,7 +66,9 @@ Item {
   }
 
   Text {
-    anchors.centerIn: parent
+    anchors.left: parent.left
+    anchors.leftMargin: Style.space(8)
+    anchors.verticalCenter: parent.verticalCenter
     visible: !meter.live && meter.idleText !== ""
     text: meter.idleText
     color: meter.dim
