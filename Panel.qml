@@ -261,7 +261,8 @@ Panel {
   property bool vGoverned: true
   readonly property string projectLabel: {
     var d = String(voice.projectDir).trim()
-    if (d === "") return "~"
+    // Said in words: a bare "~" read as a stray mark.
+    if (d === "" || d === "~") return "your home folder"
     var home = Quickshell.env("HOME") || ""
     if (home !== "" && d.indexOf(home) === 0) return "~" + d.slice(home.length)
     return d
@@ -456,6 +457,12 @@ Panel {
     onLoadFailed: voice.defaultAgent = ""
   }
   readonly property string mainAgent: vAgent !== "" ? vAgent : defaultAgent
+  // As the settings name them; the same list as Settings.programOptions.
+  function programLabel(value) {
+    var names = { claude: "Claude Code", codex: "Codex", gemini: "Gemini",
+                  agy: "Antigravity", copilot: "Copilot" }
+    return names[value] || value
+  }
   readonly property bool usingEndpoint: String(pref("endpointUrl", "")) !== ""
                                         && String(pref("endpointModel", "")) !== ""
   readonly property var crew: {
@@ -878,7 +885,7 @@ Panel {
           visible: !voice.usingEndpoint && voice.mainAgent !== ""
 
           Text {
-            text: "What " + voice.mainAgent + " may do"
+            text: "What " + voice.programLabel(voice.mainAgent) + " may do"
             color: voice.fg
             font.family: voice.fontFamily
             font.pixelSize: Style.font.body

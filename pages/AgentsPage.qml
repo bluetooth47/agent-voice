@@ -103,8 +103,9 @@ Column {
     saveAgents(list)
   }
 
-  function summary(program, model, effort, level, levels) {
-    var parts = [s.programLabel(program) || "no agent"]
+  // `named` leaves the program out, for the main card, whose title is it.
+  function summary(program, model, effort, level, levels, named) {
+    var parts = named ? [] : [s.programLabel(program) || "no agent"]
     if (model !== "") parts.push(model)
     if (effort !== "") parts.push(s.effortNames[effort] || effort)
     parts.push(s.levelLabel(level, levels).toLowerCase())
@@ -144,13 +145,13 @@ Column {
     id: mainCard
     width: parent.width
     readonly property string st: page.s.agentStatus("")
-    name: page.endpointChosen ? "Endpoint" : (page.main || "No default agent")
+    name: page.endpointChosen ? "Endpoint" : (page.main ? page.s.programLabel(page.main) : "No default agent")
     wakeName: page.s.activePhrase
     isDefault: true
     summary: page.endpointChosen
              ? String(page.s.setting("endpointModel", "") || "no model yet") + " · " +
                String(page.s.setting("endpointUrl", "") || "no address yet")
-             : page.summary(page.main, page.mainModel, page.mainEffort, page.mainLevel, page.s.agentLevels)
+             : page.summary(page.main, page.mainModel, page.mainEffort, page.mainLevel, page.s.agentLevels, page.main !== "")
     status: st
     tone: page.s.statusTone(st)
     problem: !page.endpointChosen && page.main === ""

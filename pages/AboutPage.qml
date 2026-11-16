@@ -49,7 +49,7 @@ Column {
           ok: page.s.voicesOnDisk.length > 0 },
         { label: "Main agent",
           value: page.s.usingEndpoint ? "an OpenAI-compatible endpoint"
-                 : (page.s.mainAgent || "none — set one with `omarchy default agent`"),
+                 : (page.s.mainAgent ? page.s.programLabel(page.s.mainAgent) : "none — set one with `omarchy default agent`"),
           ok: page.s.usingEndpoint || page.s.mainAgent !== "" }
       ]
       Item {

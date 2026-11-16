@@ -1,0 +1,12 @@
+{"state": "listening", "level_db": -44, "agent": "claude", "level": "trusted",
+ "levels": ["ask", "edits", "trusted"],
+ "posture": "nothing is asked", "remembers": true,
+ "overriding": "", "governed": true, "verifier": false, "takes_model": true,
+ "model": "opus", "efforts": ["low", "medium", "high", "xhigh", "max"], "effort": "high",
+ "transcript": "What's on my calendar this afternoon?", "audio_s": 2.4, "ms": 312,
+ "reply": "Two things: the design review at two, and a call with the printer at four thirty.",
+ "latency_ms": 2140, "who": "",
+ "live": {"sarah": "thinking"},
+ "crew": [{"name": "sarah", "efforts": [], "levels": ["ask", "edits", "trusted"],
+           "takes_model": true, "posture": "asks before every change", "problem": "",
+           "voice": "Amy"}]}

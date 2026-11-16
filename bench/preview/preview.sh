@@ -24,6 +24,11 @@
 #   --shots N      how many screenshots (default 1)
 #   --gap S        seconds between shots (default 1.5)
 #   --arg STRING   handed to the target as PREVIEW_ARG
+#   --state FILE   show the daemon as running with this state file: it is
+#                  copied into a scratch runtime directory, and `agentvoice`
+#                  on PATH becomes a stub that answers is-active with yes and
+#                  does nothing else, so no real service is started or
+#                  stopped. For screenshots of states the machine is not in.
 #   --keep         leave it running until Ctrl+C instead of exiting after the
 #                  last shot (for poking at it by hand)
 set -euo pipefail
@@ -33,7 +38,7 @@ repo=$(cd "$here/../.." && pwd)
 shell_src="${OMARCHY_PATH:-/usr/share/omarchy}/shell"
 themes="${OMARCHY_PATH:-/usr/share/omarchy}/themes"
 
-theme="" out="" size="" wait=3 shots=1 gap=1.5 arg="" keep=0
+theme="" out="" size="" wait=3 shots=1 gap=1.5 arg="" keep=0 state=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --theme) theme=$2; shift 2 ;;
@@ -43,6 +48,7 @@ while [ $# -gt 0 ]; do
     --shots) shots=$2; shift 2 ;;
     --gap) gap=$2; shift 2 ;;
     --arg) arg=$2; shift 2 ;;
+    --state) state=$(realpath "$2"); shift 2 ;;
     --keep) keep=1; shift ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     -*) echo "unknown option: $1" >&2; exit 2 ;;
@@ -104,6 +110,22 @@ exec ${real_omarchy:-false} "\$@"
 EOF
 chmod +x "$tmp/bin/omarchy"
 
+runtime_env=()
+if [ -n "$state" ]; then
+  mkdir -p "$tmp/run/agentvoice"
+  chmod 700 "$tmp/run"
+  cp "$state" "$tmp/run/agentvoice/state"
+  # Quickshell then cannot find Hyprland's socket and says so once; the
+  # surfaces previewed here do not use it.
+  printf '#!/usr/bin/env bash\n[ "${1:-}" = is-active ] && echo yes\nexit 0\n' > "$tmp/bin/agentvoice"
+  chmod +x "$tmp/bin/agentvoice"
+  # The Wayland socket lives in the real runtime directory, so it is named
+  # by its full path once XDG_RUNTIME_DIR points elsewhere.
+  runtime_env=(XDG_RUNTIME_DIR="$tmp/run"
+               WAYLAND_DISPLAY="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/${WAYLAND_DISPLAY:-wayland-0}")
+fi
+
+env "${runtime_env[@]}" \
 PATH="$tmp/bin:$PATH" PREVIEW_ARG="$arg" PREVIEW_WRITES="$out.writes" \
   PREVIEW_WAIT="$wait" PREVIEW_GAP="$gap" \
   qs -p "$tmp" > "$out.log" 2>&1 &

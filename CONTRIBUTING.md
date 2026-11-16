@@ -19,3 +19,9 @@ AGENTVOICE_BOX=1 ./bin/agentvoice-check    # plus eight real installs, ~10min
 Run the first one. Run the second if you touched `install.sh` — every install
 bug this project has had hid behind something the development machine already
 had.
+
+To see a QML change without restarting your shell, render it beside the live
+one: `bench/preview/preview.sh settings` (or `popup`, or `--help` for the
+rest). It never takes the keyboard and never writes your settings, and
+`--state bench/preview/states/showcase.json` shows it as if the service were
+running.

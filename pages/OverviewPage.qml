@@ -151,7 +151,7 @@ Column {
       readonly property string st: page.s.agentStatus("")
       icon: "\u{f06a9}"
       title: page.s.usingEndpoint ? "Endpoint · " + page.s.setting("endpointModel", "")
-                                  : (page.s.mainAgent || "No default agent")
+                                  : (page.s.mainAgent ? page.s.programLabel(page.s.mainAgent) : "No default agent")
       subtitle: "“" + page.s.activePhrase + "” · default"
       status: st
       tone: page.s.statusTone(st)
