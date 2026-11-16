@@ -823,6 +823,17 @@ class Daemon:
         #: than dropped as echo, and the run loop opens a capture with this
         #: at its start instead of waiting for the wake word.
         self._barged: list[bytes] | None = None
+        #: The wake word, heard while the agent was working. Talking does not
+        #: stop a turn that is thinking or running tools -- somebody may be
+        #: talking to the person beside them -- but the wake word does, and
+        #: like `_barged` the queue behind it is kept: it is usually followed
+        #: by the request that replaces the one being worked on.
+        self._woke = False
+        #: Held while a frame is taken off the queue during a turn, so the
+        #: wake watch never reads the microphone while `speak()` owns it --
+        #: then it is our own voice, and on a headset barge-in's to read.
+        self._mic_lock = threading.Lock()
+        self._speaking = False
         #: The last answer from headset.default_output(), and when it was
         #: asked: a pactl round trip is 23ms and sits in front of a sentence,
         #: so it is not asked per sentence.
@@ -1352,11 +1363,12 @@ class Daemon:
         playback. Processing them afterwards would feed our own voice to the
         wake word -- which is exactly how a speaking assistant wakes itself.
         """
-        if self._barged is not None and self.listening:
-            # Not echo: the person talked over us and is still talking. What
-            # is in the queue is the rest of what they are saying, and the
-            # run loop picks it up from here. A lock or a mute makes
-            # `listening` false, and then it is dropped like anything else.
+        if (self._barged is not None or self._woke) and self.listening:
+            # Not echo: the person talked over us and is still talking, or
+            # said the wake word while the agent worked. What is in the queue
+            # is the rest of what they are saying, and the run loop picks it
+            # up from here. A lock or a mute makes `listening` false, and
+            # then it is dropped like anything else.
             self._deaf_until = 0.0
             return
         self._deaf_until = time.time() + tail_ms / 1000.0
@@ -1406,11 +1418,15 @@ class Daemon:
         barge = self._barge_watch()
         if self.chimes is not None:
             self.chimes.settle()        # never a chime under the first word
+        with self._mic_lock:
+            self._speaking = True
         try:
             with self._watching_session():
                 self.speaker.say(speech_safe(text), watch=self._watch(barge))
         finally:
             self.deafen(tail_ms)
+            with self._mic_lock:
+                self._speaking = False
 
     def _watch(self, barge):
         """What `Speaker.say()` checks between audio chunks.
@@ -1589,6 +1605,74 @@ class Daemon:
         barged, self._barged = self._barged, None
         return barged if self.listening else None
 
+    def take_wake(self) -> bool:
+        """Whether the wake word stopped the turn, once. Only while
+        listening, for the same reason as take_barge()."""
+        woke, self._woke = self._woke, False
+        return woke and self.listening
+
+    @contextlib.contextmanager
+    def _hearing_wake(self):
+        """Listen for the wake word while the agent works.
+
+        Reported from use: talking during the thinking phase did nothing
+        until the reply started, and then stopped it. Nothing read the
+        microphone while the agent worked, so what was said waited in the
+        queue, and the first thing that did read it was the barge watch
+        inside the first sentence. Talking while it works is not taken as an
+        interrupt -- asked for that way -- but the wake word is, and it is
+        listened for while nothing is being said, on speakers as well as a
+        headset: there is no playback for it to hear itself in.
+        """
+        if self._frames is None:
+            yield
+            return
+        stop = threading.Event()
+        thread = threading.Thread(target=self._wake_watch_until, args=(stop,),
+                                  daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            # Before the run loop reads the queue again: two readers would
+            # each get half of what was said next.
+            thread.join(timeout=2.0)
+
+    def _wake_watch_until(self, stop: threading.Event) -> None:
+        while not stop.is_set():
+            pcm = None
+            with self._mic_lock:
+                # Not while speaking (our own voice, and barge-in's), not
+                # after a stop (what follows belongs to the run loop), and
+                # not while locked or muted (the run loop discards those).
+                if (not self._speaking and not self._interrupt.is_set()
+                        and self.listening):
+                    try:
+                        pcm = self._frames.get_nowait()
+                    except queue.Empty:
+                        pass
+            if pcm is None:
+                stop.wait(0.05)
+                continue
+            # The tail of a sentence just spoken: reverb, and the buffer.
+            if time.time() < self._deaf_until:
+                continue
+            try:
+                fired = self.pipe.feed_wake(pcm, frame_db(pcm))
+            except Exception as e:
+                self.say_once("wake-watch", f"  {YEL}wake word unavailable "
+                              f"while working: {type(e).__name__}: {e}{OFF}")
+                return
+            if fired:
+                print(f"  {GRN}● wake{OFF}  {DIM}stopping — go ahead{OFF}",
+                      flush=True)
+                self._woke = True
+                self._interrupt.set()
+                if self.agent:
+                    self.agent.cancel()
+                return
+
     def chime(self, name: str) -> None:
         """Play one of the short sounds, if they are on and we are listening.
 
@@ -1705,6 +1789,7 @@ class Daemon:
         tail_ms = self.cfg.get_int("echoTailMs")
         self._interrupt.clear()
         self._barged = None
+        self._woke = False
         if not self.agent:
             if self.speaker:
                 self.state.publish("speaking", **last)
@@ -1739,7 +1824,7 @@ class Daemon:
                 yield chunk
 
         try:
-            with self._watching_session():
+            with self._watching_session(), self._hearing_wake():
                 for sentence in sentences(tap(self.agent.send(text, self.session_id))):
                     # Checked before the sentence is recorded, so the transcript
                     # in the panel is what was actually said out loud rather than
@@ -2114,6 +2199,7 @@ class Daemon:
                 audio_ms = len(buf) / 32.0
                 follow_up = False
                 barged = None
+                woke = False
                 if audio_ms < self.pipe.min_utterance_ms:
                     print(f"{cursor_home()}  {DIM}(too short, discarded){OFF}"
                           f"{' ' * 40}")
@@ -2206,6 +2292,7 @@ class Daemon:
                         # follow-up window -- but the person is mid-sentence,
                         # and what they are saying is the next turn.
                         barged = self.take_barge()
+                        woke = self.take_wake()
                     else:
                         follow_up = False
                     print()
@@ -2241,6 +2328,26 @@ class Daemon:
                     shown_partial = ""
                     print(f"  {GRN}● go on{OFF}  {DIM}(talked over the reply"
                           f" — listening){OFF}", flush=True)
+                    self.state.publish("capture", **last)
+                    continue
+                if woke:
+                    # The wake word stopped the turn, so it opens the next
+                    # one, exactly as it would from idle: a chime, and the
+                    # lead-in to start talking. What followed it is still in
+                    # the queue, because deafen() kept it -- "computer,
+                    # actually make it Tuesday" -- and a bare wake word is a
+                    # stop: the lead-in runs out on silence.
+                    phase, buf, cap = "capture", b"", self.pipe.new_capture()
+                    utt = self.pipe.new_utterance()
+                    self._interrupt.clear()     # see the wake branch
+                    self.prime_agent()
+                    self._deaf_until = 0.0
+                    self.chime("wake")
+                    woke_at = last_voice = time.time()
+                    heard = False
+                    active_lead_in = self.pipe.lead_in_ms
+                    last = _empty_turn()
+                    shown_partial = ""
                     self.state.publish("capture", **last)
                     continue
                 if follow_up and self.listening:

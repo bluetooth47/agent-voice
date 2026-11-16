@@ -167,10 +167,14 @@ for two things.
    Super+Alt+Space. The panel then reads MICROPHONE OFF and says how to
    start listening again. See *Mute, not stop* below for why this is the
    control you want rather than the switch.
-4. **Interrupt.** On a headset, just talk over it: it stops, and what you
-   say is your next request, with no wake word. Through speakers, press F8
-   while it is replying, or Super+Ctrl+Space, or the stop button in the
-   panel -- voice cannot work there, see below.
+4. **Interrupt.** While it is working -- thinking, or running tools with
+   nothing being said -- say the wake word: it stops, chimes, and whatever
+   you say next is the new request ("computer, actually make it Tuesday").
+   Ordinary talk does not stop it then; you may be talking to someone else.
+   While it is speaking on a headset, just talk over it: it stops, and what
+   you say is your next request, with no wake word. Through speakers, press
+   F8 while it is replying, or Super+Ctrl+Space, or the stop button in the
+   panel -- voice cannot work over the reply there, see below.
 
 ### Knowing where it is without looking
 
@@ -278,6 +282,11 @@ microphone as digital silence (bench/FINDINGS.md §21). When it hears you,
 it stops speaking, stops the agent, and keeps listening: what you said over
 it, from its first word, becomes the next turn. A bare "stop" is a turn
 like any other "stop" and is discarded.
+
+While nothing is playing -- the agent thinking or running a tool -- none of
+this applies, so the wake word is listened for on speakers and headsets
+alike, and it stops the turn. Only the wake word: talking during that
+phase used to wait in the queue and stop the reply the moment it started.
 
 Through speakers, the obvious design is to say "stop" over the reply. Measured on this
 hardware -- one laptop microphone about a foot from the speaker it is
