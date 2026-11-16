@@ -15,6 +15,7 @@ from __future__ import annotations
 import atexit
 import json
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -41,6 +42,70 @@ KEEP_WARM_S = 300.0
 
 #: Exit statuses that mean we stopped it, not that it failed.
 _STOPPED = (-15, 143, -9, 137)
+
+#: Every level `claude --effort` accepts, lowest first (2.1.325's --help).
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+#: Names Claude Code resolves to a current model itself, every one of which
+#: takes all five levels.
+_CURRENT = {"default", "fable", "opus", "sonnet", "haiku", "opusplan"}
+
+#: A full model id, wherever it sits: "claude-opus-4-6", the Bedrock
+#: "us.anthropic.claude-haiku-5-5", the dated "claude-opus-4-5-20251101" and
+#: Vertex's "claude-opus-4-5@20251101". The minor version is one or two
+#: digits so a date is never read as one.
+_MODEL_ID = re.compile(r"claude-(fable|mythos|opus|sonnet|haiku)-(\d+)(?:-(\d{1,2}))?(?!\d)")
+
+
+def _default_model() -> str:
+    """What `claude` runs with no --model: the environment, then settings."""
+    value = os.environ.get("ANTHROPIC_MODEL", "").strip()
+    if value:
+        return value
+    home = os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude"
+    try:
+        value = json.loads((Path(home) / "settings.json").read_text()).get("model")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return value.strip() if isinstance(value, str) else ""
+
+
+def effort_levels(model: str | None) -> tuple[str, ...]:
+    """The effort levels `model` takes, or none.
+
+    The CLI does not check: `--effort max` with a model that has no effort
+    parameter is accepted and the turn runs, so whether the slider means
+    anything has to be worked out here. From Anthropic's model table: every
+    current model takes all five; xhigh arrived with Opus 4.7, so Opus and
+    Sonnet 4.6 stop at four; Opus 4.5 has three; Sonnet 4.5, Haiku 4.5 and
+    everything older have none. A name nothing here recognises gets no
+    slider -- a level silently dropped is worse than no level offered.
+    """
+    name = (model or "").strip().lower() or _default_model().lower() or "default"
+    if name.split("[", 1)[0] in _CURRENT:
+        return EFFORTS
+    found = _MODEL_ID.search(name)
+    if not found:
+        return ()
+    family = found.group(1)
+    version = (int(found.group(2)), int(found.group(3) or 0))
+    if family in ("fable", "mythos"):
+        return EFFORTS
+    if family == "opus":
+        if version >= (4, 7):
+            return EFFORTS
+        if version == (4, 6):
+            return ("low", "medium", "high", "max")
+        if version == (4, 5):
+            return ("low", "medium", "high")
+        return ()
+    if family == "sonnet":
+        if version >= (5, 0):
+            return EFFORTS
+        if version == (4, 6):
+            return ("low", "medium", "high", "max")
+        return ()
+    return EFFORTS if version >= (5, 0) else ()     # haiku
 
 #: Every adapter that may own a process, so one left waiting is not orphaned
 #: when the daemon is run in a terminal and stopped with ctrl-c. Under systemd
@@ -92,12 +157,15 @@ class ClaudeCode(Adapter):
     # PreToolUse hook and the overlay, not by Claude's own prompt, which has
     # no terminal to appear in. A mode that can block would simply hang.
     def __init__(self, model: str | None = None,
+                 effort: str | None = None,
                  permission_mode: str = "auto",
                  cwd: str | None = None,
                  spoken: bool = True,
                  ask_permission: bool = True,
                  keep_warm_s: float = KEEP_WARM_S):
         self.model = model
+        #: Applied only when the model takes it: see efforts().
+        self.effort = effort
         self.spoken = spoken
         self.ask_permission = ask_permission
         self.permission_mode = permission_mode
@@ -189,7 +257,12 @@ class ClaudeCode(Adapter):
             argv += ["--resume", session_id]
         if self.model:
             argv += ["--model", self.model]
+        if self.effort and self.effort in self.efforts():
+            argv += ["--effort", self.effort]
         return argv
+
+    def efforts(self) -> tuple[str, ...]:
+        return effort_levels(self.model)
 
     # --- the process, kept between turns -----------------------------------
 

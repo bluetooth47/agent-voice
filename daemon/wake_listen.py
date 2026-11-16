@@ -43,7 +43,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from adapters import (  # noqa: E402
     explain as explain_agent, load as load_adapter, omarchy_default, sentences,
-    takes_model,
+    takes_effort, takes_model,
 )
 from adapters.base import speech_safe  # noqa: E402
 import failure  # noqa: E402
@@ -1062,6 +1062,7 @@ class Daemon:
         want_level = self.cfg.level_for(want_name)
         want_ask = want_level != "trusted"
         want_model = None if endpoint else self.cfg.model_for(want_name)
+        want_effort = None if endpoint else self.cfg.effort_for(want_name)
         # The endpoint's identity is its URL and model, not just its name:
         # switching which machine answers must rebuild, and they all report
         # the same name.
@@ -1082,6 +1083,7 @@ class Daemon:
                 and (endpoint is not None
                      or not takes_model(self.agent)
                      or getattr(self.agent, "model", None) == want_model)):
+            self.apply_effort(want_effort)
             self.publish_agent()
             return
         if self.agent is not None:
@@ -1090,12 +1092,14 @@ class Daemon:
             endpoint = {**endpoint, "key": endpoint_key(_host(endpoint["url"]))}
         self.agent = load_adapter(ask_permission=want_ask, cwd=want_cwd,
                                   level=want_level, endpoint=endpoint,
-                                  model=want_model)
+                                  model=want_model, effort=want_effort)
         self.session_id = None
         self.publish_agent()
         where = f" · {want_cwd}" if getattr(self.agent, "has_tools", True) else ""
         if want_model and takes_model(self.agent):
             where += f" · {want_model}"
+        if self.effort_in_force():
+            where += f" · {want_effort} effort"
         # say_once, because with no agent installed self.agent stays None and
         # the guard above can never match, so this ran on every idle poll.
         self.say_once("agent", f"  {CYA}agent: {want_name or 'nobody'}{where}{OFF}"
@@ -1115,6 +1119,36 @@ class Daemon:
                           f"  {YEL}conversation is on, but {self.agent.name} starts "
                           f"fresh every turn — it saves you the wake word and "
                           f"nothing more{OFF}")
+
+    def effort_in_force(self) -> str | None:
+        """The effort the next turn will run at, or None for the default."""
+        effort = getattr(self.agent, "effort", None)
+        if effort and effort in self.efforts():
+            return effort
+        return None
+
+    def efforts(self) -> tuple[str, ...]:
+        """The levels the running agent takes with its model."""
+        return tuple(getattr(self.agent, "efforts", tuple)())
+
+    def apply_effort(self, want: str | None) -> None:
+        """Change the effort without starting a new conversation.
+
+        It is a flag the waiting claude was started with, so that process has
+        to go -- but unlike the model or the folder, nothing about the
+        conversation depends on it, so the session is kept and the next turn
+        resumes it at the new level. Only reached from refresh(), which runs
+        between turns, so cancel() here takes an idle process and never a
+        turn somebody is waiting on.
+        """
+        if not takes_effort(self.agent) or getattr(self.agent, "effort", None) == want:
+            return
+        before = self.effort_in_force()
+        self.agent.effort = want
+        if self.effort_in_force() != before:
+            self.agent.cancel()
+        print(f"  {CYA}effort: {self.effort_in_force() or 'default'}{OFF}",
+              flush=True)
 
     def endpoint_spec(self) -> dict | None:
         """The configured OpenAI-compatible endpoint, or None.
@@ -1180,6 +1214,11 @@ class Daemon:
             # would be silently dropped.
             takes_model=takes_model(self.agent),
             model=getattr(self.agent, "model", None) or "",
+            # The levels this agent takes *with its model*, so the slider is
+            # drawn only when there is something it would change, with exactly
+            # the notches the model has.
+            efforts=list(self.efforts()),
+            effort=self.effort_in_force() or "",
             # The daemon has always known this and only ever said it in a log
             # line nobody reads. A verifier is the one layer that knows who is
             # talking, so whether it is in force belongs on screen.
@@ -2453,7 +2492,8 @@ def main() -> int:
         agent = load_adapter(ask_permission=level != "trusted", level=level,
                              cwd=str(project_dir(cfg.get_str("projectDir"))),
                              endpoint=spec,
-                             model=None if spec else cfg.model_for(omarchy_default()))
+                             model=None if spec else cfg.model_for(omarchy_default()),
+                             effort=None if spec else cfg.effort_for(omarchy_default()))
         if agent is None:
             which = omarchy_default()
             print(f"  {YEL}no agent: {explain_agent(which)}"

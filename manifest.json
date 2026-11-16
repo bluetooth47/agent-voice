@@ -49,6 +49,7 @@
       "projectDir": "",
       "permissions": {},
       "agentModels": {},
+      "agentEfforts": {},
       "endpointUrl": "",
       "endpointModel": "",
       "endpointIsAgent": false,

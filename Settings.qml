@@ -159,6 +159,10 @@ Item {
   property bool vGoverned: true
   property bool vVerifier: false
   property bool vTakesModel: false
+  // The effort levels the running agent takes with its model, lowest first,
+  // as the daemon works them out. Empty means no slider: an older model, an
+  // agent with no such flag, or an endpoint.
+  property var vEfforts: []
 
   // The phrase actually being listened for. Both engines keep their own
   // key and the inactive one stays in shell.json, so reading the raw
@@ -201,6 +205,40 @@ Item {
     else all[root.vAgent] = v
     persist("agentModels", JSON.stringify(all), true)
   }
+
+  // Per agent, like the model it depends on.
+  function agentEffort() {
+    var all = cfg["agentEfforts"]
+    if (!all || typeof all !== "object" || root.vAgent === "") return ""
+    var v = all[root.vAgent]
+    return typeof v === "string" ? v : ""
+  }
+
+  function setEffort(value) {
+    var all = {}
+    var current = cfg["agentEfforts"]
+    if (current && typeof current === "object")
+      for (var k in current) all[k] = current[k]
+    if (root.vAgent === "") return
+    if (value === "") delete all[root.vAgent]
+    else all[root.vAgent] = value
+    persist("agentEfforts", JSON.stringify(all), true)
+  }
+
+  readonly property var effortNames: ({
+    "low": "Low", "medium": "Medium", "high": "High",
+    "xhigh": "Extra high", "max": "Max"
+  })
+  // Notch 0 is the default; 1..n are the levels this model takes.
+  readonly property var effortLabels: {
+    var out = ["Default"]
+    for (var i = 0; i < root.vEfforts.length; i++) {
+      var e = String(root.vEfforts[i])
+      out.push(root.effortNames[e] || e)
+    }
+    return out
+  }
+  readonly property int effortIndex: root.vEfforts.indexOf(root.agentEffort()) + 1
 
   function levelOption(value) {
     if (value === "trusted") return { label: "Trust everything here", value: "trusted" }
@@ -589,6 +627,10 @@ Item {
         if (d.governed !== undefined) root.vGoverned = (d.governed === true)
         if (d.verifier !== undefined) root.vVerifier = (d.verifier === true)
         if (d.takes_model !== undefined) root.vTakesModel = (d.takes_model === true)
+        // Reset when absent rather than kept: with no agent running the
+        // field is not published, and a slider left over from the last one
+        // would be a control that does nothing.
+        root.vEfforts = Array.isArray(d.efforts) ? d.efforts : []
       } catch (e) {}
     }
   }
@@ -1107,6 +1149,31 @@ Item {
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
+              }
+
+              // Only drawn when the model in force takes an effort level, and
+              // with only the notches it takes: the daemon publishes them.
+              KnobRow {
+                width: parent.width
+                visible: root.vEfforts.length > 0
+                scrollTarget: formScroll
+                foreground: root.foreground; fontFamily: root.fontFamily
+                label: "Effort for " + root.vAgent
+                labels: root.effortLabels
+                unit: ""
+                description: "How hard it thinks before it answers. Lower answers " +
+                             "sooner; higher works harder on difficult asks. Default " +
+                             "leaves it to " + root.vAgent + ". Changing it keeps the " +
+                             "conversation." +
+                             (root.agentEffort() !== "" && root.effortIndex === 0
+                              ? "  ⚠  The level saved for this agent is not one this " +
+                                "model takes, so the default is in use." : "")
+                value: root.effortIndex
+                minimum: 0; maximum: root.vEfforts.length; stepSize: 1
+                onCommitted: function(v) {
+                  var i = Math.round(v)
+                  root.setEffort(i < 1 ? "" : String(root.vEfforts[i - 1]))
+                }
               }
 
               Dropdown {

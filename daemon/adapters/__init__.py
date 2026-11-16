@@ -49,7 +49,7 @@ def omarchy_default() -> str | None:
 
 def load(name: str | None = None, level: str | None = None,
          endpoint: dict | None = None, model: str | None = None,
-         **kwargs) -> Adapter | None:
+         effort: str | None = None, **kwargs) -> Adapter | None:
     """Build the adapter for `name`, or for Omarchy's default when omitted.
 
     Returns None when the agent is unset, unknown, or installed-but-unusable
@@ -90,6 +90,11 @@ def load(name: str | None = None, level: str | None = None,
         # hides the field for those (see takes_model).
         if model and takes_model(cls):
             kwargs["model"] = model
+        # Handed over even when this model cannot use it: the adapter decides
+        # at spawn time, because which model is in force (its own default
+        # included) is something only it can read.
+        if effort and takes_effort(cls):
+            kwargs["effort"] = effort
         return finish(cls(**kwargs))
 
     # The remaining nine Omarchy agents share one plain-stdout adapter.
@@ -99,17 +104,30 @@ def load(name: str | None = None, level: str | None = None,
     return None
 
 
-def takes_model(adapter) -> bool:
-    """Whether this adapter class, or instance, can be told which model."""
+def _accepts(adapter, parameter: str) -> bool:
     if adapter is None:
         return False
     cls = adapter if isinstance(adapter, type) else type(adapter)
     if not issubclass(cls, Adapter) or issubclass(cls, OpenAICompatible):
         return False                  # an endpoint's model is its own setting
     try:
-        return "model" in inspect.signature(cls.__init__).parameters
+        return parameter in inspect.signature(cls.__init__).parameters
     except (TypeError, ValueError):
         return False
+
+
+def takes_model(adapter) -> bool:
+    """Whether this adapter class, or instance, can be told which model."""
+    return _accepts(adapter, "model")
+
+
+def takes_effort(adapter) -> bool:
+    """Whether this adapter class, or instance, can be told an effort level.
+
+    Whether the level then *means* anything depends on the model as well;
+    that is the adapter's own efforts().
+    """
+    return _accepts(adapter, "effort")
 
 
 def explain(name: str | None = None) -> str:
@@ -157,5 +175,6 @@ def supported() -> dict[str, str]:
 
 __all__ = ["Adapter", "Antigravity", "Chunk", "ClaudeCode", "CliAgent",
            "Codex", "Gemini", "OpenAICompatible", "load", "omarchy_default",
-           "sentences", "speech_safe", "supported", "takes_model", "REGISTRY",
+           "sentences", "speech_safe", "supported", "takes_effort", "takes_model",
+           "REGISTRY",
            "CLI_TEMPLATES"]

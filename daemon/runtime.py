@@ -28,6 +28,10 @@ PLUGIN_ID = "duaneoca.agentvoice"
 #: read as a flag, and no whitespace, so it is always exactly one argument.
 _MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,127}")
 
+#: Every effort level any backend here accepts. A closed list rather than a
+#: pattern, because the value becomes an argv element after `--effort`.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
 DEFAULTS = {
     "engine": "vosk",
     "phrase": "hey computer",
@@ -61,6 +65,7 @@ DEFAULTS = {
     "bargeFactor": 150,
     "permissions": {},
     "agentModels": {},
+    "agentEfforts": {},
     "projectDir": "",
     "endpointUrl": "",
     "endpointModel": "",
@@ -105,6 +110,7 @@ TOML_ALIASES = {
     "bargeFactor": ("audio", "barge_factor"),
     "permissions": ("agent", "permissions"),
     "agentModels": ("agent", "models"),
+    "agentEfforts": ("agent", "efforts"),
     "projectDir": ("agent", "project_dir"),
     "endpointUrl": ("agent", "endpoint_url"),
     "endpointModel": ("agent", "endpoint_model"),
@@ -270,6 +276,19 @@ class Config:
         if not value or not _MODEL_NAME.fullmatch(value):
             return None
         return value
+
+    def effort_for(self, agent: str | None) -> str | None:
+        """The effort level chosen for this agent, or None for its default.
+
+        Per agent like the model, and for the same reason. Anything outside
+        EFFORT_LEVELS reads as unset: it would otherwise be an argument to a
+        CLI that can run commands.
+        """
+        raw = self["agentEfforts"]
+        if not isinstance(raw, dict) or not agent:
+            return None
+        value = raw.get(agent)
+        return value if isinstance(value, str) and value in EFFORT_LEVELS else None
 
 
 #: How much of a reply travels to the screen. It was 400 characters, which

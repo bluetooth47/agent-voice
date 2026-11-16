@@ -28,6 +28,9 @@ Column {
   property real maximum: 1
   property real stepSize: 1
   property string unit: "ms"
+  // Names for the notches, from `minimum` up, for a slider that picks one of
+  // a few named choices rather than a number. Shown in place of the number.
+  property var labels: []
 
   // The Flickable this row lives in, so a wheel event over the slider scrolls
   // the list instead of changing the setting. Optional: when it is not set,
@@ -76,7 +79,10 @@ Column {
     }
     Text {
       id: valueText
-      text: Math.round(knob.shown) + knob.unit
+      text: knob.labels.length > 0
+            ? String(knob.labels[Math.max(0, Math.min(knob.labels.length - 1,
+                                  Math.round(knob.shown - knob.minimum)))])
+            : Math.round(knob.shown) + knob.unit
       color: knob.dim
       font.family: knob.fontFamily
       font.pixelSize: Style.font.body

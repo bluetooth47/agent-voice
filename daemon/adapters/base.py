@@ -326,6 +326,15 @@ class Adapter(ABC):
     def cancel(self) -> None:
         """Abandon the turn in progress. Default: nothing to abandon."""
 
+    def efforts(self) -> tuple[str, ...]:
+        """The effort levels this backend accepts with its model, lowest first.
+
+        Empty means there is nothing to choose, and the settings screen draws
+        no slider: an effort the CLI or the model would drop is a control that
+        does nothing. Default: none.
+        """
+        return ()
+
 
 # Replies are spoken by a TTS voice, so they have to be written for the ear.
 # Without this the agent answers in markdown and the voice reads the asterisks
