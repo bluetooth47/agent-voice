@@ -163,6 +163,106 @@ Item {
   // as the daemon works them out. Empty means no slider: an older model, an
   // agent with no such flag, or an endpoint.
   property var vEfforts: []
+  // The extra agents as the daemon sees them: per name, the effort levels its
+  // model takes, the permission levels its program can honour, and why it
+  // cannot be woken or cannot answer, if so. The settings themselves are in
+  // `voiceAgents` below; this is only what the daemon knows about them.
+  property var vCrew: []
+
+  // --- more agents ------------------------------------------------------------
+  // Each one is woken by its own name and has its own program, model,
+  // effort, voice, permission level and folder, and its own conversation.
+  // Stored as one list, written whole: `omarchy bar set` replaces a value, so
+  // an edit to one field of one agent rewrites the list with that change.
+  readonly property int maxAgents: 8
+  readonly property var voiceAgents: {
+    var v = cfg["voiceAgents"]
+    return Array.isArray(v) ? v : []
+  }
+  readonly property var programOptions: [
+    { label: "Claude Code", value: "claude" },
+    { label: "Codex", value: "codex" },
+    { label: "Gemini", value: "gemini" },
+    { label: "Antigravity", value: "agy" },
+    { label: "Copilot", value: "copilot" }
+  ]
+  // Names that suggest themselves for a new agent, every one a word the
+  // wake engine knows. The first not already taken is offered.
+  readonly property var nameSuggestions: [
+    "jarvis", "friday", "atlas", "nova", "sage", "echo", "alfred", "ziggy",
+    "max", "hal"
+  ]
+
+  function crewInfo(name) {
+    for (var i = 0; i < root.vCrew.length; i++)
+      if (root.vCrew[i] && root.vCrew[i].name === name) return root.vCrew[i]
+    return ({})
+  }
+
+  function saveAgents(list) {
+    persist("voiceAgents", JSON.stringify(list), true)
+  }
+
+  function updateAgent(index, key, value) {
+    var list = []
+    for (var i = 0; i < root.voiceAgents.length; i++) {
+      var copy = {}
+      var a = root.voiceAgents[i] || {}
+      for (var k in a) copy[k] = a[k]
+      if (i === index) copy[key] = value
+      list.push(copy)
+    }
+    saveAgents(list)
+  }
+
+  function addAgent() {
+    if (root.voiceAgents.length >= root.maxAgents) return
+    var taken = {}
+    var mine = root.activePhrase.split(" ")
+    for (var m = 0; m < mine.length; m++) taken[mine[m]] = true
+    for (var i = 0; i < root.voiceAgents.length; i++)
+      taken[String((root.voiceAgents[i] || {}).name || "")] = true
+    var name = ""
+    for (var j = 0; j < root.nameSuggestions.length && name === ""; j++)
+      if (!taken[root.nameSuggestions[j]]) name = root.nameSuggestions[j]
+    var list = root.voiceAgents.slice()
+    list.push({ name: name, agent: "claude", model: "", effort: "", voice: "",
+                level: "ask", projectDir: "" })
+    saveAgents(list)
+  }
+
+  function removeAgent(index) {
+    var list = root.voiceAgents.slice()
+    list.splice(index, 1)
+    saveAgents(list)
+  }
+
+  function agentModelChoices(program, current) {
+    var out = [{ label: "Default  (whatever " + program + " uses on its own)", value: "" }]
+    var presets = root.modelPresets[program] || []
+    var known = current === ""
+    for (var i = 0; i < presets.length; i++) {
+      out.push(presets[i])
+      if (presets[i].value === current) known = true
+    }
+    if (!known) out.push({ label: current + "  (custom)", value: current })
+    out.push({ label: "Other…", value: "__other__" })
+    return out
+  }
+
+  function agentLevelChoices(levels) {
+    var out = []
+    var list = levels && levels.length ? levels : ["ask", "edits", "trusted"]
+    for (var i = 0; i < list.length; i++) {
+      var v = String(list[i])
+      if (v === "trusted") out.push({ label: "Trust everything in its folder", value: v })
+      else if (v === "edits") out.push({ label: "Edits in its folder are fine, ask for commands", value: v })
+      else out.push({ label: list.indexOf("edits") >= 0 ? "Ask before every change"
+                                                        : "Read-only, never act unasked",
+                      value: "ask" })
+    }
+    return out
+  }
 
   // The phrase actually being listened for. Both engines keep their own
   // key and the inactive one stays in shell.json, so reading the raw
@@ -631,6 +731,7 @@ Item {
         // field is not published, and a slider left over from the last one
         // would be a control that does nothing.
         root.vEfforts = Array.isArray(d.efforts) ? d.efforts : []
+        root.vCrew = Array.isArray(d.crew) ? d.crew : []
       } catch (e) {}
     }
   }
@@ -737,7 +838,9 @@ Item {
           Text {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: "The agent wants to run " + (root.request.tool || "a tool") + "."
+            text: (root.request.who ? "The agent “" + root.request.who + "”"
+                                    : "The agent") +
+                  " wants to run " + (root.request.tool || "a tool") + "."
             textFormat: Text.PlainText
             color: root.foreground
             font.family: root.fontFamily
@@ -1224,6 +1327,239 @@ Item {
                 color: Commons.Color.urgent
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
+              }
+            }
+
+            SettingsGroup {
+              width: parent.width
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              title: "MORE AGENTS"
+
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: "Your main agent answers to “" + root.activePhrase + "”. " +
+                      "Add more, each woken by its own name, with its own model, " +
+                      "voice, permission level, folder and conversation. They can " +
+                      "work at the same time; they speak one at a time, and never " +
+                      "over you. Start a sentence with a name to talk to that agent " +
+                      "from anywhere, including a follow-up."
+                textFormat: Text.PlainText
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                visible: root.usingOww && root.voiceAgents.length > 0
+                text: "⚠  openWakeWord hears only its own phrase, so these agents " +
+                      "cannot be woken. Switch the wake engine to Vosk to use them."
+                textFormat: Text.PlainText
+                color: Commons.Color.urgent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Repeater {
+                model: root.voiceAgents
+
+                delegate: Column {
+                  id: card
+                  required property var modelData
+                  required property int index
+                  width: parent ? parent.width : 0
+                  spacing: Style.spacing.sm
+
+                  readonly property string name: String(modelData.name || "")
+                  readonly property string program: String(modelData.agent || "claude")
+                  readonly property string model: String(modelData.model || "")
+                  readonly property string effort: String(modelData.effort || "")
+                  readonly property var info: root.crewInfo(card.name)
+                  readonly property var efforts: Array.isArray(card.info.efforts)
+                                                 ? card.info.efforts : []
+                  property bool customModel: false
+
+                  Rectangle {
+                    width: parent.width
+                    height: 1
+                    visible: card.index > 0
+                    color: Qt.darker(root.foreground, 2.2)
+                  }
+
+                  TextField {
+                    width: parent.width
+                    text: card.name
+                    placeholderText: "a name — the word that wakes it"
+                    foreground: root.foreground
+                    font.family: root.fontFamily
+                    onEditingFinished: {
+                      var v = text.trim().toLowerCase()
+                      if (v !== card.name) root.updateAgent(card.index, "name", v)
+                    }
+                  }
+
+                  Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    visible: String(card.info.problem || "") !== ""
+                             || (card.name !== "" && !/^[a-z]+( [a-z]+){0,2}$/.test(card.name))
+                    text: "⚠  " + (String(card.info.problem || "") !== ""
+                                   ? String(card.info.problem)
+                                   : "A name is one to three plain words, letters only.")
+                    textFormat: Text.PlainText
+                    color: Commons.Color.urgent
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+
+                  Dropdown {
+                    width: parent.width
+                    showLabel: true
+                    label: "Program"
+                    fontFamily: root.fontFamily
+                    foreground: root.foreground
+                    options: root.programOptions
+                    value: card.program
+                    onChanged: function(v) {
+                      if (v !== card.program) {
+                        card.customModel = false
+                        root.updateAgent(card.index, "agent", v)
+                      }
+                    }
+                  }
+
+                  Dropdown {
+                    width: parent.width
+                    visible: card.info.takes_model !== false
+                    showLabel: true
+                    label: "Model for " + (card.name || "this agent")
+                    fontFamily: root.fontFamily
+                    foreground: root.foreground
+                    options: root.agentModelChoices(card.program, card.model)
+                    value: card.customModel ? "__other__" : card.model
+                    onChanged: function(v) {
+                      if (v === "__other__") { card.customModel = true; return }
+                      card.customModel = false
+                      if (v !== card.model) root.updateAgent(card.index, "model", v)
+                    }
+                  }
+
+                  TextField {
+                    width: parent.width
+                    visible: card.customModel && card.info.takes_model !== false
+                    text: card.model
+                    placeholderText: "type a model name or full model id"
+                    foreground: root.foreground
+                    font.family: root.fontFamily
+                    onEditingFinished: {
+                      if (text.trim() !== card.model)
+                        root.updateAgent(card.index, "model", text.trim())
+                    }
+                  }
+
+                  KnobRow {
+                    width: parent.width
+                    visible: card.efforts.length > 0
+                    scrollTarget: formScroll
+                    foreground: root.foreground; fontFamily: root.fontFamily
+                    label: "Effort for " + (card.name || "this agent")
+                    labels: {
+                      var out = ["Default"]
+                      for (var i = 0; i < card.efforts.length; i++) {
+                        var e = String(card.efforts[i])
+                        out.push(root.effortNames[e] || e)
+                      }
+                      return out
+                    }
+                    unit: ""
+                    description: "How hard it thinks before it answers. Changing it " +
+                                 "keeps the conversation."
+                    value: card.efforts.indexOf(card.effort) + 1
+                    minimum: 0; maximum: card.efforts.length; stepSize: 1
+                    onCommitted: function(v) {
+                      var i = Math.round(v)
+                      root.updateAgent(card.index, "effort",
+                                       i < 1 ? "" : String(card.efforts[i - 1]))
+                    }
+                  }
+
+                  Dropdown {
+                    width: parent.width
+                    showLabel: true
+                    label: "Voice"
+                    fontFamily: root.fontFamily
+                    foreground: root.foreground
+                    options: [{ label: "Same as the main agent", value: "" }]
+                             .concat(root.voiceOptions)
+                    value: String(card.modelData.voice || "")
+                    onChanged: function(v) {
+                      if (v !== String(card.modelData.voice || ""))
+                        root.updateAgent(card.index, "voice", v)
+                    }
+                  }
+
+                  Dropdown {
+                    width: parent.width
+                    showLabel: true
+                    label: "Permission level for " + (card.name || "this agent")
+                    fontFamily: root.fontFamily
+                    foreground: root.foreground
+                    options: root.agentLevelChoices(card.info.levels)
+                    value: String(card.modelData.level || "ask")
+                    onChanged: function(v) {
+                      if (v !== String(card.modelData.level || "ask"))
+                        root.updateAgent(card.index, "level", v)
+                    }
+                  }
+
+                  TextField {
+                    width: parent.width
+                    text: String(card.modelData.projectDir || "")
+                    placeholderText: "its folder  (empty: your home directory)"
+                    foreground: root.foreground
+                    font.family: root.fontFamily
+                    onEditingFinished: {
+                      if (text !== String(card.modelData.projectDir || ""))
+                        root.updateAgent(card.index, "projectDir", text)
+                    }
+                  }
+
+                  Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: (String(card.info.posture || "") !== ""
+                           ? "In force: " + card.info.posture + ".  " : "") +
+                          (String(card.modelData.level || "ask") === "trusted"
+                           ? "Nothing is asked. A sentence starting with “" +
+                             card.name + "” can edit files and run commands in its " +
+                             "folder with nothing able to stop it."
+                           : "Its own level and folder: what you allow the main agent " +
+                             "does not carry over.")
+                    textFormat: Text.PlainText
+                    color: String(card.modelData.level || "ask") === "trusted"
+                           ? Commons.Color.urgent : root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+
+                  Button {
+                    text: "Remove " + (card.name || "this agent")
+                    fontFamily: root.fontFamily
+                    onClicked: root.removeAgent(card.index)
+                  }
+                }
+              }
+
+              Button {
+                text: root.voiceAgents.length >= root.maxAgents
+                      ? "That is the most there can be (" + root.maxAgents + ")"
+                      : "Add an agent"
+                fontFamily: root.fontFamily
+                enabled: root.voiceAgents.length < root.maxAgents
+                onClicked: root.addAgent()
               }
             }
 

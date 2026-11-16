@@ -46,6 +46,9 @@ from adapters import (  # noqa: E402
     takes_effort, takes_model,
 )
 from adapters.base import speech_safe  # noqa: E402
+from crew import (  # noqa: E402
+    FLOOR_LEASE_S, FOLLOW_UP_STALE_S, Persona, View, route,
+)
 import failure  # noqa: E402
 from chimes import Chimes  # noqa: E402
 from eager import Utterance, sounds_finished  # noqa: E402
@@ -199,6 +202,21 @@ class OwwWake:
         return fired
 
 
+def wanted_names(cfg) -> list[str]:
+    """The extra agents' names, in the order they were added.
+
+    Tolerates a settings object without agents(): the test stand-ins for
+    Config are dicts, and a missing method means no extra agents.
+    """
+    agents = getattr(cfg, "agents", None)
+    if not callable(agents):
+        return []
+    try:
+        return [spec["name"] for spec in agents()]
+    except Exception:
+        return []
+
+
 class Pipeline:
     def __init__(self, cfg: Config, whisper_override: str | None = None):
         import vosk
@@ -209,6 +227,14 @@ class Pipeline:
         self._vocab = load_vocab()
         self._vocab_stamp = vocab_stamp()
         self.phrase = ""
+        #: The extra agents' names this engine listens for besides `phrase`,
+        #: and the ones it cannot: words Vosk's lexicon does not have, a name
+        #: the main agent already answers to, or any name at all on
+        #: openWakeWord, which knows only the phrase it was trained on.
+        self.names: list[str] = []
+        self.unheard: dict[str, str] = {}
+        #: Which phrase fired last: `phrase` or one of `names`.
+        self.heard_phrase = ""
         self.engine = "vosk"
         self._oww = None
         self._loud_frames = 0
@@ -235,7 +261,10 @@ class Pipeline:
                 # the verifier as a constructor argument, so turning it off
                 # means building the engine without it. The threshold is the
                 # opposite case -- a number the running engine can be handed.
-                cfg.get_bool("useVerifier") if engine == "openwakeword" else False)
+                cfg.get_bool("useVerifier") if engine == "openwakeword" else False,
+                # The extra agents' names are part of the grammar, so a new
+                # one means a new recogniser.
+                tuple(wanted_names(cfg)))
         if want != getattr(self, "_wake_spec", None):
             self._wake_spec = want
             self._build_wake(cfg, engine)
@@ -307,6 +336,10 @@ class Pipeline:
                                     cfg.get_int("owwThresholdPct") / 100.0,
                                     use_verifier=cfg.get_bool("useVerifier"))
                 self.phrase = self._oww.phrase
+                self.names = []
+                self.unheard = {n: "the openWakeWord engine hears only its "
+                                   "own phrase — use Vosk for named agents"
+                                for n in wanted_names(cfg)}
                 if self._oww.verifier:
                     verifier = "with your verifier"
                 elif not cfg.get_bool("useVerifier"):
@@ -331,7 +364,57 @@ class Pipeline:
             self._oww = None
             self._release()
         self.phrase = cfg.get_str("phrase").lower()
+        self._choose_names(wanted_names(cfg))
         self._reset_wake()
+
+    def _choose_names(self, wanted: list[str]) -> None:
+        """Keep the names Vosk can actually hear, and say why for the rest.
+
+        A grammar silently drops a word its lexicon does not have, so a name
+        made of one would be listened for and never heard -- the reason
+        "hey omarchy" is not a phrase option. Vosk can be asked, so it is.
+        """
+        self.names, self.unheard = [], {}
+        main = set(self.phrase.split())
+        for name in wanted:
+            if name == self.phrase:
+                self.unheard[name] = "the main agent already answers to it"
+                continue
+            if set(name.split()) <= main:
+                # "computer" inside "hey computer": the main phrase would be
+                # matched first and this one could never win.
+                self.unheard[name] = "it is part of the main wake phrase"
+                continue
+            missing = [w for w in name.split() if not self._knows(w)]
+            if missing:
+                self.unheard[name] = (f"the wake engine does not know the "
+                                      f"word “{missing[0]}”")
+                continue
+            self.names.append(name)
+        for name, why in self.unheard.items():
+            print(f"  {YEL}agent “{name}” cannot be woken: {why}{OFF}")
+
+    def _knows(self, word: str) -> bool:
+        """Whether Vosk's lexicon has `word`. True when it cannot say."""
+        try:
+            find = self.vosk_model_lazy().vosk_model_find_word
+        except AttributeError:
+            return True
+        try:
+            return find(word) >= 0
+        except Exception:
+            return True
+
+    def phrase_in(self, text: str) -> str:
+        """The phrase `text` holds -- the main one or an agent's name -- or "".
+
+        Whole words, longest first, so "hey computer" is not mistaken for an
+        agent called "computer" that happens to be inside it.
+        """
+        padded = f" {text} "
+        found = [p for p in (self.phrase, *getattr(self, "names", ()))
+                 if p and f" {p} " in padded]
+        return max(found, key=len) if found else ""
 
     @staticmethod
     def _release() -> None:
@@ -407,7 +490,8 @@ class Pipeline:
 
     def _reset_wake(self) -> None:
         self._wake = self._vosk.KaldiRecognizer(
-            self.vosk_model_lazy(), RATE, json.dumps([self.phrase, "[unk]"]))
+            self.vosk_model_lazy(), RATE,
+            json.dumps([self.phrase, *self.names, "[unk]"]))
         # Word-level confidence is the second line of defence. A grammar has
         # to choose between the phrase and [unk], so anything phonetically
         # near the trigger scores as a match -- which is how a podcast on a
@@ -456,6 +540,7 @@ class Pipeline:
         if self._oww is not None:
             if self._oww.feed(pcm):
                 self._refractory_until = time.time() + self.refractory_ms / 1000.0
+                self.heard_phrase = self.phrase
                 return True
             return False
 
@@ -468,15 +553,18 @@ class Pipeline:
         if final:
             payload = json.loads(self._wake.Result())
             text = payload.get("text", "")
+        else:
+            payload = {}
+            text = json.loads(self._wake.PartialResult()).get("partial", "")
+        matched = self.phrase_in(text)
+        if not matched:
+            return False
+        if final:
             words = [w for w in payload.get("result", [])
-                     if w.get("word") in self.phrase.split()]
+                     if w.get("word") in matched.split()]
             conf = (sum(w.get("conf", 0.0) for w in words) / len(words)) if words else 0.0
         else:
-            text = json.loads(self._wake.PartialResult()).get("partial", "")
             conf = None            # partials carry no confidence
-
-        if self.phrase not in text:
-            return False
 
         # A partial can only wake it after enough consecutive loud frames to
         # be actual speech; a final also has to clear the confidence bar.
@@ -497,6 +585,7 @@ class Pipeline:
         self._reset_wake()
         self._loud_frames = 0
         self._refractory_until = time.time() + self.refractory_ms / 1000.0
+        self.heard_phrase = matched
         return True
 
     def new_capture(self):
@@ -770,6 +859,18 @@ def _empty_turn() -> dict:
 class Daemon:
     def __init__(self, cfg: Config, pipe: Pipeline, state: StateFile,
                  speaker: Speaker | None, agent=None):
+        #: Which agent the current thread is serving. A turn runs on a thread
+        #: of its own once there are extra agents, and everything that says
+        #: `self.agent`, `self.speaker`, `self.session_id` or
+        #: `self._interrupt` then means that agent's. Anywhere else -- the run
+        #: loop, a signal handler, a test -- it is the main agent's, which is
+        #: all there ever was before there could be more than one. See crew.py.
+        self._here = threading.local()
+        self._main = Persona()
+        #: The extra agents, by the name that wakes them.
+        self.crew: dict[str, Persona] = {}
+        #: Builds a voice; replaced in tests, where there is no Piper.
+        self.make_speaker = Speaker
         self.cfg, self.pipe, self.state, self.speaker = cfg, pipe, state, speaker
         self.agent = agent
         # Carried between turns so the agent remembers the conversation.
@@ -834,6 +935,27 @@ class Daemon:
         #: then it is our own voice, and on a headset barge-in's to read.
         self._mic_lock = threading.Lock()
         self._speaking = False
+        #: Who may speak, once agents work side by side: one at a time, never
+        #: over somebody talking to us, and a reply keeps the floor between
+        #: its own sentences. Shares the microphone's lock, so taking the
+        #: floor and the run loop taking a frame can never interleave.
+        self._floor = threading.Condition(self._mic_lock)
+        self._floor_owner: Persona | None = None
+        self._floor_until = 0.0
+        #: Set by the run loop while somebody is talking to an agent, or has
+        #: just said a name and is about to.
+        self._hold_speech = False
+        #: The agent that was talked over, so what was said goes to it.
+        self._barged_by: Persona | None = None
+        #: The agent last given a turn: push-to-talk goes to it.
+        self._last_target: Persona | None = None
+        #: The agent whose turn ended last, so the readout keeps showing its
+        #: answer once nothing is happening, as it did with one agent.
+        self._recent: Persona | None = None
+        #: The agent the capture under way is for, for the readout.
+        self._capture_for: Persona | None = None
+        #: The microphone's own state, as last published by the run loop.
+        self._mic_shown: tuple[str, dict] = ("off", {})
         #: The last answer from headset.default_output(), and when it was
         #: asked: a pactl round trip is 23ms and sits in front of a sentence,
         #: so it is not asked per sentence.
@@ -852,6 +974,57 @@ class Daemon:
         self._said: dict[str, str] = {}
         signal.signal(signal.SIGUSR1, self._on_toggle)
         signal.signal(signal.SIGUSR2, self._on_interrupt)
+        if state is not None and hasattr(state, "overlay"):
+            state.overlay = self._compose
+
+    # --- which agent ---------------------------------------------------------
+
+    def _persona(self) -> Persona:
+        return getattr(self._here, "persona", None) or self._main
+
+    def _set(field):
+        return property(lambda self: getattr(self._persona(), field),
+                        lambda self, value: setattr(self._persona(), field, value))
+
+    agent = _set("agent")
+    session_id = _set("session_id")
+    speaker = _set("speaker")
+    _interrupt = _set("interrupt")
+    del _set
+
+    @contextlib.contextmanager
+    def _as(self, persona: Persona | None):
+        """Act for `persona` on this thread for a moment: the run loop priming
+        the agent somebody has just woken, or clearing its stop."""
+        if persona is None:
+            yield
+            return
+        before = getattr(self._here, "persona", None)
+        self._here.persona = persona
+        try:
+            yield
+        finally:
+            self._here.persona = before
+
+    def _in_turn(self) -> bool:
+        """Whether this thread is running an agent's turn beside the run loop."""
+        return bool(getattr(self._here, "turn", False))
+
+    @property
+    def crew_mode(self) -> bool:
+        """Whether turns run beside the run loop rather than inside it.
+
+        With extra agents, and for as long as a turn started that way is
+        still running after the last of them was removed.
+        """
+        return bool(self.crew) or self._main.busy
+
+    def personas(self) -> list[Persona]:
+        return [self._main, *self.crew.values()]
+
+    def _clear_interrupts(self) -> None:
+        for p in self.personas():
+            p.interrupt.clear()
 
     def say_once(self, key: str, line: str) -> bool:
         """Print `line` if it is not what was last printed under `key`."""
@@ -889,11 +1062,20 @@ class Daemon:
         busy, so without this the audio recorded during the first moments of
         a lock would be waiting to be processed on unlock.
         """
-        if self.speaker:
-            self.speaker.cancel()
-        if self.agent:
-            self.agent.cancel()
-        self._interrupt.set()
+        if self._in_turn():
+            # From inside one agent's turn -- it was stopped, or a lock was
+            # noticed between its sentences -- this is about that agent. The
+            # others are the run loop's to stop, and the microphone's queue is
+            # not this thread's to drain: somebody may be talking to another
+            # agent right now.
+            self._persona().stop()
+            return
+        for p in self.personas():
+            if p.speaker:
+                p.speaker.cancel()
+            if p.agent:
+                p.agent.cancel()
+            p.interrupt.set()
         self.deafen(0)
 
     def reconcile_lock(self) -> None:
@@ -935,7 +1117,7 @@ class Daemon:
             self.silence()
             print(f"\n  {YEL}screen locked — microphone closed{OFF}", flush=True)
         else:
-            self._interrupt.clear()
+            self._clear_interrupts()
             print(f"\n  {CYA}screen unlocked — microphone "
                   f"{'open' if self.enabled else 'still released'}{OFF}",
                   flush=True)
@@ -980,7 +1162,7 @@ class Daemon:
             print(f"\n  {YEL}microphone lent to {self._yielded_to} "
                   f"— not listening{OFF}", flush=True)
         else:
-            self._interrupt.clear()
+            self._clear_interrupts()
             print(f"\n  {CYA}{self._yielded_to or 'the other app'} finished "
                   f"— microphone {'back' if self.enabled else 'still released'}"
                   f"{OFF}", flush=True)
@@ -997,7 +1179,7 @@ class Daemon:
             self.silence()
         else:
             self._lock_hold_until = 0.0
-            self._interrupt.clear()
+            self._clear_interrupts()
         print(f"\n  {YEL if self.locked else CYA}screen "
               f"{'locked' if self.locked else 'unlocked'} "
               f"(told, not polled){OFF}", flush=True)
@@ -1039,6 +1221,11 @@ class Daemon:
         Called from the loop and from inside the reply, rate limited so a
         subprocess is not spawned per sentence.
         """
+        if self._in_turn():
+            # The run loop is still running and polls this itself. From here
+            # it would take the command file -- a push-to-talk press meant
+            # for the loop -- and drop it.
+            return
         if time.time() - self._last_session_poll < 1.0:
             return
         self._last_session_poll = time.time()
@@ -1056,6 +1243,10 @@ class Daemon:
         in Claude Code, so carrying an id across a directory change would
         resume the wrong conversation, or none.
         """
+        if self._main.busy:
+            # Its turn is running on another thread; rebuilding would cancel
+            # it. The idle poll comes round again.
+            return
         endpoint = self.endpoint_spec()
         want_name = "endpoint" if endpoint else omarchy_default()
         want_cwd = str(project_dir(self.cfg.get_str("projectDir")))
@@ -1189,7 +1380,8 @@ class Daemon:
             # which agent is missing and why, where it can actually be read.
             name = omarchy_default() or ""
             self.state.describe(agent=name, level="ask", levels=["ask"],
-                                posture=explain_agent(name) or "no agent")
+                                posture=explain_agent(name) or "no agent",
+                                **self.crew_fields())
             return
         # An endpoint takes precedence over the desktop's agent, which is a
         # reasonable rule and an unreasonable surprise: choosing Claude in
@@ -1224,6 +1416,7 @@ class Daemon:
             # talking, so whether it is in force belongs on screen.
             verifier=bool(getattr(getattr(self.pipe, "_oww", None),
                                   "verifier", None)),
+            **self.crew_fields(),
         )
 
     def _on_interrupt(self, *_):
@@ -1233,6 +1426,17 @@ class Daemon:
         deliberately a no-op, so a stray keypress cannot leave it in a state
         the user never asked for.
         """
+        if self.crew_mode:
+            busy = [p for p in self.personas() if p.busy]
+            if not busy:
+                return
+            # Everyone: the button and the keybind say "stop", not "stop
+            # whichever one I am thinking of", and there is no way to say
+            # which from a keypress.
+            for p in busy:
+                p.stop()
+            print(f"\n  {YEL}interrupted{OFF}")
+            return
         if self.state.current not in ("transcribing", "thinking", "speaking"):
             return
         self._interrupt.set()
@@ -1341,6 +1545,7 @@ class Daemon:
         # being called the moment it closed the gate -- see the dedicated
         # poll in run(), which is above it.
         self.reconcile_agent()
+        self.reconcile_crew()
         # Outside the guard for the same reason: a voice arrives on disk when
         # the installer fetches it, and a file appearing changes no setting.
         # Behind the guard, a substitution outlived its own download until
@@ -1362,6 +1567,8 @@ class Daemon:
             return
         self.pipe.apply(self.cfg)
         self.reconcile_voice()
+        # The names the wake engine can hear may have changed with it.
+        self.reconcile_crew()
         print(f"  {CYA}knobs updated{OFF}")
 
     def reconcile_voice(self) -> None:
@@ -1371,6 +1578,8 @@ class Daemon:
         means loading a different model. Cheap when nothing has changed: every
         branch below is a comparison.
         """
+        if self._main.busy:
+            return                      # not mid-reply; next poll
         if not self.cfg.get_bool("speakReplies"):
             self.speaker = None
             return
@@ -1454,18 +1663,52 @@ class Daemon:
         if not self.listening:
             self.silence()
             return
-        barge = self._barge_watch()
-        if self.chimes is not None:
-            self.chimes.settle()        # never a chime under the first word
-        with self._mic_lock:
-            self._speaking = True
+        if self._in_turn():
+            # Beside the run loop: wait until nobody is talking to us and no
+            # other agent is mid-reply. Taking the floor is what stops the
+            # loop reading the microphone, so the watch below is built after.
+            if not self._take_floor(self._persona()):
+                return
+        if not self._in_turn():
+            with self._mic_lock:
+                self._speaking = True
         try:
+            barge = self._barge_watch()
+            if self.chimes is not None:
+                self.chimes.settle()    # never a chime under the first word
             with self._watching_session():
                 self.speaker.say(speech_safe(text), watch=self._watch(barge))
         finally:
             self.deafen(tail_ms)
             with self._mic_lock:
                 self._speaking = False
+                if self._in_turn():
+                    # Kept for a moment for this reply's next sentence, so
+                    # two replies never alternate sentence by sentence.
+                    self._floor_until = time.time() + FLOOR_LEASE_S
+                    self._floor.notify_all()
+
+    def _take_floor(self, p: Persona) -> bool:
+        """Wait for a turn to speak. False if `p` was stopped meanwhile."""
+        with self._floor:
+            while True:
+                if p.interrupt.is_set() or not self.listening:
+                    return False
+                owner = self._floor_owner
+                held = (owner is not None and owner is not p and owner.busy
+                        and time.time() < self._floor_until)
+                if not (held or self._speaking or self._hold_speech):
+                    self._floor_owner = p
+                    self._speaking = True
+                    return True
+                self._floor.wait(0.1)
+
+    def _hold(self, hold: bool) -> None:
+        """Hold every reply while somebody is talking to an agent."""
+        with self._floor:
+            if self._hold_speech != hold:
+                self._hold_speech = hold
+                self._floor.notify_all()
 
     def _watch(self, barge):
         """What `Speaker.say()` checks between audio chunks.
@@ -1501,6 +1744,10 @@ class Daemon:
         echo path reaches the speaker without passing through the rest of
         `answer()`, and nesting must not start a second thread.
         """
+        if self._in_turn():
+            # The run loop is still running, and polls the lock itself.
+            yield
+            return
         self._watchers += 1
         if self._watchers == 1:
             self._watch_stop = threading.Event()
@@ -1616,6 +1863,7 @@ class Daemon:
         # one that tells the agent what they meant.
         recent: collections.deque[bytes] = collections.deque(
             maxlen=BARGE_PREROLL_FRAMES)
+        who = self._persona()
 
         def watch() -> bool:
             # Drain whatever the microphone captured while that chunk played.
@@ -1628,6 +1876,7 @@ class Daemon:
                 if self._barge.feed(pcm):
                     print(f"  {YEL}heard you over us — stopping{OFF}")
                     self._barged = list(recent)
+                    self._barged_by = who
                     self._interrupt.set()
                     if self.agent:
                         self.agent.cancel()
@@ -1663,7 +1912,9 @@ class Daemon:
         listened for while nothing is being said, on speakers as well as a
         headset: there is no playback for it to hear itself in.
         """
-        if self._frames is None:
+        if self._frames is None or self._in_turn():
+            # Beside the run loop, the loop is what hears the wake word: it
+            # never stopped listening. A second reader would split the frames.
             yield
             return
         stop = threading.Event()
@@ -1826,16 +2077,23 @@ class Daemon:
         """
         clock = dict(clock or {})
         tail_ms = self.cfg.get_int("echoTailMs")
+        # Where this turn's state goes: the state file, or -- beside the run
+        # loop -- this agent's own line, which the daemon combines with the
+        # others' and the microphone's.
+        out = self._out()
         self._interrupt.clear()
-        self._barged = None
-        self._woke = False
+        if not self._in_turn():
+            # Beside the loop these belong to it: it may be about to act on a
+            # barge that happened during another agent's reply.
+            self._barged = None
+            self._woke = False
         if not self.agent:
             if self.speaker:
-                self.state.publish("speaking", **last)
+                out.publish("speaking", **last)
                 self.speak(text, tail_ms)       # echo mode
             return
 
-        self.state.publish("thinking", **last)
+        out.publish("thinking", **last)
         t0 = time.time()
         clock["sent"] = t0
         # A turn sent without a session starts a conversation. The view draws
@@ -1889,7 +2147,7 @@ class Daemon:
                     # begins, because speak() below blocks until it has been said.
                     last["reply"] = " ".join(reply_parts)[:REPLY_MAX]
                     if self.speaker and self.listening:
-                        self.state.publish("speaking", **last)
+                        out.publish("speaking", **last)
                         self.speak(sentence, tail_ms)
                         # When the first sound actually went out, which the
                         # speaker records itself. Only one from this turn
@@ -1902,15 +2160,18 @@ class Daemon:
                     else:
                         # No voice: the text is the entire answer, so it matters
                         # more here, not less. Keep whatever state we are in.
-                        self.state.publish(self.state.current, **last)
+                        out.publish(out.current, **last)
         except Exception as e:                  # a broken agent must not end the loop
             error = f"{type(e).__name__}: {e}"
 
         if self._interrupt.is_set():
             # Killing the agent mid-stream usually surfaces as an error. It is
             # not one, and announcing it would talk over the user who just
-            # asked for silence.
-            self.deafen(tail_ms)
+            # asked for silence. Beside the run loop speak() has already
+            # dropped its own echo, and anything queued since is somebody
+            # talking to another agent.
+            if not self._in_turn():
+                self.deafen(tail_ms)
         elif error:
             # The fact of the error is always logged; its text is speech-
             # adjacent, because a CLI that rejects a prompt often quotes it
@@ -1979,9 +2240,12 @@ class Daemon:
         """
         if not self.cfg.get_bool("keepHistory"):
             return
+        who = getattr(self.agent, "name", "") or ""
+        if self.crew_mode:
+            who = self._persona().name or who
         self.history.append({
             "at": round(time.time(), 1),
-            "agent": getattr(self.agent, "name", "") or "",
+            "agent": who,
             "transcript": heard,
             "reply": reply[:REPLY_MAX],
             "error": kind,
@@ -1989,6 +2253,339 @@ class Daemon:
             "new": bool(new),
             "latency_ms": int(last.get("latency_ms") or 0),
         })
+
+    # --- extra agents --------------------------------------------------------
+
+    def reconcile_crew(self) -> None:
+        """Build, rebuild or drop the extra agents to match the settings.
+
+        Only between turns: an agent whose turn is running is left exactly as
+        it is, and caught up on a later poll. An agent the wake engine cannot
+        hear -- a word Vosk does not know, the openWakeWord engine -- is not
+        built at all, because nothing could ever reach it.
+        """
+        if self.pipe is None:
+            return
+        agents = getattr(self.cfg, "agents", None)
+        specs = {spec["name"]: spec for spec in agents()} if callable(agents) else {}
+        heard = set(getattr(self.pipe, "names", ()) or ())
+        self._main.name = getattr(self.pipe, "phrase", "") or ""
+        changed = False
+        for name in list(self.crew):
+            p = self.crew[name]
+            if (name in specs and name in heard) or p.busy:
+                continue
+            if p.agent is not None:
+                p.agent.cancel()
+            del self.crew[name]
+            changed = True
+            print(f"  {CYA}agent “{name}” removed{OFF}", flush=True)
+        for name, spec in specs.items():
+            if name not in heard:
+                continue
+            p = self.crew.get(name)
+            if p is not None and p.busy:
+                continue
+            if p is None:
+                p = self.crew[name] = Persona(name, spec)
+                self._build_persona(p, spec)
+                changed = True
+            elif p.spec != spec:
+                self._rebuild_persona(p, spec)
+                changed = True
+            if self._reconcile_persona_voice(p):
+                changed = True
+        if changed:
+            self.publish_agent()
+
+    def _build_persona(self, p: Persona, spec: dict) -> None:
+        """The adapter for an extra agent, from its own settings."""
+        p.spec = spec
+        program = spec["agent"]
+        if not program:
+            p.agent, p.problem = None, "no agent program is chosen for it"
+        else:
+            level = spec["level"]
+            p.agent = load_adapter(
+                program, level=level, ask_permission=level != "trusted",
+                cwd=str(project_dir(spec["projectDir"])),
+                model=spec["model"] or None, effort=spec["effort"] or None,
+                named=p.name)
+            p.problem = "" if p.agent is not None else (
+                explain_agent(program) or f"{program} is not available")
+        p.session_id = None
+        where = (f"{program}{' · ' + spec['model'] if spec['model'] else ''}"
+                 f"{' · ' + spec['effort'] + ' effort' if spec['effort'] else ''}"
+                 f" · {spec['level']}")
+        if p.problem:
+            print(f"  {YEL}agent “{p.name}”: {p.problem}{OFF}", flush=True)
+        else:
+            print(f"  {CYA}agent “{p.name}”: {where}{OFF}", flush=True)
+
+    def _rebuild_persona(self, p: Persona, spec: dict) -> None:
+        """Catch an idle extra agent up with changed settings.
+
+        An effort alone keeps the conversation, as it does for the main
+        agent; anything else -- program, model, folder, level -- starts a new
+        one, because a session is scoped to all of those.
+        """
+        old = p.spec or {}
+        same = {k: v for k, v in spec.items() if k not in ("effort", "voice")}
+        was = {k: v for k, v in old.items() if k not in ("effort", "voice")}
+        if same == was and p.agent is not None:
+            p.spec = spec
+            if takes_effort(p.agent):
+                before = getattr(p.agent, "effort", None)
+                p.agent.effort = spec["effort"] or None
+                if before != p.agent.effort:
+                    p.agent.cancel()        # the waiting process had the old flag
+                    print(f"  {CYA}agent “{p.name}”: effort "
+                          f"{spec['effort'] or 'default'}{OFF}", flush=True)
+            return
+        if p.agent is not None:
+            p.agent.cancel()
+        self._build_persona(p, spec)
+
+    def _reconcile_persona_voice(self, p: Persona) -> bool:
+        """Give an extra agent its own voice. True if that changed anything."""
+        if not self.cfg.get_bool("speakReplies"):
+            if p.speaker is None:
+                return False
+            p.speaker = None
+            return True
+        wanted = (p.spec or {}).get("voice") or self.cfg.get_str("voice")
+        if (p.speaker is not None and getattr(p.speaker, "requested", None) == wanted
+                and not p.speaker.superseded()):
+            return False
+        try:
+            p.speaker = self.make_speaker(wanted)
+        except Exception as e:
+            self.say_once(f"voice:{p.name}", f"  {YEL}agent “{p.name}”: voice "
+                                             f"{wanted} unavailable: {e}{OFF}")
+            return False
+        self.say_once(f"voice:{p.name}", f"  {CYA}agent “{p.name}” speaks as "
+                                         f"{p.speaker.name}{OFF}")
+        return True
+
+    def crew_fields(self) -> dict:
+        """What the settings need to draw each extra agent truthfully: the
+        effort levels its model takes, the permission levels its program can
+        honour, and why it cannot be reached, if it cannot."""
+        agents = getattr(self.cfg, "agents", None)
+        specs = agents() if callable(agents) else []
+        unheard = dict(getattr(self.pipe, "unheard", {}) or {})
+        out = []
+        for spec in specs:
+            p = self.crew.get(spec["name"])
+            a = p.agent if p is not None else None
+            out.append({
+                "name": spec["name"],
+                "efforts": list(getattr(a, "efforts", tuple)()) if a else [],
+                "levels": list(getattr(a, "levels", ("ask", "trusted")))
+                          if a else ["ask", "edits", "trusted"],
+                "takes_model": bool(takes_model(a)) if a else spec["agent"] in (
+                    "claude", "codex", "gemini", "agy"),
+                "posture": a.posture(spec["level"]) if a else "",
+                "problem": unheard.get(spec["name"], "")
+                           or (p.problem if p is not None else ""),
+                "voice": getattr(p.speaker, "name", "") if p and p.speaker else "",
+            })
+        return {"crew": out}
+
+    def _out(self):
+        """Where the current turn publishes its state. See crew.View."""
+        if not self._in_turn():
+            return self.state
+        p = self._persona()
+        view = getattr(p, "view", None)
+        if view is None:
+            view = p.view = View(p, self._recompose)
+        return view
+
+    def _recompose(self) -> None:
+        """Redraw the shared readout after an agent's own state moved."""
+        if self.state is not None:
+            state, extra = self._mic_shown
+            self.state.publish(state, **extra)
+
+    def _compose(self, state: str, extra: dict) -> tuple[str, dict]:
+        """What the one line on screen shows, given the microphone's state.
+
+        Installed as the state file's overlay, so every publish passes here.
+        With one agent it changes nothing. With several, the microphone wins
+        whenever it is doing something -- capturing, transcribing, locked,
+        muted, lent out -- and otherwise the readout shows the agent that is
+        speaking, else the one that started thinking last, else the one that
+        answered last. `who` names whose turn it is and `live` says what each
+        agent is doing.
+        """
+        self._mic_shown = (state, dict(extra))
+        if not self.crew_mode:
+            return state, extra
+        everyone = self.personas()
+        live = {p.name: (p.state if p.busy else "idle")
+                for p in everyone if p.name}
+        if state == "listening":
+            speaking = [p for p in everyone if p.busy and p.state == "speaking"]
+            thinking = sorted((p for p in everyone
+                               if p.busy and p.state == "thinking"),
+                              key=lambda p: getattr(p, "started_at", 0.0),
+                              reverse=True)
+            shown = (speaking or thinking or [None])[0]
+            if shown is not None:
+                merged = {**shown.last, "who": shown.name, "live": live}
+                if "level_db" in extra:
+                    merged["level_db"] = extra["level_db"]
+                return shown.state, merged
+            recent = self._recent
+            if recent is not None:
+                return state, {**extra, **recent.last, "who": recent.name,
+                               "live": live}
+        who = self._capture_for.name if (
+            self._capture_for is not None
+            and state in ("capture", "transcribing", "followup")) else ""
+        return state, {**extra, "who": who, "live": live}
+
+    def _woken(self) -> Persona:
+        """The agent whose name the wake engine just heard.
+
+        If it is working, it stops, exactly as the wake word stops the one
+        agent there used to be -- the others carry on.
+        """
+        heard = getattr(self.pipe, "heard_phrase", "") or ""
+        p = self.crew.get(heard, self._main)
+        if p.busy:
+            p.stop()
+            print(f"  {GRN}● {p.name or 'wake'}{OFF}  {DIM}stopping it — go "
+                  f"ahead{OFF}", flush=True)
+        return p
+
+    def _talk_target(self) -> Persona:
+        """Who push-to-talk speaks to: whoever was spoken to last, unless the
+        sentence starts with somebody else's name."""
+        p = self._last_target
+        if p is None or (p is not self._main and self.crew.get(p.name) is not p):
+            return self._main
+        return p
+
+    def _send(self, p: Persona, text: str, last: dict, clock: dict) -> None:
+        """Route what was said and hand it to an agent.
+
+        A sentence that opens with an agent's name is for that agent, from
+        anywhere -- a follow-up window, push-to-talk, a barge-in -- and the
+        name is taken off it. A stop is a stop for that agent.
+        """
+        names = {q.name: q for q in self.personas() if q.name}
+        name, rest = route(text, names)
+        if name:
+            p = names[name]
+            text = rest
+            last = {**last, "transcript": text}
+            if not text:
+                print(f"  {DIM}(only a name — nothing to send){OFF}")
+                return
+        if is_stop_command(text):
+            if p.busy:
+                p.stop()
+                print(f"  {DIM}(stopping {p.name}){OFF}")
+            return
+        if p.agent is None and not p.main:
+            # Said out loud through the echo path, rather than the transcript
+            # read back, which is what a missing main agent gets.
+            text = f"{p.name} cannot answer: {p.problem or 'it is not set up'}."
+        self.dispatch(p, text, last, clock)
+
+    def dispatch(self, p: Persona, text: str, last: dict,
+                 clock: dict | None = None) -> bool:
+        """Start a turn for `p` on its own thread. False if it could not.
+
+        An agent already working is stopped first: one conversation cannot
+        take two turns at once, and somebody who asks again has changed
+        their mind.
+        """
+        if p.busy:
+            p.stop()
+            p.thread.join(timeout=5.0)
+            if p.busy:
+                print(f"  {YEL}{p.name or 'the agent'} did not stop; not "
+                      f"sending{OFF}", flush=True)
+                return False
+        p.interrupt.clear()
+        p.follow_up = False
+        turn = dict(last)
+        p.last, p.state, p.started_at = turn, "thinking", time.time()
+        self._last_target = p
+        self._recent = None
+        p.thread = threading.Thread(target=self._turn,
+                                    args=(p, text, turn, clock),
+                                    name=f"turn-{p.name or 'main'}",
+                                    daemon=True)
+        p.thread.start()
+        return True
+
+    def _turn(self, p: Persona, text: str, last: dict,
+              clock: dict | None) -> None:
+        self._here.persona = p
+        self._here.turn = True
+        try:
+            self.answer(text, last, clock=clock)
+            p.follow_up = self.arm_follow_up()
+        except Exception as e:      # a broken turn must not take a thread down silently
+            print(f"  {YEL}{p.name or 'agent'}: turn failed: "
+                  f"{type(e).__name__}: {e}{OFF}", flush=True)
+            p.follow_up = False
+        finally:
+            p.state = "idle"
+            p.finished_at = time.time()
+            with self._floor:
+                if self._floor_owner is p:
+                    self._floor_owner, self._floor_until = None, 0.0
+                self._floor.notify_all()
+            self._recent = p
+            self._recompose()
+
+    def _due_follow_up(self) -> Persona | None:
+        """The agent whose follow-up window should open now, if any.
+
+        The one that answered last, while its answer is fresh and nobody else
+        is mid-reply. Only one window at a time: the rest lapse.
+        """
+        if not getattr(self.pipe, "conversation", False) or not self.listening:
+            return None
+        now = time.time()
+        best = None
+        for p in self.personas():
+            if not p.follow_up or p.busy:
+                continue
+            if now - p.finished_at > FOLLOW_UP_STALE_S:
+                p.follow_up = False
+                continue
+            if best is None or p.finished_at > best.finished_at:
+                best = p
+        if best is None:
+            return None
+        owner = self._floor_owner
+        if (owner is not None and owner is not best and owner.busy) or self._speaking:
+            return None
+        for p in self.personas():
+            p.follow_up = False
+        return best
+
+    def _next_frame(self, frames: "queue.Queue[bytes]") -> bytes | None:
+        """A frame for the run loop, or None while an agent is speaking.
+
+        While one speaks the microphone is the reply's -- our own voice, and
+        barge-in's to read on a headset -- exactly as it was when the loop
+        was blocked inside the reply.
+        """
+        with self._mic_lock:
+            if not self._speaking:
+                try:
+                    return frames.get_nowait()
+                except queue.Empty:
+                    pass
+        time.sleep(0.02)
+        return None
 
     def run(self, device: int | None) -> int:
         import sounddevice as sd
@@ -2025,8 +2622,16 @@ class Daemon:
             # Push-to-talk: the key decides both ends of the turn, so the
             # wake word is bypassed and silence no longer endpoints.
             ptt = ptt_done = False
+            # With extra agents: who the capture under way is for, and how it
+            # opened -- "wake", "talk", "barge" or "followup". See crew.py.
+            capture_for: Persona | None = None
+            capture_kind = ""
             while True:
-                pcm = frames.get()
+                crew = self.crew_mode
+                # Beside running turns the loop never blocks on the queue:
+                # it has to keep polling the lock and the commands while an
+                # agent speaks, when the microphone is the reply's.
+                pcm = self._next_frame(frames) if crew else frames.get()
 
                 cmd = self.take_command()
                 # One implementation, shared with the reply loop, so a lock
@@ -2036,10 +2641,16 @@ class Daemon:
                 if cmd == "talk" and self.listening:
                     if utt is not None:
                         utt.abandon()
+                    capture_for = self._talk_target() if crew else None
+                    capture_kind = "talk"
                     phase, buf, cap = "capture", b"", self.pipe.new_capture()
                     utt = self.pipe.new_utterance()
-                    self._interrupt.clear()     # see the wake branch
-                    self.prime_agent()
+                    with self._as(capture_for):
+                        self._interrupt.clear()     # see the wake branch
+                        self.prime_agent()
+                    if crew:
+                        self._capture_for, self._recent = capture_for, None
+                        self._hold(True)
                     woke_at = last_voice = time.time()
                     heard = False
                     ptt, ptt_done = True, False
@@ -2073,6 +2684,25 @@ class Daemon:
                     # forever. That exact bug shipped once already.
                     self.reconcile_yield()
 
+                if crew:
+                    # Every way out of a capture lands in "wake"; releasing
+                    # the hold here covers all of them at once.
+                    if phase == "wake" and self._hold_speech:
+                        self._hold(False)
+                    # A follow-up window nobody has spoken into yet closes
+                    # when another agent starts its reply: the moment for
+                    # a follow-up has passed, and our own voice is not one.
+                    if (phase == "capture" and capture_kind == "followup"
+                            and not heard and self._speaking):
+                        if utt is not None:
+                            utt.abandon()
+                            utt = None
+                        phase, ptt, ptt_done = "wake", False, False
+                        self._capture_for = None
+                        self._publish(**last)
+                    if pcm is None:
+                        continue
+
                 # Deaf window after our own speech: discard without even
                 # measuring, so a tail of reverb cannot register as input.
                 if time.time() < self._deaf_until:
@@ -2092,6 +2722,7 @@ class Daemon:
                     # whatever was said next.
                     if phase != "wake":
                         phase, buf, cap, ptt, ptt_done = "wake", b"", None, False, False
+                        self._capture_for = None
                         # Its pieces too: a piece still queued would otherwise
                         # be transcribed after the lock, from audio recorded
                         # before it, for a turn that no longer exists.
@@ -2121,11 +2752,68 @@ class Daemon:
                     last_poll = time.time()
                     self.refresh()
 
+                if phase == "wake" and crew:
+                    # What the run loop used to do straight after a reply,
+                    # done here because replies now end on their own threads:
+                    # carry on a sentence that talked over one, or open the
+                    # follow-up window of the agent that answered last.
+                    barged = self.take_barge()
+                    reopen, kind = None, ""
+                    if barged is not None:
+                        reopen = self._barged_by or self._last_target or self._main
+                        kind = "barge"
+                    else:
+                        due = self._due_follow_up()
+                        if due is not None:
+                            reopen, kind = due, "followup"
+                    if reopen is not None:
+                        capture_for, capture_kind = reopen, kind
+                        self._capture_for, self._recent = reopen, None
+                        phase, buf, cap = "capture", b"", self.pipe.new_capture()
+                        utt = self.pipe.new_utterance()
+                        with self._as(reopen):
+                            self._interrupt.clear()
+                            self.prime_agent()
+                        woke_at = last_voice = time.time()
+                        heard = kind == "barge"
+                        active_lead_in = (self.pipe.follow_up_ms if kind == "followup"
+                                          else self.pipe.lead_in_ms)
+                        if kind == "barge":
+                            self._deaf_until = 0.0
+                            self._hold(True)
+                            for early in barged:
+                                buf += early
+                                if cap is not None:
+                                    cap.AcceptWaveform(early)
+                                utt.add(early, self.voiced(frame_db(early)))
+                            print(f"  {GRN}● go on{OFF}  {DIM}(talked over "
+                                  f"{reopen.name or 'the reply'} — listening){OFF}",
+                                  flush=True)
+                            last = _empty_turn()
+                            shown_partial = ""
+                            self.state.publish("capture", **last)
+                        else:
+                            print(f"  {CYA}● still listening{OFF}  {DIM}"
+                                  f"({active_lead_in / 1000:.0f}s for "
+                                  f"{reopen.name or 'it'} — or say a name){OFF}",
+                                  flush=True)
+                            last = _empty_turn()
+                            shown_partial = ""
+                            self.state.publish("followup", **last)
+                        # No `continue`: this frame is the capture's first.
+
                 if phase == "wake":
                     if self.pipe.feed_wake(pcm, level):
-                        print(f"  {GRN}● wake{OFF}  {DIM}go ahead"
+                        capture_for = self._woken() if crew else None
+                        capture_kind = "wake"
+                        who = (f" {capture_for.name}"
+                               if capture_for is not None and capture_for.name else "")
+                        print(f"  {GRN}● wake{who}{OFF}  {DIM}go ahead"
                               f" ({self.pipe.lead_in_ms / 1000:.1f}s to start){OFF}",
                               flush=True)
+                        if crew:
+                            self._capture_for, self._recent = capture_for, None
+                            self._hold(True)
                         phase, buf, cap = "capture", b"", self.pipe.new_capture()
                         utt = self.pipe.new_utterance()
                         # A stop belongs to the turn it stopped. The flag
@@ -2135,11 +2823,12 @@ class Daemon:
                         # stop was discarded as "interrupted before sending"
                         # and had to be said twice. Cleared wherever a capture
                         # opens, which is after anything it could belong to.
-                        self._interrupt.clear()
-                        # Now, while you are still talking, rather than when
-                        # there is finally a prompt: a slow agent start is
-                        # then hidden behind your own sentence.
-                        self.prime_agent()
+                        with self._as(capture_for):
+                            self._interrupt.clear()
+                            # Now, while you are still talking, rather than
+                            # when there is finally a prompt: a slow agent
+                            # start is then hidden behind your own sentence.
+                            self.prime_agent()
                         # The wake word only: push-to-talk has the key for
                         # feedback, and you are already talking when it goes
                         # down -- a chime there would be deafness over your
@@ -2174,6 +2863,8 @@ class Daemon:
                 if voiced:
                     heard = True
                     last_voice = time.time()
+                    if crew and not self._hold_speech:
+                        self._hold(True)        # somebody is talking now
                 # The same measurement that endpoints the turn decides where
                 # its pauses are, so a piece is never cut where the endpoint
                 # would have heard speech.
@@ -2234,6 +2925,10 @@ class Daemon:
                          else last_voice,
                          "endpoint": time.time()}
                 ptt = ptt_done = False
+                if crew:
+                    # They have finished talking; a waiting reply may start
+                    # while the last of this is transcribed.
+                    self._hold(False)
 
                 audio_ms = len(buf) / 32.0
                 follow_up = False
@@ -2297,16 +2992,25 @@ class Daemon:
                     # cancelling a wake that fired by mistake. Matched against
                     # the whole transcript, so an ordinary sentence that merely
                     # contains "stop" cannot trigger it.
-                    if self._interrupt.is_set():
+                    stopped = (capture_for.interrupt
+                               if crew and capture_for is not None
+                               else self._interrupt)
+                    if stopped.is_set():
                         # Stop pressed while Whisper was running. answer()
                         # clears this flag on entry, so the interrupt was
                         # accepted here and then thrown away: the reply arrived
                         # regardless. Discard the turn instead.
-                        self._interrupt.clear()
+                        stopped.clear()
                         print(f"  {DIM}(interrupted before sending){OFF}")
                         follow_up = False
                     elif text and is_stop_command(text):
                         print(f"  {DIM}(stopping){OFF}")
+                        follow_up = False
+                    elif text and crew:
+                        # On its own thread: the loop goes straight back to
+                        # listening, so another agent can be given something
+                        # while this one works.
+                        self._send(capture_for or self._main, text, last, clock)
                         follow_up = False
                     elif text:
                         self.answer(text, last, clock=clock)

@@ -50,6 +50,7 @@
       "permissions": {},
       "agentModels": {},
       "agentEfforts": {},
+      "voiceAgents": [],
       "endpointUrl": "",
       "endpointModel": "",
       "endpointIsAgent": false,

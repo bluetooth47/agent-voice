@@ -155,9 +155,24 @@ def _settings() -> tuple[str, Path | None]:
         # cannot be resolved, and an unresolved level is "ask" -- a hook that
         # does not know who it is guarding must not stop guarding.
         agent = sys.argv[1] if len(sys.argv) > 1 else ""
+        # argv[2], when present, is the extra agent this process belongs to,
+        # which has a level and a folder of its own. One that is no longer
+        # configured, or that now names a different program, has nobody's
+        # decision behind it: "ask", and no folder, so "edits" cannot widen.
+        named = _named()
+        if named:
+            spec = cfg.agent_named(named)
+            if spec is None or spec.get("agent") != agent:
+                return "ask", None
+            return spec["level"], scope_root(spec["projectDir"])
         return cfg.level_for(agent), scope_root(cfg.get_str("projectDir"))
     except Exception:
         return "ask", None
+
+
+def _named() -> str:
+    """The extra agent this hook guards, or "" for the main one."""
+    return sys.argv[2] if len(sys.argv) > 2 else ""
 
 
 def _inside(path: str, root: Path | None) -> bool:
@@ -435,6 +450,10 @@ def _ask(tool_name: str, tool_input: dict, note: str = "") -> tuple[str, str]:
     staged.write_text(json.dumps({
         "id": request_id,
         "tool": tool_name,
+        # Which agent is asking, when there is more than one: two can be at
+        # work at once, and a card that only says "the agent" cannot be
+        # answered knowingly.
+        "who": _named(),
         "summary": shown,
         "note": note,
         "truncated": cut,

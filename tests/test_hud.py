@@ -167,10 +167,13 @@ def test_the_reply_is_published_as_it_is_produced():
     loop = loop[:loop.index("reply = \" \".join(reply_parts)")]
 
     assert 'last["reply"]' in loop, "the reply must be updated inside the loop"
-    assert loop.count("self.state.publish") >= 2, \
+    # `out` is the state file, or with extra agents that agent's own line of
+    # it (crew.View), which the daemon combines with the others'.
+    assert "out = self._out()" in daemon
+    assert loop.count("out.publish") >= 2, \
         "published for both the spoken and the silent path"
     # And before speak(), which blocks until the sentence has been said.
-    assert loop.index("self.state.publish") < loop.index("self.speak(sentence")
+    assert loop.index("out.publish") < loop.index("self.speak(sentence")
 
 
 def test_a_new_turn_clears_the_previous_answer():

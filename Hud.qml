@@ -39,6 +39,9 @@ PanelWindow {
   property string icon: ""
   property string transcript: ""
   property string reply: ""
+  // Which agent this is, when there is more than one: the name that wakes
+  // it. Empty with a single agent, which then reads exactly as it did.
+  property string who: ""
   property color accent: Commons.Color.foreground
 
   // `var`, not QtObject: the bar is reached for position and thickness, and
@@ -223,7 +226,8 @@ PanelWindow {
               font.pixelSize: Style.font.body
             }
             Text {
-              text: hud.stateLabel
+              text: hud.who !== "" ? hud.who + " · " + hud.stateLabel : hud.stateLabel
+              textFormat: Text.PlainText
               color: Commons.Color.tooltip.text
               font.family: hud.fontFamily
               font.pixelSize: Style.font.caption

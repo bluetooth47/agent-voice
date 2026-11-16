@@ -98,10 +98,15 @@ def test_stopping_during_transcription_discards_the_turn():
 
     loop = DAEMON[DAEMON.index('publish("transcribing"'):]
     loop = loop[:loop.index("if follow_up and self.listening")]
-    checked = loop.index("self._interrupt.is_set()")
+    # `stopped` is the stop of the agent the turn is for: the main agent's
+    # own, or with extra agents the one that was woken.
+    assert "else self._interrupt)" in loop
+    checked = loop.index("stopped.is_set()")
     answered = loop.index("self.answer(text, last")
     assert checked < answered, "the flag must be read before the agent is called"
-    assert "self._interrupt.clear()" in loop[checked:answered], \
+    assert loop.index("self._send(") > checked, \
+        "the same holds for a turn handed to another agent"
+    assert "stopped.clear()" in loop[checked:answered], \
         "and cleared, or the next turn starts already interrupted"
 
 

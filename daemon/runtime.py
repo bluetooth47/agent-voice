@@ -32,6 +32,23 @@ _MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,127}")
 #: pattern, because the value becomes an argv element after `--effort`.
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
+#: A name for an extra agent, which is also the word that wakes it: one to
+#: three plain lowercase words. Letters only, because it goes into a Vosk
+#: grammar and is matched against what Whisper writes.
+_AGENT_NAME = re.compile(r"[a-z]+( [a-z]+){0,2}")
+
+#: The program behind an agent, as Omarchy spells it. Checked against the
+#: adapters that exist when the agent is built; this only keeps the value a
+#: plain word.
+_PROGRAM = re.compile(r"[a-z][a-z0-9-]{0,31}")
+
+#: A Piper voice as the settings spell it: "lessac-medium", "hfc_male-medium".
+_VOICE = re.compile(r"[a-z][a-z_]{0,31}-(x_low|low|medium|high)")
+
+#: How many extra agents are listened for. Every name is one more word the
+#: grammar can match, and one more process and voice held in memory.
+MAX_AGENTS = 8
+
 DEFAULTS = {
     "engine": "vosk",
     "phrase": "hey computer",
@@ -66,6 +83,10 @@ DEFAULTS = {
     "permissions": {},
     "agentModels": {},
     "agentEfforts": {},
+    # Agents beyond the main one, each woken by its own name. See
+    # Config.agents(): every field is checked there, because a name becomes
+    # part of a grammar and a model or effort becomes an argument.
+    "voiceAgents": [],
     "projectDir": "",
     "endpointUrl": "",
     "endpointModel": "",
@@ -111,6 +132,7 @@ TOML_ALIASES = {
     "permissions": ("agent", "permissions"),
     "agentModels": ("agent", "models"),
     "agentEfforts": ("agent", "efforts"),
+    "voiceAgents": ("agent", "voice_agents"),
     "projectDir": ("agent", "project_dir"),
     "endpointUrl": ("agent", "endpoint_url"),
     "endpointModel": ("agent", "endpoint_model"),
@@ -290,6 +312,67 @@ class Config:
         value = raw.get(agent)
         return value if isinstance(value, str) and value in EFFORT_LEVELS else None
 
+    def agents(self) -> list[dict]:
+        """The extra agents, each woken by its own name, cleaned up.
+
+        Read from a list that is hand-editable and synced between machines,
+        so every field is checked rather than trusted, the same way the
+        per-agent maps above are:
+
+        - a name that is not one to three plain words is dropped, along with
+          its agent: it could never be heard, and it goes into a grammar;
+        - a second agent with a name already taken is dropped, because one
+          word cannot wake two agents;
+        - a model, effort or voice that is not plainly one reads as unset, as
+          it does for the main agent;
+        - a permission level that is not one of the three reads as "ask".
+          An agent nobody has made a decision about has not been trusted.
+
+        At most MAX_AGENTS, in the order they were added.
+        """
+        raw = self["voiceAgents"]
+        if not isinstance(raw, list):
+            return []
+        out: list[dict] = []
+        seen: set[str] = set()
+        for entry in raw:
+            if len(out) >= MAX_AGENTS:
+                break
+            if not isinstance(entry, dict):
+                continue
+            name = " ".join(str(entry.get("name") or "").lower().split())
+            if (len(name) > 32 or not _AGENT_NAME.fullmatch(name)
+                    or name in seen):
+                continue
+            seen.add(name)
+            program = str(entry.get("agent") or "claude").strip().lower()
+            model = entry.get("model")
+            model = model.strip() if isinstance(model, str) else ""
+            effort = entry.get("effort")
+            voice = entry.get("voice")
+            voice = voice.strip() if isinstance(voice, str) else ""
+            level = entry.get("level")
+            folder = entry.get("projectDir")
+            out.append({
+                "name": name,
+                "agent": program if _PROGRAM.fullmatch(program) else "",
+                "model": model if _MODEL_NAME.fullmatch(model) else "",
+                "effort": effort if effort in EFFORT_LEVELS else "",
+                "voice": voice if _VOICE.fullmatch(voice) else "",
+                "level": level if level in ("ask", "edits", "trusted") else "ask",
+                "projectDir": folder.strip() if isinstance(folder, str) else "",
+            })
+        return out
+
+    def agent_named(self, name: str | None) -> dict | None:
+        """The extra agent called `name`, or None."""
+        if not name:
+            return None
+        for spec in self.agents():
+            if spec["name"] == name:
+                return spec
+        return None
+
 
 #: How much of a reply travels to the screen. It was 400 characters, which
 #: cut a long answer off mid-sentence in the very readout meant for reading it
@@ -374,6 +457,14 @@ class StateFile:
             pass
         self.path = RUNTIME_DIR / "state"
         self._last: dict = {}
+        #: Publishes come from more than one thread once there are extra
+        #: agents, and every one of them writes the same temporary file.
+        self._lock = threading.RLock()
+        #: Given (state, extra) and returns what to actually show. The daemon
+        #: sets it so that the microphone's state and each agent's can be
+        #: combined into the one line the bar has room for. None shows what
+        #: was published, as it always did.
+        self.overlay = None
         # Facts that hold for the whole session and belong in every payload,
         # so the panel can render what the running agent actually supports
         # instead of keeping its own copy of that knowledge and drifting.
@@ -381,14 +472,23 @@ class StateFile:
 
     def describe(self, **fields) -> None:
         """Set the sticky fields merged into every subsequent publish."""
-        if fields != self._context:
-            self._context = dict(fields)
-            if self._last:
-                self.publish(self._last.get("state", "off"),
-                             **{k: v for k, v in self._last.items()
-                                if k != "state" and k not in self._context})
+        with self._lock:
+            if fields != self._context:
+                self._context = dict(fields)
+                if self._last:
+                    # Written as it stands, not through the overlay: it is
+                    # already what the overlay made of the last publish.
+                    self._write(self._last.get("state", "off"),
+                                {k: v for k, v in self._last.items()
+                                 if k != "state" and k not in self._context})
 
     def publish(self, state: str, **extra) -> None:
+        with self._lock:
+            if self.overlay is not None:
+                state, extra = self.overlay(state, extra)
+            self._write(state, extra)
+
+    def _write(self, state: str, extra: dict) -> None:
         payload = {"state": state, **self._context, **extra}
         if payload == self._last:
             return

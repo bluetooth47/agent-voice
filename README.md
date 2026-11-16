@@ -245,6 +245,38 @@ alone. Say no and it prints them for you to paste, because
 
 Super+Space is Omarchy's application launcher and stays that way.
 
+### More than one agent
+
+Settings → **More agents** adds agents beside the main one, up to eight.
+Each is woken by its own name and has its own program, model, effort,
+voice, permission level and folder, and its own conversation. Say
+"computer" for the main agent and "jarvis" for the one called jarvis.
+
+They can work at the same time: while one is thinking or running tools the
+microphone keeps listening, so you can give a second agent something to do
+before the first has answered. Speaking is still one at a time, because
+there is one room. Nothing is listened to while an agent talks, a reply
+that has started keeps the floor until it goes quiet for a moment, so two
+answers are never interleaved, and no reply starts while you are talking to
+any of them.
+
+Start a sentence with a name to talk to that agent from anywhere: "Jarvis,
+what's on my calendar?" inside another agent's follow-up window goes to
+jarvis. Saying the name of an agent that is working stops it, as the wake
+word always did, and leaves the others alone. "Jarvis, stop" stops jarvis.
+The panel's Stop button and the interrupt key stop everyone. Push-to-talk
+goes to whoever you spoke to last.
+
+A name has to be a word the wake engine knows. Vosk is asked, and a name it
+cannot hear is refused with the reason in the settings, the same reason
+"hey omarchy" is not a wake phrase. openWakeWord hears only its own phrase,
+so extra agents need the Vosk engine.
+
+An extra agent's permission level and folder are its own. Trusting the main
+agent does not trust the others, and the permission hook is told which
+agent it is guarding. One it cannot find in the settings, or one whose
+program has changed since, is asked about rather than allowed.
+
 ### Mute, not stop
 
 The switch in the panel and the microphone icon beside it do different

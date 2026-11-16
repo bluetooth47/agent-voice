@@ -162,8 +162,13 @@ class ClaudeCode(Adapter):
                  cwd: str | None = None,
                  spoken: bool = True,
                  ask_permission: bool = True,
-                 keep_warm_s: float = KEEP_WARM_S):
+                 keep_warm_s: float = KEEP_WARM_S,
+                 named: str = ""):
         self.model = model
+        #: The extra agent this is, by the name that wakes it, or "" for the
+        #: main one. Handed to the permission hook, which reads that agent's
+        #: own level and folder rather than the main agent's.
+        self.named = named
         #: Applied only when the model takes it: see efforts().
         self.effort = effort
         self.spoken = spoken
@@ -194,7 +199,7 @@ class ClaudeCode(Adapter):
         _LIVE.add(self)
 
     @classmethod
-    def _hook_settings(cls) -> str:
+    def _hook_settings(cls, named: str = "") -> str:
         """A PreToolUse hook, passed inline as JSON.
 
         `--settings` takes a JSON string and loads it *in addition to* the
@@ -213,8 +218,10 @@ class ClaudeCode(Adapter):
         # under $HOME -- would split the command, give exit 127, and a hook
         # that cannot start is read by Claude Code as a non-blocking error:
         # the tool proceeds. Failing to quote here disables the guard.
-        command = " ".join(shlex.quote(part)
-                           for part in (sys.executable, str(hook), cls.name))
+        parts = [sys.executable, str(hook), cls.name]
+        if named:
+            parts.append(named)
+        command = " ".join(shlex.quote(part) for part in parts)
         return json.dumps({"hooks": {"PreToolUse": [{
             "matcher": GUARDED_TOOLS,
             # ".*" -- every tool, with permission_hook.py deciding which ones
@@ -252,7 +259,7 @@ class ClaudeCode(Adapter):
         if self.spoken:
             argv += ["--append-system-prompt", SPOKEN_STYLE]
         if self.ask_permission:
-            argv += ["--settings", self._hook_settings()]
+            argv += ["--settings", self._hook_settings(self.named)]
         if session_id:
             argv += ["--resume", session_id]
         if self.model:

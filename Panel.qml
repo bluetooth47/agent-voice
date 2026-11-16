@@ -52,6 +52,8 @@ Panel {
   // turn has got that far. The wait people actually notice.
   property int lastLatencyMs: 0
   property string lastReply: ""
+  // Whose turn the readout is showing, with more than one agent.
+  property string lastWho: ""
 
   readonly property bool live: serviceActive && vState !== "off"
 
@@ -345,6 +347,9 @@ Panel {
         // level_db is in the state file for `agentvoice status` and the
         // monitor; the panel does not draw a meter, so it is not read here.
         if (d.reply !== undefined) voice.lastReply = String(d.reply)
+        // Absent with a single agent, and then cleared rather than kept: a
+        // name left over from when there were several would be wrong.
+        voice.lastWho = d.who !== undefined ? String(d.who) : ""
         if (d.agent !== undefined) voice.vAgent = String(d.agent)
         if (d.level !== undefined) voice.permissionLevel = String(d.level)
         if (d.posture !== undefined) voice.vPosture = String(d.posture)
@@ -409,6 +414,7 @@ Panel {
     // listened for the next question.
     transcript: voice.lastTranscript
     reply: voice.lastReply
+    who: voice.lastWho
     // A click on the readout opens the whole conversation -- the answer to
     // "the popup is too small" for anything longer than a glance.
     onOpenConversation: conversation.running = true

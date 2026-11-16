@@ -95,10 +95,15 @@ def load(name: str | None = None, level: str | None = None,
         # included) is something only it can read.
         if effort and takes_effort(cls):
             kwargs["effort"] = effort
+        # Only the adapters that guard through our own hook need to know
+        # which extra agent they are; the rest are given their level directly.
+        if not _accepts(cls, "named"):
+            kwargs.pop("named", None)
         return finish(cls(**kwargs))
 
     # The remaining nine Omarchy agents share one plain-stdout adapter.
     if agent in CLI_TEMPLATES:
+        kwargs.pop("named", None)
         return finish(CliAgent(agent, **kwargs))
 
     return None
