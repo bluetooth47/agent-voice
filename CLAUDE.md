@@ -116,6 +116,16 @@ singletons through a symlink) next to a `shell.qml` that instantiates the
 file, run `qs -p` on that directory, and screenshot it with `grim`. It runs
 beside the real shell and touches nothing of it.
 
+`bench/preview/preview.sh` does all of that: `preview.sh --size 520x720
+--shots 8 settings` walks the whole settings page a screenful at a time,
+`--theme flexoki-light` checks a light theme, and `knob` drives a slider with
+synthetic mouse events (QtTest's `TestEvent`), so nobody's real pointer
+moves. It never takes the keyboard (Exclusive focus is rewritten to None in
+its copies) and never writes shell.json (`omarchy bar set` is stubbed to a
+log). Two things it found out the hard way: a directory under `qs -p` needs a
+`qmldir` before its files see each other as types, and a Timer placed
+directly under `ShellRoot` never fires.
+
 ## Anything a model loads is reconciled, not constructed once
 
 `Pipeline.apply()` decides when to rebuild the wake engine, the transcription
