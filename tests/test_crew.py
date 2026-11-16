@@ -224,6 +224,78 @@ class TestWakeNames:
         assert built == ["vosk", "vosk"]
         assert wake_listen.wanted_names(cfg) == ["jarvis"]
 
+    # A short name said on its own, then a pause. Frames under the gate never
+    # reach the grammar, so it cannot finish the word by hearing the silence;
+    # only the partial path was left, and that wants three loud 200ms frames.
+    # "sarah" is two syllables and never woke. Measured on synthesized clips
+    # through the real Vosk model: bench/FINDINGS.md.
+
+    def _feeding_pipe(self, final_words, accepts_on_quiet=False):
+        import wake_listen
+        pipe = _pipe(known=("computer", "sarah"))
+        pipe._choose_names(["sarah"])
+        pipe._oww, pipe._refractory_until, pipe._loud_frames = None, 0.0, 0
+        pipe.threshold_db, pipe.min_loud_frames = -40.0, 3
+        pipe.wake_confidence, pipe.refractory_ms = 0.70, 1500
+        pipe._log_speech = False
+        calls = []
+
+        class Rec:
+            def __init__(self, *a):
+                pass
+
+            def SetWords(self, on):
+                pass
+
+            def AcceptWaveform(self, pcm):
+                calls.append("accept")
+                return accepts_on_quiet and pcm == b"quiet"
+
+            def PartialResult(self):
+                return json.dumps({"partial": "sarah"})
+
+            def _verdict(self, name):
+                calls.append(name)
+                return json.dumps({
+                    "text": " ".join(w for w, _ in final_words),
+                    "result": [{"word": w, "conf": c} for w, c in final_words]})
+
+            def Result(self):
+                return self._verdict("result")
+
+            def FinalResult(self):
+                return self._verdict("final")
+
+        pipe._vosk = type("V", (), {"KaldiRecognizer": Rec})
+        pipe._reset_wake()
+        assert wake_listen.CHUNK_MS == 200
+        return pipe, calls
+
+    def test_a_short_name_wakes_when_the_speech_stops(self):
+        pipe, calls = self._feeding_pipe([("sarah", 0.95)])
+        assert pipe.feed_wake(b"loud", -20.0) is False     # one frame: too short
+        assert pipe.feed_wake(b"quiet", -60.0) is True     # the pause: verdict
+        assert pipe.heard_phrase == "sarah"
+        assert calls == ["accept", "accept", "final"]
+
+    def test_the_confidence_bar_still_holds_at_the_end(self):
+        pipe, _ = self._feeding_pipe([("sarah", 0.40)])
+        pipe.feed_wake(b"loud", -20.0)
+        assert pipe.feed_wake(b"quiet", -60.0) is False
+
+    def test_silence_alone_never_asks_for_a_verdict(self):
+        pipe, calls = self._feeding_pipe([("sarah", 0.95)])
+        for _ in range(5):
+            assert pipe.feed_wake(b"quiet", -60.0) is False
+        assert calls == []
+
+    def test_a_final_the_grammar_already_had_is_not_lost(self):
+        pipe, calls = self._feeding_pipe([("sarah", 0.95)],
+                                         accepts_on_quiet=True)
+        pipe.feed_wake(b"loud", -20.0)
+        assert pipe.feed_wake(b"quiet", -60.0) is True
+        assert calls[-1] == "result"
+
     def test_wanted_names_survives_a_stand_in_config(self):
         import wake_listen
         assert wake_listen.wanted_names({"phrase": "computer"}) == []

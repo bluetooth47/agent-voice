@@ -691,3 +691,48 @@ attenuate the microphone while they play (half-duplex echo suppression),
 which would make talking over the reply harder than talking into silence.
 If it does not stop for you on a headset, that is the first thing to check,
 with `bargeFactor` the knob.
+
+## 22. A two-syllable name said alone never woke
+
+Reported as "I cannot start Sarah" (an extra agent, Vosk engine, wake phrase
+"computer"). The guess was that wake words come from a fixed list. They do
+not: `vosk_model_find_word` finds "sarah" (and "sara", "zara", "jarvis") in
+the small English lexicon, and the daemon already refuses and explains any
+name it lacks.
+
+The real cause is the gate. Frames under `micThresholdDb` are never fed to
+the grammar, so it never hears the silence it needs to finish a word, and a
+name said on its own with a pause after it can only wake through a partial.
+A partial needs three consecutive loud 200ms frames (600ms). "computer" is
+three syllables and gets there; "sarah" does not.
+
+Measured by synthesizing clips with both installed Piper voices (ryan,
+lessac), scaling the speech to -20 and -28 dBFS over -60 dBFS noise, and
+feeding them through the real `Pipeline.feed_wake` with the installed
+vosk-model-small-en-us-0.15, phrase "computer", names ["sarah"], gate -38,
+confidence 0.70:
+
+| clip                     | before  | after   |
+|--------------------------|---------|---------|
+| "Computer"               | 4 / 4   | 4 / 4   |
+| "Sarah"                  | 0 / 4   | 2 / 4   |
+| "Hey Sarah"              | 0 / 4   | 4 / 4   |
+| "Sarah, what time is it" | 4 / 4   | 4 / 4   |
+
+The two misses after the fix are ryan's "Sarah", which Piper speaks in
+0.20s -- one frame, shorter than anyone says it.
+
+The fix: on the first frame under the gate after a loud run, ask the grammar
+for `FinalResult()`. That carries word confidence, so the 0.70 bar applies,
+which a partial never had.
+
+The cost, on 19 other words in both voices at both levels (76 clips): false
+wakes went from 12 to 19. Every one of the seven new ones is a sound-alike of
+a name: Sahara and Zara (lessac, both levels), Commuter (ryan, both levels),
+Sorrow (ryan, -20). The worst existing ones are unchanged and are not caused
+by this: "okay" waking "computer", "sounds good", "salad" and "zero" waking
+"sarah", all through the partial path, which has no confidence to check.
+That path is the weaker of the two and a better place to look next.
+
+Synthesized speech is not a person in a room, so these are relative numbers
+for one change, not a detection rate.

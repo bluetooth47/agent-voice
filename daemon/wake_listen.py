@@ -545,17 +545,33 @@ class Pipeline:
             return False
 
         if level_db < self.threshold_db:
+            ended = self._loud_frames > 0
             self._loud_frames = 0
-            return False
-        self._loud_frames += 1
-
-        final = self._wake.AcceptWaveform(pcm)
-        if final:
-            payload = json.loads(self._wake.Result())
+            if not ended:
+                return False
+            # The speech has just stopped, so ask for the verdict now. Frames
+            # under the gate are never fed to the grammar, so it never hears
+            # the silence it needs to finish a word on its own: a name said
+            # alone with a pause after it reached only the partial path, which
+            # wants 600ms of loud audio. "computer" is three syllables and
+            # passes; "sarah" is two and never woke -- measured on synthesized
+            # clips, see bench/FINDINGS.md. FinalResult() carries word
+            # confidence, so the bar below still applies, and it leaves the
+            # recogniser ready for the next utterance.
+            final = True
+            payload = json.loads(self._wake.Result()
+                                 if self._wake.AcceptWaveform(pcm)
+                                 else self._wake.FinalResult())
             text = payload.get("text", "")
         else:
-            payload = {}
-            text = json.loads(self._wake.PartialResult()).get("partial", "")
+            self._loud_frames += 1
+            final = self._wake.AcceptWaveform(pcm)
+            if final:
+                payload = json.loads(self._wake.Result())
+                text = payload.get("text", "")
+            else:
+                payload = {}
+                text = json.loads(self._wake.PartialResult()).get("partial", "")
         matched = self.phrase_in(text)
         if not matched:
             return False
