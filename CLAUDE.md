@@ -100,6 +100,22 @@ the last two:
 Skipping step 3 gives a setting that works from `omarchy bar set` and is
 invisible in the UI. That has happened.
 
+## Read the theme through `Commons.Color`, never a bare `Color`
+
+Under Qt 6.12 a bare `Color` is QtQuick's own value-type helper, and
+`Color.tooltip.background` is `undefined`. The live shell happens to load
+plugins with `import QtQuick 6.11`, which hides it -- but qmllint does not,
+and the check failed on it 25 times before anyone looked; a standalone
+Quickshell does not either. Omarchy's own QML writes `Commons.Color`, with
+`import qs.Commons as Commons`, and so does every file here.
+`test_no_qml_reads_a_colour_through_a_bare_color` holds it.
+
+To see a QML change rather than guess at it: copy `Commons` and `Ui` from
+`/usr/share/omarchy/shell` (copies -- Quickshell does not resolve the
+singletons through a symlink) next to a `shell.qml` that instantiates the
+file, run `qs -p` on that directory, and screenshot it with `grim`. It runs
+beside the real shell and touches nothing of it.
+
 ## Anything a model loads is reconciled, not constructed once
 
 `Pipeline.apply()` decides when to rebuild the wake engine, the transcription

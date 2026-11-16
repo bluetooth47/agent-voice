@@ -205,6 +205,24 @@ case "${1:-status}" in
     [[ -x $PY ]] || PY="$REPO/bench/.venv/bin/python"
     exec "$PY" "$REPO/daemon/monitor.py" "$@"
     ;;
+  history)
+    # This session's conversation, which the daemon keeps beside the state
+    # file for the conversation view: tmpfs, 0600, gone at logout.
+    #   agentvoice history         print it
+    #   agentvoice history clear   delete it -- the overlay's Clear button
+    H="$RUNDIR/history.jsonl"
+    if [[ ${2:-} == clear ]]; then rm -f "$H"; exit 0; fi
+    if [[ ! -s $H ]]; then echo "nothing yet this session" >&2; exit 0; fi
+    # -R and fromjson?, so one damaged line skips itself rather than ending
+    # the listing. Control characters are stripped: a reply is model output,
+    # and printed raw to a terminal it can carry escape sequences.
+    jq -rR 'fromjson? | def clean: gsub("[\u0000-\u0008\u000b-\u001f\u007f]"; "");
+      (if .new then "-- new conversation --\n" else "" end)
+      + ((.at // 0 | floor | strflocaltime("%H:%M")) + "  you: " + (.transcript // "" | clean))
+      + "\n       " + (.agent // "agent") + ": " + (.reply // "" | clean)
+      + (if (.error // "") != "" then "  [failed: " + .error + "]" else "" end)
+      + (if .stopped then "  [stopped]" else "" end) + "\n"' "$H"
+    ;;
   status)
     if [[ -r $STATE ]] && active; then cat "$STATE"; else echo '{"state":"off"}'; fi
     ;;
@@ -212,7 +230,7 @@ case "${1:-status}" in
     active && echo yes || echo no
     ;;
   *)
-    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|interrupt|monitor|calibrate|permit|pending|status|is-active]" >&2
+    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|interrupt|monitor|calibrate|permit|pending|history|status|is-active]" >&2
     exit 2
     ;;
 esac

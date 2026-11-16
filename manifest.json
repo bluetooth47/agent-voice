@@ -29,10 +29,13 @@
       "phrase": "hey computer",
       "leadInMs": 5000,
       "trailingSilenceMs": 1200,
+      "quickEndMs": 800,
       "minUtteranceMs": 400,
       "maxUtteranceMs": 30000,
       "model": "tiny.en",
       "speakReplies": true,
+      "chimes": true,
+      "keepHistory": true,
       "voice": "lessac-medium",
       "micThresholdDb": -38,
       "wakeConfidencePct": 70,
@@ -45,6 +48,7 @@
       "livePartials": "auto",
       "projectDir": "",
       "permissions": {},
+      "agentModels": {},
       "endpointUrl": "",
       "endpointModel": "",
       "endpointIsAgent": false,
@@ -116,6 +120,16 @@
         "description": "Quiet time that means you have finished. Raise if it cuts you off mid-thought."
       },
       {
+        "key": "quickEndMs",
+        "type": "integer",
+        "label": "Shorter pause when you sound finished (ms)",
+        "min": 0,
+        "max": 2000,
+        "step": 100,
+        "defaultValue": 800,
+        "description": "When what you said is already transcribed and reads as a finished sentence, this much quiet ends the turn instead of the full pause above. A sentence that trails off, or ends on a word like 'and' or 'the', still waits the full pause. 0 turns it off."
+      },
+      {
         "key": "minUtteranceMs",
         "type": "integer",
         "label": "Discard shorter than (ms)",
@@ -153,6 +167,20 @@
         "label": "Speak replies aloud",
         "defaultValue": true,
         "description": "Piper text-to-speech. Off leaves replies as text only."
+      },
+      {
+        "key": "chimes",
+        "type": "bool",
+        "label": "Sounds for listening, heard and done",
+        "defaultValue": true,
+        "description": "A rising tone when the wake word lands, a soft one when it has heard the end of what you said, and a chime when a long task finishes."
+      },
+      {
+        "key": "keepHistory",
+        "type": "bool",
+        "label": "Keep this session's conversation",
+        "defaultValue": true,
+        "description": "Every exchange, for the conversation view. Kept in memory only, readable by you alone, and gone when you log out. Off deletes it."
       },
       {
         "key": "voice",

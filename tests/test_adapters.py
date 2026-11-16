@@ -610,7 +610,10 @@ class TestStderrIsDrained:
         from adapters.gemini import Gemini
 
         for cls in (ClaudeCode, Codex, Gemini, Antigravity, CliAgent):
-            source = inspect.getsource(cls.send)
+            # Wherever the process is started. Claude Code's outlives one turn
+            # and is started from prepare() as well as send(), so it has a
+            # method of its own for it.
+            source = inspect.getsource(getattr(cls, "_spawn", cls.send))
             assert "stderr=subprocess.PIPE" in source, cls.__name__
             assert "Drain(proc.stderr)" in source, cls.__name__
             assert "proc.stderr.read()" not in source, cls.__name__
@@ -680,7 +683,11 @@ class TestThePromptStaysOutOfArgv:
     def test_the_adapter_hands_the_prompt_over_on_stdin(self, name):
         src = (Path(__file__).resolve().parent.parent / "daemon" / "adapters"
                / f"{name}.py").read_text()
-        assert "feed(proc" in src, f"{name} does not write the prompt to stdin"
+        # feed() writes one prompt and closes stdin. Claude Code keeps its
+        # process for the next turn, so it writes a stream-json line and
+        # leaves stdin open -- still stdin, never argv.
+        assert "feed(proc" in src or "_write_turn(proc" in src, \
+            f"{name} does not write the prompt to stdin"
         assert "stdin=subprocess.PIPE" in src, \
             f"{name} spawns without a stdin pipe to write to"
         assert "stdin=subprocess.DEVNULL" not in src, \

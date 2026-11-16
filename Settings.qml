@@ -4,6 +4,10 @@ import Quickshell.Wayland
 import QtQuick
 import QtQuick.Controls as QQC
 import qs.Commons
+// Namespaced as well: on Qt 6.12 a bare `Color` resolves to QtQuick's own
+// value-type helper, not to the theme, and every colour read through it was
+// undefined. Omarchy's own QML writes Commons.Color for the same reason.
+import qs.Commons as Commons
 import qs.Ui
 
 // Agent Voice settings, as a themed overlay.
@@ -33,11 +37,11 @@ Item {
 
   // Shares the [menu] surface tokens, so themes that style the menu style
   // this too.
-  property color background: Color.menu.background
-  property color foreground: Color.menu.text
-  property color borderColor: Color.menu.border
+  property color background: Commons.Color.menu.background
+  property color foreground: Commons.Color.menu.text
+  property color borderColor: Commons.Color.menu.border
   property var borderSpec: Border.surfaceSpec("menu", "border", borderColor, Math.max(1, Style.space(2)))
-  property color scrim: Color.menu.scrim
+  property color scrim: Commons.Color.menu.scrim
   readonly property color dim: Qt.darker(foreground, 1.5)
   property string fontFamily: Style.font.menuFamily
 
@@ -154,6 +158,7 @@ Item {
   property string vOverriding: ""
   property bool vGoverned: true
   property bool vVerifier: false
+  property bool vTakesModel: false
 
   // The phrase actually being listened for. Both engines keep their own
   // key and the inactive one stays in shell.json, so reading the raw
@@ -176,6 +181,27 @@ Item {
     persist("permissions", JSON.stringify(all), true)
   }
 
+  // Per agent, like the level: a model name means something to one CLI and
+  // nothing to the next, so it must not follow `omarchy default agent`.
+  function agentModel() {
+    var all = cfg["agentModels"]
+    if (!all || typeof all !== "object" || root.vAgent === "") return ""
+    var v = all[root.vAgent]
+    return typeof v === "string" ? v : ""
+  }
+
+  function setModel(value) {
+    var all = {}
+    var current = cfg["agentModels"]
+    if (current && typeof current === "object")
+      for (var k in current) all[k] = current[k]
+    if (root.vAgent === "") return
+    var v = String(value).trim()
+    if (v === "") delete all[root.vAgent]
+    else all[root.vAgent] = v
+    persist("agentModels", JSON.stringify(all), true)
+  }
+
   function levelOption(value) {
     if (value === "trusted") return { label: "Trust everything here", value: "trusted" }
     if (value === "edits") return { label: "Edits here are fine, ask for commands", value: "edits" }
@@ -189,7 +215,38 @@ Item {
       out.push(levelOption(String(root.agentLevels[i])))
     return out
   }
+  // The model dropdown. Known aliases per agent, then whatever custom name is
+  // already saved (so it stays selectable), then "Other…" for typing one.
+  // "Other…" is a local UI state, never persisted: picking it only reveals
+  // the text box, and the model changes when a name is typed there.
+  readonly property var modelPresets: ({
+    "claude": [
+      { label: "Fable — most capable", value: "fable" },
+      { label: "Opus", value: "opus" },
+      { label: "Sonnet", value: "sonnet" },
+      { label: "Haiku — fastest", value: "haiku" }
+    ]
+  })
+  property bool customModel: false
+  readonly property var agentModelOptions: {
+    var cur = root.agentModel()
+    var out = [{ label: "Default  (whatever " + (root.vAgent || "the agent") +
+                        " uses on its own)", value: "" }]
+    var presets = root.modelPresets[root.vAgent] || []
+    var known = cur === ""
+    for (var i = 0; i < presets.length; i++) {
+      out.push(presets[i])
+      if (presets[i].value === cur) known = true
+    }
+    if (!known) out.push({ label: cur + "  (custom)", value: cur })
+    out.push({ label: "Other…", value: "__other__" })
+    return out
+  }
+  onVAgentChanged: customModel = false
+
   readonly property bool speakReplies: setting("speakReplies", true)
+  readonly property bool chimes: setting("chimes", true)
+  readonly property bool keepHistory: setting("keepHistory", true)
   readonly property string engine: setting("engine", "vosk")
   readonly property bool usingOww: engine === "openwakeword"
   // Selected *and* able to run. The daemon falls back to Vosk when
@@ -205,6 +262,7 @@ Item {
     try {
       var p = JSON.parse(payloadJson || "{}")
       if (p.mode === "permission") mode = "permission"
+      if (p.mode === "history") mode = "history"
       if (p.id) wanted = String(p.id)
     } catch (e) {}
 
@@ -225,13 +283,124 @@ Item {
                                     : ["agentvoice", "pending"]
       pendingProbe.running = true
     } else {
-      cfgReload.running = true
+      showPage(mode)
+    }
+  }
+
+  // Between the settings and the conversation, from the link in the header
+  // as well as from open(). Not to or from a permission prompt: that card is
+  // a question with a countdown, and wandering off it is not an answer.
+  function showPage(page) {
+    mode = page
+    cfgReload.running = true
+    stateFile.reload()
+    if (page === "history") {
+      historyFile.reload()
+      historyList.following = true
+      Qt.callLater(historyList.positionViewAtEnd)
+    } else {
       scanCustom.running = true
       scanVoices.running = true
       scanOww.running = true
-      stateFile.reload()
     }
   }
+
+  // --- the conversation -------------------------------------------------------
+  // This session's exchanges, from the file the daemon appends to as each turn
+  // ends (runtime.History): tmpfs, 0600, gone at logout. Read here directly,
+  // the way the state file is, rather than through the CLI.
+
+  ListModel { id: historyModel }
+
+  // What has already been turned into rows. A new turn only ever appends to
+  // the file, so only the lines past this are parsed and added -- rebuilding
+  // the list on every turn would throw away wherever you had scrolled to.
+  property string historyRaw: ""
+
+  function historyEntry(e) {
+    // One shape for every row: a ListModel takes its roles' types from the
+    // first row it is given, and a later row with a field missing or of
+    // another type would quietly lose it.
+    return {
+      at: Number(e.at) || 0,
+      agent: String(e.agent || ""),
+      transcript: String(e.transcript || ""),
+      reply: String(e.reply || ""),
+      failed: String(e.error || ""),
+      stopped: e.stopped === true,
+      fresh: e["new"] === true,
+      latency: Number(e.latency_ms) || 0
+    }
+  }
+
+  function syncHistory(raw) {
+    raw = String(raw || "")
+    // Whole lines only: a read that lands mid-write sees the start of one,
+    // and it is picked up complete on the next read.
+    raw = raw.slice(0, raw.lastIndexOf("\n") + 1)
+    if (raw === root.historyRaw) return
+    var from = 0
+    if (root.historyRaw !== "" && raw.indexOf(root.historyRaw) === 0) {
+      from = root.historyRaw.length
+    } else {
+      // Cleared, or trimmed to its last turns: start again.
+      historyModel.clear()
+    }
+    root.historyRaw = raw
+    var lines = raw.slice(from).split("\n")
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim()
+      if (line === "") continue
+      try {
+        var e = JSON.parse(line)
+        if (e && typeof e === "object") historyModel.append(root.historyEntry(e))
+      } catch (err) {}
+    }
+  }
+
+  FileView {
+    id: historyFile
+    path: (Quickshell.env("XDG_RUNTIME_DIR") || "/run/user/1000") + "/agentvoice/history.jsonl"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: historyFile.reload()
+    onLoaded: root.syncHistory(historyFile.text())
+    // No file: nothing kept yet, or just cleared.
+    onLoadFailed: root.syncHistory("")
+  }
+
+  // A file that did not exist when the watch was set never gets one -- the
+  // first turn of a session creates it -- so while the page is open it is
+  // read again on a timer as well. The same recovery the state file needs.
+  Timer {
+    interval: 1500
+    running: root.opened && root.mode === "history"
+    repeat: true
+    onTriggered: historyFile.reload()
+  }
+
+  // Two presses, a few seconds apart, because it cannot be undone.
+  property bool confirmClear: false
+  Timer {
+    id: clearTimeout
+    interval: 4000
+    onTriggered: root.confirmClear = false
+  }
+  Process {
+    id: clearHistory
+    command: ["agentvoice", "history", "clear"]
+    onExited: historyFile.reload()
+  }
+
+  function timeOf(at) {
+    return at > 0 ? Qt.formatTime(new Date(at * 1000), "h:mm AP") : ""
+  }
+
+  // Closed the moment the screen locks. This is a layer-shell surface, and
+  // the HUD's own notes say those draw over the lock screen -- which with
+  // this page open would put the whole session's conversation above a
+  // locked machine.
+  onVStateChanged: if (vState === "locked" && opened && mode === "history") close()
 
   function answer(verdict) {
     if (!request || !request.id) { close(); return }
@@ -419,6 +588,7 @@ Item {
         if (d.overriding !== undefined) root.vOverriding = String(d.overriding)
         if (d.governed !== undefined) root.vGoverned = (d.governed === true)
         if (d.verifier !== undefined) root.vVerifier = (d.verifier === true)
+        if (d.takes_model !== undefined) root.vTakesModel = (d.takes_model === true)
       } catch (e) {}
     }
   }
@@ -449,10 +619,15 @@ Item {
     BorderSurface {
       id: card
       anchors.centerIn: parent
-      width: Math.min(Style.space(560), parent.width - Style.gapsOut * 2)
+      // The conversation gets more room than the settings: it is text to
+      // read, and the whole point of it was that the popup had too little.
+      width: Math.min(Style.space(root.mode === "history" ? 680 : 560),
+                      parent.width - Style.gapsOut * 2)
       height: root.mode === "permission"
               ? Math.min(Style.space(300), parent.height - Style.gapsOut * 2)
-              : Math.min(Style.space(660), parent.height - Style.gapsOut * 2)
+              : root.mode === "history"
+                ? Math.min(Style.space(760), parent.height - Style.gapsOut * 2)
+                : Math.min(Style.space(660), parent.height - Style.gapsOut * 2)
       radius: Style.cornerRadius
       color: root.background
       borderSpec: root.borderSpec
@@ -471,16 +646,35 @@ Item {
 
         Row {
           width: parent.width
+          spacing: Style.space(12)
           Text {
-            text: root.mode === "permission" ? "Allow this?" : "Agent Voice"
-            color: root.mode === "permission" ? Color.urgent : root.foreground
+            text: root.mode === "permission" ? "Allow this?"
+                  : root.mode === "history" ? "Conversation" : "Agent Voice"
+            color: root.mode === "permission" ? Commons.Color.urgent : root.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.title
             font.bold: true
-            width: parent.width - hint.width
+            width: parent.width - hint.width - parent.spacing
+                   - (switcher.visible ? switcher.width + parent.spacing : 0)
+          }
+          // The other page. Not on a permission prompt -- see showPage().
+          Text {
+            id: switcher
+            visible: root.mode !== "permission"
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.mode === "history" ? "settings ›" : "conversation ›"
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.showPage(root.mode === "history" ? "settings" : "history")
+            }
           }
           Text {
             id: hint
+            anchors.verticalCenter: parent.verticalCenter
             text: root.mode === "permission"
                   ? "denied in " + root.secondsLeft + "s"
                   : "esc to close"
@@ -517,7 +711,7 @@ Item {
             visible: (root.request.note || "") !== ""
             text: root.request.note || ""
             textFormat: Text.PlainText
-            color: Color.urgent
+            color: Commons.Color.urgent
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
           }
@@ -578,7 +772,7 @@ Item {
                   + (cmdScroll.contentHeight > cmdScroll.height
                      ? " · scroll to read it all" : "")
             textFormat: Text.PlainText
-            color: (root.request.truncated || 0) > 0 ? Color.urgent : root.dim
+            color: (root.request.truncated || 0) > 0 ? Commons.Color.urgent : root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
           }
@@ -700,6 +894,36 @@ Item {
 
               Toggle {
                 width: parent.width
+                label: "Sounds for listening, heard and done"
+                description: "A rising tone when the wake word lands, a soft " +
+                             "one when it has heard the end of what you said, " +
+                             "and a chime when a long task finishes -- so you " +
+                             "know where it is without looking. Push-to-talk " +
+                             "gets no opening tone; the key is the signal."
+                checked: root.chimes
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.persist("chimes",
+                                        root.chimes ? "false" : "true", true)
+              }
+
+              Toggle {
+                width: parent.width
+                label: "Keep this session's conversation"
+                description: "Every exchange, for the conversation view -- " +
+                             "open it from the panel, or by clicking the " +
+                             "readout. Kept in memory only, readable by you " +
+                             "alone, and gone when you log out. Off deletes " +
+                             "what is already kept."
+                checked: root.keepHistory
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.persist("keepHistory",
+                                        root.keepHistory ? "false" : "true", true)
+              }
+
+              Toggle {
+                width: parent.width
                 label: "Keep listening after a reply"
                 description: "Carry on without repeating the wake word. Say " +
                              "\"stop\", \"cancel that\" or \"never mind\" to end it, " +
@@ -758,7 +982,7 @@ Item {
                       " starts fresh on every turn, so this saves you the wake " +
                       "word and nothing more. Asking \"what did you mean by " +
                       "that?\" will get an answer to a question it has never seen."
-                color: Color.urgent
+                color: Commons.Color.urgent
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
               }
@@ -789,7 +1013,7 @@ Item {
                     "its own machine, in a directory it chooses — these two " +
                     "settings govern an agent started here, and reach nothing " +
                     "over there. Restrain that one where it runs."
-              color: Color.urgent
+              color: Commons.Color.urgent
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
             }
@@ -836,7 +1060,51 @@ Item {
                       "inside: every change is prompted until you name one. " +
                       "Your home directory is not accepted as a project — it " +
                       "holds the file this permission level is stored in."
-                color: Color.urgent
+                color: Commons.Color.urgent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Dropdown {
+                width: parent.width
+                visible: root.vTakesModel
+                showLabel: true
+                label: "Model for " + root.vAgent
+                fontFamily: root.fontFamily
+                foreground: root.foreground
+                options: root.agentModelOptions
+                value: root.customModel ? "__other__" : root.agentModel()
+                onChanged: function(v) {
+                  if (v === "__other__") { root.customModel = true; return }
+                  root.customModel = false
+                  if (v !== root.agentModel()) root.setModel(v)
+                }
+              }
+
+              TextField {
+                width: parent.width
+                visible: root.vTakesModel && root.customModel
+                text: root.agentModel()
+                placeholderText: "type a model name or full model id"
+                foreground: root.foreground
+                font.family: root.fontFamily
+                onEditingFinished: {
+                  if (text.trim() !== root.agentModel()) root.setModel(text)
+                }
+              }
+
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                visible: root.vTakesModel
+                text: "Only for voice; your other sessions keep their own model. " +
+                      "For Claude: sonnet, opus, haiku or a full model id. " +
+                      "Changing it starts a new conversation." +
+                      (root.agentModel() !== ""
+                       && !/^[A-Za-z0-9][A-Za-z0-9._:\/@\[\]-]{0,127}$/.test(root.agentModel())
+                       ? "  ⚠  Not accepted as a model name, so the default is in use." : "")
+                textFormat: Text.PlainText
+                color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
               }
@@ -874,7 +1142,7 @@ Item {
                            "reaches the network or your own MCP servers. Reading " +
                            "is free except for keys, credentials and shell " +
                            "history. An unanswered prompt is denied.")
-                color: root.permissionLevel === "trusted" ? Color.urgent : root.dim
+                color: root.permissionLevel === "trusted" ? Commons.Color.urgent : root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
               }
@@ -886,7 +1154,7 @@ Item {
                 text: "⚠  This endpoint is answering instead of " + root.vOverriding +
                       ", which is what Omarchy's own settings are set to. Clear " +
                       "both boxes below to go back to it."
-                color: Color.urgent
+                color: Commons.Color.urgent
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
               }
@@ -991,7 +1259,7 @@ Item {
                         "It was offered during install and can be added now — about " +
                         "154MB, and it brings real rejection plus verifiers trained " +
                         "from your own voice."
-                  color: Color.urgent
+                  color: Commons.Color.urgent
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                 }
@@ -1171,7 +1439,7 @@ Item {
                 wrapMode: Text.WordWrap
                 text: "Verifiers attach to an openWakeWord model. Vosk has no model " +
                       "to attach one to, so training is unavailable while it is selected."
-                color: Color.urgent
+                color: Commons.Color.urgent
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
               }
@@ -1281,7 +1549,7 @@ Item {
                   x: meter.width * meter.gateFrac
                   width: Math.max(2, Style.space(2))
                   height: meter.height
-                  color: Color.urgent
+                  color: Commons.Color.urgent
                 }
               }
 
@@ -1346,6 +1614,23 @@ Item {
                 value: root.setting("trailingSilenceMs", 1200)
                 minimum: 400; maximum: 4000; stepSize: 100
                 onCommitted: function(v) { root.persist("trailingSilenceMs", v, true) }
+              }
+
+              KnobRow {
+                width: parent.width
+                scrollTarget: formScroll
+                foreground: root.foreground; fontFamily: root.fontFamily
+                label: "Shorter pause when you sound finished"
+                description: "Whisper works through what you said at each " +
+                             "pause, so by the time you stop it usually has " +
+                             "the words already. When they read as a finished " +
+                             "sentence, this much quiet ends the turn instead " +
+                             "of the full pause above. Trailing off, or " +
+                             "stopping on a word like \"and\" or \"the\", " +
+                             "still waits the full pause. 0 turns it off."
+                value: root.setting("quickEndMs", 800)
+                minimum: 0; maximum: 2000; stepSize: 100
+                onCommitted: function(v) { root.persist("quickEndMs", v, true) }
               }
 
               KnobRow {
@@ -1469,7 +1754,7 @@ Item {
                   text: "\u201c" + root.setting("voice", "lessac-medium") +
                         "\u201d is not on this machine, so it is speaking in " +
                         "one that is. Voices are about 60MB each."
-                  color: Color.urgent
+                  color: Commons.Color.urgent
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                 }
@@ -1568,8 +1853,8 @@ Item {
             Button {
               text: "Remove Agent Voice…"
               fontFamily: root.fontFamily
-              foreground: Color.urgent
-              accent: Color.urgent
+              foreground: Commons.Color.urgent
+              accent: Commons.Color.urgent
               onClicked: {
                 // One command, no shell logic. The launcher already does
                 // `cmd="$*"` and re-wraps it in its own `bash -c`, and a second
@@ -1603,6 +1888,203 @@ Item {
             Process { id: remover }
 
             Item { width: 1; height: Style.space(12) }
+          }
+        }
+
+        // --- the conversation -----------------------------------------
+        Item {
+          id: historyPage
+          visible: root.mode === "history"
+          width: parent.width
+          height: body.height - y - Style.spacing.md
+
+          ListView {
+            id: historyList
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: historyFooter.top
+            anchors.bottomMargin: Style.spacing.md
+            clip: true
+            spacing: Style.spacing.xxxl
+            model: historyModel
+            boundsBehavior: Flickable.StopAtBounds
+            flickableDirection: Flickable.VerticalFlick
+            QQC.ScrollBar.vertical: QQC.ScrollBar {
+              policy: QQC.ScrollBar.AsNeeded
+            }
+
+            // At the end while you are at the end, so a turn taken with the
+            // page open appears without scrolling; left alone once you have
+            // scrolled back to read.
+            property bool following: true
+            onMovementEnded: following = atYEnd
+            onCountChanged: if (following) Qt.callLater(historyList.positionViewAtEnd)
+
+            delegate: Column {
+              id: turn
+              required property int index
+              required property real at
+              required property string agent
+              required property string transcript
+              required property string reply
+              required property string failed
+              required property bool stopped
+              required property bool fresh
+              required property int latency
+
+              width: ListView.view ? ListView.view.width - Style.space(10) : 0
+              spacing: Style.space(4)
+
+              // Where a conversation began: a turn sent with no session to
+              // continue. "What did I ask it earlier" is usually this one.
+              Item {
+                visible: turn.fresh && turn.index > 0
+                width: parent.width
+                height: visible ? newLabel.implicitHeight + Style.space(10) : 0
+                PanelSeparator {
+                  anchors.verticalCenter: newLabel.verticalCenter
+                  width: parent.width
+                  foreground: root.foreground
+                }
+                Text {
+                  id: newLabel
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  leftPadding: Style.space(8)
+                  rightPadding: Style.space(8)
+                  text: "new conversation"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  Rectangle {
+                    z: -1
+                    anchors.fill: parent
+                    color: root.background
+                  }
+                }
+              }
+
+              Text {
+                text: root.timeOf(turn.at)
+                      + (turn.agent !== "" ? " · " + turn.agent : "")
+                      + (turn.latency > 0
+                         ? " · answered in " + (turn.latency / 1000).toFixed(1) + "s" : "")
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              // TextEdit, read-only, rather than Text: selectable, so a path
+              // or a command the agent read out can be copied, not retyped.
+              // Plain text for the same reason every other transcript here
+              // is -- neither half of this was written by us.
+              TextEdit {
+                width: parent.width
+                readOnly: true
+                selectByMouse: true
+                wrapMode: TextEdit.Wrap
+                textFormat: TextEdit.PlainText
+                text: turn.transcript
+                color: root.foreground
+                selectionColor: Qt.rgba(root.foreground.r, root.foreground.g,
+                                        root.foreground.b, 0.3)
+                selectedTextColor: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+
+              Item {
+                visible: turn.reply !== ""
+                width: parent.width
+                height: replyText.implicitHeight
+
+                // A rule down the left of the answer, rather than an arrow in
+                // its text that would come along with every copy.
+                Rectangle {
+                  width: Style.space(2)
+                  height: parent.height
+                  color: Qt.rgba(root.foreground.r, root.foreground.g,
+                                 root.foreground.b, 0.35)
+                }
+                TextEdit {
+                  id: replyText
+                  x: Style.space(10)
+                  width: parent.width - x
+                  readOnly: true
+                  selectByMouse: true
+                  wrapMode: TextEdit.Wrap
+                  textFormat: TextEdit.PlainText
+                  text: turn.reply
+                  color: Qt.rgba(root.foreground.r, root.foreground.g,
+                                 root.foreground.b, 0.8)
+                  selectionColor: Qt.rgba(root.foreground.r, root.foreground.g,
+                                          root.foreground.b, 0.3)
+                  selectedTextColor: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                }
+              }
+
+              Text {
+                visible: turn.failed !== "" || turn.stopped
+                text: turn.failed !== "" ? "failed" : "stopped part-way"
+                color: turn.failed !== "" ? Commons.Color.urgent : root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+          }
+
+          Text {
+            anchors.centerIn: historyList
+            width: Math.min(parent.width, Style.space(380))
+            visible: historyModel.count === 0
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            text: root.keepHistory
+                  ? "Nothing yet this session.\n\nEach exchange appears here " +
+                    "as it ends, and is kept in memory until you log out."
+                  : "Keeping the conversation is off.\n\nTurn it on in " +
+                    "settings, under While you interact with it."
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+          }
+
+          Item {
+            id: historyFooter
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: clearButton.implicitHeight
+
+            Text {
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              width: parent.width - clearButton.width - Style.space(12)
+              elide: Text.ElideRight
+              text: historyModel.count + (historyModel.count === 1 ? " exchange" : " exchanges")
+                    + " · in memory only, gone at logout · drag across text to copy it"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            Button {
+              id: clearButton
+              anchors.right: parent.right
+              visible: historyModel.count > 0
+              text: root.confirmClear ? "Clear it all?" : "Clear"
+              fontFamily: root.fontFamily
+              onClicked: {
+                if (!root.confirmClear) {
+                  root.confirmClear = true
+                  clearTimeout.restart()
+                  return
+                }
+                root.confirmClear = false
+                clearHistory.running = true
+              }
+            }
           }
         }
       }

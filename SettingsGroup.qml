@@ -1,5 +1,9 @@
 import QtQuick
 import qs.Commons
+// Namespaced as well: on Qt 6.12 a bare `Color` resolves to QtQuick's own
+// value-type helper, not to the theme, and every colour read through it was
+// undefined. Omarchy's own QML writes Commons.Color for the same reason.
+import qs.Commons as Commons
 import qs.Ui
 
 // A titled box around settings that belong together.
@@ -23,7 +27,7 @@ Column {
   id: group
 
   property string title: ""
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   readonly property color dim: Qt.darker(foreground, 1.4)
   property string fontFamily: Style.font.family
   // Outer padding inside the box. Named because the height below depends on

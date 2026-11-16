@@ -42,12 +42,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from adapters import (  # noqa: E402
     explain as explain_agent, load as load_adapter, omarchy_default, sentences,
+    takes_model,
 )
 from adapters.base import speech_safe  # noqa: E402
+import failure  # noqa: E402
+from chimes import Chimes  # noqa: E402
+from eager import Utterance, sounds_finished  # noqa: E402
 from speech_text import (  # noqa: E402
     as_prompt, is_stop_command, safe_for_terminal,
 )
-from runtime import RUNTIME_DIR, Config, Speaker, StateFile  # noqa: E402
+from runtime import (  # noqa: E402
+    REPLY_MAX, RUNTIME_DIR, Config, History, Speaker, StateFile,
+)
 
 from paths import (  # noqa: E402
     build_id, endpoint_key, harden_private_trees, project_dir, vocab_file,
@@ -208,6 +214,7 @@ class Pipeline:
         self._whisper = None
         self._whisper_size = None
         self._whisper_override = whisper_override
+        self._pool = None       # Whisper's one worker; see new_utterance()
         self.apply(cfg)
 
     def apply(self, cfg: Config) -> None:
@@ -233,6 +240,8 @@ class Pipeline:
 
         self.lead_in_ms = cfg.get_int("leadInMs")
         self.trailing_ms = cfg.get_int("trailingSilenceMs")
+        # 0 turns it off: every turn then waits out the full pause above.
+        self.quick_end_ms = cfg.get_int("quickEndMs")
         self.min_utterance_ms = cfg.get_int("minUtteranceMs")
         self.max_utterance_ms = cfg.get_int("maxUtteranceMs")
         self.threshold_db = float(cfg["micThresholdDb"])
@@ -506,17 +515,46 @@ class Pipeline:
             return True
         return self.engine == "vosk"
 
-    def transcribe(self, pcm: bytes) -> tuple[str, float]:
+    def _whisper_text(self, pcm: bytes, prompt: str | None) -> str:
         import numpy as np
         audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
-        t0 = time.perf_counter()
         segments, _ = self._whisper.transcribe(
-            audio, language="en", beam_size=1, initial_prompt=self._vocab)
-        text = " ".join(s.text for s in segments)
+            audio, language="en", beam_size=1, initial_prompt=prompt)
+        return " ".join(s.text for s in segments)
+
+    def transcribe(self, pcm: bytes) -> tuple[str, float]:
+        """A whole recording at once. The bench and --simulate path; the live
+        loop transcribes as it goes -- see new_utterance()."""
+        t0 = time.perf_counter()
+        text = self._whisper_text(pcm, self._vocab)
         # Cleaned here, once, rather than in each adapter: this is the only
         # place a transcript is made, and every backend puts it straight into
         # argv where a leading hyphen would be read as a flag.
         return as_prompt(text), (time.perf_counter() - t0) * 1000
+
+    def transcribe_piece(self, pcm: bytes, context: str) -> str:
+        """One piece of an utterance, with what was said before it.
+
+        The vocabulary first, because it is the part measured to matter (41%
+        fewer domain errors for 41ms), then the tail of the transcript so far,
+        so a sentence split at a pause is still heard as one.
+        """
+        prompt = " ".join(p for p in (self._vocab, context) if p) or None
+        return self._whisper_text(pcm, prompt)
+
+    def new_utterance(self) -> Utterance:
+        """A capture that transcribes itself at each pause. See eager.py.
+
+        One worker for every utterance, so Whisper is never asked two things
+        at once -- a piece still running from a capture that was abandoned
+        simply finishes before the next one starts.
+        """
+        if self._pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+            self._pool = ThreadPoolExecutor(max_workers=1,
+                                            thread_name_prefix="whisper")
+        return Utterance(self.transcribe_piece, self._pool.submit,
+                         bytes_per_s=RATE * 2, frame_bytes=CHUNK * 2)
 
 
 #: Every value the state file can carry, in the order a turn moves through
@@ -531,6 +569,16 @@ STATES = ("off", "locked", "yielded", "listening", "capture", "transcribing",
 
 #: The subset that means a turn is underway, i.e. what the HUD shows for.
 BUSY_STATES = ("capture", "transcribing", "thinking", "speaking", "followup")
+
+#: A turn this long ends with the `done` chime. Short answers do not need
+#: one -- you are still listening when they end -- and every turn having one
+#: would make it noise.
+LONG_TURN_S = 15.0
+
+#: How long past its own length a chime is assumed to still be sounding:
+#: PipeWire's output latency means it leaves the speaker a little after it was
+#: started.
+CHIME_TAIL_S = 0.1
 
 #: How long `agentvoice lock` outranks the poll. Long enough for a compositor
 #: to raise its lock surface and for `solitaryBlockedBy` to admit it, short
@@ -698,7 +746,8 @@ def _empty_turn() -> dict:
     and the widget only updates a field it is sent -- an absent key leaves the
     old value on screen rather than clearing it.
     """
-    return {"transcript": "", "ms": 0, "audio_s": 0.0, "reply": ""}
+    return {"transcript": "", "ms": 0, "audio_s": 0.0, "reply": "",
+            "latency_ms": 0}
 
 
 class Daemon:
@@ -730,6 +779,15 @@ class Daemon:
         # room has reverb and the audio device has a buffer.
         self._frames = None
         self._deaf_until = 0.0
+        #: The short sounds -- see chimes.py. Set by main(); None means silent,
+        #: which is what every test and the --simulate path want.
+        self.chimes: Chimes | None = None
+        #: The session's exchanges, for the conversation view.
+        self.history = History()
+        #: Until when a frame's loudness may be our own chime rather than the
+        #: person. Not `_deaf_until`: deafness throws frames away, and the
+        #: frame after a wake word may hold the start of the request.
+        self._chime_until = 0.0
         RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
         (RUNTIME_DIR / "pid").write_text(str(os.getpid()))
         # Barge-in is not possible acoustically on this class of hardware:
@@ -962,6 +1020,7 @@ class Daemon:
         want_cwd = str(project_dir(self.cfg.get_str("projectDir")))
         want_level = self.cfg.level_for(want_name)
         want_ask = want_level != "trusted"
+        want_model = None if endpoint else self.cfg.model_for(want_name)
         # The endpoint's identity is its URL and model, not just its name:
         # switching which machine answers must rebuild, and they all report
         # the same name.
@@ -978,7 +1037,10 @@ class Daemon:
                 and (endpoint is not None
                      or getattr(self.agent, "cwd", None) == want_cwd)
                 and (endpoint is not None
-                     or getattr(self.agent, "ask_permission", None) == want_ask)):
+                     or getattr(self.agent, "ask_permission", None) == want_ask)
+                and (endpoint is not None
+                     or not takes_model(self.agent)
+                     or getattr(self.agent, "model", None) == want_model)):
             self.publish_agent()
             return
         if self.agent is not None:
@@ -986,10 +1048,13 @@ class Daemon:
         if endpoint:
             endpoint = {**endpoint, "key": endpoint_key(_host(endpoint["url"]))}
         self.agent = load_adapter(ask_permission=want_ask, cwd=want_cwd,
-                                  level=want_level, endpoint=endpoint)
+                                  level=want_level, endpoint=endpoint,
+                                  model=want_model)
         self.session_id = None
         self.publish_agent()
         where = f" · {want_cwd}" if getattr(self.agent, "has_tools", True) else ""
+        if want_model and takes_model(self.agent):
+            where += f" · {want_model}"
         # say_once, because with no agent installed self.agent stays None and
         # the guard above can never match, so this ran on every idle poll.
         self.say_once("agent", f"  {CYA}agent: {want_name or 'nobody'}{where}{OFF}"
@@ -1069,6 +1134,11 @@ class Daemon:
             # directory we choose, under flags we pass. They govern nothing
             # about a machine down the hall.
             governed=bool(getattr(self.agent, "cwd", None)),
+            # Whether the model field means anything for the running backend,
+            # and what it is set to, so the panel never offers a setting that
+            # would be silently dropped.
+            takes_model=takes_model(self.agent),
+            model=getattr(self.agent, "model", None) or "",
             # The daemon has always known this and only ever said it in a log
             # line nobody reads. A verifier is the one layer that knows who is
             # talking, so whether it is in force belongs on screen.
@@ -1198,6 +1268,12 @@ class Daemon:
         # detection threshold that never reached the running engine.
         self.reconcile_voice()
         self.pipe.reconcile_vocab()
+        # Off means gone, not merely paused: someone who turns it off is
+        # saying they do not want the session's words kept, including the
+        # ones already kept. Outside the guard, so it also holds for a file
+        # left from earlier in the session when the daemon starts.
+        if not self.cfg.get_bool("keepHistory"):
+            self.history.clear()
         if not self.cfg.reload():
             return
         self.pipe.apply(self.cfg)
@@ -1287,6 +1363,8 @@ class Daemon:
             self.silence()
             return
         barge = self._barge_watch()
+        if self.chimes is not None:
+            self.chimes.settle()        # never a chime under the first word
         try:
             with self._watching_session():
                 self.speaker.say(speech_safe(text), watch=self._watch(barge))
@@ -1402,14 +1480,119 @@ class Daemon:
 
         return watch
 
-    def answer(self, text: str, last: dict) -> None:
+    def chime(self, name: str) -> None:
+        """Play one of the short sounds, if they are on and we are listening.
+
+        Never blocks: the sound plays from PortAudio's own thread. For its
+        length the microphone keeps recording but nothing it hears counts as
+        speech (`_chime_until`), so our own chime is not taken for the person
+        starting to talk -- which on `wake` would end the lead-in's wait for
+        nobody. It is not made deaf: that dropped the frame after the wake
+        word whole, and with it the first word of anyone who did not pause.
+        """
+        if (self.chimes is None or not self.cfg.get_bool("chimes")
+                or not self.listening):
+            return
+        try:
+            length = self.chimes.play(name)
+        except Exception as e:
+            # A missing output device must not cost the turn. Said once: it
+            # is a standing condition, and this runs on every wake.
+            self.say_once("chimes", f"  {YEL}cannot play sounds: "
+                                    f"{type(e).__name__}: {e}{OFF}")
+            return
+        self._chime_until = max(self._chime_until,
+                                time.time() + length + CHIME_TAIL_S)
+
+    def voiced(self, level_db: float) -> bool:
+        """Whether a frame this loud counts as the person speaking.
+
+        Louder than the gate, and not while one of our own chimes may be what
+        the microphone is hearing -- see chime().
+        """
+        return (level_db >= self.pipe.threshold_db
+                and time.time() >= self._chime_until)
+
+    def prime_agent(self) -> None:
+        """Let the agent get ready while the person is still talking.
+
+        Called the moment a capture opens. For Claude Code that starts the
+        process the turn will be written to, which takes about a second --
+        hidden entirely behind a sentence that takes several to say.
+        """
+        prepare = getattr(self.agent, "prepare", None)
+        if prepare is None:
+            return
+        try:
+            prepare(self.session_id)
+        except Exception as e:
+            # Never fatal and never silent. The turn itself will try again,
+            # and can say why out loud if it still cannot.
+            self.say_once("prime", f"  {YEL}could not start "
+                                   f"{getattr(self.agent, 'name', 'the agent')}"
+                                   f" early: {type(e).__name__}{OFF}")
+
+    def turn_ended(self, quiet_ms: float, utt) -> bool:
+        """Whether this much quiet means you have finished.
+
+        The full pause always does. A shorter one does when what you said is
+        already transcribed and reads as finished -- see eager.sounds_finished,
+        which is deliberately narrow, because being cut off is worse than
+        waiting. The quiet is still required: a transcript that looks complete
+        after 400ms is a person drawing breath as often as one who is done.
+        """
+        if quiet_ms > self.pipe.trailing_ms:
+            return True
+        quick = getattr(self.pipe, "quick_end_ms", 0)
+        if not quick or quiet_ms < quick or utt is None:
+            return False
+        so_far = utt.tail()
+        return so_far is not None and sounds_finished(so_far)
+
+    def report_latency(self, clock: dict, last: dict) -> None:
+        """One line per turn: from the moment you stopped talking to the
+        moment it started answering, and where that time went.
+
+        The number that decides how this feels, and the one nothing measured.
+        "first token" below it is the model's own figure, counted from when
+        the request left -- it leaves out the pause, Whisper, and starting the
+        agent, which together were most of the wait. Structural, never gated:
+        it holds timings and the agent's name, and nothing anybody said.
+        """
+        end = clock.get("voice_end")
+        reached = clock.get("first_audio") or clock.get("first_sentence")
+        if not end or not reached:
+            return
+        name = getattr(self.agent, "name", "") or "agent"
+        start = getattr(self.agent, "last_start", "")
+        spans = []
+        for label, a, b in (("pause", "voice_end", "endpoint"),
+                            ("whisper", "endpoint", "transcribed"),
+                            (f"{name}{' ' + start if start else ''}",
+                             "sent", "first_text"),
+                            ("first sentence", "first_text", "first_sentence"),
+                            ("voice", "first_sentence", "first_audio")):
+            if a in clock and b in clock:
+                spans.append(f"{label} {clock[b] - clock[a]:.1f}s")
+        verb = "spoke" if "first_audio" in clock else "showed"
+        total = reached - end
+        print(f"  {DIM}heard → {verb} in {total:.1f}s  "
+              f"({' · '.join(spans)}){OFF}")
+        last["latency_ms"] = round(total * 1000)
+
+    def answer(self, text: str, last: dict, clock: dict | None = None) -> None:
         """Hand the transcript to the agent and speak the reply as it lands.
 
         Speech starts on the first complete sentence rather than the whole
-        reply, because the agent's own generation is now the slowest thing in
-        the loop by an order of magnitude -- local transcription is ~300ms and
-        time-to-first-token is measured in seconds.
+        reply, because the agent's own generation is the slowest thing in the
+        loop -- time-to-first-token is measured in seconds, and transcription
+        is now mostly finished by the time you are.
+
+        `clock` carries the turn's timestamps from the frame loop -- when you
+        stopped talking, when the endpoint fired, when Whisper finished -- and
+        this adds the agent's and the voice's, for report_latency().
         """
+        clock = dict(clock or {})
         tail_ms = self.cfg.get_int("echoTailMs")
         self._interrupt.clear()
         if not self.agent:
@@ -1420,13 +1603,21 @@ class Daemon:
 
         self.state.publish("thinking", **last)
         t0 = time.time()
+        clock["sent"] = t0
+        # A turn sent without a session starts a conversation. The view draws
+        # a line there, because "what did I ask it earlier" is usually about
+        # this conversation, not the one before.
+        new_conversation = not self.session_id
         reply_parts: list[str] = []
         ttft = None
         error = None
+        kind = ""
 
         def tap(stream):
             nonlocal ttft, error
             for chunk in stream:
+                if chunk.text and "first_text" not in clock:
+                    clock["first_text"] = time.time()
                 if chunk.session_id:
                     self.session_id = chunk.session_id
                 if chunk.ttft_ms is not None and ttft is None:
@@ -1452,6 +1643,7 @@ class Daemon:
                     if self._interrupt.is_set() or not self.listening:
                         self.silence()
                         break
+                    clock.setdefault("first_sentence", time.time())
                     if speech_is_logged(self.cfg.get_bool("logSpeech")):
                         print(f"  {CYA}{safe_for_terminal(sentence)}{OFF}", flush=True)
                     reply_parts.append(sentence)
@@ -1461,10 +1653,18 @@ class Daemon:
                     # to close -- so it was on screen for the linger and nothing
                     # more. Publishing here puts the text up as that sentence
                     # begins, because speak() below blocks until it has been said.
-                    last["reply"] = " ".join(reply_parts)[:400]
+                    last["reply"] = " ".join(reply_parts)[:REPLY_MAX]
                     if self.speaker and self.listening:
                         self.state.publish("speaking", **last)
                         self.speak(sentence, tail_ms)
+                        # When the first sound actually went out, which the
+                        # speaker records itself. Only one from this turn
+                        # counts: a sentence that was never said leaves the
+                        # last turn's value behind.
+                        heard_at = getattr(self.speaker, "first_audio_at", None)
+                        if (heard_at and heard_at >= t0
+                                and "first_audio" not in clock):
+                            clock["first_audio"] = heard_at
                     else:
                         # No voice: the text is the entire answer, so it matters
                         # more here, not less. Keep whatever state we are in.
@@ -1482,26 +1682,79 @@ class Daemon:
             # adjacent, because a CLI that rejects a prompt often quotes it
             # back. Found by the syntax-tree audit after I had decided by
             # hand that this one was fine.
+            #
+            # Its *kind* is not: failure.classify() returns a name from a
+            # fixed list and never any of the text, so it is logged and said
+            # whatever logSpeech is. "agent error (text withheld)" five times
+            # in a row left nothing to act on.
+            kind = failure.classify(error)
             if speech_is_logged(self.cfg.get_bool("logSpeech")):
-                print(f"  {YEL}agent error: {safe_for_terminal(error)}{OFF}")
+                print(f"  {YEL}agent error ({kind}): "
+                      f"{safe_for_terminal(error)}{OFF}")
             else:
-                print(f"  {YEL}agent error (text withheld — logSpeech is "
-                      f"off){OFF}")
+                print(f"  {YEL}agent error: {kind}  {DIM}(details withheld — "
+                      f"logSpeech is off){OFF}")
+            if failure.forgets_conversation(kind) and self.session_id:
+                # Resuming it would fail the same way on every turn after
+                # this one. The process holding it goes with it: prepare()
+                # sees a different conversation and starts a fresh one.
+                self.session_id = None
+                print(f"  {YEL}conversation dropped — the next turn starts "
+                      f"a new one{OFF}")
+            explained = failure.spoken(kind, getattr(self.agent, "name", ""),
+                                       error)
+            if not reply_parts:
+                # On the panel too, where the reply would have been: a turn
+                # that failed silently on screen reads as one still running.
+                reply_parts.append(explained)
             # Inside a try of its own: this is the apology for a turn that
             # already went wrong, and the speaker is one of the things that
             # can be wrong. A PortAudio failure here was caught above as an
             # agent error and then re-raised out of this line, which is
             # outside the handler -- so a bad audio device ended the daemon.
             try:
-                self.speak("Sorry, the agent failed.", tail_ms)
+                self.speak(explained, tail_ms)
             except Exception as e:
                 print(f"  {YEL}and could not say so: "
                       f"{type(e).__name__}: {e}{OFF}")
+        elif time.time() - t0 >= LONG_TURN_S:
+            # Long enough that you may have stopped listening for it: most
+            # long turns are tools running with nothing being said. The
+            # spoken summary is the answer; this is the bell that says it
+            # is over and the floor is yours.
+            self.chime("done")
 
         reply = " ".join(reply_parts)
-        last["reply"] = reply[:400]
+        last["reply"] = reply[:REPLY_MAX]
         print(f"  {DIM}agent {time.time() - t0:.1f}s"
               f"{f', first token {ttft:.0f}ms' if ttft else ''}{OFF}")
+        # A stopped turn still counts if it got as far as making a sound --
+        # that wait was real. One stopped before it spoke has nothing to say.
+        if "first_audio" in clock or not self._interrupt.is_set():
+            self.report_latency(clock, last)
+        self.remember(text, reply, last, kind=kind,
+                      stopped=self._interrupt.is_set(), new=new_conversation)
+
+    def remember(self, heard: str, reply: str, last: dict, *, kind: str,
+                 stopped: bool, new: bool) -> None:
+        """Add the exchange to the session's conversation -- runtime.History.
+
+        What was said aloud, not everything the agent wrote: a reply stopped
+        halfway is kept as far as it got, and marked, so the record matches
+        what you heard rather than what you were spared.
+        """
+        if not self.cfg.get_bool("keepHistory"):
+            return
+        self.history.append({
+            "at": round(time.time(), 1),
+            "agent": getattr(self.agent, "name", "") or "",
+            "transcript": heard,
+            "reply": reply[:REPLY_MAX],
+            "error": kind,
+            "stopped": bool(stopped),
+            "new": bool(new),
+            "latency_ms": int(last.get("latency_ms") or 0),
+        })
 
     def run(self, device: int | None) -> int:
         import sounddevice as sd
@@ -1524,7 +1777,9 @@ class Daemon:
             phase = "wake"
             buf = b""
             cap = None
-            woke_at = last_voice = 0.0
+            # Transcribes as you talk; None outside a capture. See eager.py.
+            utt = None
+            woke_at = last_voice = released_at = 0.0
             heard = False
             # A follow-up gets its own, shorter window: after a reply the
             # machine keeps listening for a moment so the next thing you say
@@ -1545,7 +1800,11 @@ class Daemon:
                 if self.apply_lock_command(cmd):
                     continue
                 if cmd == "talk" and self.listening:
+                    if utt is not None:
+                        utt.abandon()
                     phase, buf, cap = "capture", b"", self.pipe.new_capture()
+                    utt = self.pipe.new_utterance()
+                    self.prime_agent()
                     woke_at = last_voice = time.time()
                     heard = False
                     ptt, ptt_done = True, False
@@ -1558,6 +1817,9 @@ class Daemon:
                     self.state.publish("capture", **last)
                 elif cmd == "talk-end" and ptt:
                     ptt_done = True
+                    # The key coming up is when you stopped talking, which is
+                    # where the turn's latency is counted from.
+                    released_at = time.time()
 
                 # Before the gate below, and on its own clock, because
                 # everything past the gate is skipped while the screen is
@@ -1595,6 +1857,12 @@ class Daemon:
                     # whatever was said next.
                     if phase != "wake":
                         phase, buf, cap, ptt, ptt_done = "wake", b"", None, False, False
+                        # Its pieces too: a piece still queued would otherwise
+                        # be transcribed after the lock, from audio recorded
+                        # before it, for a turn that no longer exists.
+                        if utt is not None:
+                            utt.abandon()
+                            utt = None
                         shown_partial = ""
                         last = _empty_turn()
                         self._publish(**last)
@@ -1624,6 +1892,16 @@ class Daemon:
                               f" ({self.pipe.lead_in_ms / 1000:.1f}s to start){OFF}",
                               flush=True)
                         phase, buf, cap = "capture", b"", self.pipe.new_capture()
+                        utt = self.pipe.new_utterance()
+                        # Now, while you are still talking, rather than when
+                        # there is finally a prompt: a slow agent start is
+                        # then hidden behind your own sentence.
+                        self.prime_agent()
+                        # The wake word only: push-to-talk has the key for
+                        # feedback, and you are already talking when it goes
+                        # down -- a chime there would be deafness over your
+                        # first word.
+                        self.chime("wake")
                         woke_at = last_voice = time.time()
                         heard = False
                         active_lead_in = self.pipe.lead_in_ms
@@ -1642,9 +1920,21 @@ class Daemon:
                 # Energy decides when you stopped talking; Vosk's partials only
                 # say what it thinks you said. A pause between words produces no
                 # new partial but is not the end of a turn.
-                if level >= self.pipe.threshold_db:
+                #
+                # Not while one of our own chimes is sounding: the frame is
+                # kept -- you may already be talking over it, and dropping it
+                # lost the first word of "computer, what time is it" -- but
+                # the chime cannot count as you. Counted, it would end the
+                # lead-in's wait for nobody, and a turn of nothing but a
+                # chime would go to Whisper.
+                voiced = self.voiced(level)
+                if voiced:
                     heard = True
                     last_voice = time.time()
+                # The same measurement that endpoints the turn decides where
+                # its pauses are, so a piece is never cut where the endpoint
+                # would have heard speech.
+                utt.add(pcm, voiced)
                 if partial and partial != shown_partial:
                     shown_partial = partial
                     if speech_is_logged(self.cfg.get_bool("logSpeech")):
@@ -1674,6 +1964,8 @@ class Daemon:
                     if ptt_done if ptt else elapsed_ms > active_lead_in:
                         print(f"{cursor_home()}  {DIM}(nothing heard){OFF}"
                               f"{' ' * 40}")
+                        utt.abandon()
+                        utt = None
                         phase = "wake"
                         ptt = ptt_done = False
                         self._publish(**last)
@@ -1684,12 +1976,20 @@ class Daemon:
                     # A key that never comes back up must not buffer forever.
                     if elapsed_ms < self.pipe.max_utterance_ms:
                         continue
-                elif not ptt and quiet_ms <= self.pipe.trailing_ms \
-                        and elapsed_ms < self.pipe.max_utterance_ms:
+                elif not ptt and elapsed_ms < self.pipe.max_utterance_ms \
+                        and not self.turn_ended(quiet_ms, utt):
                     continue
                 if elapsed_ms >= self.pipe.max_utterance_ms:
                     print(f"{cursor_home()}  {YEL}(hit max_utterance_ms){OFF}"
                           f"{' ' * 30}")
+                # Where the latency of this turn is counted from: the last
+                # sound you made, or the key coming up. Not the endpoint --
+                # the pause it waits out is part of what you sit through.
+                # A key still held at max_utterance_ms never came up, so it
+                # has no release time of its own this turn.
+                clock = {"voice_end": released_at if ptt and ptt_done
+                         else last_voice,
+                         "endpoint": time.time()}
                 ptt = ptt_done = False
 
                 audio_ms = len(buf) / 32.0
@@ -1697,14 +1997,25 @@ class Daemon:
                 if audio_ms < self.pipe.min_utterance_ms:
                     print(f"{cursor_home()}  {DIM}(too short, discarded){OFF}"
                           f"{' ' * 40}")
+                    utt.abandon()
                 else:
+                    # Got it. Before the wait for Whisper, not after, so it
+                    # marks the moment the turn ended -- the thing you could
+                    # not tell before without looking at the bar.
+                    self.chime("heard")
                     # Its own state. This phase and the agent's turn both
                     # published "thinking", and the panel labelled that
                     # "TRANSCRIBING" -- so the label was right here and wrong
                     # for the whole of the agent's turn, which is the part
                     # people actually wait through.
                     self.state.publish("transcribing", **last)
-                    text, ms = self.pipe.transcribe(buf)
+                    # Mostly done already: each pause sent what came before it
+                    # to Whisper while the endpoint was still waiting. What is
+                    # left is whatever of the last piece has not finished.
+                    raw, waited_ms = utt.finish()
+                    text = as_prompt(raw)
+                    ms = utt.busy_ms
+                    clock["transcribed"] = time.time()
                     # Gated like every other line carrying speech. It was not,
                     # and the audit that was supposed to find them all used a
                     # grep that matched only the first physical line of a
@@ -1722,8 +2033,14 @@ class Daemon:
                         # line -- which is how the timings below ended up
                         # inside "[149B blob data]".
                         print(cursor_home(120), end="")
+                    # Whisper's whole cost, then how much of it you actually
+                    # waited for -- the second is the one that used to equal
+                    # the first.
+                    pieces = (f" in {utt.parts} pieces" if utt.parts > 1
+                              else "")
                     print(f"  {DIM}{audio_ms / 1000:.1f}s audio, "
-                          f"whisper {ms:.0f}ms{OFF}")
+                          f"whisper {ms:.0f}ms{pieces}, "
+                          f"{waited_ms:.0f}ms waited{OFF}")
                     last = {**_empty_turn(), "transcript": text,
                             "ms": round(ms),
                             "audio_s": round(audio_ms / 1000, 2)}
@@ -1747,7 +2064,7 @@ class Daemon:
                         print(f"  {DIM}(stopping){OFF}")
                         follow_up = False
                     elif text:
-                        self.answer(text, last)
+                        self.answer(text, last, clock=clock)
                         # Uncapped on purpose, and worth stating because it
                         # reads like an oversight: a follow-up window opens
                         # after every answered turn, it uses neither the wake
@@ -1769,8 +2086,14 @@ class Daemon:
                         follow_up = False
                     print()
 
+                utt = None
                 if follow_up and self.listening:
                     phase, buf, cap = "capture", b"", self.pipe.new_capture()
+                    utt = self.pipe.new_utterance()
+                    # Usually a no-op: the agent that just answered is still
+                    # running. It matters after a stop or a failed turn, which
+                    # leave nothing running.
+                    self.prime_agent()
                     woke_at = last_voice = time.time()
                     heard = False
                     active_lead_in = self.pipe.follow_up_ms
@@ -1865,7 +2188,8 @@ def main() -> int:
         level = cfg.level_for("endpoint" if spec else omarchy_default())
         agent = load_adapter(ask_permission=level != "trusted", level=level,
                              cwd=str(project_dir(cfg.get_str("projectDir"))),
-                             endpoint=spec)
+                             endpoint=spec,
+                             model=None if spec else cfg.model_for(omarchy_default()))
         if agent is None:
             which = omarchy_default()
             print(f"  {YEL}no agent: {explain_agent(which)}"
@@ -1876,6 +2200,10 @@ def main() -> int:
         daemon = Daemon(cfg, pipe, state, speaker, agent)
         if args.simulate:
             return run_simulated(pipe, speaker, args.simulate, daemon)
+        # Only for the live loop: a simulated turn has no room to chime into.
+        # Built whether or not the setting is on, because it can be switched
+        # on while running; rendering the three sounds costs a few ms.
+        daemon.chimes = Chimes()
         return daemon.run(args.device)
     except KeyboardInterrupt:
         print(f"\n  {DIM}stopped{OFF}")

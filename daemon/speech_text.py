@@ -166,11 +166,29 @@ def _next_boundary(buffer: str):
         pos = closes_at + len(_FENCE)
 
 
+#: Put in the delta stream to mean "nothing more is coming for a while": the
+#: agent has gone off to run a tool. Whatever is waiting is spoken now.
+#:
+#: Without it, "Let me check the logs." sat unspoken until the tool finished,
+#: which is exactly the moment it stops being worth saying. A boundary needs
+#: the whitespace that follows it, and a text block that ends in a tool call
+#: has none until the next block -- after the tool. And anything under
+#: MIN_CHUNK_CHARS ("On it.") waits to merge with what comes next, which is
+#: the same wait again.
+FLUSH = object()
+
+
 def iter_sentences(deltas):
     """Group a stream of text deltas into speakable sentence chunks."""
     buffer = ""
     pending = ""
     for delta in deltas:
+        if delta is FLUSH:
+            waiting = (pending + " " + buffer).strip() if pending else buffer.strip()
+            pending = buffer = ""
+            if waiting:
+                yield waiting
+            continue
         buffer += delta
         while True:
             match = _next_boundary(buffer)

@@ -52,7 +52,9 @@ def test_every_declared_state_is_actually_reachable():
 def test_transcribing_is_published_before_transcription_and_thinking_after():
     """They were the same state, so the two phases could not be told apart."""
     body = DAEMON[DAEMON.index('publish("transcribing"'):]
-    assert "self.pipe.transcribe(buf)" in body[:400], \
+    # utt.finish() is where the loop waits for whatever Whisper has left;
+    # most of the utterance was transcribed at its pauses, before this.
+    assert "utt.finish()" in body[:400], \
         "transcribing must be published immediately before transcribing"
 
     answer = DAEMON[DAEMON.index("    def answer(self"):]
@@ -97,7 +99,7 @@ def test_stopping_during_transcription_discards_the_turn():
     loop = DAEMON[DAEMON.index('publish("transcribing"'):]
     loop = loop[:loop.index("if follow_up and self.listening")]
     checked = loop.index("self._interrupt.is_set()")
-    answered = loop.index("self.answer(text, last)")
+    answered = loop.index("self.answer(text, last")
     assert checked < answered, "the flag must be read before the agent is called"
     assert "self._interrupt.clear()" in loop[checked:answered], \
         "and cleared, or the next turn starts already interrupted"
@@ -613,6 +615,26 @@ def _drive_one_turn(daemon, monkeypatch, said, *, logs=False):
         def transcribe(self, buf):
             return said, 12.0
 
+        def new_utterance(self):
+            return Utterance()
+
+    class Utterance:
+        """eager.Utterance-shaped: the whole transcript at the end, in one
+        piece, with Whisper's 12ms all spent before the pause ended."""
+        busy_ms, parts = 12.0, 1
+
+        def add(self, pcm, loud):
+            pass
+
+        def tail(self):
+            return None
+
+        def finish(self):
+            return said, 0.0
+
+        def abandon(self):
+            pass
+
     class Stream:
         def __init__(self, **kw):
             self.cb = kw["callback"]
@@ -712,6 +734,31 @@ def test_the_frame_loop_withholds_the_words_it_transcribed(
     assert "whisper 12ms" in out, "the timings went with the words"
 
 
+def test_the_frame_loop_chimes_at_the_wake_and_at_the_end_of_the_turn(
+        daemon, capsys, monkeypatch):
+    """Driven, because where in the loop a chime sits is the whole question:
+    the wake sound after the wake word and before the lead-in, the heard
+    sound at the endpoint and before Whisper is waited for."""
+    class Chimes:
+        played = []
+
+        def play(self, name):
+            self.played.append(name)
+            return 0.0                    # no deafness, so the fake speech lands
+
+        def settle(self):
+            pass
+
+    import wake_listen
+    # The fake microphone delivers a frame every 10ms rather than every
+    # 200ms, so even the latency allowance would mask all of its speech.
+    monkeypatch.setattr(wake_listen, "CHIME_TAIL_S", 0.0)
+    daemon.chimes = Chimes()
+    daemon.cfg._values["chimes"] = True
+    _drive_one_turn(daemon, monkeypatch, "what time is it")
+    assert daemon.chimes.played == ["wake", "heard"]
+
+
 def test_the_frame_loop_prints_the_words_when_asked_to(
         daemon, capsys, monkeypatch):
     """The other direction, which is the half that makes it a setting rather
@@ -747,7 +794,8 @@ def test_nothing_in_the_journal_is_hidden_behind_a_carriage_return(
         # a record starting with the audio length, not appended to anything.
         plain = [re.sub(r"\x1b\[[0-9;]*m", "", line).strip()
                  for line in both.splitlines()]
-        assert any(re.match(r"^\d+\.\ds audio, whisper 12ms$", line)
+        assert any(re.match(r"^\d+\.\ds audio, whisper 12ms, 0ms waited$",
+                            line)
                    for line in plain), \
             f"logSpeech={logs}: the timings are not a record of their own: {plain}"
 

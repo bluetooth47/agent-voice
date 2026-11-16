@@ -96,4 +96,11 @@ def test_nothing_is_rebuilt_for_a_word_list():
     body = src[src.index("    def reconcile_vocab"):]
     body = body[:body.index("\n    def ", 10)]
     assert "_load_whisper" not in body
-    assert "initial_prompt=self._vocab" in src, "still read per transcription"
+    # Handed to Whisper on every call -- the whole-recording path and each
+    # piece of a live utterance -- rather than baked into the model.
+    assert "self._whisper_text(pcm, self._vocab)" in src, \
+        "still read per transcription"
+    piece = src[src.index("    def transcribe_piece"):]
+    piece = piece[:piece.index("\n    def ", 10)]
+    assert "self._vocab" in piece, "a live piece is transcribed without the vocabulary"
+    assert "initial_prompt=prompt" in src

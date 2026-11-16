@@ -1,6 +1,18 @@
-"""Claude Code, headless, streaming, with session resume."""
+"""Claude Code, headless, streaming, with session resume.
+
+One process carries the conversation from turn to turn, instead of one per
+turn. Measured on the 2014 dev machine against `claude` 2.1.325 with Haiku:
+a process started for the turn took ~1.0s to come up (MCP servers connected,
+session loaded) and 2.3-2.5s to its first word; the same turn written to a
+process that was already running reached its first word in 1.3-1.4s. That
+second is dead air after every single thing anyone says, so it is worth the
+~230MB a waiting process holds -- but only while it is likely to be used,
+which is why it is started when the wake word fires and let go after a few
+idle minutes rather than kept forever.
+"""
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import shlex
@@ -8,12 +20,12 @@ import signal
 import subprocess
 import sys
 import threading
+import weakref
 from pathlib import Path
 from typing import Iterator
 
 from .base import (
-    Adapter, Chunk, Drain, SPOKEN_STYLE, Watchdog, feed, installed,
-    stop_tree,
+    Adapter, Chunk, Drain, SPOKEN_STYLE, Watchdog, installed, stop_tree,
 )
 
 #: Every tool. The hook's `matcher` is also the limit of what the permission
@@ -22,11 +34,54 @@ from .base import (
 #: can be read, tested and said out loud -- see NO_EFFECT and READ_ONLY.
 GUARDED_TOOLS = ".*"
 
+#: Seconds a running claude waits for the next turn before it is let go.
+#: Long enough to cover a conversation with pauses in it, short enough that
+#: ~230MB is not held all afternoon on a machine that has 4GB.
+KEEP_WARM_S = 300.0
+
+#: Exit statuses that mean we stopped it, not that it failed.
+_STOPPED = (-15, 143, -9, 137)
+
+#: Every adapter that may own a process, so one left waiting is not orphaned
+#: when the daemon is run in a terminal and stopped with ctrl-c. Under systemd
+#: the unit's cgroup is killed whole and this is belt and braces.
+_LIVE: "weakref.WeakSet[ClaudeCode]" = weakref.WeakSet()
+
+
+@atexit.register
+def _stop_all() -> None:
+    for adapter in list(_LIVE):
+        try:
+            adapter.cancel()
+        except Exception:
+            pass
+
+
+def _write_turn(proc, text: str) -> bool:
+    """Hand one turn to a running claude on stdin. False if it has gone.
+
+    stdin, never argv: `/proc/<pid>/cmdline` is world readable on an ordinary
+    Linux box, so a prompt passed as an argument is readable by every local
+    account for as long as the process lives -- and this process now lives
+    for minutes, not for one turn. The stream-json input protocol is one JSON
+    object per line, and stdin stays open between turns, which is what keeps
+    the process alive to take the next one.
+    """
+    line = json.dumps({"type": "user",
+                       "message": {"role": "user", "content": text},
+                       "parent_tool_use_id": None, "session_id": ""})
+    try:
+        proc.stdin.write(line + "\n")
+        proc.stdin.flush()
+        return True
+    except (OSError, ValueError, AttributeError):
+        return False
+
 
 class ClaudeCode(Adapter):
     name = "claude"
     guards_permissions = True
-    remembers = True          # --resume <session-id>
+    remembers = True          # one process per conversation, --resume after
     # The only backend with somewhere to put the question: a PreToolUse hook
     # receives the pending call and blocks on the verdict, so "edits" can be
     # decided per call against the project path.
@@ -40,14 +95,35 @@ class ClaudeCode(Adapter):
                  permission_mode: str = "auto",
                  cwd: str | None = None,
                  spoken: bool = True,
-                 ask_permission: bool = True):
+                 ask_permission: bool = True,
+                 keep_warm_s: float = KEEP_WARM_S):
         self.model = model
         self.spoken = spoken
         self.ask_permission = ask_permission
         self.permission_mode = permission_mode
         self.cwd = cwd or os.getcwd()
+        self.keep_warm_s = keep_warm_s
+        #: The running claude, between turns as well as during one.
         self._proc: subprocess.Popen | None = None
-        self._lock = threading.Lock()
+        #: Its stderr, drained from the moment it starts. See Drain.
+        self._errors: Drain | None = None
+        #: The conversation that process is carrying: what it was resumed
+        #: from, then whatever its last turn reported. A turn for any other
+        #: conversation must not be written to it.
+        self._holds: str | None = None
+        #: True while a turn is being read from it, so the idle timer and
+        #: prepare() cannot take it away mid-turn.
+        self._busy = False
+        self._expiry: threading.Timer | None = None
+        # Reentrant, because cancel() is reached from a signal handler -- the
+        # interrupt keybind -- which runs on the main thread, and the main
+        # thread may be holding this when the signal lands.
+        self._lock = threading.RLock()
+        #: "warm" when the last turn found claude already running, "cold"
+        #: when it had to be started for it. Said in the timing line, because
+        #: it is the difference between the two numbers at the top of this file.
+        self.last_start = ""
+        _LIVE.add(self)
 
     @classmethod
     def _hook_settings(cls) -> str:
@@ -60,7 +136,8 @@ class ClaudeCode(Adapter):
         A hook rather than `--permission-prompt-tool`: that flag is accepted
         by the CLI and loads the MCP server, but is never consulted -- tested
         against 2.1.278 across every permission mode. Hooks fire in all of
-        them, including `auto`.
+        them, including `auto`, and with `--input-format stream-json` --
+        tested against 2.1.325 with a hook that blocked a Bash call.
         """
         hook = Path(__file__).resolve().parent.parent / "permission_hook.py"
         # Quoted, because this string is run by a shell. A space anywhere in
@@ -93,11 +170,12 @@ class ClaudeCode(Adapter):
         return installed("claude")
 
     def _argv(self, text: str, session_id: str | None) -> list[str]:
-        # `-p` with no value: the prompt arrives on stdin instead, because
-        # argv is world readable through /proc. Verified against the real CLI
-        # rather than read off --help.
+        # No prompt here at all: turns arrive on stdin as stream-json, because
+        # argv is world readable through /proc. `text` stays in the signature
+        # so the test that hunts for a prompt in argv keeps asking the question.
         argv = [
             "claude", "-p",
+            "--input-format", "stream-json",
             "--output-format", "stream-json",
             "--include-partial-messages",
             "--verbose",                      # stream-json requires it
@@ -113,8 +191,15 @@ class ClaudeCode(Adapter):
             argv += ["--model", self.model]
         return argv
 
-    def send(self, text: str, session_id: str | None = None) -> Iterator[Chunk]:
-        argv = self._argv(text, session_id)
+    # --- the process, kept between turns -----------------------------------
+
+    def _ready_for(self, session_id: str | None) -> bool:
+        """Whether the running process can take a turn in `session_id`."""
+        return (self._proc is not None and self._proc.poll() is None
+                and self._holds == session_id)
+
+    def _spawn(self, session_id: str | None) -> subprocess.Popen:
+        """Start claude, continuing `session_id` if there is one. Locked."""
         # The environment is inherited whole, including AGENTVOICE_ENDPOINT_KEY
         # and OPENAI_API_KEY, which any Bash command the agent runs can read.
         # Deliberately: Codex authenticates with OPENAI_API_KEY, so scrubbing
@@ -122,28 +207,123 @@ class ClaudeCode(Adapter):
         # user is already trusting to run commands on their behalf. The key
         # that matters is not in the environment on this machine anyway --
         # endpoint_key() prefers the login keyring.
+        proc = subprocess.Popen(self._argv("", session_id), cwd=self.cwd,
+                                stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, bufsize=1,
+                                start_new_session=True)
+        # Drained in the background from here on: stderr is a 64KB pipe and
+        # a process that lives for minutes has plenty of time to fill it,
+        # block on its next write, and stop producing stdout -- which the
+        # watchdog then reports as "stopped responding".
+        self._errors = Drain(proc.stderr)
+        self._proc, self._holds = proc, session_id
+        return proc
+
+    def _forget(self) -> subprocess.Popen | None:
+        """Let go of the running process and return it, to be stopped. Locked."""
+        proc, self._proc, self._holds = self._proc, None, None
+        if self._expiry is not None:
+            self._expiry.cancel()
+            self._expiry = None
+        return proc
+
+    def _arm_expiry(self) -> None:
+        """Let go of an idle process after `keep_warm_s`. Locked."""
+        if self._expiry is not None:
+            self._expiry.cancel()
+        proc = self._proc
+        if proc is None or self.keep_warm_s <= 0:
+            self._expiry = None
+            return
+        timer = threading.Timer(self.keep_warm_s, self._expire, args=(proc,))
+        timer.daemon = True
+        timer.start()
+        self._expiry = timer
+
+    def _expire(self, proc) -> None:
+        with self._lock:
+            if self._proc is not proc or self._busy:
+                return
+            self._forget()
+        stop_tree(proc, signal.SIGTERM)
+
+    def prepare(self, session_id: str | None = None) -> None:
+        """Start claude now, so the turn about to be spoken finds it running.
+
+        Called when the wake word fires. The person then talks for a few
+        seconds and Whisper takes another, which is far longer than the ~1s
+        claude needs to start -- so by the time there is a prompt, there is a
+        process waiting for it. Never raises: a process that cannot start
+        here is started again by send(), which can say why out loud.
+        """
+        stale = None
+        with self._lock:
+            if self._busy:
+                return
+            if not self._ready_for(session_id):
+                stale = self._forget()
+                try:
+                    self._spawn(session_id)
+                except OSError:
+                    self._arm_expiry()
+                    return
+            self._arm_expiry()
+        if stale is not None and stale.poll() is None:
+            stop_tree(stale, signal.SIGTERM)
+
+    def _take(self, session_id: str | None, *, fresh: bool = False):
+        """The process this turn will use, started if need be, marked busy.
+
+        Returns (proc, its Drain, a process to stop) or raises OSError. Never
+        yields while holding the lock -- a generator suspended inside it would
+        leave every other thread that reaches cancel() waiting on the turn.
+        """
+        with self._lock:
+            if self._expiry is not None:
+                self._expiry.cancel()
+                self._expiry = None
+            stale = None
+            self.last_start = "warm"
+            if fresh or not self._ready_for(session_id):
+                stale = self._forget()
+                self.last_start = "cold"
+                self._spawn(session_id)
+            self._busy = True
+            return self._proc, self._errors, stale
+
+    def send(self, text: str, session_id: str | None = None) -> Iterator[Chunk]:
         try:
-            proc = subprocess.Popen(argv, cwd=self.cwd, stdin=subprocess.PIPE,
-                                    stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, text=True, bufsize=1,
-                                    start_new_session=True)
+            proc, errors, stale = self._take(session_id)
         except OSError as e:
             yield Chunk(error=f"could not start claude: {e}")
             return
-        feed(proc, text)
+        if stale is not None and stale.poll() is None:
+            stop_tree(stale, signal.SIGTERM)
 
-        # Drained in the background from here on: stderr is a 64KB pipe
-        # and it is not read until stdout ends, so a chatty CLI fills it,
-        # blocks on its next write, and stops producing stdout -- which the
-        # watchdog then reports as "stopped responding".
-        errors = Drain(proc.stderr)
-
-        with self._lock:
-            self._proc = proc
-        dog = Watchdog(proc, self.idle_timeout_s)
-
+        finished = False
+        dog = None
         try:
-            for line in proc.stdout:
+            if not _write_turn(proc, text):
+                # Died between the check and the write -- the idle timer, or
+                # the CLI itself. Once more from cold, then give up honestly.
+                try:
+                    proc, errors, _ = self._take(session_id, fresh=True)
+                except OSError as e:
+                    yield Chunk(error=f"could not start claude: {e}")
+                    return
+                if not _write_turn(proc, text):
+                    yield Chunk(error="claude exited before it could be asked")
+                    return
+
+            dog = Watchdog(proc, self.idle_timeout_s)
+            # readline, not iteration: the stream does not end at the end of a
+            # turn any more -- the process waits for the next one -- so the
+            # turn ends at `result` and nothing past it may be read here.
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    break                     # the process ended
                 dog.poke()
                 line = line.strip()
                 if not line:
@@ -174,13 +354,23 @@ class ClaudeCode(Adapter):
                             yield Chunk(tool=block.get("name"))
 
                 elif kind == "result":
+                    # Marked finished before anything else is yielded: a
+                    # consumer that stops reading at the error chunk still
+                    # leaves a process that has completed its turn, and that
+                    # one is safe to keep.
+                    finished = True
+                    with self._lock:
+                        if self._proc is proc:
+                            self._holds = msg.get("session_id") or self._holds
                     if msg.get("subtype") != "success" and msg.get("is_error"):
                         yield Chunk(error=str(msg.get("result") or "agent error"))
                     yield Chunk(done=True,
                                 session_id=msg.get("session_id"),
                                 cost_usd=msg.get("total_cost_usd"),
                                 duration_ms=msg.get("duration_ms"))
+                    return
 
+            # The stream ended without a result: the process is gone.
             code = proc.wait()
             if dog.fired:
                 # Killed for going quiet. Indistinguishable from a cancel by
@@ -189,23 +379,35 @@ class ClaudeCode(Adapter):
                 yield Chunk(error=f"claude stopped responding after "
                                   f"{dog.idle_s:.0f}s")
                 return
-            if code != 0:
-                err = errors.text()
+            if code not in _STOPPED:
                 # A cancel closes the pipe under us; that is not a failure.
-                if code not in (-15, 143, -9, 137):
-                    yield Chunk(error=err or f"claude exited {code}")
+                err = errors.text() if errors is not None else ""
+                yield Chunk(error=err or f"claude exited {code}")
         finally:
-            dog.stop()
+            if dog is not None:
+                dog.stop()
             with self._lock:
-                self._proc = None
-            for stream in (proc.stdout, proc.stderr):
-                try:
-                    stream.close()
-                except Exception:
-                    pass
+                self._busy = False
+                if self._proc is proc:
+                    if finished and proc.poll() is None:
+                        self._arm_expiry()
+                    else:
+                        # Abandoned mid-turn -- the consumer stopped reading,
+                        # or raised -- or already dead. Either way it is not a
+                        # process anyone should write the next turn to: one
+                        # still working would answer the old question first.
+                        stale = self._forget()
+                        if stale is not None and stale.poll() is None:
+                            stop_tree(stale, signal.SIGTERM)
 
     def cancel(self) -> None:
+        """Stop the turn in progress, and the process carrying it.
+
+        A process that was interrupted mid-turn may still be working on the
+        old question, so it is not kept: the next prepare() starts a fresh
+        one with --resume, which is exactly what every turn used to cost.
+        """
         with self._lock:
-            proc = self._proc
-        if proc and proc.poll() is None:
+            proc = self._forget()
+        if proc is not None and proc.poll() is None:
             stop_tree(proc, signal.SIGTERM)

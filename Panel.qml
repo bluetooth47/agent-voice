@@ -2,6 +2,10 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+// Namespaced as well: on Qt 6.12 a bare `Color` resolves to QtQuick's own
+// value-type helper, not to the theme, and every colour read through it was
+// undefined. Omarchy's own QML writes Commons.Color for the same reason.
+import qs.Commons as Commons
 import qs.Ui
 
 // Agent Voice bar widget: one icon, one panel, one switch.
@@ -27,8 +31,8 @@ Panel {
   implicitHeight: button.implicitHeight
 
   // --- Theme ------------------------------------------------------------------
-  readonly property color fg: bar ? bar.foreground : Color.foreground
-  readonly property color urgent: bar ? bar.urgent : Color.urgent
+  readonly property color fg: bar ? bar.foreground : Commons.Color.foreground
+  readonly property color urgent: bar ? bar.urgent : Commons.Color.urgent
   readonly property color dim: Qt.darker(fg, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
@@ -44,6 +48,9 @@ Panel {
   property string lastTranscript: ""
   property int lastMs: 0
   property real lastAudioS: 0
+  // From the moment you stopped talking to the first word back; 0 until a
+  // turn has got that far. The wait people actually notice.
+  property int lastLatencyMs: 0
   property string lastReply: ""
 
   readonly property bool live: serviceActive && vState !== "off"
@@ -73,7 +80,7 @@ Panel {
 
   readonly property color barIconColor: {
     if ((vState === "capture" || vState === "followup") && serviceActive)
-      return bar ? bar.urgent : Color.urgent
+      return bar ? bar.urgent : Commons.Color.urgent
     if (live) return barForeground
     return Qt.darker(barForeground, 1.55)
   }
@@ -334,6 +341,7 @@ Panel {
         if (d.transcript !== undefined) voice.lastTranscript = String(d.transcript)
         if (d.ms !== undefined) voice.lastMs = Math.round(d.ms)
         if (d.audio_s !== undefined) voice.lastAudioS = d.audio_s
+        if (d.latency_ms !== undefined) voice.lastLatencyMs = Math.round(d.latency_ms)
         // level_db is in the state file for `agentvoice status` and the
         // monitor; the panel does not draw a meter, so it is not read here.
         if (d.reply !== undefined) voice.lastReply = String(d.reply)
@@ -401,6 +409,9 @@ Panel {
     // listened for the next question.
     transcript: voice.lastTranscript
     reply: voice.lastReply
+    // A click on the readout opens the whole conversation -- the answer to
+    // "the popup is too small" for anything longer than a glance.
+    onOpenConversation: conversation.running = true
   }
 
   KeyboardPanel {
@@ -625,7 +636,9 @@ Panel {
           font.pixelSize: Style.font.body
         }
         Text {
-          text: voice.lastAudioS.toFixed(1) + "s audio · whisper " + voice.lastMs + "ms"
+          text: voice.lastAudioS.toFixed(1) + "s audio · whisper " + voice.lastMs + "ms" +
+                (voice.lastLatencyMs > 0
+                 ? " · answered in " + (voice.lastLatencyMs / 1000).toFixed(1) + "s" : "")
           color: voice.dim
           font.family: voice.fontFamily
           font.pixelSize: Style.font.caption
@@ -720,8 +733,28 @@ Panel {
           color: voice.dim
           font.family: voice.fontFamily
           font.pixelSize: Style.font.caption
-          width: parent.width - gear.width - Style.spacing.md
+          width: parent.width - gear.width - talk.width - Style.spacing.md * 2
           elide: Text.ElideRight
+        }
+
+        // The whole session, not just the last exchange above.
+        Text {
+          id: talk
+          text: "\uf086   conversation"
+          color: talkHover.containsMouse ? voice.fg : voice.dim
+          font.family: voice.fontFamily
+          font.pixelSize: Style.font.caption
+          MouseArea {
+            id: talkHover
+            anchors.fill: parent
+            anchors.margins: -Style.space(6)
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+              conversation.running = true
+              voice.close()
+            }
+          }
         }
 
         Text {
@@ -750,6 +783,13 @@ Panel {
   Process {
     id: settings
     command: ["omarchy-shell", "shell", "summon", "duaneoca.agentvoice", "{}"]
+  }
+
+  // The same overlay, on its conversation page.
+  Process {
+    id: conversation
+    command: ["omarchy-shell", "shell", "summon", "duaneoca.agentvoice",
+              "{\"mode\":\"history\"}"]
   }
 
 }

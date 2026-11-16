@@ -171,6 +171,61 @@ for two things.
    the stop button in the panel. Deliberately not voice-triggered -- see
    below.
 
+### Knowing where it is without looking
+
+Three short sounds, synthesised at startup and played from PortAudio's own
+thread so none of them holds the loop (`daemon/chimes.py`, **Sounds for
+listening, heard and done**):
+
+  two rising notes    the wake word landed; go ahead
+  one soft note       it heard the end of what you said; the agent is on it
+  a three-note chime  a task that ran 15 seconds or more has finished
+
+Push-to-talk gets no opening sound -- the key is the signal, and you are
+already talking. While a chime sounds, the microphone keeps recording but
+nothing it hears counts as speech: making it deaf instead dropped the whole
+frame after the wake word, and with it the first word of anyone who did not
+pause.
+
+A long task says what it is about to do. The agent is asked for one sentence
+before its first tool call and one at the end, and the reply is spoken the
+moment a tool starts rather than after it finishes -- a sentence needs the
+whitespace that follows it, and before this, "Let me check the logs." waited
+for text that only arrived once the tool was done. Asked for a sentence
+before *every* tool call, Haiku obliged; with a desktop-control loop making a
+hundred of them, speech fell further behind the work with each, so the
+instruction says once.
+
+### Reading it back
+
+The readout that appears while it works sizes itself to what it is showing.
+It was a fixed 280 wide with the question cut at three lines and the answer
+at six -- and the daemon cut the answer at 400 characters before it ever got
+there -- so anything worth reading was an ellipsis. Now it widens to fit, up
+to 40% of the screen; grows taller, up to 60%; and past that it scrolls,
+pinned to the newest sentence as it is spoken unless you scroll back to
+reread. Hovering keeps it open; clicking it opens the whole conversation.
+
+The conversation is the session's exchanges, newest at the bottom, with a
+line where each new conversation began, which turns failed or were stopped,
+and how long each took to answer. The text is selectable, so a path or a
+command the agent read out can be copied rather than retyped. Open it from
+the panel (**conversation**), from the readout, or from the link at the top
+of the settings; in a terminal, `agentvoice history`.
+
+It is kept beside the state file, in the runtime directory: memory only,
+readable by you alone, gone when you log out, never the journal and never
+the disk. **Keep this session's conversation** turns it off, and turning it
+off deletes what is already kept. Clear empties it on the spot.
+
+A failed turn says why: "Claude has hit its usage limit. It resets at
+7 PM.", "Claude needs you to sign in again.", "Claude could not reach its
+service." The error text itself is still never said or logged, because a CLI
+that rejects its input often quotes it back. It is *classified* into a fixed
+list (`daemon/failure.py`), and only the name of the kind reaches the journal
+-- `agent error: limit`. A conversation that has grown too long, or that the
+CLI no longer has, is dropped, since every later turn would fail the same way.
+
 These binds. `install.sh` offers to add them and never overwrites a key
 that is already bound; it backs the file up first and puts it back if
 Hyprland rejects the result. They go in between markers, so `--uninstall`
@@ -338,7 +393,12 @@ far end -- only that it offers no tools itself.
 
 **Remembering is three different mechanisms, and one absence.** Claude
 Code, Codex and Antigravity each keep the conversation themselves and
-hand back a handle -- `--resume`, a `thread_id`, `--conversation`. The
+hand back a handle -- `--resume`, a `thread_id`, `--conversation`.
+Claude Code also keeps its *process*: one is started the moment the wake
+word fires, while you are still talking, takes each turn on stdin as
+stream-json, and is let go after five idle minutes or any stop. Starting one
+per turn cost about a second before the first word, every time; waiting, it
+holds ~230MB. The
 endpoint keeps no server-side session at all, so the transcript is ours:
 it is replayed up the wire every turn, capped at eight turns, and every
 replayed turn is re-read and re-billed. Gemini's headless mode is
@@ -443,8 +503,22 @@ Measured on the target hardware. See `bench/FINDINGS.md`.
 
 **STT** faster-whisper `tiny.en`, in process, with a custom vocabulary
 prompt. 4.9% WER against 6.5% for `base.en` with the same prompt, at
-roughly half the latency, ~320ms after you stop talking. `small.en` is
-disqualified: nearly two seconds of dead air on every turn.
+roughly half the latency. `small.en` is disqualified: nearly two seconds of
+dead air on every turn.
+
+That latency is no longer paid after you stop. The ~320ms this used to quote
+was short benchmark clips; real turns in the journal ran a median of 7.6s and
+1.1s of Whisper on `base.en`, all of it after the last word. Now every pause
+sends what came before it to Whisper in the background, so by the time the
+endpoint has waited out its silence the transcript is usually finished --
+`0ms waited` in the journal. A piece shorter than three seconds is not kept
+on its own; it is heard again as part of a longer one. `daemon/eager.py`.
+
+When the words are already in and read as a finished sentence, a shorter
+pause ends the turn (**Shorter pause when you sound finished**, 800ms; 0
+turns it off). Trailing off with "...", or stopping on "and", "the", "to"
+and the like, still waits the full pause, because being cut off is worse than
+waiting.
 
 **Custom vocabulary** is a first class component, not a tuning knob. A
 fourteen word `initial_prompt` cut domain errors by 41% for 41ms.
@@ -513,12 +587,10 @@ the only filter present is a speaker EQ.
    so it measures the stack as configured rather than the layer under
    test. Keeping the next stranger's attempts as wavs would settle it.
    See `bench/FINDINGS.md` §17.
-2. **Streaming transcription.** faster-whisper cannot start before the
-   utterance ends, which is why Vosk's partials exist at all: they give
-   the screen something to show during the ~320ms wait. Voxtype's
-   `whisper.eager_processing` transcribes overlapping chunks while you
-   are still speaking; whether an equivalent is worth building here is
-   open.
+2. **Streaming transcription.** Answered: worth it, and built -- not as
+   overlapping chunks but by cutting at pauses, where no word can be split.
+   Measured end to end, it took Whisper's 1.0-1.1s on an 8s utterance down
+   to nothing waited. See *Stack* above and `bench/FINDINGS.md` §19.
 3. **Moonshine and Parakeet.** Both are built for low-latency short
    utterances and both appear in Voxtype's ONNX build. Either could beat
    `tiny.en` on the metric that matters -- time after you stop talking.
@@ -708,6 +780,17 @@ whatever `install.sh` last copied, and the panel's install offer runs the one
 in the plugin directory. So installing from a checkout and then clicking that
 offer puts the published daemon back, and a line missing its `build` field is
 a daemon from before this was recorded.
+
+Every answered turn ends with the wait you actually sat through, and
+where it went:
+
+```
+heard → spoke in 2.9s  (pause 1.1s · whisper 0.0s · claude warm 1.7s · first sentence 0.0s · voice 0.1s)
+```
+
+`warm` means the agent was already running when the prompt arrived; `cold`
+means it had to be started for it, which costs Claude Code about a second.
+The panel shows the same number as "answered in".
 
 What it does **not** have is the words. `logSpeech` is off by default,
 because the journal keeps entries for weeks and a reply is whatever the agent

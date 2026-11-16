@@ -593,3 +593,74 @@ Worth noting what this says about `--help` as evidence. Nine CLIs documented
 a headless `-p` form and every one of those forms was real; what no help page
 mentioned was whether the same prompt could arrive privately. The flag was
 never the question.
+
+## 19. The wait after you stop talking, and where it went
+
+Measured 2026-11-15 on the dev machine, `claude` 2.1.325, Whisper `base.en`
+(the setting in use here, not the `tiny.en` default), trailing pause 1600ms.
+
+**From the journal, 82 real turns before any change.** Median 7.6s of audio,
+median Whisper 1105ms (p90 1511ms), all of it after the person had stopped.
+The ~320ms in the README was short benchmark clips on `tiny.en`; real
+utterances are longer. Claude's own "first token" figure was median 3133ms,
+p90 7606ms -- and it is counted from when the request left, so it never
+included starting the CLI.
+
+**Starting `claude -p` per turn costs about a second.** Haiku, trivial prompt,
+`stream-json` output:
+
+| | `system/init` | first text |
+|---|---|---|
+| a process started for the turn | 973ms | 2255ms |
+| the same, `--resume` | 1021ms | 2545ms |
+| a process already running, first turn | 155ms | 1292ms |
+| a process already running, second turn | 31ms | 1404ms |
+
+That second is the CLI coming up and connecting MCP servers (desktop-control
+here), every turn. A waiting process holds ~230MB RSS. `--input-format
+stream-json` keeps stdin open between turns; `--resume` works with it (same
+session id, history intact), and a PreToolUse hook passed with `--settings`
+still fires and still blocks -- checked with a hook that denied a Bash call.
+
+**End to end, real loop, real Whisper, real CLI.** An 8.1s two-part
+utterance (Piper, with a 0.7s pause mid-way) fed to the frame loop at real
+time, wake forced on the first frame, no speaker; timed from the last voiced
+frame to the agent's first words:
+
+| | run 1 | run 2 |
+|---|---|---|
+| before (7dd52b2) | 6.65s | 5.25s |
+| after: pieces at pauses, quick end, warm claude | 2.98s | 3.00s |
+
+After, the line the daemon now prints said `pause 1.1s · whisper 0.0s ·
+claude warm 1.7s` and `pause 1.3s · whisper 0.0s · claude warm 1.6s`.
+Whisper's total work went *up* -- 1634ms and 1979ms across two pieces, against
+1015-1124ms in one -- because a piece cut at a pause is sometimes heard again;
+none of it was waited for. The quick end fired after 1.1-1.3s rather than its
+800ms because the last piece was still in Whisper until then: on `base.en`
+the model's speed, not the setting, is the floor.
+
+## 20. Saying what it is doing, and when the sounds start
+
+Same machine and CLI as §19, Haiku, a scratch folder of three empty files.
+
+**The sentence before a tool was spoken after it.** `iter_sentences` emits a
+sentence when it sees the whitespace that follows it, and merges anything
+under 20 characters forward. A text block that ends in a tool call has no
+whitespace until the next block -- after the tool. With a tool call now
+flushing what is waiting, a real turn spoke its plan at the instant the tool
+started: 3.2s and 6.2s into the turn, each on the same timestamp as the tool
+marker.
+
+**Asked for a sentence "before using tools", Haiku gave one before every
+tool call** -- two plan sentences for two tools in a one-line question. A
+desktop-control session in this machine's journal made 113 screenshot calls
+in one turn. Reworded to one sentence up front, no narration, one at the end:
+"look at each text file one at a time" ran four tools and spoke one plan
+sentence, one change of approach, and the answer.
+
+**The sounds.** `play()` returned in 25-27ms (stream opened, playback handed
+to PortAudio's thread) and the sound then ran for its full length -- 60, 160
+and 290ms -- while the caller went on. The first call in a fresh process took
+1429ms, which is importing sounddevice and initialising PortAudio; the daemon
+has done both for the microphone before any sound is played.

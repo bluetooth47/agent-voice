@@ -7,6 +7,7 @@ desktop level switches the voice too, with nothing to configure twice.
 """
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 from .base import Adapter, Chunk, sentences, speech_safe
@@ -47,7 +48,8 @@ def omarchy_default() -> str | None:
 
 
 def load(name: str | None = None, level: str | None = None,
-         endpoint: dict | None = None, **kwargs) -> Adapter | None:
+         endpoint: dict | None = None, model: str | None = None,
+         **kwargs) -> Adapter | None:
     """Build the adapter for `name`, or for Omarchy's default when omitted.
 
     Returns None when the agent is unset, unknown, or installed-but-unusable
@@ -83,6 +85,11 @@ def load(name: str | None = None, level: str | None = None,
 
     cls = REGISTRY.get(agent)
     if cls is not None:
+        # Only the adapters that take a model are given one; the shared
+        # plain-stdout adapter below has no way to pass it on, and the panel
+        # hides the field for those (see takes_model).
+        if model and takes_model(cls):
+            kwargs["model"] = model
         return finish(cls(**kwargs))
 
     # The remaining nine Omarchy agents share one plain-stdout adapter.
@@ -90,6 +97,19 @@ def load(name: str | None = None, level: str | None = None,
         return finish(CliAgent(agent, **kwargs))
 
     return None
+
+
+def takes_model(adapter) -> bool:
+    """Whether this adapter class, or instance, can be told which model."""
+    if adapter is None:
+        return False
+    cls = adapter if isinstance(adapter, type) else type(adapter)
+    if not issubclass(cls, Adapter) or issubclass(cls, OpenAICompatible):
+        return False                  # an endpoint's model is its own setting
+    try:
+        return "model" in inspect.signature(cls.__init__).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def explain(name: str | None = None) -> str:
@@ -137,5 +157,5 @@ def supported() -> dict[str, str]:
 
 __all__ = ["Adapter", "Antigravity", "Chunk", "ClaudeCode", "CliAgent",
            "Codex", "Gemini", "OpenAICompatible", "load", "omarchy_default",
-           "sentences", "speech_safe", "supported", "REGISTRY",
+           "sentences", "speech_safe", "supported", "takes_model", "REGISTRY",
            "CLI_TEMPLATES"]

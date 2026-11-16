@@ -314,6 +314,15 @@ class Adapter(ABC):
     def send(self, text: str, session_id: str | None = None) -> Iterator[Chunk]:
         """Stream the answer. Pass the previous turn's session_id to continue."""
 
+    def prepare(self, session_id: str | None = None) -> None:
+        """Get ready for a turn that is about to arrive. Default: nothing.
+
+        Called the moment a capture starts, while the person is still
+        talking -- seconds before there is any prompt. A backend with a slow
+        start (Claude Code: ~1s to bring a process up) does it here so the
+        turn does not wait for it. Must not raise and must not block.
+        """
+
     def cancel(self) -> None:
         """Abandon the turn in progress. Default: nothing to abandon."""
 
@@ -329,7 +338,19 @@ SPOKEN_STYLE = (
     "the point, and say them in words a listener can follow. Use short plain "
     "sentences. Keep the whole answer to two or three sentences unless asked "
     "for detail, and lead with the answer rather than the reasoning. If you "
-    "must list things, say them in a sentence joined by 'and'."
+    "must list things, say them in a sentence joined by 'and'. "
+    # A voice cannot show a spinner. A task that runs tools for a minute is a
+    # minute of silence unless the agent says what it is doing -- and the
+    # loop now speaks that sentence the moment the tool starts, rather than
+    # after it. Measured in this machine's journal: median turn 37s, p90 114s,
+    # most of it Bash and screenshots, with nothing heard until the end.
+    # Once, up front: asked to say what it was "about to do", Haiku said a
+    # sentence before every tool call, and a desktop-control loop here makes
+    # a hundred of them -- speech falls further behind the work with each.
+    "When you need tools before you can answer, start with one short "
+    "sentence saying what you are going to do, so the listener knows you are "
+    "working. Then work without narrating each step, and end with one "
+    "sentence on what you did or found."
 )
 
 def speech_safe(text: str) -> str:
@@ -351,7 +372,7 @@ def sentences(chunks: Iterator["Chunk"]) -> Iterator[str]:
     split "2.47 PM" or "J. Smith" and merges fragments too short to speak
     without sounding choppy.
     """
-    from speech_text import iter_sentences
+    from speech_text import FLUSH, iter_sentences
 
     def deltas():
         for chunk in chunks:
@@ -359,5 +380,10 @@ def sentences(chunks: Iterator["Chunk"]) -> Iterator[str]:
                 return
             if chunk.text:
                 yield chunk.text
+            # A tool is starting, so the agent will be quiet for as long as it
+            # runs. What it said before going -- "let me check the logs" -- is
+            # said now, not after.
+            if chunk.tool:
+                yield FLUSH
 
     yield from iter_sentences(deltas())

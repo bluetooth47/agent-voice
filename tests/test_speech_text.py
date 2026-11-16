@@ -180,3 +180,54 @@ class TestStopCommand:
         # The whole point of matching the entire transcript.
         assert not is_stop_command("do not stop the deployment")
         assert not is_stop_command("stop the service please")
+
+
+# --- a tool call flushes what is waiting -------------------------------------
+# "Let me check the logs." before a tool call used to be spoken after the
+# tool had finished: a boundary needs the whitespace that follows it, and a
+# text block that ends in a tool call has none until the next block.
+
+def test_a_flush_speaks_what_is_waiting_before_anything_else_arrives():
+    from speech_text import FLUSH, iter_sentences
+
+    pulled = []
+
+    def stream():
+        for item in ("Let me check the logs.", FLUSH, "They are clean."):
+            pulled.append(item)
+            yield item
+
+    out = iter_sentences(stream())
+    assert next(out) == "Let me check the logs."
+    assert "They are clean." not in pulled, \
+        "the first sentence waited for text that only comes after the tool"
+    assert list(out) == ["They are clean."]
+
+
+def test_a_short_sentence_is_not_held_back_to_merge_across_a_tool():
+    from speech_text import FLUSH, iter_sentences
+    assert list(iter_sentences(["On it.", FLUSH, "Found three files."])) == \
+        ["On it.", "Found three files."]
+
+
+def test_a_flush_with_nothing_waiting_says_nothing():
+    from speech_text import FLUSH, iter_sentences
+    assert list(iter_sentences([FLUSH, "Hello there, friend.", FLUSH, FLUSH])) \
+        == ["Hello there, friend."]
+
+
+def test_a_tool_chunk_is_the_flush():
+    from adapters.base import Chunk, sentences
+    chunks = [Chunk(text="Let me look."), Chunk(tool="Bash"),
+              Chunk(text="Nothing there.")]
+    assert list(sentences(iter(chunks))) == ["Let me look.", "Nothing there."]
+
+
+def test_the_agent_is_asked_to_say_what_it_is_about_to_do():
+    """The flush only helps if there is a sentence to flush."""
+    from adapters.base import SPOKEN_STYLE
+    assert "before you can answer" in SPOKEN_STYLE
+    assert "what you are going to do" in SPOKEN_STYLE
+    # Once. Asked for a sentence before each tool, Haiku obliged, and a
+    # desktop-control loop makes a hundred tool calls.
+    assert "without narrating each step" in SPOKEN_STYLE

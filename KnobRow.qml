@@ -1,5 +1,9 @@
 import QtQuick
 import qs.Commons
+// Namespaced as well: on Qt 6.12 a bare `Color` resolves to QtQuick's own
+// value-type helper, not to the theme, and every colour read through it was
+// undefined. Omarchy's own QML writes Commons.Color for the same reason.
+import qs.Commons as Commons
 import qs.Ui
 
 // A labelled slider that reports its value with a unit and only commits on
@@ -13,7 +17,7 @@ Column {
   // bar items -- so it is null in practice and kept because the component
   // it forwards to declares it.
   property QtObject bar: null
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property color dim: Qt.darker(foreground, 1.55)
   property string fontFamily: Style.font.family
 

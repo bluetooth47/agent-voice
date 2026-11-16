@@ -10,7 +10,10 @@ Three small concerns that the wake loop should not have to know about:
 from __future__ import annotations
 
 import json
+import os
+import re
 import threading
+import time
 import tomllib
 from pathlib import Path
 
@@ -20,6 +23,11 @@ PLUGIN_ID = "duaneoca.agentvoice"
 
 # Mirrors manifest.json's barWidget.defaults. Duplicated deliberately: the
 # daemon has to run with no plugin installed and no config file present.
+#: What a model name may look like: "sonnet", "claude-opus-5-5",
+#: "gpt-5.1-codex", "anthropic/claude[1m]". No leading dash, so it can never be
+#: read as a flag, and no whitespace, so it is always exactly one argument.
+_MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,127}")
+
 DEFAULTS = {
     "engine": "vosk",
     "phrase": "hey computer",
@@ -27,6 +35,7 @@ DEFAULTS = {
     "owwThresholdPct": 90,
     "leadInMs": 5000,
     "trailingSilenceMs": 1200,
+    "quickEndMs": 800,
     "minUtteranceMs": 400,
     "maxUtteranceMs": 30000,
     "micThresholdDb": -38,
@@ -38,6 +47,8 @@ DEFAULTS = {
     "wakeConfidencePct": 70,
     "model": "tiny.en",
     "speakReplies": True,
+    "chimes": True,
+    "keepHistory": True,
     "livePartials": "auto",
     "bargeIn": False,
     # Every declared setting needs a default here: the check script requires
@@ -48,6 +59,7 @@ DEFAULTS = {
     "hudLingerMs": 2000,
     "bargeFactor": 150,
     "permissions": {},
+    "agentModels": {},
     "projectDir": "",
     "endpointUrl": "",
     "endpointModel": "",
@@ -68,6 +80,7 @@ TOML_ALIASES = {
     "owwThresholdPct": ("wake", "oww_threshold_pct"),
     "leadInMs": ("timing", "lead_in_ms"),
     "trailingSilenceMs": ("timing", "trailing_silence_ms"),
+    "quickEndMs": ("timing", "quick_end_ms"),
     "minUtteranceMs": ("timing", "min_utterance_ms"),
     "maxUtteranceMs": ("timing", "max_utterance_ms"),
     "model": ("stt", "model"),
@@ -85,8 +98,11 @@ TOML_ALIASES = {
     "useVerifier": ("wake", "use_verifier"),
     "hud": ("ui", "hud"),
     "hudLingerMs": ("ui", "hud_linger_ms"),
+    "chimes": ("ui", "chimes"),
+    "keepHistory": ("ui", "keep_history"),
     "bargeFactor": ("audio", "barge_factor"),
     "permissions": ("agent", "permissions"),
+    "agentModels": ("agent", "models"),
     "projectDir": ("agent", "project_dir"),
     "endpointUrl": ("agent", "endpoint_url"),
     "endpointModel": ("agent", "endpoint_model"),
@@ -232,6 +248,88 @@ class Config:
         value = raw.get(agent)
         return value if value in ("ask", "edits", "trusted") else "ask"
 
+    def model_for(self, agent: str | None) -> str | None:
+        """The model chosen for this agent, or None for the CLI's own default.
+
+        Per agent for the same reason levels are: "sonnet" means something to
+        Claude Code and nothing to Codex, so a name chosen for one must not be
+        handed to whatever `omarchy default agent` is switched to next.
+
+        The value becomes an argv element after `--model`, so anything that
+        could be read as a flag or is not plainly a model name reads as unset.
+        """
+        raw = self["agentModels"]
+        if not isinstance(raw, dict) or not agent:
+            return None
+        value = raw.get(agent)
+        if not isinstance(value, str):
+            return None
+        value = value.strip()
+        if not value or not _MODEL_NAME.fullmatch(value):
+            return None
+        return value
+
+
+#: How much of a reply travels to the screen. It was 400 characters, which
+#: cut a long answer off mid-sentence in the very readout meant for reading it
+#: -- "the popup is too small" was partly this. The state file is rewritten
+#: once per sentence, in tmpfs, so a few kilobytes cost nothing.
+REPLY_MAX = 8000
+
+#: Exchanges kept for the conversation view. A session is rarely more.
+HISTORY_MAX = 200
+
+
+class History:
+    """The session's exchanges, for the conversation view.
+
+    Beside the state file, in the runtime directory: tmpfs, 0600, gone at
+    logout -- the same place and the same lifetime as the current exchange
+    the panel already shows, kept for the session rather than for one turn.
+    Never the journal, which keeps weeks, and never anywhere on disk. That is
+    the line logSpeech draws, and this stays on the right side of it.
+
+    One JSON object per line, appended as each turn ends, so the screen can
+    watch the file and add what is new without re-reading the rest.
+    """
+
+    def __init__(self, path: Path | None = None) -> None:
+        self.path = path or RUNTIME_DIR / "history.jsonl"
+
+    def append(self, entry: dict) -> None:
+        line = json.dumps(entry, ensure_ascii=False) + "\n"
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+                         0o600)
+            # Tightened even if it already existed: a file somebody else made
+            # loose is still holding what was said.
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
+                f.write(line)
+            self._trim()
+        except OSError:
+            # A readout, not a record anything depends on. Losing it must
+            # not cost the turn -- the same rule as the state file.
+            pass
+
+    def _trim(self) -> None:
+        lines = self.path.read_text(encoding="utf-8").splitlines()
+        if len(lines) <= HISTORY_MAX:
+            return
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text("\n".join(lines[-HISTORY_MAX:]) + "\n", encoding="utf-8")
+        tmp.chmod(0o600)
+        tmp.replace(self.path)
+
+    def clear(self) -> None:
+        try:
+            self.path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
 
 class StateFile:
     """What the daemon is doing, written where the bar widget can watch it.
@@ -350,6 +448,9 @@ class Speaker:
         #: changed setting and reload Piper on every reload.
         self.requested = substituted or voice
         self._stop = threading.Event()
+        #: When the last say() put its first sound out, by the wall clock. The
+        #: end of the turn's latency: everything before it is silence.
+        self.first_audio_at: float | None = None
 
     def superseded(self) -> bool:
         """True when the voice originally asked for has since been downloaded.
@@ -417,6 +518,7 @@ class Speaker:
         import sounddevice as sd
 
         self._stop.clear()
+        self.first_audio_at = None
         total = 0.0
         slice_n = max(1, int(self._rate * SLICE_MS / 1000))
         with sd.OutputStream(samplerate=self._rate, channels=1,
@@ -434,6 +536,8 @@ class Speaker:
                         if self._stop.is_set():
                             break
                         out.write(pcm[at:at + slice_n])
+                        if self.first_audio_at is None:
+                            self.first_audio_at = time.time()
                         total += len(pcm[at:at + slice_n]) / self._rate
                         if watch is not None and watch():
                             self._stop.set()
