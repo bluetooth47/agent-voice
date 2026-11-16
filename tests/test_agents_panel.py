@@ -252,3 +252,14 @@ def test_simulate_never_appears_in_the_panel():
     sim = src.index("return run_simulated(pipe, speaker, args.simulate, daemon)")
     made = src.index("daemon.panel = AgentsPanel(")
     assert sim < made
+
+
+def test_a_systemd_stop_runs_the_cleanup():
+    """systemd stops with SIGTERM, whose default skips `finally`: the panel
+    was left saying "Listening to you" after a stop, and the pidfile stayed.
+    Checked live: start, wake, `agentvoice stop`, and the record reads Off."""
+    src = (ROOT / "daemon/wake_listen.py").read_text()
+    handler = src.index("signal.signal(signal.SIGTERM, _stopped)")
+    assert "raise SystemExit(0)" in src[src.index("def _stopped"):handler]
+    assert handler < src.index("    state = StateFile()\n    panel = None")
+    assert src.index("panel.stopped()") > src.index("    finally:\n        state.clear()")

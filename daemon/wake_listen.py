@@ -3289,6 +3289,16 @@ def main() -> int:
             print(f"  {YEL}no agent: {explain_agent(which)}"
                   f"; echoing instead{OFF}")
 
+    # systemd stops the service with SIGTERM, whose default disposition
+    # skips `finally`: the pidfile below was never removed, and the Agents
+    # panel was left saying whatever the agents were doing at the moment of
+    # the stop ("Listening to you") instead of Off. A stop is a normal
+    # unwind, the same as the Ctrl-C a terminal run already gets.
+    def _stopped(signum, _frame):
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _stopped)
+
     state = StateFile()
     panel = None
     try:
