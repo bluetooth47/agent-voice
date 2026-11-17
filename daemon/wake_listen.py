@@ -224,6 +224,21 @@ EXTRA_PHONES = {
 }
 
 
+#: Second pronunciations listened for alongside the dictionary's. A short
+#: name gets few chances to land, and the model hears "Theo" as either
+#: ending: on synthesized clips TH IY1 OW0 alone woke 8/30, both 9/30.
+ALT_PHONES = {
+    "theo": [["TH", "IY1", "AH0"]],
+}
+
+#: Phrases this many phones or shorter get SHORT_BOOST instead of
+#: SHERPA_BOOST: a three-phone name has too little sound for the decoder to
+#: settle on at 0.5. Measured for "theo": 0.5 -> 5/30, 1.5 -> 8/30 with no
+#: false wakes, 3.0 -> 4/30 plus "Thank you"/"Rodeo" waking it.
+SHORT_PHONES = 3
+SHORT_BOOST = 1.5
+
+
 def sherpa_lexicon(model_dir: Path, words) -> dict[str, list[str]]:
     """The CMU-style phones for each of `words` the model's lexicon has.
 
@@ -253,9 +268,14 @@ def sherpa_keywords(phrases, lexicon: dict[str, list[str]],
     """
     lines = []
     for phrase in phrases:
-        phones = [p for word in phrase.split() for p in lexicon[word]]
-        lines.append(f"{' '.join(phones)} :{SHERPA_BOOST} #{threshold:.2f} "
-                     f"@{phrase.replace(' ', '_')}")
+        spellings = [[]]
+        for word in phrase.split():
+            options = [lexicon[word], *ALT_PHONES.get(word, [])]
+            spellings = [s + o for s in spellings for o in options]
+        for phones in spellings:
+            boost = SHORT_BOOST if len(phones) <= SHORT_PHONES else SHERPA_BOOST
+            lines.append(f"{' '.join(phones)} :{boost} #{threshold:.2f} "
+                         f"@{phrase.replace(' ', '_')}")
     return "\n".join(lines)
 
 

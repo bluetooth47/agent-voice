@@ -36,6 +36,7 @@ HEY HH EY1
 SARAH S EH1 R AH0
 SARAH S AA1 R AH0
 JARVIS JH AA1 R V IH0 S
+THEO TH IY1 OW0
 """
 
 
@@ -63,6 +64,19 @@ def test_a_keyword_line_is_phones_boost_threshold_and_a_tag(model):
         f"HH EY1 S EH1 R AH0 :{wake_listen.SHERPA_BOOST} #0.30 @hey_sarah",
     ]
 
+
+
+def test_a_short_name_gets_both_readings_and_the_stronger_pull(model):
+    import wake_listen
+    lex = wake_listen.sherpa_lexicon(model, ["hey", "theo"])
+    text = wake_listen.sherpa_keywords(["theo", "hey theo"], lex, 0.25)
+    short, long = wake_listen.SHORT_BOOST, wake_listen.SHERPA_BOOST
+    assert text.splitlines() == [
+        f"TH IY1 OW0 :{short} #0.25 @theo",
+        f"TH IY1 AH0 :{short} #0.25 @theo",
+        f"HH EY1 TH IY1 OW0 :{long} #0.25 @hey_theo",
+        f"HH EY1 TH IY1 AH0 :{long} #0.25 @hey_theo",
+    ]
 
 # --- the real class, against a stand-in library ------------------------------
 
@@ -198,8 +212,8 @@ def test_it_listens_for_the_phrase_and_the_names(monkeypatch, tmp_path):
     pipe.apply(cfg)
     assert pipe.engine == "sherpa"
     assert pipe._sherpa.phrases == ["computer", "sarah"]
-    assert pipe._sherpa.threshold == pytest.approx(0.25)
-    assert pipe.detection_threshold == pytest.approx(0.25)
+    assert pipe._sherpa.threshold == pytest.approx(0.15)
+    assert pipe.detection_threshold == pytest.approx(0.15)
     assert pipe._vosk_built == []
 
 
