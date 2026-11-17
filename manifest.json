@@ -296,7 +296,7 @@
         "type": "bool",
         "label": "Keep listening after a reply",
         "defaultValue": true,
-        "description": "Carry on without repeating the wake word. Say 'stop', 'cancel that' or 'never mind' to end the exchange, or just stay quiet."
+        "description": "Carry on without repeating the wake word. Say 'goodbye' (or 'stop', 'never mind') to end the exchange, or just stay quiet. 'Full stop' stops every agent at once."
       },
       {
         "key": "yieldToRecorders",

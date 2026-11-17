@@ -855,3 +855,23 @@ unbounded, so nothing said in that second is lost. It is setting
 `wakeCrossCheck`, on by default, and it keeps the Vosk model resident
 (114MB, §10) on the sherpa engine. Synthesized speech again: the live miss
 rate decides whether it earns its keep.
+
+## 25. What Whisper writes for "goodbye" and "full stop"
+
+2026-11-17. Piper (ryan, amy, lessac medium; en_GB alan medium) said each
+phrase, padded with 0.25s silence before and 0.5s after, transcribed by
+faster-whisper base.en (int8, beam 1, vocab.txt as the prompt) -- the
+user's configured model.
+
+- "Full stop." / "Full stop!" came back as the words in 8 of 8 clips
+  ("Full stop", "Full stop.", "Full stop!"), never as a bare ".". Safe to
+  match on.
+- "Stop everything" and "Everybody stop": 4/4 each, as words.
+- "Goodbye": 4/4. "Bye bye": 4/4, written "Bye bye" or "Bye-bye".
+  "See you later": 4/4. "Okay, thanks, goodbye" and "That's all, goodbye":
+  4/4.
+- "Bye." alone: 3/4. Ryan's came back as "Die!", so a bare "bye" can miss;
+  "goodbye" is the one to say.
+
+Synthetic voices, no room noise: this says the transcripts have the right
+words, not how often a real "goodbye" across a room gets through.

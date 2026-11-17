@@ -215,7 +215,58 @@ _STOP_PHRASES = frozenset({
 })
 
 
-def is_stop_command(text: str) -> bool:
-    """True when the transcript is a stop command and nothing else."""
+# Ways of saying the conversation is over. They end it the way a stop does
+# -- nothing is sent, no follow-up window opens -- so the microphone goes
+# back to waiting for the wake word instead of taking the next thing said in
+# the room as a turn. Whisper writes "bye bye" as "Bye-bye", which the
+# normalizer turns back into two words.
+_GOODBYES = frozenset({
+    "goodbye", "good bye", "bye", "bye bye", "bye for now", "see you",
+    "see you later", "see ya", "talk to you later", "talk later",
+    "thats all", "thats it", "im done", "were done", "good night",
+    "goodnight",
+})
+
+# Said in front of a goodbye without changing what it means: "okay, thanks,
+# goodbye". Only ever stripped from the front, so "goodbye okay" is not one.
+_GOODBYE_LEAD = frozenset({
+    "ok", "okay", "alright", "all", "right", "thanks", "thank", "you",
+    "great", "cool", "perfect", "and", "so", "well", "thats",
+})
+
+# Stop every agent at once, not only the one the turn was for. Measured with
+# Whisper base.en on four Piper voices: "Full stop" came back as the words in
+# 8 of 8 clips, never as a bare ".".
+_FULL_STOPS = frozenset({
+    "full stop", "stop everything", "everybody stop", "everyone stop",
+    "stop all", "stop all of it", "emergency stop", "all stop",
+})
+
+
+def _normalize(text: str) -> str:
     norm = re.sub(r"[^a-z ]+", " ", text.lower().replace("'", ""))
-    return " ".join(norm.split()) in _STOP_PHRASES
+    return " ".join(norm.split())
+
+
+def is_goodbye(text: str) -> bool:
+    """True when the transcript says the conversation is over, and no more."""
+    words = _normalize(text).split()
+    while words and " ".join(words) not in _GOODBYES and words[0] in _GOODBYE_LEAD:
+        words = words[1:]
+    return bool(words) and " ".join(words) in _GOODBYES
+
+
+def is_full_stop(text: str) -> bool:
+    """True when the transcript asks for everything to stop."""
+    return _normalize(text) in _FULL_STOPS
+
+
+def is_stop_command(text: str) -> bool:
+    """True when the transcript is a stop command and nothing else.
+
+    A goodbye and a full stop count: each ends the exchange, so every place
+    that already discards a stop discards those too. Callers that must do
+    more for a full stop check is_full_stop() first.
+    """
+    norm = _normalize(text)
+    return norm in _STOP_PHRASES or is_full_stop(norm) or is_goodbye(norm)

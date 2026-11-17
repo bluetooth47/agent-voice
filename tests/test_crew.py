@@ -621,6 +621,30 @@ class TestWhoItIsFor:
         assert crew.crew["friday"].agent.sent == ["long job"]
         assert crew._main.agent.sent == []
 
+    def test_full_stop_stops_every_agent_whoever_it_was_said_to(self, crew):
+        gates = {}
+        for p in crew.personas():
+            gates[p.name] = p.agent.wait = threading.Event()
+        crew.dispatch(crew._main, "job a", {})
+        crew.dispatch(crew.crew["friday"], "job b", {})
+        assert _until(lambda: crew._main.busy and crew.crew["friday"].busy)
+        crew.crew["jarvis"].follow_up = True
+        crew._send(crew.crew["jarvis"], "Jarvis, full stop.", {}, {})
+        assert crew._main.interrupt.is_set()
+        assert crew.crew["friday"].interrupt.is_set()
+        assert not crew.crew["jarvis"].follow_up
+        for g in gates.values():
+            g.set()
+        _wait_idle(crew)
+        assert crew.crew["jarvis"].agent.sent == []
+
+    def test_goodbye_closes_that_agents_window_and_sends_nothing(self, crew):
+        crew.crew["friday"].follow_up = True
+        crew._send(crew.crew["friday"], "Okay, thanks, goodbye.", {}, {})
+        _wait_idle(crew)
+        assert not crew.crew["friday"].follow_up
+        assert crew.crew["friday"].agent.sent == []
+
     def test_waking_a_busy_agent_stops_it_and_only_it(self, crew):
         gate = threading.Event()
         for p in crew.personas():

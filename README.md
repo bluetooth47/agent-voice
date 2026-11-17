@@ -176,6 +176,16 @@ for two things.
    you say is your next request, with no wake word. Through speakers, press
    F8 while it is replying, or Super+Ctrl+Space, or the stop button in the
    panel -- voice cannot work over the reply there, see below.
+5. **Goodbye.** In a conversation, say "goodbye" (or "bye", "see you
+   later", "okay thanks, goodbye") and it stops listening for a follow-up
+   and goes back to waiting for the wake word. "Stop", "cancel that" and
+   "never mind" do the same. Only the whole sentence counts, so "write a
+   goodbye email" is still sent.
+6. **Full stop.** Say "full stop" (or "stop everything", "everybody stop")
+   and every agent stops at once -- each one's turn, its voice and its
+   follow-up window -- even if you said it to just one of them. The
+   microphone stays on, waiting for the wake word. While an agent is
+   working, say the wake word first: "computer, full stop".
 
 ### Knowing where it is without looking
 

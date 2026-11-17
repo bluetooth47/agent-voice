@@ -3,7 +3,7 @@
 Every case here is one that only shows up when you listen to the output.
 """
 from speech_text import (
-    as_prompt, iter_sentences, is_stop_command, make_speakable,
+    as_prompt, is_full_stop, is_goodbye, iter_sentences, is_stop_command, make_speakable,
 )
 
 
@@ -180,6 +180,41 @@ class TestStopCommand:
         # The whole point of matching the entire transcript.
         assert not is_stop_command("do not stop the deployment")
         assert not is_stop_command("stop the service please")
+
+
+class TestGoodbye:
+    def test_what_whisper_wrote_for_it(self):
+        # Transcripts from FINDINGS: Whisper base.en on four Piper voices.
+        for t in (" Goodbye!", " Bye", " Bye-bye!", " See you later!",
+                  " Okay, thanks, goodbye.", " That's all, goodbye."):
+            assert is_goodbye(t), t
+            assert is_stop_command(t), t
+
+    def test_politeness_alone_is_not_a_goodbye(self):
+        for t in ("thank you", "okay", "thanks", "all right"):
+            assert not is_goodbye(t), t
+
+    def test_a_sentence_with_goodbye_in_it_is_still_sent(self):
+        for t in ("write a goodbye email to the team",
+                  "say goodbye to the old config", "goodbye okay"):
+            assert not is_goodbye(t), t
+            assert not is_stop_command(t), t
+
+
+class TestFullStop:
+    def test_recognised(self):
+        for t in (" Full stop", " Full stop!", " Stop everything!",
+                  " Everybody stop."):
+            assert is_full_stop(t), t
+            assert is_stop_command(t), t
+
+    def test_an_ordinary_stop_is_not_a_full_stop(self):
+        for t in ("stop", "cancel that", "goodbye"):
+            assert not is_full_stop(t), t
+
+    def test_only_the_whole_transcript_counts(self):
+        assert not is_full_stop("put a full stop at the end of the line")
+        assert not is_stop_command("put a full stop at the end of the line")
 
 
 # --- a tool call flushes what is waiting -------------------------------------

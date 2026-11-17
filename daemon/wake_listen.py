@@ -56,7 +56,7 @@ from chimes import Chimes  # noqa: E402
 from eager import Utterance, sounds_finished  # noqa: E402
 import headset  # noqa: E402
 from speech_text import (  # noqa: E402
-    as_prompt, is_stop_command, safe_for_terminal,
+    as_prompt, is_full_stop, is_goodbye, is_stop_command, safe_for_terminal,
 )
 from runtime import (  # noqa: E402
     REPLY_MAX, RUNTIME_DIR, Config, History, Speaker, StateFile, instructions_text, speed_pct,
@@ -1819,6 +1819,24 @@ class Daemon:
             self.agent.cancel()
         print(f"\n  {YEL}interrupted{OFF}")
 
+    def full_stop(self) -> None:
+        """Stop everything: every agent's turn, every voice, every window.
+
+        What "full stop" does. Unlike the keybind it is not a no-op when
+        nothing is busy, because it also closes each agent's follow-up
+        window, so nobody is left listening for a next turn. The microphone
+        stays on and waits for the wake word: muting it would leave no way
+        back by voice.
+        """
+        for p in self.personas():
+            p.follow_up = False
+            if p.busy:
+                p.stop()
+        # With one agent there is nothing else to stop: its turn runs on this
+        # thread, so by the time a transcript is read it is already over, and
+        # the wake word that let "full stop" be heard has stopped any reply.
+        print(f"  {YEL}full stop — everything stopped{OFF}", flush=True)
+
     def take_command(self) -> str | None:
         """One-shot commands from the CLI, for what a signal cannot carry.
 
@@ -2946,7 +2964,11 @@ class Daemon:
             if not text:
                 print(f"  {DIM}(only a name — nothing to send){OFF}")
                 return
+        if is_full_stop(text):
+            self.full_stop()
+            return
         if is_stop_command(text):
+            p.follow_up = False
             if p.busy:
                 p.stop()
                 print(f"  {DIM}(stopping {p.name}){OFF}")
@@ -3464,6 +3486,15 @@ class Daemon:
                         # regardless. Discard the turn instead.
                         stopped.clear()
                         print(f"  {DIM}(interrupted before sending){OFF}")
+                        follow_up = False
+                    elif text and is_full_stop(text):
+                        # Before routing: "Sarah, full stop" still means all
+                        # of them, and route() would otherwise hand it to
+                        # Sarah alone.
+                        self.full_stop()
+                        follow_up = False
+                    elif text and is_goodbye(text):
+                        print(f"  {DIM}(goodbye — waiting for the wake word){OFF}")
                         follow_up = False
                     elif text and is_stop_command(text):
                         print(f"  {DIM}(stopping){OFF}")
