@@ -44,7 +44,7 @@
       "engine": "vosk",
       "owwModel": "hey_jarvis",
       "owwThresholdPct": 90,
-      "sherpaThresholdPct": 25,
+      "sherpaThresholdPct": 15,
       "conversationMode": true,
       "followUpMs": 7000,
       "livePartials": "auto",
@@ -280,7 +280,7 @@
         "min": 10,
         "max": 60,
         "step": 5,
-        "defaultValue": 25,
+        "defaultValue": 15,
         "description": "Higher rejects more sound-alikes and misses more real wakes. On synthesized speech 15-35 all caught the same wakes; 50 lost about half (FINDINGS §23)."
       },
       {

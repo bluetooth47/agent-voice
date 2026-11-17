@@ -158,7 +158,7 @@ Column {
       help: "Measured on synthesized speech: anywhere from 15 to 35 caught the same " +
             "wakes, and higher mostly cut sound-alikes such as \"Sarong\" for \"Sarah\". " +
             "At 50 it missed about half the real ones."
-      value: page.s.setting("sherpaThresholdPct", 25)
+      value: page.s.setting("sherpaThresholdPct", 15)
       defaultValue: page.s.defaults.sherpaThresholdPct !== undefined ? page.s.defaults.sherpaThresholdPct : NaN
       changed: page.s.changed("sherpaThresholdPct")
       minimum: 10; maximum: 60; stepSize: 5

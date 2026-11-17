@@ -98,7 +98,7 @@ DEFAULTS = {
     "owwThresholdPct": 90,
     # sherpa-onnx keywords_threshold, as a percent like the others. 25 is the
     # library's default and held up in FINDINGS §23; 50 lost half the wakes.
-    "sherpaThresholdPct": 25,
+    "sherpaThresholdPct": 15,
     "leadInMs": 5000,
     "trailingSilenceMs": 1200,
     "quickEndMs": 800,
