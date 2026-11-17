@@ -217,6 +217,13 @@ SHERPA_BOOST = 0.5
 _SHERPA_NEVER = "ZH ZH ZH ZH ZH ZH ZH ZH :0.01 #1.0 @_never"
 
 
+#: Names the bundled en.phone lacks, spelled from its neighbours (SOR is
+#: S AO1 R there). Only consulted for a word the file does not have.
+EXTRA_PHONES = {
+    "SORA": ["S", "AO1", "R", "AH0"],
+}
+
+
 def sherpa_lexicon(model_dir: Path, words) -> dict[str, list[str]]:
     """The CMU-style phones for each of `words` the model's lexicon has.
 
@@ -231,6 +238,9 @@ def sherpa_lexicon(model_dir: Path, words) -> dict[str, list[str]]:
             parts = line.split()
             if parts and parts[0] in want and parts[0] not in found:
                 found[parts[0]] = parts[1:]
+    for w in want - found.keys():
+        if w in EXTRA_PHONES:
+            found[w] = EXTRA_PHONES[w]
     return {w.lower(): p for w, p in found.items()}
 
 
@@ -3496,6 +3506,23 @@ def run_simulated(pipe: Pipeline, speaker: Speaker | None, wav: Path,
     return 0
 
 
+def forget_chat_grants() -> int:
+    """Drop every "allow everything in this chat" left from a previous run.
+
+    A grant is scoped to one conversation already, but a restarted service is
+    a natural line to draw under them: whoever allowed a conversation
+    wholesale did it for the session in front of them, not for one resumed
+    after a restart. Returns how many went."""
+    gone = 0
+    for f in (RUNTIME_DIR / "grants").glob("*"):
+        try:
+            f.unlink()
+            gone += 1
+        except OSError:
+            pass
+    return gone
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--whisper", default=None, help="override the configured model")
@@ -3508,6 +3535,7 @@ def main() -> int:
 
     cfg = Config()
     print(f"  {DIM}knobs: {cfg.source} · build {build_id()}{OFF}")
+    forget_chat_grants()
 
     # Writing new files with the right mode does nothing for the ones already
     # there. Somebody who trained a verifier while these directories were

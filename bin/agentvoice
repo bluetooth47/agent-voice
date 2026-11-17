@@ -21,7 +21,7 @@
 #   agentvoice calibrate           can this room support barge-in?
 #   agentvoice monitor             live wake-word scores, for tuning
 #   agentvoice voice fetch|sample|remove <voice>   the Voice page's library
-#   agentvoice permit <id> allow|deny   answer a pending permission request
+#   agentvoice permit <id> allow|allow-session|deny   answer a pending permission request
 #   agentvoice pending             the request waiting for an answer, as JSON
 set -euo pipefail
 
@@ -148,7 +148,7 @@ case "${1:-status}" in
     ;;
   permit)
     # Answer a pending permission request. The overlay calls this; so can you.
-    #   agentvoice permit <id> allow|deny
+    #   agentvoice permit <id> allow|allow-session|deny
     id="${2:-}"; verdict="${3:-deny}"
     # The id is a filename, so it is checked rather than trusted: the hook
     # makes it from twelve hex characters, and `../../x` would otherwise write
@@ -160,6 +160,10 @@ case "${1:-status}" in
     D="$RUNDIR/permissions"
     if [[ $verdict == allow ]]; then
       printf '{"allow":true}' > "$D/$id.response"
+    elif [[ $verdict == allow-session ]]; then
+      # This request, and everything else this agent asks in this
+      # conversation. The hook keeps the grant; a new conversation ends it.
+      printf '{"allow":true,"session":true}' > "$D/$id.response"
     else
       printf '{"allow":false,"reason":"denied at the desktop"}' > "$D/$id.response"
     fi

@@ -314,7 +314,7 @@ class TestContentSearch:
                                      "credentials.json": "token\n"})
         monkeypatch.setattr(hook, "_settings", lambda: ("ask", None))
         monkeypatch.setattr(hook, "_ask",
-                            lambda t, i, note="": ("deny", note))
+                            lambda t, i, note="", session="": ("deny", note))
         decision, note = hook.decide("Grep", {"pattern": "token", "path": root})
         assert decision != "allow"
         assert "credentials.json" in note, \
@@ -338,7 +338,7 @@ class TestContentSearch:
         root = self._repo(tmp_path, {"app.py": "x=1\n", ".env": "TOKEN=abc\n"},
                           ignore=".env\n")
         monkeypatch.setattr(hook, "_settings", lambda: ("ask", None))
-        monkeypatch.setattr(hook, "_ask", lambda t, i, note="": ("deny", note))
+        monkeypatch.setattr(hook, "_ask", lambda t, i, note="", session="": ("deny", note))
         assert hook.decide("Grep", {"pattern": "x", "path": root})[0] == "allow"
 
     def test_the_bare_walk_is_the_conservative_one(self, tmp_path, monkeypatch):
@@ -349,7 +349,7 @@ class TestContentSearch:
         root = self._repo(tmp_path, {"app.py": "x=1\n", ".env": "TOKEN=abc\n"},
                           ignore=".env\n")
         monkeypatch.setattr(hook, "_settings", lambda: ("ask", None))
-        monkeypatch.setattr(hook, "_ask", lambda t, i, note="": ("deny", note))
+        monkeypatch.setattr(hook, "_ask", lambda t, i, note="", session="": ("deny", note))
 
         def nothing(*a, **k):
             raise FileNotFoundError("no rg, no git")
@@ -377,7 +377,7 @@ class TestContentSearch:
                                                        monkeypatch):
         root = self._repo(tmp_path, {"credentials.json": "token\n"})
         monkeypatch.setattr(hook, "_settings", lambda: ("ask", None))
-        monkeypatch.setattr(hook, "_ask", lambda t, i, note="": ("deny", note))
+        monkeypatch.setattr(hook, "_ask", lambda t, i, note="", session="": ("deny", note))
 
         def no_rg(*a, **k):
             raise FileNotFoundError("rg")
@@ -398,7 +398,7 @@ class TestContentSearch:
         monkeypatch.setattr(hook, "_settings", lambda: ("ask", None))
         monkeypatch.setattr(hook, "_searchable", lambda root: None)
         monkeypatch.setattr(hook, "_ask",
-                            lambda t, i, note="": ("deny", note))
+                            lambda t, i, note="", session="": ("deny", note))
         decision, note = hook.decide("Grep", {"pattern": "x", "path": "/"})
         assert decision != "allow"
         assert "too large" in note
@@ -445,7 +445,7 @@ class TestContentSearch:
 
         root = self._repo(tmp_path, {"app.py": "x=1\n", ".env": "TOKEN=abc\n"})
         monkeypatch.setattr(hook, "_settings", lambda: ("ask", None))
-        monkeypatch.setattr(hook, "_ask", lambda t, i, note="": ("deny", note))
+        monkeypatch.setattr(hook, "_ask", lambda t, i, note="", session="": ("deny", note))
         decision, note = hook.decide("Grep", {"pattern": "x", "path": str(root)})
         assert decision == "deny"
         assert ".env" in note

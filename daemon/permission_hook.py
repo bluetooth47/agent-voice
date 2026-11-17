@@ -19,6 +19,7 @@ nobody is at the screen -- is the thing this exists to prevent.
 from __future__ import annotations
 
 import json
+import re
 import os
 import signal
 import subprocess
@@ -31,6 +32,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paths import CONFIG_DIR, RUNTIME_DIR, scope_root  # noqa: E402
 
 PENDING = RUNTIME_DIR / "permissions"
+
+#: "Allow everything in this chat": one file per conversation that the user
+#: allowed wholesale from the prompt. Keyed by Claude Code's session id, which
+#: --resume keeps (checked against the real CLI), so it holds across the turns
+#: of one conversation and ends with it -- a new conversation is a new id.
+#: The daemon empties this directory when it starts.
+GRANTS = RUNTIME_DIR / "grants"
+
+#: Claude Code's session ids are UUIDs. Anything else is not one, and gets
+#: no grant either way.
+_SESSION = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
 def _timeout() -> float:
@@ -361,9 +373,69 @@ def _search_would_read(tool_input: dict) -> list[str] | None:
     return [f for f in files if _is_secret(f)]
 
 
-def decide(tool_name: str, tool_input: dict) -> tuple[str, str]:
+def _grant_file(session: str) -> Path:
+    """Where the grant for `session` lives, for this agent. Named by a hash of
+    who is asking and the session, so two agents never share a grant and the
+    id is never trusted as a filename."""
+    import hashlib
+    agent = sys.argv[1] if len(sys.argv) > 1 else ""
+    key = f"{agent}\0{_named()}\0{session}".encode()
+    return GRANTS / (hashlib.sha256(key).hexdigest()[:32] + ".grant")
+
+
+def granted(session: str) -> bool:
+    """True only for a grant this user wrote, for exactly this conversation.
+
+    Every way of being unsure is a no: a missing or malformed id, a file that
+    is a symlink, belongs to someone else or is writable by anyone else, or
+    holds anything but the record `grant()` writes. A no here is not a
+    denial -- it just means the question is asked as usual."""
+    try:
+        if not _SESSION.fullmatch(session or ""):
+            return False
+        path = _grant_file(session)
+        st = os.lstat(path)
+        import stat as _stat
+        if (not _stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid()
+                or st.st_mode & 0o077):
+            return False
+        record = json.loads(path.read_text())
+        return (isinstance(record, dict) and record.get("session") == session
+                and record.get("agent") == (sys.argv[1] if len(sys.argv) > 1 else "")
+                and record.get("who") == _named())
+    except Exception:
+        return False
+
+
+def grant(session: str) -> bool:
+    """Remember "allow everything" for this conversation. False if it could not."""
+    try:
+        if not _SESSION.fullmatch(session or ""):
+            return False
+        GRANTS.mkdir(parents=True, exist_ok=True, mode=0o700)
+        GRANTS.chmod(0o700)
+        path = _grant_file(session)
+        staged = path.with_suffix(f".{os.getpid()}.staging")
+        fd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"session": session, "who": _named(),
+                       "agent": sys.argv[1] if len(sys.argv) > 1 else "",
+                       "at": time.time()}, f)
+        os.replace(staged, path)
+        return True
+    except Exception:
+        return False
+
+
+def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, str]:
     """Return (decision, reason). decision is 'allow' or 'deny'."""
     if tool_name in NO_EFFECT:
+        return "allow", ""
+
+    # Allowed wholesale for this conversation, from the prompt. Like
+    # "trusted", it covers everything, credentials included -- that is what
+    # the button says -- but only this agent, only this conversation.
+    if granted(session):
         return "allow", ""
 
     # Reads are free unless they are reads of a credential. Checked before
@@ -395,7 +467,7 @@ def decide(tool_name: str, tool_input: dict) -> tuple[str, str]:
         level, _ = _settings()
         if level == "trusted":
             return "allow", ""
-        return _ask(tool_name, tool_input, note=note)
+        return _ask(tool_name, tool_input, note=note, session=session)
 
     level, root = _settings()
     if level == "trusted":
@@ -405,10 +477,11 @@ def decide(tool_name: str, tool_input: dict) -> tuple[str, str]:
         if _inside(target, root) and not _sensitive(_resolved(target)):
             return "allow", ""
 
-    return _ask(tool_name, tool_input)
+    return _ask(tool_name, tool_input, session=session)
 
 
-def _ask(tool_name: str, tool_input: dict, note: str = "") -> tuple[str, str]:
+def _ask(tool_name: str, tool_input: dict, note: str = "",
+         session: str = "") -> tuple[str, str]:
     """Put the question on screen and wait for an answer.
 
     Split out of decide() so both the write path and the read-a-secret
@@ -461,6 +534,9 @@ def _ask(tool_name: str, tool_input: dict, note: str = "") -> tuple[str, str]:
         "input": tool_input,
         "asked_at": time.time(),
         "timeout": TIMEOUT,
+        # Whether "allow everything in this chat" can be offered: only when
+        # there is a conversation to scope it to.
+        "sessionWide": bool(_SESSION.fullmatch(session or "")),
     }))
     staged.chmod(0o600)
     staged.replace(request)
@@ -490,6 +566,10 @@ def _ask(tool_name: str, tool_input: dict, note: str = "") -> tuple[str, str]:
                 # writes counts. A response file holding anything else is a
                 # response this cannot read, and that is a denial.
                 if answer.get("allow") is True:
+                    # This one is allowed whatever happens next; the grant
+                    # only saves asking again in this conversation.
+                    if answer.get("session") is True:
+                        grant(session)
                     return "allow", ""
                 return "deny", str(answer.get("reason") or "Denied at the desktop.")
             time.sleep(0.1)
@@ -558,7 +638,9 @@ def main() -> int:
         if not isinstance(tool_input, dict):
             tool_input = {}
 
-        decision, reason = decide(str(tool), tool_input)
+        session = payload.get("session_id")
+        decision, reason = decide(str(tool), tool_input,
+                                  session if isinstance(session, str) else "")
         return _emit(decision, reason)
     except BaseException as e:                  # noqa: BLE001 -- see docstring
         try:

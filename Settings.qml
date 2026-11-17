@@ -1265,12 +1265,28 @@ Item {
               bordered: true
               onClicked: root.answer("allow")
             }
+            // Everything this agent asks for in this conversation, from now
+            // until a new conversation starts or the service restarts. Only
+            // offered when the hook has a conversation to scope it to.
+            Button {
+              visible: root.request.sessionWide === true
+              text: "Allow all in this chat"
+              tooltipText: "Allow this and everything else " +
+                           (root.request.who ? root.request.who : "the agent") +
+                           " asks for until the conversation ends"
+              fontFamily: root.fontFamily
+              bordered: true
+              onClicked: root.answer("allow-session")
+            }
           }
 
           Text {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: "Doing nothing denies it. Read-only tools are never asked about."
+            text: "Doing nothing denies it. Read-only tools are never asked about." +
+                  (root.request.sessionWide === true
+                   ? " \"Allow all in this chat\" lasts until a new conversation starts or the service restarts."
+                   : "")
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
