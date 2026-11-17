@@ -210,18 +210,22 @@ Column {
       visible: !page.s.owwLive
       stacked: true
       label: "Wake phrase"
-      hint: "What you say to start a turn with this agent. Which phrases there are depends on the wake engine, on Listening."
+      hint: "What you say to start a turn with this agent. One to three plain words, such as a name. Press Enter to save."
       changed: page.s.changed("phrase")
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
       onReset: page.s.resetKey("phrase")
-      Dropdown {
-        showLabel: false
-        fontFamily: page.s.fontFamily
+      TextField {
+        text: page.s.setting("phrase", "hey computer")
+        placeholderText: "a name or phrase — the words that wake it"
         foreground: page.s.foreground
-        options: page.s.phraseOptions
-        value: page.s.setting("phrase", "hey computer")
-        onChanged: function(v) { page.s.put("phrase", v) }
+        font.family: page.s.fontFamily
+        onEditingFinished: {
+          // Same rule as the extra agents' names: one to three plain words.
+          var v = text.trim().toLowerCase().replace(/\s+/g, " ")
+          if (!/^[a-z']+( [a-z']+){0,2}$/.test(v)) { text = page.s.setting("phrase", "hey computer"); return }
+          if (v !== page.s.setting("phrase", "hey computer")) page.s.put("phrase", v)
+        }
       }
     }
 

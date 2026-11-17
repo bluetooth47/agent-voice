@@ -70,21 +70,10 @@
     "schema": [
       {
         "key": "phrase",
-        "type": "enum",
+        "type": "string",
         "label": "Wake phrase",
-        "options": [
-          "hey computer",
-          "okay computer",
-          "hey agent",
-          "hey claude",
-          "okay claude",
-          "hey assistant",
-          "hey jarvis",
-          "hey machine",
-          "computer"
-        ],
         "defaultValue": "hey computer",
-        "description": "Pinned by a Vosk grammar. Every option here was measured on a 2014 MacBook Pro (i7-4980HQ): all detect reliably and none false-woke across 98 seconds of ordinary speech. \"hey omarchy\" is absent because Vosk's lexicon has no such word and it never fires."
+        "description": "Any one to three plain words, typed in. Pinned by a Vosk grammar, so every word must be in its lexicon. The old preset list was measured on a 2014 MacBook Pro (i7-4980HQ): all detect reliably and none false-woke across 98 seconds of ordinary speech. \"hey omarchy\" is absent because Vosk's lexicon has no such word and it never fires."
       },
       {
         "key": "micThresholdDb",
