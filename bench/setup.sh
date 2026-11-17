@@ -36,7 +36,8 @@ if [[ ! -d "$BENCH/.venv" ]]; then
 fi
 echo "==> Installing the pinned runtime"
 VIRTUAL_ENV="$BENCH/.venv" uv pip install --quiet \
-  -r "$BENCH/../requirements.txt" -r "$BENCH/../requirements-openwakeword.txt"
+  -r "$BENCH/../requirements.txt" -r "$BENCH/../requirements-openwakeword.txt" \
+  -r "$BENCH/../requirements-sherpa.txt"
 
 # --- vosk model ---
 VOSK_SMALL="$MODELS/vosk-model-small-en-us-0.15"

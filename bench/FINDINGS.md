@@ -736,3 +736,65 @@ That path is the weaker of the two and a better place to look next.
 
 Synthesized speech is not a person in a room, so these are relative numbers
 for one change, not a detection rate.
+
+## 23. sherpa-onnx keyword spotting against Vosk
+
+`bench/wake_clips.py` makes
+the corpus: the §22 recipe widened to all three installed Piper voices (amy,
+lessac, ryan), -20 and -28 dBFS over -60 dBFS noise, 0.6s lead and 1.2s tail.
+30 positive clips (five phrasings of "computer" and "sarah") and 150 negative
+ones: 19 near-miss words, among them every §22 false wake, and six ordinary
+sentences. `bench/wake_bench.py` scores each engine in 200ms frames from a
+fresh detector. Vosk runs through the daemon's real `Pipeline.feed_wake`
+(vosk-model-small-en-us-0.15, gate -38, confidence 0.70); sherpa-onnx 2.0.1
+runs `KeywordSpotter`, one thread, with no gate. i7-1185G7.
+
+| clip                        | Vosk     | sherpa gigaspeech-3.3M (defaults) | sherpa zh-en-3M (boost 0.5, thr 0.25) |
+|-----------------------------|----------|-----------------------------------|----------------------------------------|
+| Computer                    | 6 / 6    | 6 / 6                             | 6 / 6                                  |
+| Sarah                       | 4 / 6    | 4 / 6                             | 4 / 6                                  |
+| Hey Sarah                   | 6 / 6    | 6 / 6                             | 6 / 6                                  |
+| Sarah, what time is it      | 6 / 6    | 6 / 6                             | 6 / 6                                  |
+| Computer, open the browser  | 6 / 6    | 6 / 6                             | 6 / 6                                  |
+| **false wakes**             | 63 / 150 | 15 / 150                          | 4 / 150                                |
+| on the six plain sentences  | 7 / 36   | 0 / 36                            | 0 / 36                                 |
+| fires, after speech ends    | -0.28s   | +0.22s                            | +0.22s                                 |
+| CPU, one core               | 1.8%     | 4.4%                              | 4.1%                                   |
+
+All three engines miss the same two clips: ryan's "Sarah", which Piper says
+in 0.29s. Vosk's false wakes include "okay", "sounds good", "computation",
+"competitor" and four ordinary sentences. Its confidence bar can't fix them:
+0.50 gives 65, 0.90 still gives 60, because nearly all of them come through
+the partial path, which has no confidence. That path is also why Vosk fires
+before the word ends (the negative delay). sherpa-onnx's four remaining false
+wakes are all "Sarong" heard as "sarah".
+
+The zh-en column was tuned on this same corpus (score 0.25/0.5/1/2 against
+threshold 0.15-0.5), so 4/150 is optimistic. The untuned defaults are the
+honest number: 27/30 detected and 8/150 false wakes for zh-en, and the
+gigaspeech column above. Threshold 0.5 removes every false wake and loses
+roughly half the detections on both models. int8 and the 8-frame chunk
+changed nothing worth having (the chunk costs 6.2% CPU for no earlier fire).
+
+Footprint: the zh-en model loads in about 44MB RSS, against Vosk's 114MB
+(§10). Files: a 12MB encoder (4.4MB as int8), plus the decoder, the
+joiner, tokens and a 3.2MB CMU-style lexicon (`en.phone`). Keywords are
+written as text and turned into phones through that lexicon, so a new agent
+name needs no training. A name missing from the lexicon has the same
+refusal path Vosk's `_knows` gives today.
+
+As with §22, synthesized speech is not a person in a room. The gap is large
+enough to justify adding the engine, and small enough that live testing must
+decide the default.
+
+**Wired in as `engine = "sherpa"`.** The daemon loads the model once with a
+placeholder keyword: keywords given to a stream are *added* to the
+constructor's file, not swapped for them, so the file holds a phone string
+nobody says behind threshold 1.0. The phrase and names then go on the
+stream. A new stream took 0.7ms and loading the model about 1s, so a
+threshold or name change opens a stream, and only a phrase change (which
+can force a Vosk fallback) reloads. Run through the daemon's own `Pipeline`
+on the same corpus (`wake_bench.py daemon-sherpa`, threshold 0.25): 28/30
+detected, 3/150 false wakes, 4.5% CPU. That matches the prototype's
+4/150, so the stream-keyword route costs nothing. The lexicon lacks
+"ziggy", so it was replaced with "otto" in the suggested agent names.

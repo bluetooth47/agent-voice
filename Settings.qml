@@ -146,12 +146,31 @@ Item {
     }
   }
 
+  // The same question for sherpa-onnx, which needs two things: the package
+  // and its model folder (install.sh --sherpa fetches both). Either missing
+  // and the daemon falls back to Vosk, so either missing is "not installed".
+  property bool sherpaAvailable: true
+  Process {
+    id: scanSherpa
+    command: ["bash", "-c",
+      "d=\"${XDG_DATA_HOME:-$HOME/.local/share}/agentvoice\"; " +
+      "compgen -G \"$d/venv/lib/python*/site-packages/sherpa_onnx\" >/dev/null " +
+      "&& [ -f \"$d/models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20/tokens.txt\" ] " +
+      "&& echo yes || echo no"]
+    stdout: StdioCollector {
+      onStreamFinished: root.sherpaAvailable = String(text).trim() === "yes"
+    }
+  }
+
   readonly property var engineOptions: [
     { label: "Vosk", value: "vosk",
       tooltip: "Any phrase, and your other agents' names. Weaker at rejecting sound-alikes." },
     { label: root.owwAvailable ? "openWakeWord" : "openWakeWord (not installed)",
       value: "openwakeword",
-      tooltip: "Four phrases, better rejection, and a verifier trained on your voice." }
+      tooltip: "Four phrases, better rejection, and a verifier trained on your voice." },
+    { label: root.sherpaAvailable ? "sherpa-onnx" : "sherpa-onnx (not installed)",
+      value: "sherpa",
+      tooltip: "Any phrase and your other agents' names, with far fewer false wakes than Vosk." }
   ]
   // Which voices are actually on disk. install.sh fetches one by default
   // and the one the settings ask for; the rest are 60MB each and arrive
@@ -410,10 +429,11 @@ Item {
       if (programOptions[i].value === value) return programOptions[i].label
     return value
   }
-  // Names that suggest themselves for a new agent, every one a word the
-  // wake engine knows. The first not already taken is offered.
+  // Names that suggest themselves for a new agent, every one a word both
+  // Vosk and sherpa-onnx know ("ziggy" was here; sherpa-onnx's lexicon lacks
+  // it). The first not already taken is offered.
   readonly property var nameSuggestions: [
-    "jarvis", "friday", "atlas", "nova", "sage", "echo", "alfred", "ziggy",
+    "jarvis", "friday", "atlas", "nova", "sage", "echo", "alfred", "otto",
     "max", "hal"
   ]
 
@@ -496,6 +516,9 @@ Item {
   // off the setting -- otherwise the page describes an engine that is not
   // running.
   readonly property bool owwLive: usingOww && owwAvailable
+  // The same split for sherpa-onnx: chosen, and chosen-and-running.
+  readonly property bool usingSherpa: engine === "sherpa"
+  readonly property bool sherpaLive: usingSherpa && sherpaAvailable
   readonly property bool keepHistory: setting("keepHistory", true) === true
 
   // --- what needs fixing --------------------------------------------------------
@@ -513,6 +536,9 @@ Item {
       out.push({ text: "The voice engine is not installed yet.", page: "about" })
     if (usingOww && !owwAvailable)
       out.push({ text: "openWakeWord is chosen but not installed, so Vosk is listening instead.",
+                 page: "listening" })
+    if (usingSherpa && !sherpaAvailable)
+      out.push({ text: "sherpa-onnx is chosen but not installed, so Vosk is listening instead.",
                  page: "listening" })
     var voice = String(setting("voice", "lessac-medium"))
     if (voiceMissing(voice))
@@ -594,6 +620,7 @@ Item {
       scanCustom.running = true
       scanVoices.running = true
       scanOww.running = true
+      scanSherpa.running = true
     }
   }
 

@@ -40,7 +40,8 @@ Roughly 750MB with the default engine, or 900MB with openWakeWord as well.
 openWakeWord is not installed by default and the installer does not ask: it is
 optional, and a question with Yes preselected is not really optional. Choose it
 under **Engine** in the settings and it offers to fetch it, or run the
-installer again with `--oww`.
+installer again with `--oww`. sherpa-onnx works the same way, with
+`--sherpa`: about 60MB, package and model.
 
 The widget and the engine are two installs, because Omarchy runs
 nothing on a plugin's behalf: `plugin add` clones a directory and
@@ -271,8 +272,9 @@ goes to whoever you spoke to last.
 
 A name has to be a word the wake engine knows. Vosk is asked, and a name it
 cannot hear is refused with the reason in the settings, the same reason
-"hey omarchy" is not a wake phrase. openWakeWord hears only its own phrase,
-so extra agents need the Vosk engine.
+"hey omarchy" is not a wake phrase. sherpa-onnx is asked the same way,
+through its phone lexicon. openWakeWord hears only its own phrase, so extra
+agents need Vosk or sherpa-onnx.
 
 An extra agent's permission level and folder are its own. Trusting the main
 agent does not trust the others, and the permission hook is told which
@@ -605,7 +607,7 @@ the term list; project names and tool names go in it.
 is 22x realtime. espeak-ng is the fallback for machines that cannot
 manage even that; it is robotic and costs 6ms.
 
-**Wake word** two engines, chosen in settings, because they fail
+**Wake word** three engines, chosen in settings, because they fail
 differently.
 
 *Vosk* (default) takes any phrase you like and costs 26MB. Its weakness
@@ -629,6 +631,18 @@ misleading. It costs ~154MB, almost
 none of it the detector: scipy and scikit-learn are hard imports of its
 package `__init__`. Pin `openwakeword==0.4.0`; 0.5 and later depend on
 `tflite-runtime`, which has no wheel past cp311.
+
+*sherpa-onnx* keyword spotting is a 3M-parameter streaming recogniser
+held to the phrases it is given. It takes the phrase and the agents'
+names as text, like Vosk, by turning them into phones through its lexicon,
+so nothing is trained. Unlike Vosk it scores the sound itself. On the
+synthesized corpus in `bench/FINDINGS.md` §23 it caught the same 28 of 30
+wakes as Vosk with 8 false wakes in 150 untuned, against Vosk's 63, and
+none on ordinary sentences (Vosk: 7 of 36). Its cost is 4% of a core
+against Vosk's 2%, and about 44MB resident. Like openWakeWord it is fed
+every frame, not gated, and its threshold is a slider. Changing the
+threshold or adding an agent opens a new stream without reloading the
+model. Optional, and installed with `--sherpa`.
 
 **Personal verifier** the only layer that knows *who* is speaking. Both
 engines above are speaker independent by design, which is why a podcast
@@ -679,10 +693,12 @@ the only filter present is a speaker EQ.
 Roughly **600MB resident** and 5% of one core, idling. The models are what
 weigh: whisper `tiny.en` 323MB, openWakeWord with its scipy and sklearn
 179MB, a Piper voice 48MB, the Vosk model 114MB when the engine or the
-live-transcript setting needs it. Only the models actually in use are
+live-transcript setting needs it, or sherpa-onnx about 44MB in its place.
+Only the models actually in use are
 loaded, and switching engines releases the other one.
 
-On disk it is about 750MB installed, or 900MB with openWakeWord as well.
+On disk it is about 750MB installed, or 900MB with openWakeWord as well;
+sherpa-onnx adds about 60MB.
 
 That is comfortable on the 2014 laptop this was built on, which has 16GB.
 It is not nothing on a 4GB machine, and principle 5 says that matters.
@@ -947,7 +963,7 @@ same thing: Omarchy reads the manifest, GitHub reads the file, and a
 manifest claiming a licence the repo does not carry grants nothing.
 
 The models are not covered by it. Nothing here redistributes them --
-`install.sh` downloads Whisper, Piper, Vosk and openWakeWord from their
+`install.sh` downloads Whisper, Piper, Vosk, openWakeWord and sherpa-onnx from their
 own projects at install time, and each carries its own terms. A trained
 verifier is yours and stays on your machine; it is a pickle, so it must
 never be one you downloaded.

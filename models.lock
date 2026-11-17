@@ -12,7 +12,7 @@
 # nothing arrives unverified. The list is every voice the settings page offers
 # plus the ones the verifier trainer fetches for contrast.
 #
-# To refresh:  ./bench/pin-models.sh [--vosk] > models.lock
+# To refresh:  ./bench/pin-models.sh [--vosk] [--sherpa] > models.lock
 
 # The piper-voices revision every voice below is fetched from.
 revision piper c10ece1aade47bb51c153c893d14e5bf8e5b7117
@@ -35,3 +35,8 @@ sha256 en_US-hfc_male-medium.onnx.json    f66847424aed0bf99ecbb5d7cfde47c0a906f4
 # Vosk publishes versioned URLs rather than a branch, so this is a hash
 # of what that URL served rather than a pin against drift.
 sha256 vosk-model-small-en-us-0.15.zip 30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498
+
+# The sherpa-onnx keyword model is a GitHub release asset, fetched only with
+# --sherpa. Hashed by downloading it, like Vosk; it matched the checksum.txt
+# the release publishes beside it.
+sha256 sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2 68447f4fbc67e70eee3a93961f36e81e98f47aef73ce7e7ca00885c6cd3616a6

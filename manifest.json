@@ -43,6 +43,7 @@
       "engine": "vosk",
       "owwModel": "hey_jarvis",
       "owwThresholdPct": 90,
+      "sherpaThresholdPct": 25,
       "conversationMode": true,
       "followUpMs": 7000,
       "livePartials": "auto",
@@ -91,7 +92,7 @@
         "max": -20,
         "step": 1,
         "defaultValue": -38,
-        "description": "Guards the Vosk grammar and decides when your turn has ended. It does NOT gate openWakeWord, which scores every frame -- gating that one discards most of the phrase."
+        "description": "Guards the Vosk grammar and decides when your turn has ended. It does NOT gate openWakeWord or sherpa-onnx, which score every frame -- gating them discards most of the phrase."
       },
       {
         "key": "wakeConfidencePct",
@@ -217,10 +218,11 @@
         "label": "Wake word engine",
         "options": [
           "vosk",
-          "openwakeword"
+          "openwakeword",
+          "sherpa"
         ],
         "defaultValue": "vosk",
-        "description": "vosk takes any phrase but scores phonetic neighbours as high as the real one; openwakeword has four phrases and real rejection."
+        "description": "vosk takes any phrase but scores phonetic neighbours as high as the real one; openwakeword has four phrases and real rejection; sherpa (sherpa-onnx keyword spotting) takes any phrase and agent names with far fewer false wakes than vosk."
       },
       {
         "key": "owwModel",
@@ -244,6 +246,16 @@
         "step": 1,
         "defaultValue": 90,
         "description": "Measured on a 2014 MacBook Pro (i7-4980HQ): real phrase ~99, phonetic near-miss ~90, unrelated speech ~0."
+      },
+      {
+        "key": "sherpaThresholdPct",
+        "type": "integer",
+        "label": "sherpa-onnx threshold (%)",
+        "min": 10,
+        "max": 60,
+        "step": 5,
+        "defaultValue": 25,
+        "description": "Higher rejects more sound-alikes and misses more real wakes. On synthesized speech 15-35 all caught the same wakes; 50 lost about half (FINDINGS §23)."
       },
       {
         "key": "conversationMode",

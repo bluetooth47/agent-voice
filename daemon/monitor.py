@@ -26,6 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paths import VERIFIERS  # noqa: E402
 from runtime import Config  # noqa: E402
 from wake_listen import CHUNK, RATE, OwwWake, frame_db  # noqa: E402
+from wake_listen import SherpaWake, wanted_names  # noqa: E402
+from paths import sherpa_model  # noqa: E402
 
 DIM, RED, GRN, YEL, CYA, BLD, OFF = (
     "\033[2m", "\033[31m", "\033[32m", "\033[33m", "\033[36m", "\033[1m", "\033[0m")
@@ -123,6 +125,77 @@ def run_ab(cfg, threshold, with_verifier, seconds: float = 0.0,
     return 0
 
 
+def run_sherpa(cfg, gate: float, seconds: float = 0.0, device=None,
+               all_frames: bool = False) -> int:
+    """Show what sherpa-onnx spots, live, built the way the daemon builds it.
+
+    The spotter gives a verdict rather than a score, so this prints every
+    spoken burst with what (if anything) it heard. A burst that ends with
+    nothing spotted is the missed wake the journal never records.
+    """
+    import sounddevice as sd
+
+    model = sherpa_model()
+    if model is None:
+        print(f"  {YEL}sherpa-onnx is chosen but its model is not installed "
+              f"(install.sh --sherpa), so the daemon is using Vosk.{OFF}")
+        return 1
+    threshold = cfg.get_int("sherpaThresholdPct") / 100.0
+    spot = SherpaWake(model, threshold)
+    phrase = cfg.get_str("phrase").lower()
+    wanted = [phrase] + [n for n in wanted_names(cfg) if n != phrase]
+    heard = [p for p in wanted if all(spot.knows(w) for w in p.split())]
+    for p in wanted:
+        if p not in heard:
+            print(f"  {YEL}“{p}” has a word its lexicon lacks; not listened for.{OFF}")
+    if phrase not in heard:
+        return 1
+    spot.listen_for(heard, threshold)
+    print(f"\n  {BLD}sherpa-onnx{OFF}  threshold {threshold:.2f}  "
+          f"listening for {', '.join(heard)}")
+    print(f"  {DIM}Not gated, as in the daemon; the gate ({gate:.0f} dBFS) only "
+          f"marks where a burst of speech starts and ends.{OFF}\n")
+
+    frames: queue.Queue[bytes] = queue.Queue()
+
+    def cb(indata, _f, _t, status):
+        frames.put(bytes(indata))
+
+    started = time.time()
+    bursts = fires = 0
+    loud = quiet = 0
+    hit_this_burst = ""
+    with sd.RawInputStream(samplerate=RATE, channels=1, dtype="int16",
+                           blocksize=CHUNK, device=device, callback=cb):
+        try:
+            while seconds <= 0 or time.time() - started < seconds:
+                pcm = frames.get()
+                level = frame_db(pcm)
+                hit = spot.feed(pcm)
+                t = time.time() - started
+                if hit:
+                    fires += 1
+                    hit_this_burst = hit
+                    print(f"  {GRN}{t:7.1f}s  {level:6.1f} dBFS  ← WOULD FIRE: {hit}{OFF}")
+                elif all_frames:
+                    print(f"  {DIM}{t:7.1f}s  {level:6.1f} dBFS{OFF}")
+                if level >= gate:
+                    loud, quiet = loud + 1, 0
+                elif loud:
+                    quiet += 1
+                    if quiet >= 8:              # ~1.6s of quiet ends a burst
+                        bursts += 1
+                        if not hit_this_burst:
+                            print(f"  {YEL}{t:7.1f}s  speech ({loud * CHUNK * 1000 // RATE}ms)"
+                                  f" — nothing spotted{OFF}")
+                        loud = quiet = 0
+                        hit_this_burst = ""
+        except KeyboardInterrupt:
+            pass
+    print(f"\n  {BLD}{fires} wakes{OFF} in {bursts} bursts of speech\n")
+    return 0
+
+
 def main() -> int:
     import sounddevice as sd
 
@@ -140,6 +213,9 @@ def main() -> int:
     cfg = Config()
     engine = cfg.get_str("engine")
     gate = float(cfg["micThresholdDb"])
+
+    if engine == "sherpa":
+        return run_sherpa(cfg, gate, args.seconds, args.device, args.all_frames)
 
     if engine != "openwakeword":
         print(f"  {YEL}The configured engine is {engine}, which scores by grammar "

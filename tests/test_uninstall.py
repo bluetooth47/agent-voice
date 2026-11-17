@@ -88,7 +88,8 @@ def _install_tree(home: Path) -> Path:
     for d in ("daemon", "bin", "desktop"):
         shutil.copytree(ROOT / d, app / d)
     for f in ("install.sh", "requirements.txt",
-              "requirements-openwakeword.txt", "models.lock"):
+              "requirements-openwakeword.txt", "requirements-sherpa.txt",
+              "models.lock"):
         shutil.copy(ROOT / f, app / f)
 
     data = app.parent
@@ -340,7 +341,8 @@ def test_the_installed_copy_carries_the_model_hashes(tmp_path):
     for d in ("daemon", "bin", "desktop"):
         shutil.copytree(ROOT / d, plugin / d)
     for f in ("install.sh", "requirements.txt",
-              "requirements-openwakeword.txt", "models.lock"):
+              "requirements-openwakeword.txt", "requirements-sherpa.txt",
+              "models.lock"):
         shutil.copy(ROOT / f, plugin / f)
 
     done = _run_section(plugin, app)
@@ -387,7 +389,8 @@ def test_installing_from_the_plugin_directory_still_replaces_the_copy(tmp_path):
     for d in ("daemon", "bin", "desktop"):
         shutil.copytree(ROOT / d, plugin / d)
     for f in ("install.sh", "requirements.txt",
-              "requirements-openwakeword.txt", "models.lock"):
+              "requirements-openwakeword.txt", "requirements-sherpa.txt",
+              "models.lock"):
         shutil.copy(ROOT / f, plugin / f)
     (app / "stale.txt").write_text("from the previous version")
 

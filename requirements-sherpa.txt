@@ -1,0 +1,12 @@
+# Optional third wake-word engine: sherpa-onnx keyword spotting. About 43MB
+# of wheels (it carries its own onnxruntime build) plus a 17MB model that
+# install.sh fetches, pinned in models.lock.
+#
+# Why it is here: on synthesized speech it caught the same wakes as Vosk with
+# a fraction of the false ones -- 63/150 for Vosk, 8/150 untuned -- and still
+# takes any phrase written as text, so extra agents' names work, which
+# openWakeWord cannot do. FINDINGS §23.
+#
+# Wheels are per CPython version (cp313 is what install.sh pins). The upper
+# bound is because the KeywordSpotter API is what the daemon calls directly.
+sherpa-onnx>=2.0,<3

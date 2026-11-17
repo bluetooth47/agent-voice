@@ -16,6 +16,7 @@ set -euo pipefail
 
 REPO=rhasspy/piper-voices
 VOSK_URL=https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+SHERPA_URL=https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2
 
 # Every voice the settings page offers, plus the ones the verifier trainer
 # fetches to contrast against. A voice absent from the lock is not installed,
@@ -23,8 +24,11 @@ VOSK_URL=https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
 VOICES=(lessac-medium lessac-low amy-medium ryan-medium joe-medium
         kristin-medium hfc_male-medium)
 
-WANT_VOSK=0
-[[ ${1:-} == --vosk ]] && WANT_VOSK=1
+WANT_VOSK=0 WANT_SHERPA=0
+for a in "$@"; do
+  [[ $a == --vosk ]] && WANT_VOSK=1
+  [[ $a == --sherpa ]] && WANT_SHERPA=1
+done
 
 note() { printf '%s\n' "$*" >&2; }
 
@@ -48,7 +52,7 @@ cat <<HEADER
 # nothing arrives unverified. The list is every voice the settings page offers
 # plus the ones the verifier trainer fetches for contrast.
 #
-# To refresh:  ./bench/pin-models.sh [--vosk] > models.lock
+# To refresh:  ./bench/pin-models.sh [--vosk] [--sherpa] > models.lock
 
 # The piper-voices revision every voice below is fetched from.
 revision piper $REV
@@ -104,4 +108,18 @@ if (( WANT_VOSK )); then
 else
   note "keeping the existing Vosk hash; pass --vosk to re-download it"
   grep '^sha256 vosk-' "$(dirname "$(readlink -f "$0")")/../models.lock"
+fi
+
+echo
+echo "# The sherpa-onnx keyword model is a GitHub release asset, fetched only with"
+echo "# --sherpa. Hashed by downloading it, like Vosk; it matched the checksum.txt"
+echo "# the release publishes beside it."
+if (( WANT_SHERPA )); then
+  note "downloading the sherpa-onnx model to hash it (33MB)"
+  curl -sfL --proto '=https' -o "$tmp/sherpa.tar.bz2" "$SHERPA_URL"
+  printf 'sha256 %s %s\n' "${SHERPA_URL##*/}" \
+    "$(sha256sum "$tmp/sherpa.tar.bz2" | cut -d' ' -f1)"
+else
+  note "keeping the existing sherpa-onnx hash; pass --sherpa to re-download it"
+  grep '^sha256 sherpa-' "$(dirname "$(readlink -f "$0")")/../models.lock"
 fi

@@ -131,6 +131,7 @@ import ast, pathlib, sys
 # fine: they are stdlib-only at import time, which is why the suite runs at
 # all. A test needing one of these must reach it through pytest.importorskip.
 heavy = {"numpy", "onnxruntime", "sounddevice", "torch", "openwakeword",
+         "sherpa_onnx",
          "vosk", "piper", "scipy", "sklearn", "faster_whisper", "soundfile",
          "joblib", "barge", "verifier", "monitor"}
 bad = []

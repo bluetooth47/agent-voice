@@ -40,6 +40,8 @@ Column {
       label: "Engine"
       hint: page.s.usingOww
             ? "Better at rejecting sound-alikes, and can learn your voice. Hears only its own phrase."
+            : page.s.usingSherpa
+            ? "Any phrase, and your other agents' names, with far fewer false wakes than Vosk."
             : "Any phrase, and your other agents' names. Weaker at rejecting sound-alikes."
       changed: page.s.changed("engine")
       foreground: page.s.foreground
@@ -53,6 +55,7 @@ Column {
         onCommitted: function(v) {
           page.s.put("engine", v)
           if (v === "openwakeword" && !page.s.owwAvailable) page.s.fetchNow(["--oww"])
+          if (v === "sherpa" && !page.s.sherpaAvailable) page.s.fetchNow(["--sherpa"])
         }
       }
     }
@@ -83,6 +86,30 @@ Column {
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
         onClicked: page.s.fetchNow(["--oww"])
+      }
+    }
+
+    Column {
+      width: parent.width
+      spacing: Style.space(6)
+      visible: page.s.usingSherpa && !page.s.sherpaAvailable
+
+      Text {
+        width: parent.width
+        wrapMode: Text.WordWrap
+        text: "sherpa-onnx is not installed, so Vosk is listening instead. It can be " +
+              "added now: about 60MB, for the same phrases and names with far fewer " +
+              "false wakes."
+        color: page.s.urgent
+        font.family: page.s.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+      Button {
+        text: "Try installing sherpa-onnx again…"
+        bordered: true
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onClicked: page.s.fetchNow(["--sherpa"])
       }
     }
 
@@ -148,9 +175,29 @@ Column {
       onReset: page.s.resetKey("owwThresholdPct")
     }
 
+    // sherpa-onnx shares Vosk's phrase above -- both take it as text -- but
+    // not its confidence bar: it has a keyword threshold of its own.
     KnobRow {
       width: parent.width
-      visible: !page.s.owwLive
+      visible: page.s.sherpaLive
+      foreground: page.s.foreground; fontFamily: page.s.fontFamily
+      label: "Detection threshold"
+      unit: "%"
+      description: "Higher rejects more sound-alikes; lower wakes more easily."
+      help: "Measured on synthesized speech: anywhere from 15 to 35 caught the same " +
+            "wakes, and higher mostly cut sound-alikes such as \"Sarong\" for \"Sarah\". " +
+            "At 50 it missed about half the real ones."
+      value: page.s.setting("sherpaThresholdPct", 25)
+      defaultValue: page.s.defaults.sherpaThresholdPct !== undefined ? page.s.defaults.sherpaThresholdPct : NaN
+      changed: page.s.changed("sherpaThresholdPct")
+      minimum: 10; maximum: 60; stepSize: 5
+      onCommitted: function(v) { page.s.put("sherpaThresholdPct", v) }
+      onReset: page.s.resetKey("sherpaThresholdPct")
+    }
+
+    KnobRow {
+      width: parent.width
+      visible: !page.s.owwLive && !page.s.sherpaLive
       foreground: page.s.foreground; fontFamily: page.s.fontFamily
       label: "Grammar confidence"
       unit: "%"
@@ -199,7 +246,7 @@ Column {
             "been under the line for the pause set on the Conversation page, it " +
             "stops listening. Set it too low and room noise holds the turn open; too " +
             "high and a quiet word cuts you off." +
-            (page.s.owwLive ? "" :
+            (page.s.owwLive || page.s.sherpaLive ? "" :
               "\n\nOn Vosk it also gates the wake word: quieter frames never reach " +
               "the grammar, so the phrase cannot be matched against room noise.")
       value: page.s.setting("micThresholdDb", -38)

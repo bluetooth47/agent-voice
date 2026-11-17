@@ -147,7 +147,7 @@ Column {
       label: "Live transcript while you speak"
       hint: "Rough text shown as you talk, before Whisper returns."
       help: "It needs the Vosk model resident. On the Vosk wake engine that model is " +
-            "already loaded, so it is free; on openWakeWord it is an extra 114MB. " +
+            "already loaded, so it is free; on openWakeWord or sherpa-onnx it is an extra 114MB. " +
             "\"Auto\" shows it only when it is free."
       changed: page.s.changed("livePartials")
       foreground: page.s.foreground
@@ -156,7 +156,7 @@ Column {
       SegmentedChoice {
         options: [
           { value: "auto", label: "Auto", tooltip: "Only when it costs nothing" },
-          { value: "on", label: "On", tooltip: "Always; costs 114MB on openWakeWord" },
+          { value: "on", label: "On", tooltip: "Always; costs 114MB on the other engines" },
           { value: "off", label: "Off" }
         ]
         value: page.s.setting("livePartials", "auto")

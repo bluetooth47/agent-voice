@@ -38,10 +38,15 @@ Column {
           value: page.s.serviceActive ? "running" : "stopped — it does not start itself after a reboot",
           ok: true },
         { label: "Wake engine",
-          value: page.s.owwLive ? "openWakeWord" : page.s.usingOww ? "Vosk (openWakeWord is not installed)" : "Vosk",
-          ok: !(page.s.usingOww && !page.s.owwAvailable) },
+          value: page.s.owwLive ? "openWakeWord" : page.s.usingOww ? "Vosk (openWakeWord is not installed)"
+               : page.s.sherpaLive ? "sherpa-onnx" : page.s.usingSherpa ? "Vosk (sherpa-onnx is not installed)"
+               : "Vosk",
+          ok: !(page.s.usingOww && !page.s.owwAvailable) && !(page.s.usingSherpa && !page.s.sherpaAvailable) },
         { label: "openWakeWord",
           value: page.s.owwAvailable ? "installed" : "not installed (optional, about 154MB)",
+          ok: true },
+        { label: "sherpa-onnx",
+          value: page.s.sherpaAvailable ? "installed" : "not installed (optional, about 60MB)",
           ok: true },
         { label: "Voices on disk",
           value: page.s.voicesOnDisk.length === 0 ? "none found"
@@ -115,6 +120,22 @@ Column {
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
         onClicked: page.s.fetchNow(["--oww"])
+      }
+    }
+
+    SettingRow {
+      width: parent.width
+      visible: !page.s.sherpaAvailable
+      label: "Add sherpa-onnx"
+      hint: "Takes any phrase and your agents' names, with far fewer false wakes than Vosk. About 60MB."
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      Button {
+        text: "Install…"
+        bordered: true
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onClicked: page.s.fetchNow(["--sherpa"])
       }
     }
   }

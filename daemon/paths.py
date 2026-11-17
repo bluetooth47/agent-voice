@@ -65,6 +65,24 @@ def vosk_model() -> Path | None:
     return None
 
 
+#: The sherpa-onnx keyword-spotting model install.sh fetches. Phones rather
+#: than BPE pieces, because a phone lexicon is what lets a typed name become a
+#: keyword with no training -- and it false-woke least in FINDINGS §23.
+SHERPA_KWS_MODEL = "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
+
+
+def sherpa_model() -> Path | None:
+    """The sherpa-onnx keyword-spotting model directory, or None.
+
+    Present means every file the engine opens is there, not just the folder:
+    an extraction cut short leaves a directory that would fail at load.
+    """
+    d = models_dir() / SHERPA_KWS_MODEL
+    need = ("tokens.txt", "en.phone", *(f"{p}-epoch-13-avg-2-chunk-16-left-64.onnx"
+                                        for p in ("encoder", "decoder", "joiner")))
+    return d if all((d / n).is_file() for n in need) else None
+
+
 def piper_voices() -> Path:
     return models_dir() / "piper"
 

@@ -83,6 +83,14 @@ run_case() {
     done
     [[ -n $(find "$data/models" -name '*.onnx' 2>/dev/null) ]] ||
       why="$why no-model-downloaded"
+    # --sherpa is two pieces, and either one alone means the daemon quietly
+    # falls back to Vosk -- an exit 0 that installed the engine in name only.
+    if [[ " $INSTALL_ARGS " == *" --sherpa "* ]]; then
+      [[ -f $data/models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20/en.phone ]] ||
+        why="$why no-sherpa-model"
+      compgen -G "$data/venv/lib/python*/site-packages/sherpa_onnx" >/dev/null ||
+        why="$why no-sherpa-package"
+    fi
   else
     [[ -d $data ]] && why="$why refused-but-left:$data"
   fi
@@ -157,6 +165,9 @@ run_case "no uv and no way to install it"         1 uv omarchy omarchy-pkg-add p
 
 INSTALL_ARGS="--oww"
 run_case "with openWakeWord, no Omarchy, no gum"  0 gum omarchy omarchy-pkg-add
+
+INSTALL_ARGS="--no-oww --sherpa"
+run_case "with sherpa-onnx, no Omarchy, no gum"   0 gum omarchy omarchy-pkg-add
 
 round_trip "install then uninstall leaves nothing"  gum omarchy omarchy-pkg-add
 

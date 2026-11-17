@@ -9,7 +9,8 @@
 #
 #   ./install.sh              interactive
 #   ./install.sh --yes        no prompts, core engine only
-#   ./install.sh --yes --oww  no prompts, both wake engines
+#   ./install.sh --yes --oww  no prompts, plus openWakeWord
+#   ./install.sh --sherpa     plus sherpa-onnx keyword spotting
 #   ./install.sh --uninstall  take it all back off again
 #   ./install.sh --dev        run from this checkout instead of a copy
 #
@@ -45,6 +46,7 @@ fi
 
 ASSUME_YES=0
 WANT_OWW=""
+WANT_SHERPA=""
 UNINSTALL=0
 WITH_WIDGET=0
 KEYBINDS=""
@@ -64,6 +66,8 @@ for arg in "$@"; do
     --dev) DEV=1 ;;
     --oww|--openwakeword) WANT_OWW=1 ;;
     --no-oww) WANT_OWW=0 ;;
+    --sherpa) WANT_SHERPA=1 ;;
+    --no-sherpa) WANT_SHERPA=0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
 done
@@ -504,6 +508,26 @@ if [[ $WANT_OWW == 1 ]]; then
   VIRTUAL_ENV="$VENV" uv pip install --quiet -r "$ROOT/requirements-openwakeword.txt"
 fi
 
+# sherpa-onnx follows openWakeWord's rules: optional, never prompted for,
+# asked for with --sherpa or by choosing it in the settings, and installed
+# without asking when the settings already name it -- the same reason as
+# above, a daemon configured for an engine it cannot start. Unlike
+# openWakeWord it needs a model as well as a package; that is fetched with
+# the others below.
+if [[ -z $WANT_SHERPA ]] && have jq; then
+  if [[ "$(jq -r '[.bar.layout[]?[]? | select(.id=="duaneoca.agentvoice")][0].engine // empty' \
+        "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json" 2>/dev/null)" == "sherpa" ]]; then
+    say "Settings already use sherpa-onnx; installing it."
+    WANT_SHERPA=1
+  fi
+fi
+WANT_SHERPA="${WANT_SHERPA:-0}"
+
+if [[ $WANT_SHERPA == 1 ]]; then
+  say "Installing sherpa-onnx…"
+  VIRTUAL_ENV="$VENV" uv pip install --quiet -r "$ROOT/requirements-sherpa.txt"
+fi
+
 # --- models ----------------------------------------------------------------
 # models.lock holds the revision to fetch voices from and a sha256 for every
 # file either script downloads. See the comments in it.
@@ -569,6 +593,31 @@ fetch_vosk() {
   bsdtar -xf "$MODELS/.vosk.zip" -C "$MODELS" && rm -f "$MODELS/.vosk.zip"
 }
 
+# The release is a 33MB archive holding several builds of one model; only the
+# five files the daemon opens are kept (about 17MB). Extracted into a temp
+# directory and moved into place whole, so an interrupted run never leaves
+# a folder that looks installed -- paths.sherpa_model() checks every file.
+SHERPA_MODEL=sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20
+fetch_sherpa() {
+  local dir="$MODELS/$SHERPA_MODEL" tmp
+  [[ -f "$dir/tokens.txt" && -f "$dir/en.phone" ]] && return 0
+  say "Downloading the sherpa-onnx keyword model (33MB)…"
+  download "https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/$SHERPA_MODEL.tar.bz2" \
+    "$MODELS/.sherpa.tar.bz2" "$SHERPA_MODEL.tar.bz2" || return 1
+  tmp="$(mktemp -d "$MODELS/.sherpa.XXXXXX")"
+  if bsdtar -xf "$MODELS/.sherpa.tar.bz2" -C "$tmp" \
+       "$SHERPA_MODEL/tokens.txt" "$SHERPA_MODEL/en.phone" \
+       "$SHERPA_MODEL/encoder-epoch-13-avg-2-chunk-16-left-64.onnx" \
+       "$SHERPA_MODEL/decoder-epoch-13-avg-2-chunk-16-left-64.onnx" \
+       "$SHERPA_MODEL/joiner-epoch-13-avg-2-chunk-16-left-64.onnx"; then
+    rm -rf "$dir"
+    mv "$tmp/$SHERPA_MODEL" "$dir"
+  else
+    warn "Could not unpack the sherpa-onnx model; the daemon will use Vosk."
+  fi
+  rm -rf "$tmp" "$MODELS/.sherpa.tar.bz2"
+}
+
 fetch_voice() {
   local dir="$MODELS/piper" file="en_US-$1-$2.onnx"
   mkdir -p "$dir"
@@ -601,6 +650,9 @@ configured() {
 
 fetch_vosk
 fetch_voice lessac medium
+if [[ $WANT_SHERPA == 1 ]]; then
+  fetch_sherpa || warn "The sherpa-onnx model was not installed; the daemon will use Vosk."
+fi
 
 # Whatever was asked for on the command line, then whatever the settings ask
 # for. Both, because a --voice run is also an install and the configured voice
@@ -664,7 +716,8 @@ else
   mkdir -p "$APP"
   cp -r "$ROOT/daemon" "$ROOT/bin" "$ROOT/desktop" "$APP/"
   cp "$ROOT/install.sh" "$ROOT/requirements.txt" \
-     "$ROOT/requirements-openwakeword.txt" "$ROOT/models.lock" "$APP/"
+     "$ROOT/requirements-openwakeword.txt" "$ROOT/requirements-sherpa.txt" \
+     "$ROOT/models.lock" "$APP/"
 
   # The stamp the daemon reads back for its banner, so the journal says which
   # build wrote the lines underneath it.

@@ -63,7 +63,7 @@ from runtime import (  # noqa: E402
 
 from paths import (  # noqa: E402
     build_id, endpoint_key, harden_private_trees, project_dir, vocab_file,
-    vosk_model,
+    sherpa_model, vosk_model,
 )
 
 #: `blocksize` is in frames, not bytes: 3200 frames at 16kHz is 200ms, not
@@ -203,6 +203,132 @@ class OwwWake:
         return fired
 
 
+#: How strongly the decoder is pulled towards a keyword path (sherpa-onnx's
+#: keywords_score). 0.5 was the best of 0.25/0.5/1/2 in FINDINGS §23 -- tuned
+#: on that corpus, so treat it as a starting point; it is fixed rather than a
+#: setting because the threshold is the one knob a person can reason about.
+SHERPA_BOOST = 0.5
+
+#: The constructor insists on a keywords file, and keywords given to a stream
+#: are added to that file's, not substituted for them. So the file holds only
+#: this -- a phone string nobody says, behind a threshold nothing reaches --
+#: and every real keyword goes on the stream, where changing one costs a new
+#: stream (under 1ms) instead of a new model (about a second).
+_SHERPA_NEVER = "ZH ZH ZH ZH ZH ZH ZH ZH :0.01 #1.0 @_never"
+
+
+def sherpa_lexicon(model_dir: Path, words) -> dict[str, list[str]]:
+    """The CMU-style phones for each of `words` the model's lexicon has.
+
+    Only the words asked for are kept: the file is 3MB and the engine needs
+    a handful of entries. A word with several pronunciations keeps the first,
+    which is CMU's primary one.
+    """
+    want = {w.upper() for w in words}
+    found: dict[str, list[str]] = {}
+    with open(model_dir / "en.phone", encoding="utf-8") as f:
+        for line in f:
+            parts = line.split()
+            if parts and parts[0] in want and parts[0] not in found:
+                found[parts[0]] = parts[1:]
+    return {w.lower(): p for w, p in found.items()}
+
+
+def sherpa_keywords(phrases, lexicon: dict[str, list[str]],
+                    threshold: float) -> str:
+    """The keyword text for a stream: one line per phrase.
+
+    The tag after @ is what the spotter reports. It cannot hold a space, so
+    "hey sarah" travels as hey_sarah and SherpaWake turns it back.
+    """
+    lines = []
+    for phrase in phrases:
+        phones = [p for word in phrase.split() for p in lexicon[word]]
+        lines.append(f"{' '.join(phones)} :{SHERPA_BOOST} #{threshold:.2f} "
+                     f"@{phrase.replace(' ', '_')}")
+    return "\n".join(lines)
+
+
+class SherpaWake:
+    """sherpa-onnx keyword spotting: a small streaming recogniser constrained
+    to the phrases it is given, so it scores acoustically like openWakeWord
+    yet takes any phrase written as text, like Vosk -- names included.
+
+    Fed every frame, never gated, for openWakeWord's reason: it decodes a
+    contiguous stream, and frames cut out of the middle of a word are a word
+    it cannot finish. FINDINGS §23 measured it ungated.
+    """
+
+    def __init__(self, model_dir: Path, threshold: float) -> None:
+        import tempfile
+
+        import numpy as np
+        import sherpa_onnx
+
+        self._np = np
+        self.model_dir = model_dir
+        self.threshold = threshold
+        self.phrases: list[str] = []
+        self._lexicon: dict[str, list[str]] = {}
+        chunk = "epoch-13-avg-2-chunk-16-left-64.onnx"
+        fd, kw = tempfile.mkstemp(suffix=".txt", prefix="agentvoice-kws-")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(_SHERPA_NEVER + "\n")
+            self._spotter = sherpa_onnx.KeywordSpotter(
+                tokens=str(model_dir / "tokens.txt"),
+                encoder=str(model_dir / f"encoder-{chunk}"),
+                decoder=str(model_dir / f"decoder-{chunk}"),
+                joiner=str(model_dir / f"joiner-{chunk}"),
+                keywords_file=kw, num_threads=1,
+                keywords_score=SHERPA_BOOST, keywords_threshold=threshold)
+        finally:
+            os.unlink(kw)
+        self._stream = None
+        #: The phrase the most recent feed() spotted, or "".
+        self.last_hit = ""
+
+    def knows(self, word: str) -> bool:
+        """Whether the lexicon has `word`, so it can be listened for."""
+        word = word.lower()
+        if word not in self._lexicon:
+            self._lexicon.update(sherpa_lexicon(self.model_dir, [word]))
+        return word in self._lexicon
+
+    def listen_for(self, phrases: list[str], threshold: float) -> None:
+        """Start a stream that spots exactly `phrases` at `threshold`.
+
+        Cheap enough to call on any change: the model stays, only the stream
+        is new. A word outside the lexicon raises ValueError naming it --
+        callers check with knows() first, so this is the backstop.
+        """
+        for word in {w for p in phrases for w in p.split()}:
+            if not self.knows(word):
+                raise ValueError(f"its lexicon has no word “{word}”")
+        self.phrases, self.threshold = list(phrases), threshold
+        text = sherpa_keywords(self.phrases, self._lexicon, threshold)
+        self._stream = self._spotter.create_stream(text)
+
+    def reset(self) -> None:
+        if self._stream is not None:
+            self._spotter.reset_stream(self._stream)
+
+    def feed(self, pcm: bytes) -> str:
+        """The phrase spotted in this frame, or ""."""
+        self.last_hit = ""
+        if self._stream is None:
+            return ""
+        x = self._np.frombuffer(pcm, dtype=self._np.int16)
+        self._stream.accept_waveform(RATE, x.astype(self._np.float32) / 32768.0)
+        while self._spotter.is_ready(self._stream):
+            self._spotter.decode_stream(self._stream)
+            tag = self._spotter.get_result(self._stream)
+            if tag and not self.last_hit and tag != "_never":
+                self.last_hit = tag.replace("_", " ")
+                self._spotter.reset_stream(self._stream)
+        return self.last_hit
+
+
 def wanted_names(cfg) -> list[str]:
     """The extra agents' names, in the order they were added.
 
@@ -238,6 +364,8 @@ class Pipeline:
         self.heard_phrase = ""
         self.engine = "vosk"
         self._oww = None
+        self._sherpa = None
+        self._sherpa_spec = None
         self._loud_frames = 0
         self._refractory_until = 0.0
         self._whisper = None
@@ -266,9 +394,16 @@ class Pipeline:
                 # The extra agents' names are part of the grammar, so a new
                 # one means a new recogniser.
                 tuple(wanted_names(cfg)))
+        if engine == "sherpa":
+            want = self._sherpa_wake_spec(cfg)
         if want != getattr(self, "_wake_spec", None):
-            self._wake_spec = want
             self._build_wake(cfg, engine)
+            # Recomputed, because building decides it: a fallback to Vosk
+            # puts the names back into what needs a rebuild.
+            self._wake_spec = (self._sherpa_wake_spec(cfg) if engine == "sherpa"
+                               else want)
+        if getattr(self, "_sherpa", None) is not None:
+            self._sherpa_listen(cfg)
 
         self.lead_in_ms = cfg.get_int("leadInMs")
         self.trailing_ms = cfg.get_int("trailingSilenceMs")
@@ -310,10 +445,29 @@ class Pipeline:
         # frame was described as 100ms.
         self.min_loud_frames = max(1, 600 // CHUNK_MS)
 
+    def _sherpa_wake_spec(self, cfg: Config) -> tuple:
+        """What needs a new sherpa-onnx model, as opposed to a new stream.
+
+        The phrase is in it because a word the lexicon lacks means falling
+        back to Vosk, a rebuild either way. The names and the threshold are
+        not: they go on the stream. Once it has fallen back, though, Vosk is
+        what is listening and its grammar does hold the names, so they rejoin
+        the spec -- otherwise a new agent would never reach the grammar.
+        """
+        want = ("sherpa", cfg.get_str("phrase").lower(), str(sherpa_model() or ""))
+        if getattr(self, "_sherpa_fell_back", False):
+            want += (tuple(wanted_names(cfg)),)
+        return want
+
     @property
     def detection_threshold(self) -> float | None:
-        """openWakeWord's firing threshold, or None on any other engine."""
-        return self._oww.threshold if self._oww is not None else None
+        """The engine's firing threshold, or None on Vosk, which has a
+        confidence bar instead."""
+        if self._oww is not None:
+            return self._oww.threshold
+        if getattr(self, "_sherpa", None) is not None:
+            return self._sherpa.threshold
+        return None
 
     @staticmethod
     def _verifier_stamp(cfg: Config) -> float:
@@ -331,6 +485,21 @@ class Pipeline:
         neighbours as high as the real one; openWakeWord has four pretrained
         phrases (plus anything trained locally) and real rejection."""
         self.engine = engine
+        if getattr(self, "_sherpa", None) is not None and engine != "sherpa":
+            self._sherpa = None
+            self._release()
+        if engine == "sherpa":
+            try:
+                self._build_sherpa(cfg)
+                self._sherpa_fell_back = False
+                return
+            except Exception as e:
+                self._sherpa_fell_back = True
+                self._sherpa = None
+                self._release()
+                print(f"  {YEL}sherpa-onnx unavailable ({type(e).__name__}: {e});"
+                      f" falling back to Vosk{OFF}")
+                self.engine = "vosk"
         if engine == "openwakeword":
             try:
                 self._oww = OwwWake(cfg.get_str("owwModel"),
@@ -368,6 +537,47 @@ class Pipeline:
         self._choose_names(wanted_names(cfg))
         self._reset_wake()
 
+    def _build_sherpa(self, cfg: Config) -> None:
+        """Load the keyword spotter and start listening. Raises when it cannot
+        run -- no package, no model, a phrase word outside its lexicon -- and
+        the caller falls back to Vosk."""
+        model = sherpa_model()
+        if model is None:
+            raise FileNotFoundError("no sherpa-onnx model installed -- "
+                                    "run install.sh --sherpa")
+        if self._oww is not None:
+            self._oww = None
+        self._sherpa = SherpaWake(model, cfg.get_int("sherpaThresholdPct") / 100.0)
+        self.phrase = cfg.get_str("phrase").lower()
+        missing = [w for w in self.phrase.split() if not self._sherpa.knows(w)]
+        if missing:
+            raise ValueError(f"its lexicon has no word “{missing[0]}”, "
+                             f"so it cannot hear “{self.phrase}”")
+        self._sherpa_spec = None
+        self._sherpa_listen(cfg)
+        print(f"  {DIM}wake: sherpa-onnx @ {self._sherpa.threshold:.2f}"
+              f" ({', '.join(self._sherpa.phrases)}){OFF}")
+        # As on openWakeWord: nothing needs Vosk here unless partials are
+        # explicitly on, so give its memory back.
+        if getattr(self, "_partials", "auto") != "on":
+            self._drop_vosk()
+
+    def _sherpa_listen(self, cfg: Config) -> None:
+        """Point the spotter at the current names and threshold.
+
+        Assigned after the spec check rather than in it: both live on the
+        stream, so a slider move or a new agent costs a stream, not the
+        second it takes to load the model again.
+        """
+        names = tuple(wanted_names(cfg))
+        threshold = cfg.get_int("sherpaThresholdPct") / 100.0
+        if (names, threshold) == self._sherpa_spec:
+            return
+        if self._sherpa_spec is None or names != self._sherpa_spec[0]:
+            self._choose_names(list(names))
+        self._sherpa_spec = (names, threshold)
+        self._sherpa.listen_for([self.phrase, *self.names], threshold)
+
     def _choose_names(self, wanted: list[str]) -> None:
         """Keep the names Vosk can actually hear, and say why for the rest.
 
@@ -396,7 +606,10 @@ class Pipeline:
             print(f"  {YEL}agent “{name}” cannot be woken: {why}{OFF}")
 
     def _knows(self, word: str) -> bool:
-        """Whether Vosk's lexicon has `word`. True when it cannot say."""
+        """Whether the wake engine's lexicon has `word`. True when it cannot
+        say."""
+        if getattr(self, "_sherpa", None) is not None:
+            return self._sherpa.knows(word)
         try:
             find = self.vosk_model_lazy().vosk_model_find_word
         except AttributeError:
@@ -538,6 +751,16 @@ class Pipeline:
         #
         # The gate below still guards the Vosk grammar, which does need it --
         # a grammar will happily match the phrase against room noise.
+        # sherpa-onnx is ungated for the same reason: it decodes a contiguous
+        # stream, and it was measured that way (FINDINGS §23).
+        if getattr(self, "_sherpa", None) is not None:
+            hit = self._sherpa.feed(pcm)
+            if hit:
+                self._refractory_until = time.time() + self.refractory_ms / 1000.0
+                self.heard_phrase = hit
+                return True
+            return False
+
         if self._oww is not None:
             if self._oww.feed(pcm):
                 self._refractory_until = time.time() + self.refractory_ms / 1000.0

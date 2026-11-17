@@ -54,6 +54,9 @@ DEFAULTS = {
     "phrase": "hey computer",
     "owwModel": "hey_jarvis",
     "owwThresholdPct": 90,
+    # sherpa-onnx keywords_threshold, as a percent like the others. 25 is the
+    # library's default and held up in FINDINGS §23; 50 lost half the wakes.
+    "sherpaThresholdPct": 25,
     "leadInMs": 5000,
     "trailingSilenceMs": 1200,
     "quickEndMs": 800,
@@ -106,6 +109,7 @@ TOML_ALIASES = {
     "engine": ("wake", "engine"),
     "owwModel": ("wake", "oww_model"),
     "owwThresholdPct": ("wake", "oww_threshold_pct"),
+    "sherpaThresholdPct": ("wake", "sherpa_threshold_pct"),
     "leadInMs": ("timing", "lead_in_ms"),
     "trailingSilenceMs": ("timing", "trailing_silence_ms"),
     "quickEndMs": ("timing", "quick_end_ms"),
