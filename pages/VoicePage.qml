@@ -13,7 +13,6 @@ Column {
 
   spacing: Style.space(18)
 
-  readonly property string voice: String(s.setting("voice", "lessac-medium"))
   readonly property bool speaks: s.setting("speakReplies", true) === true
 
   PageHeader {
@@ -44,57 +43,16 @@ Column {
 
     SettingRow {
       width: parent.width
-      label: "Voice"
-      hint: page.s.voiceMissing(page.voice) ? "Not on this machine yet — choosing a voice downloads it (about 60MB)."
-                                            : "The main agent's. Other agents can have their own, on Agents."
-      disabledReason: page.speaks ? "" : "Replies are not spoken."
-      changed: page.s.changed("voice")
+      label: "Voice and speed"
+      hint: "Each agent's voice and speaking speed live on its card, beside its other settings."
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      onReset: { page.s.resetKey("voice"); page.s.chooseVoice(page.s.defaults.voice || "") }
-      Dropdown {
-        width: Style.space(250)
-        showLabel: false
-        fontFamily: page.s.fontFamily
-        foreground: page.s.foreground
-        options: page.s.voiceOptions
-        value: page.voice
-        onChanged: function(v) {
-          if (v === page.voice) return
-          page.s.put("voice", v)
-          page.s.chooseVoice(v)
-        }
-      }
-    }
-
-    // Choosing the voice already starts the download. This is for
-    // afterwards: a download declined, a terminal closed, no network at the
-    // time. Without it the only way back would be to pick a different voice
-    // and pick this one again.
-    Column {
-      width: parent.width
-      spacing: Style.space(6)
-      visible: page.s.voiceMissing(page.voice)
-
-      Text {
-        width: parent.width
-        wrapMode: Text.WordWrap
-        text: "“" + page.s.voiceName(page.voice) + "” is not on this machine, so it is " +
-              "speaking in one that is."
-        textFormat: Text.PlainText
-        color: page.s.urgent
-        font.family: page.s.fontFamily
-        font.pixelSize: Style.font.caption
-      }
       Button {
-        // Names the voice, as the dropdown does. Passing no name left it to
-        // install.sh to read the setting, which is a race the flag exists
-        // to avoid.
-        text: "Try the download again…"
+        text: "Agents ›"
         bordered: true
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
-        onClicked: page.s.fetchVoice(page.voice)
+        onClicked: page.s.goTo("agents", "main")
       }
     }
 

@@ -317,7 +317,15 @@ if [[ $UNINSTALL == 1 ]]; then
 
   # The sections in Omarchy's Agents panel. After the service has stopped,
   # because stopping is when the daemon writes them one last time, as Off.
-  rm -f "${XDG_STATE_HOME:-$HOME/.local/state}"/omarchy/agents/usage/agentvoice-*.json
+  # Never fatal: under `set -e` a record that could not be removed (a
+  # read-only state directory, found by bench/install-in-a-box.sh) ended the
+  # uninstall here with exit 1, leaving the voice directories below unchecked
+  # and the data directory behind. A stale panel section is worth a warning,
+  # not a half-finished uninstall.
+  usage_dir="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/agents/usage"
+  if ! rm -f "$usage_dir"/agentvoice-*.json 2>/dev/null; then
+    warn "Could not remove agentvoice's sections from $usage_dir; delete agentvoice-*.json there by hand"
+  fi
 
   remove_keybinds
 

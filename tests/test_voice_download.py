@@ -14,7 +14,9 @@ ROOT = Path(__file__).resolve().parent.parent
 from qml_sources import overlay, overlay_files, page
 
 SETTINGS = overlay()
-VOICE = page("Voice")
+# The main agent's voice is on its card on the Agents page, beside every
+# other agent's, since the per-agent voice and speed settings.
+VOICE = page("Agents")
 DAEMON = (ROOT / "daemon" / "wake_listen.py").read_text()
 
 
@@ -30,7 +32,7 @@ def _voice_dropdown() -> str:
 
 
 def _download_offer() -> str:
-    start = VOICE.index("visible: page.s.voiceMissing(page.voice)")
+    start = VOICE.index("visible: page.s.voiceMissing(page.mainVoice)")
     return VOICE[VOICE.rindex("Column {", 0, start):
                  VOICE.index("\n    }", start)]
 
@@ -102,7 +104,7 @@ def test_every_launcher_argument_is_quoted():
 
 
 def test_the_offer_appears_only_when_it_is_missing():
-    assert "voiceMissing(page.voice)" in _download_offer()
+    assert "voiceMissing(page.mainVoice)" in _download_offer()
     missing = _function("voiceMissing")
     assert "< 0" in missing, "shown when the voice is absent from the list"
     assert "voicesOnDisk.length > 0" in missing, \

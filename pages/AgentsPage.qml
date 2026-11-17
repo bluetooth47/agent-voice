@@ -60,10 +60,47 @@ Column {
   // Per agent, like the model it depends on.
   function setEffort(value) { putMap("agentEfforts", page.main, value) }
 
+  readonly property string mainVoice: String(s.setting("voice", "lessac-medium"))
+  readonly property bool mainSpeaks: s.setting("speakReplies", true) === true
   readonly property string mainModel: mapValue("agentModels", page.main)
   readonly property string mainEffort: mapValue("agentEfforts", page.main)
   // What is saved for this agent, else what the daemon says is in force.
   readonly property string mainLevel: mapValue("permissions", page.main) || s.permissionLevel
+
+  // --- which cards are open ---------------------------------------------------
+  // Kept here, by agent name, not on the cards. A card's own `expanded` was
+  // a binding to focusAgent that the header click overwrote, so any time a
+  // card was rebuilt it came back shut -- and every save rebuilt them all.
+  property var openCards: ({})
+  function isOpen(key) { return openCards[key] === true }
+  function setOpen(key, open) {
+    if (key === "" || isOpen(key) === open) return
+    var all = {}
+    for (var k in openCards) all[k] = openCards[k]
+    if (open) all[key] = true
+    else delete all[key]
+    openCards = all
+  }
+  // A deep link ({page: "agents", agent: "sarah"}), a new agent, a rename.
+  Connections {
+    target: page.s
+    function onFocusAgentChanged() { page.setOpen(page.s.focusAgent, true) }
+  }
+  // Which card starts open: the one linked to, else the main card when it is
+  // the only one. Decided once the settings have loaded, not at creation --
+  // before that every list reads empty, so the main card always opened.
+  property bool openingDecided: false
+  function decideOpening() {
+    if (openingDecided || !s.store.loaded) return
+    openingDecided = true
+    if (s.focusAgent !== "") setOpen(s.focusAgent, true)
+    else if (s.voiceAgents.length === 0) setOpen("main", true)
+  }
+  Connections {
+    target: page.s.store
+    function onLoadedChanged() { page.decideOpening() }
+  }
+  Component.onCompleted: decideOpening()
 
   // --- the extra agents -------------------------------------------------------
   function saveAgents(list) { s.put("voiceAgents", list) }
@@ -92,7 +129,7 @@ Column {
       if (!taken[s.nameSuggestions[j]]) name = s.nameSuggestions[j]
     var list = s.voiceAgents.slice()
     list.push({ name: name, agent: "claude", model: "", effort: "", voice: "",
-                level: "ask", projectDir: "" })
+                speed: 0, level: "ask", projectDir: "" })
     s.focusAgent = name
     saveAgents(list)
   }
@@ -159,9 +196,54 @@ Column {
              : page.s.projectDir.trim() === "" && page.mainLevel === "edits" && !page.endpointChosen
                ? "No project folder, so “edits are fine” has nothing to be inside: every change is asked about."
                : ""
-    expanded: page.s.focusAgent === "main" || (page.s.focusAgent === "" && page.s.voiceAgents.length === 0)
+    expanded: page.isOpen("main")
+    onToggled: function(open) { page.setOpen("main", open) }
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
+
+    // One dropdown per engine rather than one that swaps its options.
+    // Swapping left the previous engine's value displayed -- picking "hey
+    // claude" under Vosk and then switching engines still showed "hey
+    // claude", which openWakeWord has no model for.
+    SettingRow {
+      width: parent.width
+      visible: !page.s.owwLive
+      stacked: true
+      label: "Wake phrase"
+      hint: "What you say to start a turn with this agent. Which phrases there are depends on the wake engine, on Listening."
+      changed: page.s.changed("phrase")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onReset: page.s.resetKey("phrase")
+      Dropdown {
+        showLabel: false
+        fontFamily: page.s.fontFamily
+        foreground: page.s.foreground
+        options: page.s.phraseOptions
+        value: page.s.setting("phrase", "hey computer")
+        onChanged: function(v) { page.s.put("phrase", v) }
+      }
+    }
+
+    SettingRow {
+      width: parent.width
+      visible: page.s.owwLive
+      stacked: true
+      label: "Wake phrase"
+      hint: "Only these ship pretrained. Another phrase means training your own model, on Listening."
+      changed: page.s.changed("owwModel")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onReset: page.s.resetKey("owwModel")
+      Dropdown {
+        showLabel: false
+        fontFamily: page.s.fontFamily
+        foreground: page.s.foreground
+        options: page.s.owwOptions
+        value: page.s.setting("owwModel", "hey_jarvis")
+        onChanged: function(v) { page.s.put("owwModel", v) }
+      }
+    }
 
     SettingRow {
       width: parent.width
@@ -441,38 +523,103 @@ Column {
           }
         }
       }
+    }
 
-      SettingRow {
-        width: parent.width
-        label: "Voice"
-        hint: page.s.voiceName(String(page.s.setting("voice", "lessac-medium"))) +
-              (page.s.setting("speakReplies", true) === true ? "" : " · replies are not spoken")
-        foreground: page.s.foreground
+    SettingRow {
+      width: parent.width
+      stacked: true
+      label: "Voice"
+      hint: page.s.voiceMissing(page.mainVoice) ? "Not on this machine yet — choosing a voice downloads it (about 60MB)."
+                                            : "Which Piper voice this agent speaks in."
+      disabledReason: page.mainSpeaks ? "" : "Replies are not spoken."
+      changed: page.s.changed("voice")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onReset: { page.s.resetKey("voice"); page.s.chooseVoice(page.s.defaults.voice || "") }
+      Dropdown {
+        showLabel: false
         fontFamily: page.s.fontFamily
-        Button {
-          text: "Change on Voice ›"
-          bordered: true
-          foreground: page.s.foreground
-          fontFamily: page.s.fontFamily
-          onClicked: page.s.goTo("voice", "")
+        foreground: page.s.foreground
+        options: page.s.voiceOptions
+        value: page.mainVoice
+        onChanged: function(v) {
+          if (v === page.mainVoice) return
+          page.s.put("voice", v)
+          page.s.chooseVoice(v)
         }
       }
+    }
+
+    // Choosing the voice already starts the download. This is for
+    // afterwards: a download declined, a terminal closed, no network at the
+    // time. Without it the only way back would be to pick a different voice
+    // and pick this one again.
+    Column {
+      width: parent.width
+      spacing: Style.space(6)
+      visible: page.s.voiceMissing(page.mainVoice)
+
+      Text {
+        width: parent.width
+        wrapMode: Text.WordWrap
+        text: "“" + page.s.voiceName(page.mainVoice) + "” is not on this machine, so it is " +
+              "speaking in one that is."
+        textFormat: Text.PlainText
+        color: page.s.urgent
+        font.family: page.s.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+      Button {
+        // Names the voice, as the dropdown does. Passing no name left it to
+        // install.sh to read the setting, which is a race the flag exists
+        // to avoid.
+        text: "Try the download again…"
+        bordered: true
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onClicked: page.s.fetchVoice(page.mainVoice)
+      }
+    }
+
+    KnobRow {
+      width: parent.width
+      foreground: page.s.foreground; fontFamily: page.s.fontFamily
+      label: "Speaking speed"
+      description: "Its pace. Agents set to \"same as the main agent\" follow this one."
+      help: "A percent of the voice's natural pace: 100 is as recorded, 150 is half " +
+            "again as fast. Piper stretches or squeezes each sound, so it stays the " +
+            "same voice rather than going higher. Takes effect from the next reply " +
+            "with nothing reloaded. Double-click the slider for 100."
+      enabled: page.mainSpeaks
+      value: page.s.setting("voiceSpeed", 100)
+      defaultValue: page.s.defaults.voiceSpeed !== undefined ? page.s.defaults.voiceSpeed : 100
+      changed: page.s.changed("voiceSpeed")
+      minimum: 50; maximum: 200; stepSize: 5
+      unit: "%"
+      onCommitted: function(v) { page.s.put("voiceSpeed", Math.round(v)) }
+      onReset: page.s.resetKey("voiceSpeed")
     }
   }
 
   // --- the extra agents ---------------------------------------------------------
+  // By count, not by the list. `s.voiceAgents` is a new array after every
+  // save of any setting, and a Repeater handed a new array rebuilds every
+  // delegate: each card shut, a dropdown open inside it vanished, a half-typed
+  // name was lost. A count that has not changed rebuilds nothing.
   Repeater {
-    model: page.s.voiceAgents
+    model: page.s.voiceAgents.length
 
     delegate: AgentCard {
       id: card
-      required property var modelData
       required property int index
+      readonly property var modelData: page.s.voiceAgents[card.index] || ({})
 
       readonly property string agentName: String(modelData.name || "")
       readonly property string program: String(modelData.agent || "claude")
       readonly property string model: String(modelData.model || "")
       readonly property string effort: String(modelData.effort || "")
+      // 0 (or nothing) is "same as the main agent".
+      readonly property int speed: Number(modelData.speed || 0)
       readonly property string level: String(modelData.level || "ask")
       readonly property var info: page.s.crewInfo(card.agentName)
       readonly property var efforts: Array.isArray(card.info.efforts) ? card.info.efforts : []
@@ -490,7 +637,8 @@ Column {
       problem: String(card.info.problem || "") !== "" ? String(card.info.problem)
                : card.agentName !== "" && !/^[a-z]+( [a-z]+){0,2}$/.test(card.agentName)
                  ? "A name is one to three plain words, letters only." : ""
-      expanded: page.s.focusAgent === card.agentName
+      expanded: page.isOpen(card.agentName)
+      onToggled: function(open) { page.setOpen(card.agentName, open) }
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
 
@@ -511,6 +659,8 @@ Column {
           onEditingFinished: {
             var v = text.trim().toLowerCase()
             if (v !== card.agentName) {
+              page.setOpen(card.agentName, false)
+              page.setOpen(v, true)
               page.s.focusAgent = v
               page.updateAgent(card.index, "name", v)
             }
@@ -599,28 +749,6 @@ Column {
       SettingRow {
         width: parent.width
         stacked: true
-        label: "Voice"
-        hint: page.s.voiceMissing(String(card.modelData.voice || ""))
-              ? "Not downloaded yet — choosing it starts the download." : ""
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        Dropdown {
-          showLabel: false
-          fontFamily: page.s.fontFamily
-          foreground: page.s.foreground
-          options: [{ label: "Same as the main agent", value: "" }].concat(page.s.voiceOptions)
-          value: String(card.modelData.voice || "")
-          onChanged: function(v) {
-            if (v === String(card.modelData.voice || "")) return
-            page.updateAgent(card.index, "voice", v)
-            page.s.chooseVoice(v)
-          }
-        }
-      }
-
-      SettingRow {
-        width: parent.width
-        stacked: true
         label: "Permission"
         hint: card.level === "trusted"
               ? "Nothing is asked. A sentence starting with “" + card.agentName +
@@ -687,6 +815,71 @@ Column {
           onEditingFinished: {
             if (text !== String(card.modelData.projectDir || ""))
               page.updateAgent(card.index, "projectDir", text.trim())
+          }
+        }
+      }
+
+      SettingRow {
+        width: parent.width
+        stacked: true
+        label: "Voice"
+        hint: page.s.voiceMissing(String(card.modelData.voice || ""))
+              ? "Not downloaded yet — choosing it starts the download." : ""
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        Dropdown {
+          showLabel: false
+          fontFamily: page.s.fontFamily
+          foreground: page.s.foreground
+          options: [{ label: "Same as the main agent", value: "" }].concat(page.s.voiceOptions)
+          value: String(card.modelData.voice || "")
+          onChanged: function(v) {
+            if (v === String(card.modelData.voice || "")) return
+            page.updateAgent(card.index, "voice", v)
+            page.s.chooseVoice(v)
+          }
+        }
+      }
+
+      SettingRow {
+        width: parent.width
+        stacked: true
+        label: "Speaking speed"
+        hint: card.speed > 0 ? "Its own pace, whatever the main agent's is."
+                             : "Follows the main agent (" + Number(page.s.setting("voiceSpeed", 100)) + "%)."
+        changed: card.speed > 0
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onReset: page.updateAgent(card.index, "speed", 0)
+        Column {
+          spacing: Style.space(6)
+          SegmentedChoice {
+            options: [
+              { value: "main", label: "Same as the main agent" },
+              { value: "own", label: "Its own" }
+            ]
+            value: card.speed > 0 ? "own" : "main"
+            foreground: page.s.foreground
+            fontFamily: page.s.fontFamily
+            onCommitted: function(v) {
+              if (v === "own" && card.speed === 0)
+                page.updateAgent(card.index, "speed", Number(page.s.setting("voiceSpeed", 100)) || 100)
+              else if (v === "main" && card.speed > 0)
+                page.updateAgent(card.index, "speed", 0)
+            }
+          }
+          KnobRow {
+            width: parent.width
+            visible: card.speed > 0
+            foreground: page.s.foreground; fontFamily: page.s.fontFamily
+            label: "Speed"
+            value: card.speed > 0 ? card.speed : 100
+            defaultValue: 100
+            minimum: 50; maximum: 200; stepSize: 5
+            unit: "%"
+            onCommitted: function(v) {
+              if (Math.round(v) !== card.speed) page.updateAgent(card.index, "speed", Math.round(v))
+            }
           }
         }
       }

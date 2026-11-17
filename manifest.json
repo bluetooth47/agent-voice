@@ -37,6 +37,7 @@
       "chimes": true,
       "keepHistory": true,
       "voice": "lessac-medium",
+      "voiceSpeed": 100,
       "micThresholdDb": -38,
       "wakeConfidencePct": 70,
       "echoTailMs": 350,
@@ -201,6 +202,16 @@
         ],
         "defaultValue": "lessac-medium",
         "description": "Piper voices, all measured around 22x realtime on this hardware. lessac and amy are female, ryan, joe and hfc_male are male; low is faster and thinner than medium."
+      },
+      {
+        "key": "voiceSpeed",
+        "type": "integer",
+        "label": "Speaking speed (%)",
+        "min": 50,
+        "max": 200,
+        "step": 5,
+        "defaultValue": 100,
+        "description": "How fast the main agent's voice talks, as a percent of the voice's natural pace. Other agents follow it unless they have their own speed. Applies from the next reply; no model is reloaded."
       },
       {
         "key": "echoTailMs",

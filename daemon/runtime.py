@@ -49,6 +49,27 @@ _VOICE = re.compile(r"[a-z][a-z_]{0,31}-(x_low|low|medium|high)")
 #: grammar can match, and one more process and voice held in memory.
 MAX_AGENTS = 8
 
+#: How fast a voice speaks, as a percent of its natural pace. Piper slows by
+#: stretching each phoneme (length_scale), so the bounds are where it still
+#: sounds like speech rather than a tape at the wrong speed.
+SPEED_MIN, SPEED_MAX = 50, 200
+
+
+def speed_pct(value, fallback: int = 100) -> int:
+    """A speaking speed as a whole percent inside the bounds, or `fallback`.
+
+    Read from a hand-editable file, so anything that is not a number reads as
+    unset rather than raising inside the run loop."""
+    if isinstance(value, bool):
+        return fallback
+    try:
+        n = int(round(float(value)))
+    except (TypeError, ValueError):
+        return fallback
+    if n <= 0:
+        return fallback
+    return max(SPEED_MIN, min(SPEED_MAX, n))
+
 DEFAULTS = {
     "engine": "vosk",
     "phrase": "hey computer",
@@ -99,6 +120,7 @@ DEFAULTS = {
     "logSpeech": False,
     "followUpMs": 7000,
     "voice": "lessac-medium",
+    "voiceSpeed": 100,
     "agentsPanel": True,
 }
 
@@ -359,12 +381,15 @@ class Config:
             voice = voice.strip() if isinstance(voice, str) else ""
             level = entry.get("level")
             folder = entry.get("projectDir")
+            # 0 is "same as the main agent"; anything unreadable reads as that.
+            speed = speed_pct(entry.get("speed"), 0)
             out.append({
                 "name": name,
                 "agent": program if _PROGRAM.fullmatch(program) else "",
                 "model": model if _MODEL_NAME.fullmatch(model) else "",
                 "effort": effort if effort in EFFORT_LEVELS else "",
                 "voice": voice if _VOICE.fullmatch(voice) else "",
+                "speed": speed,
                 "level": level if level in ("ask", "edits", "trusted") else "ask",
                 "projectDir": folder.strip() if isinstance(folder, str) else "",
             })
@@ -570,12 +595,20 @@ class Speaker:
     #: is the failure this exists to avoid.
     substituted_for: str = ""
 
+    #: Speaking speed in percent. A plain attribute, assigned by the caller
+    #: after its spec check: a speed is a number, not a new model.
+    speed: int = 100
+    #: The voice's own pace. Some voices ship a length_scale other than 1,
+    #: so a speed is applied on top of it rather than instead of it.
+    _base_scale: float = 1.0
+
     def __init__(self, voice: str = "lessac-medium") -> None:
         from piper import PiperVoice
         voice, substituted = self._resolve(voice)
         path = piper_voices() / f"en_US-{voice}.onnx"
         self._voice = PiperVoice.load(str(path))
         self._rate = getattr(self._voice.config, "sample_rate", 22050)
+        self._base_scale = float(getattr(self._voice.config, "length_scale", 1.0) or 1.0)
         self.name = voice
         self.substituted_for = substituted
         #: What the settings asked for, which is what a later reload compares
@@ -635,6 +668,17 @@ class Speaker:
         from speech_text import iter_sentences
         return list(iter_sentences([text.strip()]))
 
+    def length_scale(self) -> float:
+        """Piper's length_scale for the current speed: larger is slower."""
+        return self._base_scale * 100.0 / speed_pct(self.speed)
+
+    def synthesis_config(self):
+        """None at normal speed, so Piper keeps its own defaults untouched."""
+        if speed_pct(self.speed) == 100:
+            return None
+        from piper import SynthesisConfig
+        return SynthesisConfig(length_scale=self.length_scale())
+
     def cancel(self) -> None:
         self._stop.set()
 
@@ -656,12 +700,16 @@ class Speaker:
         self.first_audio_at = None
         total = 0.0
         slice_n = max(1, int(self._rate * SLICE_MS / 1000))
+        syn = self.synthesis_config()
+        # Only handed over when it says something, so normal speed calls
+        # Piper exactly as it always has.
+        opts = {"syn_config": syn} if syn is not None else {}
         with sd.OutputStream(samplerate=self._rate, channels=1,
                              dtype="int16") as out:
             for sentence in self.sentences(text):
                 if self._stop.is_set():
                     break
-                for chunk in self._voice.synthesize(sentence):
+                for chunk in self._voice.synthesize(sentence, **opts):
                     if self._stop.is_set():
                         break
                     pcm = np.frombuffer(chunk.audio_int16_bytes, dtype=np.int16)

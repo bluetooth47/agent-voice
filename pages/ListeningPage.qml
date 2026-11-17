@@ -113,47 +113,18 @@ Column {
       }
     }
 
-    // One dropdown per engine rather than one that swaps its options.
-    // Swapping left the previous engine's value displayed -- picking "hey
-    // claude" under Vosk and then switching engines still showed "hey
-    // claude", which openWakeWord has no model for.
     SettingRow {
       width: parent.width
-      visible: !page.s.owwLive
-      label: "Phrase"
-      hint: "What you say to start a turn with the main agent."
-      changed: page.s.changed("phrase")
+      label: "Wake phrase"
+      hint: "“" + page.s.activePhrase + "” wakes the main agent. It is set on its card, beside each other agent's name."
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      onReset: page.s.resetKey("phrase")
-      Dropdown {
-        width: Style.space(220)
-        showLabel: false
-        fontFamily: page.s.fontFamily
+      Button {
+        text: "Agents ›"
+        bordered: true
         foreground: page.s.foreground
-        options: page.s.phraseOptions
-        value: page.s.setting("phrase", "hey computer")
-        onChanged: function(v) { page.s.put("phrase", v) }
-      }
-    }
-
-    SettingRow {
-      width: parent.width
-      visible: page.s.owwLive
-      label: "Phrase"
-      hint: "Only these ship pretrained. Another phrase means training your own model (below)."
-      changed: page.s.changed("owwModel")
-      foreground: page.s.foreground
-      fontFamily: page.s.fontFamily
-      onReset: page.s.resetKey("owwModel")
-      Dropdown {
-        width: Style.space(220)
-        showLabel: false
         fontFamily: page.s.fontFamily
-        foreground: page.s.foreground
-        options: page.s.owwOptions
-        value: page.s.setting("owwModel", "hey_jarvis")
-        onChanged: function(v) { page.s.put("owwModel", v) }
+        onClicked: page.s.goTo("agents", "main")
       }
     }
 

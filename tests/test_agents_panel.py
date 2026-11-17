@@ -243,8 +243,20 @@ def test_the_setting_is_in_all_three_places():
 def test_uninstall_removes_the_records_after_the_service_stops():
     text = (ROOT / "install.sh").read_text()
     stop = text.index("disable --now agentvoice.service")
-    rm = text.index("omarchy/agents/usage/agentvoice-*.json")
-    assert stop < rm
+    where = text.index('usage_dir="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/agents/usage"')
+    rm = text.index('rm -f "$usage_dir"/agentvoice-*.json', where)
+    assert stop < where < rm
+
+
+def test_a_record_that_cannot_be_removed_does_not_end_the_uninstall():
+    """install.sh runs under `set -e`, and a bare `rm -f` that failed (a
+    read-only state directory) exited 1 there: the voice directories after it
+    were never checked and the data directory was left behind. Found by the
+    installer-in-a-box round trip."""
+    text = (ROOT / "install.sh").read_text()
+    line = text[text.rindex("\n", 0, text.index('rm -f "$usage_dir"/agentvoice-*.json')) + 1:]
+    line = line[:line.index("\n")]
+    assert line.strip().startswith("if ! rm -f"), line
 
 
 def test_simulate_never_appears_in_the_panel():

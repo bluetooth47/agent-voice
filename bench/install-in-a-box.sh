@@ -63,6 +63,8 @@ run_case() {
         --setenv PATH "$bin" \
         --setenv XDG_DATA_HOME "$box/home/.local/share" \
         --setenv XDG_CONFIG_HOME "$box/home/.config" \
+        --setenv XDG_STATE_HOME "$box/home/.local/state" \
+        --setenv XDG_CACHE_HOME "$box/home/.cache" \
         --setenv XDG_RUNTIME_DIR "$box/run" \
         --setenv UV_CACHE_DIR "$box/uvcache" \
         -- bash -c "mkdir -p '$box/home' '$box/run' && '$ROOT/install.sh' $INSTALL_ARGS" \
@@ -124,6 +126,8 @@ round_trip() {
         --setenv PATH "$bin" \
         --setenv XDG_DATA_HOME "$box/home/.local/share" \
         --setenv XDG_CONFIG_HOME "$box/home/.config" \
+        --setenv XDG_STATE_HOME "$box/home/.local/state" \
+        --setenv XDG_CACHE_HOME "$box/home/.cache" \
         --setenv XDG_RUNTIME_DIR "$box/run" \
         --setenv UV_CACHE_DIR "$box/uvcache" \
         -- bash -c "

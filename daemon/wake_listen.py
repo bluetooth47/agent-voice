@@ -58,7 +58,7 @@ from speech_text import (  # noqa: E402
     as_prompt, is_stop_command, safe_for_terminal,
 )
 from runtime import (  # noqa: E402
-    REPLY_MAX, RUNTIME_DIR, Config, History, Speaker, StateFile,
+    REPLY_MAX, RUNTIME_DIR, Config, History, Speaker, StateFile, speed_pct,
 )
 
 from paths import (  # noqa: E402
@@ -1829,12 +1829,18 @@ class Daemon:
             self.speaker = None
             return
         wanted = self.cfg.get_str("voice")
+        speed = speed_pct(self.cfg["voiceSpeed"])
         if (self.speaker is not None
                 and self.speaker.requested == wanted
                 and not self.speaker.superseded()):
+            # After the spec check: a speed is a number, not a new model.
+            if getattr(self.speaker, "speed", 100) != speed:
+                self.speaker.speed = speed
+                self.say_once("speed", f"  {CYA}voice speed: {speed}%{OFF}")
             return
         try:
             self.speaker = Speaker(wanted)
+            self.speaker.speed = speed
         except Exception as e:
             # Reported once, not every two seconds: no voice on disk at all
             # is a standing condition, and it used to reprint the whole
@@ -2575,8 +2581,10 @@ class Daemon:
         one, because a session is scoped to all of those.
         """
         old = p.spec or {}
-        same = {k: v for k, v in spec.items() if k not in ("effort", "voice")}
-        was = {k: v for k, v in old.items() if k not in ("effort", "voice")}
+        same = {k: v for k, v in spec.items()
+                if k not in ("effort", "voice", "speed")}
+        was = {k: v for k, v in old.items()
+               if k not in ("effort", "voice", "speed")}
         if same == was and p.agent is not None:
             p.spec = spec
             if takes_effort(p.agent):
@@ -2591,6 +2599,11 @@ class Daemon:
             p.agent.cancel()
         self._build_persona(p, spec)
 
+    def persona_speed(self, p: Persona) -> int:
+        """An extra agent's own speed, else the main agent's."""
+        own = (p.spec or {}).get("speed") or 0
+        return speed_pct(own) if own else speed_pct(self.cfg["voiceSpeed"])
+
     def _reconcile_persona_voice(self, p: Persona) -> bool:
         """Give an extra agent its own voice. True if that changed anything."""
         if not self.cfg.get_bool("speakReplies"):
@@ -2599,11 +2612,18 @@ class Daemon:
             p.speaker = None
             return True
         wanted = (p.spec or {}).get("voice") or self.cfg.get_str("voice")
+        speed = self.persona_speed(p)
         if (p.speaker is not None and getattr(p.speaker, "requested", None) == wanted
                 and not p.speaker.superseded()):
-            return False
+            if getattr(p.speaker, "speed", 100) == speed:
+                return False
+            p.speaker.speed = speed
+            self.say_once(f"speed:{p.name}", f"  {CYA}agent “{p.name}” speaks at "
+                                             f"{speed}%{OFF}")
+            return True
         try:
             p.speaker = self.make_speaker(wanted)
+            p.speaker.speed = speed
         except Exception as e:
             self.say_once(f"voice:{p.name}", f"  {YEL}agent “{p.name}”: voice "
                                              f"{wanted} unavailable: {e}{OFF}")

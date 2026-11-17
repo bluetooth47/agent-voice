@@ -29,6 +29,12 @@
 #                  on PATH becomes a stub that answers is-active with yes and
 #                  does nothing else, so no real service is started or
 #                  stopped. For screenshots of states the machine is not in.
+#   --live-config  give it a scratch copy of shell.json (XDG_CONFIG_HOME points
+#                  at it) and make the stub *apply* each `bar set` there with
+#                  jq, so a write comes back through the store's reload the
+#                  way it does on the real shell. The round trip is where
+#                  rebuild bugs live (a card shutting on every save); the
+#                  real shell.json is still never touched.
 #   --keep         leave it running until Ctrl+C instead of exiting after the
 #                  last shot (for poking at it by hand)
 set -euo pipefail
@@ -38,7 +44,7 @@ repo=$(cd "$here/../.." && pwd)
 shell_src="${OMARCHY_PATH:-/usr/share/omarchy}/shell"
 themes="${OMARCHY_PATH:-/usr/share/omarchy}/themes"
 
-theme="" out="" size="" wait=3 shots=1 gap=1.5 arg="" keep=0 state=""
+theme="" out="" size="" wait=3 shots=1 gap=1.5 arg="" keep=0 state="" live=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --theme) theme=$2; shift 2 ;;
@@ -50,6 +56,7 @@ while [ $# -gt 0 ]; do
     --arg) arg=$2; shift 2 ;;
     --state) state=$(realpath "$2"); shift 2 ;;
     --keep) keep=1; shift ;;
+    --live-config) live=1; shift ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     -*) echo "unknown option: $1" >&2; exit 2 ;;
     *) break ;;
@@ -98,12 +105,31 @@ fi
 
 real_omarchy=$(command -v omarchy || true)
 : > "$out.writes"
+config_env=()
+apply=""
+if [ "$live" -eq 1 ]; then
+  real_cfg="${XDG_CONFIG_HOME:-$HOME/.config}"
+  mkdir -p "$tmp/config/omarchy"
+  # Everything else under ~/.config/omarchy is read-only to a preview, so
+  # linked; shell.json is the one file it writes, so copied.
+  for f in "$real_cfg"/omarchy/*; do
+    [ "$(basename "$f")" = shell.json ] || ln -s "$f" "$tmp/config/omarchy/"
+  done
+  cp "$real_cfg/omarchy/shell.json" "$tmp/config/omarchy/shell.json"
+  cp "$tmp/config/omarchy/shell.json" "$out.shell.json.before"
+  config_env=(XDG_CONFIG_HOME="$tmp/config")
+  # `omarchy bar set ID KEY VALUE --json`: VALUE is JSON.
+  apply="f='$tmp/config/omarchy/shell.json'
+  jq --arg id \"\$3\" --arg k \"\$4\" --argjson v \"\$5\" \\
+    '(.bar.layout[]?[]? | select(.id==\$id))[\$k] = \$v' \"\$f\" > \"\$f.new\" && mv \"\$f.new\" \"\$f\""
+fi
 cat > "$tmp/bin/omarchy" <<EOF
 #!/usr/bin/env bash
 if [ "\${1:-}" = bar ] && [ "\${2:-}" = set ]; then
   # PREVIEW_SET_DELAY: seconds a write takes, to imitate the real one.
   sleep "\${PREVIEW_SET_DELAY:-0}"
   printf '%s\n' "\$*" >> '$out.writes'
+  $apply
   exit 0
 fi
 exec ${real_omarchy:-false} "\$@"
@@ -125,7 +151,7 @@ if [ -n "$state" ]; then
                WAYLAND_DISPLAY="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/${WAYLAND_DISPLAY:-wayland-0}")
 fi
 
-env "${runtime_env[@]}" \
+env "${runtime_env[@]}" "${config_env[@]}" \
 PATH="$tmp/bin:$PATH" PREVIEW_ARG="$arg" PREVIEW_WRITES="$out.writes" \
   PREVIEW_WAIT="$wait" PREVIEW_GAP="$gap" \
   qs -p "$tmp" > "$out.log" 2>&1 &
@@ -160,6 +186,8 @@ else
     [ "$i" -lt "$shots" ] && sleep "$gap"
   done
 fi
+
+[ "$live" -eq 1 ] && cp "$tmp/config/omarchy/shell.json" "$out.shell.json.after"
 
 if [ "$keep" -eq 1 ]; then
   echo "running; Ctrl+C to stop (log: $out.log, writes: $out.writes)" >&2
