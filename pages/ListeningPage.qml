@@ -166,6 +166,19 @@ Column {
       onReset: page.s.resetKey("sherpaThresholdPct")
     }
 
+    ToggleRow {
+      width: parent.width
+      visible: page.s.sherpaLive
+      label: "Second check for short names"
+      hint: "If the spotter misses a short burst, Vosk and Whisper both listen, and it wakes when both hear the same name."
+      checked: page.s.setting("wakeCrossCheck", true) === true
+      changed: page.s.changed("wakeCrossCheck")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onToggled: page.s.put("wakeCrossCheck", !checked)
+      onReset: page.s.resetKey("wakeCrossCheck")
+    }
+
     KnobRow {
       width: parent.width
       visible: !page.s.owwLive && !page.s.sherpaLive

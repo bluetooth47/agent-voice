@@ -45,6 +45,7 @@
       "owwModel": "hey_jarvis",
       "owwThresholdPct": 90,
       "sherpaThresholdPct": 15,
+      "wakeCrossCheck": true,
       "conversationMode": true,
       "followUpMs": 7000,
       "livePartials": "auto",
@@ -282,6 +283,13 @@
         "step": 5,
         "defaultValue": 15,
         "description": "Higher rejects more sound-alikes and misses more real wakes. On synthesized speech 15-35 all caught the same wakes; 50 lost about half (FINDINGS §23)."
+      },
+      {
+        "key": "wakeCrossCheck",
+        "type": "bool",
+        "label": "Second check for short names",
+        "defaultValue": true,
+        "description": "When sherpa-onnx lets a short burst of speech pass, Vosk and Whisper both listen to it, and it wakes if both hear the same name. Caught short names like Theo the spotter missed half the time, with no extra false wakes on the test clips (FINDINGS §24). Keeps the Vosk model loaded (about 114MB)."
       },
       {
         "key": "conversationMode",

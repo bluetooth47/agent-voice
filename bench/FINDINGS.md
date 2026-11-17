@@ -798,3 +798,60 @@ on the same corpus (`wake_bench.py daemon-sherpa`, threshold 0.25): 28/30
 detected, 3/150 false wakes, 4.5% CPU. That matches the prototype's
 4/150, so the stream-keyword route costs nothing. The lexicon lacks
 "ziggy", so it was replaced with "otto" in the suggested agent names.
+
+## 24. A second check for short names: Vosk and Whisper must agree
+
+The user reported valid wakes being dropped with "theo" as the main phrase
+and "sora" as an agent. Nothing in the journal showed it, because a miss
+prints nothing. Measured on the §23 corpus extended for these names
+(`/tmp/theo-bench`: five Piper voices at -20 and -28 dBFS, 190 clips),
+sherpa-onnx at threshold 0.10 caught "Theo" 5/10, "Hey Theo" 5/10, "Sora"
+3/10 and "Hey Sora" 6/10. Thresholds 0.03 and 0.10 gave identical results,
+so the slider cannot fix this.
+
+Each clip was then put through the two other engines the daemon already has:
+
+| clip       | Vosk grammar heard it | Whisper base.en heard it first |
+|------------|-----------------------|--------------------------------|
+| Theo       | 10/10                 | 10/10                          |
+| Hey Theo   | 9/10                  | 9/10                           |
+| Sora       | 10/10 (as "zora")     | 8/10                           |
+| Hey Sora   | 8/10 (as "zora")      | 10/10                          |
+| Video      | 8/10 as theo          | 0                              |
+| Cleo       | 7/10 as theo          | 0                              |
+| Leo / Neo  | 5/10, 4/10 as theo    | 0                              |
+| Story      | 10/10 as zora         | 2/10 as sora                   |
+| Sorry      | 7/10 as zora          | 0                              |
+
+Vosk's lexicon has no "sora". Of the spellings it does know, "zora" heard
+Sora 10/10. "soar a" and "sore a" heard it 3/10, and "laura" and "torah"
+fell somewhere in between. Whisper was prompted with "Theo, Sora." and
+counted only when the name opened the transcript, after an optional "hey".
+
+Each engine wakes on the other's mistakes but rarely on the same one, so the
+rule is that both must name the same agent. This runs only on a burst of
+speech 0.3-2.6s long that sherpa-onnx let pass. A name Vosk cannot hear at
+all is left to Whisper alone, and only when the transcript is the bare name.
+Whisper is skipped when Vosk heard nothing and every name has a Vosk vote,
+so background talk costs a grammar pass (about 100ms) and no transcription.
+
+Through the daemon's own `Pipeline` (gate -46 dBFS, sherpa at 0.10):
+
+| clip        | spotter alone | with the second check |
+|-------------|---------------|-----------------------|
+| Theo        | 5/10          | 10/10                 |
+| Hey Theo    | 5/10          | 8/10                  |
+| Sora        | 3/10          | 6/10                  |
+| Hey Sora    | 6/10          | 10/10                 |
+| Cleo        | 2/10          | 2/10 (the spotter's)  |
+| Story       | 0/10          | 2/10                  |
+| all others  | 0             | 0                     |
+
+The cost is time. faster-whisper pads every clip to its 30s window, so a
+half-second burst takes 0.8-1.7s to transcribe, with tiny.en no faster than
+base.en. A wake through the second check therefore lands about a second
+later than a spotter wake. Frames queue while it runs, and the queue is
+unbounded, so nothing said in that second is lost. It is setting
+`wakeCrossCheck`, on by default, and it keeps the Vosk model resident
+(114MB, §10) on the sherpa engine. Synthesized speech again: the live miss
+rate decides whether it earns its keep.

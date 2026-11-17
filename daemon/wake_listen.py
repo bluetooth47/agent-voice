@@ -50,6 +50,7 @@ from crew import (  # noqa: E402
     FLOOR_LEASE_S, FOLLOW_UP_STALE_S, Persona, View, route,
 )
 from agents_panel import AgentsPanel, program_label, slug  # noqa: E402
+import crosscheck  # noqa: E402
 import failure  # noqa: E402
 from chimes import Chimes  # noqa: E402
 from eager import Utterance, sounds_finished  # noqa: E402
@@ -408,6 +409,9 @@ class Pipeline:
         """Pick up the current knobs. Called between utterances only, so a
         turn in progress is never disturbed."""
         engine = cfg.get_str("engine")
+        # Read first: building the sherpa engine decides from it whether the
+        # Vosk model is worth keeping.
+        self.cross_check = cfg.get_bool("wakeCrossCheck")
         # The verifier's mtime belongs in the spec: retraining rewrites that
         # file, and without it the daemon keeps the copy it loaded at startup
         # for ever. A freshly trained verifier then appears to do nothing --
@@ -434,6 +438,9 @@ class Pipeline:
                                else want)
         if getattr(self, "_sherpa", None) is not None:
             self._sherpa_listen(cfg)
+            # Switched off: nothing else on this engine needs Vosk.
+            if not self.cross_check and getattr(self, "_partials", "auto") != "on":
+                self._drop_vosk()
 
         self.lead_in_ms = cfg.get_int("leadInMs")
         self.trailing_ms = cfg.get_int("trailingSilenceMs")
@@ -585,11 +592,14 @@ class Pipeline:
                              f"so it cannot hear “{self.phrase}”")
         self._sherpa_spec = None
         self._sherpa_listen(cfg)
+        second = " + second check" if getattr(self, "cross_check", False) else ""
         print(f"  {DIM}wake: sherpa-onnx @ {self._sherpa.threshold:.2f}"
-              f" ({', '.join(self._sherpa.phrases)}){OFF}")
+              f" ({', '.join(self._sherpa.phrases)}){second}{OFF}")
         # As on openWakeWord: nothing needs Vosk here unless partials are
-        # explicitly on, so give its memory back.
-        if getattr(self, "_partials", "auto") != "on":
+        # explicitly on or the second check votes with it, so give its
+        # memory back.
+        if (getattr(self, "_partials", "auto") != "on"
+                and not getattr(self, "cross_check", False)):
             self._drop_vosk()
 
     def _sherpa_listen(self, cfg: Config) -> None:
@@ -788,7 +798,10 @@ class Pipeline:
             if hit:
                 self._refractory_until = time.time() + self.refractory_ms / 1000.0
                 self.heard_phrase = hit
+                self._burst_cutter().clear()
                 return True
+            if getattr(self, "cross_check", False):
+                return self._second_check(pcm, level_db)
             return False
 
         if self._oww is not None:
@@ -857,6 +870,74 @@ class Pipeline:
         self._refractory_until = time.time() + self.refractory_ms / 1000.0
         self.heard_phrase = matched
         return True
+
+    def _burst_cutter(self) -> crosscheck.Bursts:
+        if getattr(self, "_bursts", None) is None:
+            self._bursts = crosscheck.Bursts(CHUNK_MS)
+        return self._bursts
+
+    def _second_check(self, pcm: bytes, level_db: float) -> bool:
+        """Ask Vosk and Whisper about a short burst the spotter let pass.
+
+        See crosscheck.py for the rule and its numbers. Runs only when a
+        burst of the right length has just ended, and Whisper only when Vosk
+        heard a name or cannot vote for one, so background talk costs a
+        grammar pass rather than a transcription.
+        """
+        audio = self._burst_cutter().feed(pcm, level_db >= self.threshold_db)
+        if audio is None:
+            return False
+        names = [self.phrase, *self.names]
+        t0 = time.perf_counter()
+        vosk, has_vote = self._vosk_vote(audio, names)
+        if not vosk and set(names) <= has_vote:
+            return False
+        try:
+            text = self._whisper_names(audio, names)
+        except Exception as e:
+            print(f"  {YEL}second check failed: {type(e).__name__}: {e}{OFF}")
+            return False
+        name, why = crosscheck.decide(names, has_vote, vosk, text)
+        ms = (time.perf_counter() - t0) * 1000
+        heard = (f" — whisper heard \"{safe_for_terminal(text.strip())}\""
+                 if speech_is_logged(getattr(self, "_log_speech", False)) else "")
+        if not name:
+            print(f"  {DIM}(second check: no wake — {why}{heard}, {ms:.0f}ms){OFF}",
+                  flush=True)
+            return False
+        print(f"  {DIM}(second check: {name} by {why}{heard}, {ms:.0f}ms){OFF}",
+              flush=True)
+        self._refractory_until = time.time() + self.refractory_ms / 1000.0
+        self.heard_phrase = name
+        self._sherpa.reset()
+        return True
+
+    def _vosk_vote(self, audio: bytes, names: list[str]) -> tuple[str, set[str]]:
+        """(name Vosk heard or "", the names it could have heard)."""
+        try:
+            model = self.vosk_model_lazy()
+            find = model.vosk_model_find_word
+        except Exception:
+            return "", set()
+        grammar, means = crosscheck.vosk_grammar(names, lambda w: find(w) >= 0)
+        if not grammar:
+            return "", set()
+        rec = self._vosk.KaldiRecognizer(model, RATE,
+                                         json.dumps([*grammar, "[unk]"]))
+        rec.AcceptWaveform(audio)
+        text = json.loads(rec.FinalResult()).get("text", "")
+        return crosscheck.vosk_heard(text, means), set(means.values())
+
+    def _whisper_names(self, audio: bytes, names: list[str]) -> str:
+        """Whisper's reading of a burst, prompted with the names -- the
+        prompt measured in FINDINGS §24. Through the one Whisper worker, so
+        it never runs beside a piece of an abandoned utterance."""
+        prompt = ", ".join(n.title() for n in names) + "."
+        if self._pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+            self._pool = ThreadPoolExecutor(max_workers=1,
+                                            thread_name_prefix="whisper")
+        return self._pool.submit(self._whisper_text, audio, prompt).result(timeout=10)
 
     def new_capture(self):
         """A recogniser for the live partial text, or None when it is not worth

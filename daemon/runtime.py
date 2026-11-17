@@ -99,6 +99,8 @@ DEFAULTS = {
     # sherpa-onnx keywords_threshold, as a percent like the others. 25 is the
     # library's default and held up in FINDINGS §23; 50 lost half the wakes.
     "sherpaThresholdPct": 15,
+    # Vosk + Whisper re-check short bursts sherpa-onnx let pass; crosscheck.py.
+    "wakeCrossCheck": True,
     "leadInMs": 5000,
     "trailingSilenceMs": 1200,
     "quickEndMs": 800,
@@ -154,6 +156,7 @@ TOML_ALIASES = {
     "owwModel": ("wake", "oww_model"),
     "owwThresholdPct": ("wake", "oww_threshold_pct"),
     "sherpaThresholdPct": ("wake", "sherpa_threshold_pct"),
+    "wakeCrossCheck": ("wake", "cross_check"),
     "leadInMs": ("timing", "lead_in_ms"),
     "trailingSilenceMs": ("timing", "trailing_silence_ms"),
     "quickEndMs": ("timing", "quick_end_ms"),
