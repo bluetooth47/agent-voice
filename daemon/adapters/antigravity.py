@@ -42,7 +42,7 @@ import threading
 from typing import Iterator
 
 from .base import (
-    Adapter, Chunk, Drain, SPOKEN_STYLE, Watchdog, feed, installed,
+    Adapter, Chunk, Drain, Watchdog, feed, installed,
     stop_tree,
 )
 
@@ -102,7 +102,7 @@ class Antigravity(Adapter):
         "user"}` answers "missing the message field", and the message is
         Claude-shaped.
         """
-        prompt = f"{SPOKEN_STYLE}\n\n{text}" if self.spoken else text
+        prompt = self.with_preamble(text)
         return json.dumps({"event": "user",
                            "message": {"role": "user",
                                        "content": [{"type": "text",

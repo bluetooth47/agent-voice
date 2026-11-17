@@ -17,7 +17,8 @@ import time
 import tomllib
 from pathlib import Path
 
-from paths import RUNTIME_DIR, SHELL_JSON, config_toml, piper_voices
+from paths import (RUNTIME_DIR, SHELL_JSON, VOICE_ID, config_toml, piper_voices,
+                   voice_id, voice_stem)
 
 PLUGIN_ID = "duaneoca.agentvoice"
 
@@ -42,8 +43,8 @@ _AGENT_NAME = re.compile(r"[a-z]+( [a-z]+){0,2}")
 #: plain word.
 _PROGRAM = re.compile(r"[a-z][a-z0-9-]{0,31}")
 
-#: A Piper voice as the settings spell it: "lessac-medium", "hfc_male-medium".
-_VOICE = re.compile(r"[a-z][a-z_]{0,31}-(x_low|low|medium|high)")
+#: A Piper voice as the settings spell it: "lessac-medium", "en_GB-alan-medium".
+_VOICE = VOICE_ID
 
 #: How many extra agents are listened for. Every name is one more word the
 #: grammar can match, and one more process and voice held in memory.
@@ -69,6 +70,26 @@ def speed_pct(value, fallback: int = 100) -> int:
     if n <= 0:
         return fallback
     return max(SPEED_MIN, min(SPEED_MAX, n))
+
+
+#: Custom instructions are added to the agent's system prompt on every turn,
+#: so a pasted essay costs tokens on every question. Long enough for a
+#: paragraph of preferences; past that it is a document, not an instruction.
+INSTRUCTIONS_MAX = 2000
+
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def instructions_text(value) -> str:
+    """Standing instructions for an agent: plain text, trimmed, bounded.
+
+    Read from a hand-editable file and handed to an agent CLI, so anything
+    that is not a string reads as none, and control characters other than a
+    newline are dropped rather than passed on."""
+    if not isinstance(value, str):
+        return ""
+    text = _CONTROL.sub("", value.replace("\r\n", "\n").replace("\t", " ")).strip()
+    return text[:INSTRUCTIONS_MAX].rstrip()
 
 DEFAULTS = {
     "engine": "vosk",
@@ -121,6 +142,7 @@ DEFAULTS = {
     "followUpMs": 7000,
     "voice": "lessac-medium",
     "voiceSpeed": 100,
+    "agentInstructions": "",
     "agentsPanel": True,
 }
 
@@ -390,6 +412,7 @@ class Config:
                 "effort": effort if effort in EFFORT_LEVELS else "",
                 "voice": voice if _VOICE.fullmatch(voice) else "",
                 "speed": speed,
+                "instructions": instructions_text(entry.get("instructions")),
                 "level": level if level in ("ask", "edits", "trusted") else "ask",
                 "projectDir": folder.strip() if isinstance(folder, str) else "",
             })
@@ -605,7 +628,7 @@ class Speaker:
     def __init__(self, voice: str = "lessac-medium") -> None:
         from piper import PiperVoice
         voice, substituted = self._resolve(voice)
-        path = piper_voices() / f"en_US-{voice}.onnx"
+        path = (piper_voices() / f"{voice_stem(voice)}.onnx")
         self._voice = PiperVoice.load(str(path))
         self._rate = getattr(self._voice.config, "sample_rate", 22050)
         self._base_scale = float(getattr(self._voice.config, "length_scale", 1.0) or 1.0)
@@ -630,7 +653,7 @@ class Speaker:
         """
         if not self.substituted_for:
             return False
-        return (piper_voices() / f"en_US-{self.substituted_for}.onnx").exists()
+        return (piper_voices() / f"{voice_stem(self.substituted_for)}.onnx").exists()
 
     @staticmethod
     def _resolve(voice: str) -> tuple[str, str]:
@@ -644,10 +667,10 @@ class Speaker:
         substitution; being wrong out loud beats being silent.
         """
         here = piper_voices()
-        if (here / f"en_US-{voice}.onnx").exists():
+        if (piper_voices() / f"{voice_stem(voice)}.onnx").exists():
             return voice, ""
-        available = sorted(p.stem.removeprefix("en_US-")
-                           for p in here.glob("en_US-*.onnx"))
+        available = sorted(voice_id(p.stem) for p in here.glob("*.onnx")
+                           if VOICE_ID.fullmatch(voice_id(p.stem)))
         if not available:
             raise FileNotFoundError(f"no piper voice at {here}")
         # Prefer the default when it is one of them: it is the voice every

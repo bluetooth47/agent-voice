@@ -57,7 +57,7 @@ from pathlib import Path
 from typing import Iterator
 
 from .base import (
-    Adapter, Chunk, Drain, SPOKEN_STYLE, Watchdog, feed, installed,
+    Adapter, Chunk, Drain, Watchdog, feed, installed,
     stop_tree,
 )
 
@@ -250,7 +250,7 @@ class Gemini(Adapter):
         return "gemini has no auth configured — run: gemini"
 
     def send(self, text: str, session_id: str | None = None) -> Iterator[Chunk]:
-        prompt = f"{SPOKEN_STYLE}\n\n{text}" if self.spoken else text
+        prompt = self.with_preamble(text)
         # An empty `-p` forces headless mode and the prompt arrives on stdin,
         # which --help describes as "appended to input on stdin (if any)" and
         # a real turn confirms. Out of argv, where /proc exposes it to any

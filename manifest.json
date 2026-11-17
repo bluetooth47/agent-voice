@@ -49,6 +49,7 @@
       "followUpMs": 7000,
       "livePartials": "auto",
       "projectDir": "",
+      "agentInstructions": "",
       "permissions": {},
       "agentModels": {},
       "agentEfforts": {},
@@ -195,13 +196,38 @@
         "options": [
           "lessac-medium",
           "lessac-low",
+          "lessac-high",
           "amy-medium",
+          "amy-low",
+          "kristin-medium",
+          "hfc_female-medium",
+          "kathleen-low",
+          "ljspeech-medium",
+          "ljspeech-high",
           "ryan-medium",
+          "ryan-low",
+          "ryan-high",
           "joe-medium",
-          "hfc_male-medium"
+          "hfc_male-medium",
+          "bryce-medium",
+          "danny-low",
+          "john-medium",
+          "kusal-medium",
+          "mike-medium",
+          "norman-medium",
+          "reza_ibrahim-medium",
+          "sam-medium",
+          "en_GB-alan-medium",
+          "en_GB-alan-low",
+          "en_GB-northern_english_male-medium",
+          "en_GB-alba-medium",
+          "en_GB-cori-medium",
+          "en_GB-cori-high",
+          "en_GB-jenny_dioco-medium",
+          "en_GB-southern_english_female-low"
         ],
         "defaultValue": "lessac-medium",
-        "description": "Piper voices, all measured around 22x realtime on this hardware. lessac and amy are female, ryan, joe and hfc_male are male; low is faster and thinner than medium."
+        "description": "Piper voices: every single-speaker English voice in the pinned revision, American ones by name and British ones prefixed en_GB-. low is faster and thinner than medium, high is fuller and about twice the size. The Voice page lists them with a button to hear each one."
       },
       {
         "key": "voiceSpeed",
@@ -324,6 +350,13 @@
         "label": "Project directory",
         "defaultValue": "",
         "description": "Where the agent works. Empty means your home directory. Everything it reads, writes or runs happens here, and the permission level below applies to this directory."
+      },
+      {
+        "key": "agentInstructions",
+        "type": "string",
+        "label": "Custom instructions",
+        "defaultValue": "",
+        "description": "Standing instructions for the main agent, added to its system prompt on every turn: how to address you, what to keep in mind, how much to say. Extra agents each have their own. Up to 2000 characters; changing them keeps the conversation."
       },
       {
         "key": "endpointUrl",

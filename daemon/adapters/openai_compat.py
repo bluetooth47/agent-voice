@@ -19,7 +19,7 @@ import urllib.request
 import uuid
 from typing import Iterator
 
-from .base import SPOKEN_STYLE, Adapter, Chunk
+from .base import Adapter, Chunk
 
 #: How many prior turns to replay. Voice conversations are short, and every
 #: replayed turn is re-billed and re-read on the next request.
@@ -187,8 +187,13 @@ class OpenAICompatible(Adapter):
     def _messages(self, text: str, session_id: str | None) -> tuple[str, list[dict]]:
         sid = session_id or str(uuid.uuid4())
         history = self._sessions.get(sid, [])
-        if not history and self.spoken:
-            history = [{"role": "system", "content": SPOKEN_STYLE}]
+        # The system message is rebuilt every turn rather than kept from the
+        # first, so changed instructions apply to a conversation already open.
+        if history and history[0]["role"] == "system":
+            history = history[1:]
+        head = self.preamble()
+        if head:
+            history = [{"role": "system", "content": head}] + history
         history = history + [{"role": "user", "content": text}]
         # Keep the system message and the tail; the middle is what ages out.
         if len(history) > self.history_turns * 2 + 1:

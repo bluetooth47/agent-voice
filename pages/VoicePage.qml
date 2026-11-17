@@ -15,6 +15,29 @@ Column {
 
   readonly property bool speaks: s.setting("speakReplies", true) === true
 
+  // The library's filter: this page's own view, not a setting.
+  property string filter: "all"
+  readonly property var shown: {
+    var out = []
+    var all = s.rawVoiceOptions
+    for (var i = 0; i < all.length; i++) {
+      var v = all[i]
+      if (page.filter === "here" && s.voicesOnDisk.indexOf(v.value) < 0) continue
+      if ((page.filter === "female" || page.filter === "male") && v.gender !== page.filter) continue
+      if (page.filter === "GB" && v.accent !== "GB") continue
+      out.push(v)
+    }
+    return out
+  }
+  readonly property var agentChoices: {
+    var out = [{ label: "Main agent", value: "" }]
+    for (var i = 0; i < s.voiceAgents.length; i++) {
+      var n = String((s.voiceAgents[i] || {}).name || "")
+      if (n !== "") out.push({ label: n.charAt(0).toUpperCase() + n.slice(1), value: n })
+    }
+    return out
+  }
+
   PageHeader {
     width: parent.width
     title: "Voice"
@@ -44,7 +67,7 @@ Column {
     SettingRow {
       width: parent.width
       label: "Voice and speed"
-      hint: "Each agent's voice and speaking speed live on its card, beside its other settings."
+      hint: "Pick from the library below, or on each agent's card beside its speed and instructions."
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
       Button {
@@ -68,6 +91,79 @@ Column {
       fontFamily: page.s.fontFamily
       onToggled: page.s.put("chimes", !checked)
       onReset: page.s.resetKey("chimes")
+    }
+  }
+
+  SettingsGroup {
+    width: parent.width
+    title: "VOICES"
+    foreground: page.s.foreground
+    fontFamily: page.s.fontFamily
+
+    SettingRow {
+      width: parent.width
+      stacked: true
+      label: "Library"
+      hint: page.s.voicesOnDisk.length + " of " + page.s.rawVoiceOptions.length +
+            " on this machine. Test plays about a minute at the main agent's speed."
+      help: "Every voice comes from the same pinned piper-voices revision as the installer and " +
+            "is checked against its hash in models.lock before it is kept. low and medium are " +
+            "about 63MB, high about 118MB. The default voice cannot be removed: it is what " +
+            "speaks when another voice is missing."
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      SegmentedChoice {
+        options: [
+          { value: "all", label: "All" },
+          { value: "here", label: "Downloaded" },
+          { value: "female", label: "Female" },
+          { value: "male", label: "Male" },
+          { value: "GB", label: "British" }
+        ]
+        value: page.filter
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onCommitted: function(v) { page.filter = v }
+      }
+    }
+
+    Text {
+      visible: page.s.fetchError !== ""
+      width: parent.width
+      wrapMode: Text.Wrap
+      text: "Download failed — " + page.s.fetchError
+      color: Commons.Color.urgent
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.bodySmall
+      textFormat: Text.PlainText
+    }
+
+    Column {
+      width: parent.width
+      spacing: Style.space(2)
+      Repeater {
+        model: page.shown
+        VoiceLibraryRow {
+          required property var modelData
+          width: parent.width
+          label: modelData.label.split(" — ")[0]
+          detail: modelData.label.split(" — ")[1] + "  ·  " + modelData.mb + "MB"
+          users: page.s.voiceUsers(modelData.value).join(", ")
+          onDisk: page.s.voicesOnDisk.indexOf(modelData.value) >= 0
+          playing: page.s.samplePlaying === modelData.value
+          downloading: page.s.fetching === modelData.value
+          queued: page.s.fetchQueue.indexOf(modelData.value) >= 0
+          percent: page.s.fetchPct
+          removable: modelData.value !== "lessac-medium" && users === ""
+          agents: page.agentChoices
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          onTest: page.s.playSample(modelData.value)
+          onDownload: page.s.fetchVoice(modelData.value)
+          onRemove: page.s.removeVoice(modelData.value)
+          onUse: function(who) { page.s.assignVoice(who, modelData.value) }
+        }
+      }
     }
   }
 

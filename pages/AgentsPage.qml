@@ -129,7 +129,7 @@ Column {
       if (!taken[s.nameSuggestions[j]]) name = s.nameSuggestions[j]
     var list = s.voiceAgents.slice()
     list.push({ name: name, agent: "claude", model: "", effort: "", voice: "",
-                speed: 0, level: "ask", projectDir: "" })
+                speed: 0, instructions: "", level: "ask", projectDir: "" })
     s.focusAgent = name
     saveAgents(list)
   }
@@ -528,6 +528,27 @@ Column {
     SettingRow {
       width: parent.width
       stacked: true
+      label: "Custom instructions"
+      hint: "Added to what this agent is told on every turn. Changing them keeps the conversation."
+      help: "How to address you, what to keep in mind, how long to talk. They sit after the " +
+            "rule that replies are spoken, so asking for lists or code blocks will still be read out " +
+            "as speech. Up to 2000 characters."
+      changed: page.s.changed("agentInstructions")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onReset: page.s.resetKey("agentInstructions")
+      InstructionsBox {
+        value: String(page.s.setting("agentInstructions", ""))
+        placeholder: "e.g. Call me Sam. Keep answers to one sentence unless I ask for more."
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onCommitted: function(t) { page.s.put("agentInstructions", t) }
+      }
+    }
+
+    SettingRow {
+      width: parent.width
+      stacked: true
       label: "Voice"
       hint: page.s.voiceMissing(page.mainVoice) ? "Not on this machine yet — choosing a voice downloads it (about 60MB)."
                                             : "Which Piper voice this agent speaks in."
@@ -816,6 +837,22 @@ Column {
             if (text !== String(card.modelData.projectDir || ""))
               page.updateAgent(card.index, "projectDir", text.trim())
           }
+        }
+      }
+
+      SettingRow {
+        width: parent.width
+        stacked: true
+        label: "Custom instructions"
+        hint: "Its own, separate from the main agent's. Changing them keeps the conversation."
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        InstructionsBox {
+          value: String(card.modelData.instructions || "")
+          placeholder: "What " + (card.modelData.name || "this agent") + " should always keep in mind"
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          onCommitted: function(t) { page.updateAgent(card.index, "instructions", t) }
         }
       }
 

@@ -278,6 +278,28 @@ class Adapter(ABC):
     #: Seconds of silence before this backend is presumed hung.
     idle_timeout_s: float = IDLE_TIMEOUT_S
 
+    #: False for a turn that will be read rather than heard.
+    spoken: bool = True
+
+    #: The user's standing instructions for this agent, added to its system
+    #: prompt every turn. A plain attribute: changing it is not a new backend,
+    #: and the conversation carries on under the new instructions.
+    instructions: str = ""
+
+    def preamble(self) -> str:
+        """What goes ahead of the conversation: the spoken style, then the
+        user's own instructions. Empty when there is neither."""
+        parts = [SPOKEN_STYLE] if self.spoken else []
+        own = (self.instructions or "").strip()
+        if own:
+            parts.append(INSTRUCTIONS_HEAD + own)
+        return "\n\n".join(parts)
+
+    def with_preamble(self, text: str) -> str:
+        """`text` with the preamble in front, for a CLI with no system prompt."""
+        head = self.preamble()
+        return f"{head}\n\n{text}" if head else text
+
     #: The chosen permission level. Most backends can only act on the coarse
     #: ask_permission flag; the ones that can tell "edits" apart read this.
     level: str = "ask"
@@ -361,6 +383,34 @@ SPOKEN_STYLE = (
     "working. Then work without narrating each step, and end with one "
     "sentence on what you did or found."
 )
+
+#: Introduces the user's own instructions, so the model reads them as the
+#: person's standing wishes rather than as part of the formatting rules.
+INSTRUCTIONS_HEAD = ("Standing instructions from the person you are talking to, "
+                     "for every reply:\n")
+
+
+def prompt_file(text: str) -> str:
+    """`text` in a private file, for a CLI that can read its system prompt
+    from one. Returns the path.
+
+    Instructions are the user's own words, and argv is readable by every local
+    account through /proc -- the same reason a spoken prompt goes on stdin.
+    Named by its content, so two agents with the same text share one file and
+    a change never rewrites a file a running process has open."""
+    import hashlib
+    from paths import RUNTIME_DIR
+    folder = RUNTIME_DIR / "prompts"
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = folder / (hashlib.sha256(text.encode()).hexdigest()[:20] + ".txt")
+    if not path.exists():
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    return str(path)
+
 
 def speech_safe(text: str) -> str:
     """Flatten markdown for TTS. See daemon/speech_text.make_speakable."""

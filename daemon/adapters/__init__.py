@@ -49,7 +49,8 @@ def omarchy_default() -> str | None:
 
 def load(name: str | None = None, level: str | None = None,
          endpoint: dict | None = None, model: str | None = None,
-         effort: str | None = None, **kwargs) -> Adapter | None:
+         effort: str | None = None, instructions: str = "",
+         **kwargs) -> Adapter | None:
     """Build the adapter for `name`, or for Omarchy's default when omitted.
 
     Returns None when the agent is unset, unknown, or installed-but-unusable
@@ -65,6 +66,7 @@ def load(name: str | None = None, level: str | None = None,
             api_key=endpoint.get("key") or None,
             is_agent=bool(endpoint.get("is_agent")),
             spoken=kwargs.get("spoken", True))
+        adapter.instructions = instructions or ""
         return adapter if adapter.available() else None
 
     agent = name or omarchy_default()
@@ -81,6 +83,7 @@ def load(name: str | None = None, level: str | None = None,
         # mode that was withdrawn.
         if level and level in getattr(adapter, "levels", ()):
             adapter.level = level
+        adapter.instructions = instructions or ""
         return adapter if adapter.available() else None
 
     cls = REGISTRY.get(agent)

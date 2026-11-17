@@ -20,6 +20,7 @@
 #   agentvoice is-active           yes|no, for a keybind that has to branch
 #   agentvoice calibrate           can this room support barge-in?
 #   agentvoice monitor             live wake-word scores, for tuning
+#   agentvoice voice fetch|sample|remove <voice>   the Voice page's library
 #   agentvoice permit <id> allow|deny   answer a pending permission request
 #   agentvoice pending             the request waiting for an answer, as JSON
 set -euo pipefail
@@ -205,6 +206,16 @@ case "${1:-status}" in
     [[ -x $PY ]] || PY="$REPO/bench/.venv/bin/python"
     exec "$PY" "$REPO/daemon/monitor.py" "$@"
     ;;
+  voice)
+    # The Voice page's library: fetch, hear or remove one Piper voice.
+    #   agentvoice voice fetch <voice>          download, checked against models.lock
+    #   agentvoice voice sample <voice> [speed] about a minute of speech in it
+    #   agentvoice voice remove <voice>         delete it (not the default)
+    shift
+    REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+    PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+    exec "$PY" "$REPO/daemon/voices.py" "$@"
+    ;;
   history)
     # This session's conversation, which the daemon keeps beside the state
     # file for the conversation view: tmpfs, 0600, gone at logout.
@@ -230,7 +241,7 @@ case "${1:-status}" in
     active && echo yes || echo no
     ;;
   *)
-    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|interrupt|monitor|calibrate|permit|pending|history|status|is-active]" >&2
+    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|interrupt|monitor|calibrate|voice|permit|pending|history|status|is-active]" >&2
     exit 2
     ;;
 esac

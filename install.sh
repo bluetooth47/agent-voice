@@ -553,7 +553,7 @@ pinned_sha() {
 PIPER_REV="$(awk '$1=="revision" && $2=="piper" {print $3; exit}' \
              "$MODELS_LOCK" 2>/dev/null || true)"
 PIPER_REV="${PIPER_REV:-main}"
-PIPER_BASE="https://huggingface.co/rhasspy/piper-voices/resolve/$PIPER_REV/en/en_US"
+PIPER_BASE="https://huggingface.co/rhasspy/piper-voices/resolve/$PIPER_REV/en"
 
 # Downloaded to a temp name, checked, and only then renamed into place.
 #
@@ -626,11 +626,18 @@ fetch_sherpa() {
   rm -rf "$tmp" "$MODELS/.sherpa.tar.bz2"
 }
 
+# Takes a voice as the settings spell it: "ryan-medium" is American, and any
+# other locale is written in ("en_GB-alan-medium").
 fetch_voice() {
-  local dir="$MODELS/piper" file="en_US-$1-$2.onnx"
+  local v="$1" loc=en_US
+  if [[ $v =~ ^([a-z]{2}_[A-Z]{2})-(.*)$ ]]; then
+    loc="${BASH_REMATCH[1]}"; v="${BASH_REMATCH[2]}"
+  fi
+  local name="${v%-*}" quality="${v##*-}"
+  local dir="$MODELS/piper" file="$loc-$v.onnx"
   mkdir -p "$dir"
   [[ -f "$dir/$file" ]] && return 0
-  local base="$PIPER_BASE/$1/$2"
+  local base="$PIPER_BASE/$loc/$name/$quality"
   say "Downloading the voice $file (60MB)…"
   download "$base/$file"      "$dir/$file"
   download "$base/$file.json" "$dir/$file.json"
@@ -657,7 +664,7 @@ configured() {
 }
 
 fetch_vosk
-fetch_voice lessac medium
+fetch_voice lessac-medium
 if [[ $WANT_SHERPA == 1 ]]; then
   fetch_sherpa || warn "The sherpa-onnx model was not installed; the daemon will use Vosk."
 fi
@@ -676,7 +683,7 @@ fi
 # Shape only. Whether it is a voice this will actually install is decided by
 # models.lock, in download(): a name with no recorded hash is refused there.
 voice_name_ok() {
-  [[ $1 =~ ^[a-z][a-z0-9_]*-(x_low|low|medium|high)$ ]]
+  [[ $1 =~ ^([a-z]{2}_[A-Z]{2}-)?[a-z][a-z0-9_]*-(x_low|low|medium|high)$ ]]
 }
 
 fetched=""
@@ -688,7 +695,7 @@ for v in "$WANT_VOICE_ARG" "$(configured voice)"; do
   fi
   [[ " $fetched " == *" $v "* ]] && continue
   fetched="$fetched $v"
-  fetch_voice "${v%-*}" "${v##*-}"
+  fetch_voice "$v"
 done
 
 # --- the daemon itself -----------------------------------------------------

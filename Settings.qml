@@ -182,7 +182,7 @@ Item {
     id: scanVoices
     command: ["bash", "-c",
       "d=\"${XDG_DATA_HOME:-$HOME/.local/share}/agentvoice/models/piper\"; " +
-      "[ -d \"$d\" ] && for f in \"$d\"/en_US-*.onnx; do " +
+      "[ -d \"$d\" ] && for f in \"$d\"/*.onnx; do " +
       "[ -e \"$f\" ] && basename \"$f\" .onnx | sed 's/^en_US-//'; done || true"]
     stdout: StdioCollector {
       onStreamFinished: {
@@ -203,13 +203,41 @@ Item {
     return root.voicesOnDisk.length > 0 && root.voicesOnDisk.indexOf(value) < 0
   }
 
+  // Every single-speaker English voice in the pinned piper-voices revision.
+  // American voices are named without their locale, as they always were;
+  // British ones carry it ("en_GB-alan-medium"). Each one is in models.lock.
   readonly property var rawVoiceOptions: [
-    { label: "Lessac — female, medium", value: "lessac-medium" },
-    { label: "Lessac — female, low",    value: "lessac-low" },
-    { label: "Amy — female, medium",    value: "amy-medium" },
-    { label: "Ryan — male, medium",     value: "ryan-medium" },
-    { label: "Joe — male, medium",      value: "joe-medium" },
-    { label: "HFC — male, medium",      value: "hfc_male-medium" }
+    { label: "Lessac — female, medium", value: "lessac-medium", gender: "female", accent: "US", quality: "medium", mb: 63 },
+    { label: "Lessac — female, low", value: "lessac-low", gender: "female", accent: "US", quality: "low", mb: 63 },
+    { label: "Lessac — female, high", value: "lessac-high", gender: "female", accent: "US", quality: "high", mb: 118 },
+    { label: "Amy — female, medium", value: "amy-medium", gender: "female", accent: "US", quality: "medium", mb: 63 },
+    { label: "Amy — female, low", value: "amy-low", gender: "female", accent: "US", quality: "low", mb: 63 },
+    { label: "Kristin — female, medium", value: "kristin-medium", gender: "female", accent: "US", quality: "medium", mb: 63 },
+    { label: "HFC — female, medium", value: "hfc_female-medium", gender: "female", accent: "US", quality: "medium", mb: 63 },
+    { label: "Kathleen — female, low", value: "kathleen-low", gender: "female", accent: "US", quality: "low", mb: 63 },
+    { label: "LJ — female, medium", value: "ljspeech-medium", gender: "female", accent: "US", quality: "medium", mb: 63 },
+    { label: "LJ — female, high", value: "ljspeech-high", gender: "female", accent: "US", quality: "high", mb: 118 },
+    { label: "Ryan — male, medium", value: "ryan-medium", gender: "male", accent: "US", quality: "medium", mb: 63 },
+    { label: "Ryan — male, low", value: "ryan-low", gender: "male", accent: "US", quality: "low", mb: 63 },
+    { label: "Ryan — male, high", value: "ryan-high", gender: "male", accent: "US", quality: "high", mb: 118 },
+    { label: "Joe — male, medium", value: "joe-medium", gender: "male", accent: "US", quality: "medium", mb: 63 },
+    { label: "HFC — male, medium", value: "hfc_male-medium", gender: "male", accent: "US", quality: "medium", mb: 63 },
+    { label: "Bryce — male, medium", value: "bryce-medium", gender: "male", accent: "US", quality: "medium", mb: 63 },
+    { label: "Danny — male, low", value: "danny-low", gender: "male", accent: "US", quality: "low", mb: 63 },
+    { label: "John — male, medium", value: "john-medium", gender: "male", accent: "US", quality: "medium", mb: 63 },
+    { label: "Kusal — male, medium", value: "kusal-medium", gender: "male", accent: "US", quality: "medium", mb: 63 },
+    { label: "Mike — male, medium", value: "mike-medium", gender: "male", accent: "US", quality: "medium", mb: 63 },
+    { label: "Norman — male, medium", value: "norman-medium", gender: "male", accent: "US", quality: "medium", mb: 63 },
+    { label: "Reza — male, medium", value: "reza_ibrahim-medium", gender: "male", accent: "US", quality: "medium", mb: 63 },
+    { label: "Sam — medium", value: "sam-medium", gender: "", accent: "US", quality: "medium", mb: 63 },
+    { label: "Alan — male, British, medium", value: "en_GB-alan-medium", gender: "male", accent: "GB", quality: "medium", mb: 63 },
+    { label: "Alan — male, British, low", value: "en_GB-alan-low", gender: "male", accent: "GB", quality: "low", mb: 63 },
+    { label: "Northern English — male, British, medium", value: "en_GB-northern_english_male-medium", gender: "male", accent: "GB", quality: "medium", mb: 63 },
+    { label: "Alba — female, British, medium", value: "en_GB-alba-medium", gender: "female", accent: "GB", quality: "medium", mb: 63 },
+    { label: "Cori — female, British, medium", value: "en_GB-cori-medium", gender: "female", accent: "GB", quality: "medium", mb: 63 },
+    { label: "Cori — female, British, high", value: "en_GB-cori-high", gender: "female", accent: "GB", quality: "high", mb: 118 },
+    { label: "Jenny — female, British, medium", value: "en_GB-jenny_dioco-medium", gender: "female", accent: "GB", quality: "medium", mb: 63 },
+    { label: "Southern English — female, British, low", value: "en_GB-southern_english_female-low", gender: "female", accent: "GB", quality: "low", mb: 63 }
   ]
 
   readonly property var voiceOptions: {
@@ -800,22 +828,133 @@ Item {
     root.dismiss()
   }
 
-  // A Piper voice name, and nothing else, may become part of that command
-  // line. shell.json is written by this screen, by `omarchy bar set`, by a
-  // dotfile sync and by hand, so the value arriving here is not necessarily
-  // one this screen ever offered. Quoting alone would be enough; checking
-  // the shape as well means a junk value fails visibly rather than running.
-  function fetchVoice(v) {
-    if (!/^[a-z][a-z0-9_]*-(x_low|low|medium|high)$/.test(String(v))) return
-    root.fetchNow(["--voice=" + v])
-  }
-
   Process { id: fetcher }
 
+  // --- the voice library ---------------------------------------------------
+  // Downloads run here, in the background, through `agentvoice voice fetch`:
+  // the same pinned revision and sha256 as install.sh, with progress on
+  // stdout. Once there was a floating terminal for this, which closed the
+  // settings to show a progress bar for one file.
+  //
+  // A voice name, and nothing else, reaches that argv. shell.json is written
+  // by this screen, by `omarchy bar set`, by a dotfile sync and by hand, so
+  // the value arriving here is not necessarily one this screen offered. It is
+  // an argv element, not shell source, but checking the shape as well means a
+  // junk value fails visibly rather than becoming a request.
+  property var fetchQueue: []
+  property string fetching: ""
+  property int fetchPct: 0
+  property string fetchError: ""
+  function fetchVoice(v) {
+    if (!/^([a-z]{2}_[A-Z]{2}-)?[a-z][a-z0-9_]*-(x_low|low|medium|high)$/.test(String(v))) return
+    if (root.fetching === v || root.fetchQueue.indexOf(v) >= 0) return
+    root.fetchQueue = root.fetchQueue.concat([v])
+    root.nextFetch()
+  }
+  function nextFetch() {
+    if (voiceFetcher.running || root.fetchQueue.length === 0) return
+    var v = root.fetchQueue[0]
+    root.fetchQueue = root.fetchQueue.slice(1)
+    root.fetching = v
+    root.fetchPct = 0
+    root.fetchError = ""
+    voiceFetcher.command = ["agentvoice", "voice", "fetch", v]
+    voiceFetcher.running = true
+  }
+  Process {
+    id: voiceFetcher
+    stdout: SplitParser {
+      onRead: function(line) {
+        var l = String(line)
+        if (l.indexOf("progress ") === 0) root.fetchPct = parseInt(l.substring(9)) || 0
+        else if (l.indexOf("error ") === 0) root.fetchError = root.voiceName(root.fetching) + ": " + l.substring(6)
+      }
+    }
+    onRunningChanged: {
+      if (running) return
+      scanVoices.running = true
+      root.fetching = ""
+      Qt.callLater(root.nextFetch)
+    }
+  }
+
   // Pick a voice, and fetch it if it is not on disk. Shared by the main
-  // voice and every agent's, so a voice chosen anywhere arrives.
+  // voice, every agent's and the library, so a voice chosen anywhere arrives.
   function chooseVoice(v) {
     if (v !== "" && root.voiceMissing(v)) root.fetchVoice(v)
+  }
+
+  // The library's "Use for": the one place outside the Agents page that sets
+  // a voice. Through here rather than a second put("voice") in a page, so the
+  // Agents card stays the voice's home and this is a shortcut to it.
+  function assignVoice(who, v) {
+    if (who === "") root.put("voice", v)
+    else {
+      var list = []
+      for (var i = 0; i < root.voiceAgents.length; i++) {
+        var copy = {}
+        var a = root.voiceAgents[i] || {}
+        for (var k in a) copy[k] = a[k]
+        if (String(a.name || "") === who) copy.voice = v
+        list.push(copy)
+      }
+      root.put("voiceAgents", list)
+    }
+    root.chooseVoice(v)
+  }
+  // Who speaks in `v` now: "main" and the names of extra agents.
+  function voiceUsers(v) {
+    var out = []
+    if (String(root.setting("voice", "lessac-medium")) === v) out.push("main")
+    for (var i = 0; i < root.voiceAgents.length; i++) {
+      var a = root.voiceAgents[i] || {}
+      var own = String(a.voice || "")
+      if (own === v) out.push(String(a.name || ""))
+    }
+    return out
+  }
+
+  // A minute of speech in one voice, at the main agent's speed. One at a time:
+  // starting another stops the first, and the same button stops it.
+  property string samplePlaying: ""
+  property string sampleNext: ""
+  function playSample(v) {
+    if (!/^([a-z]{2}_[A-Z]{2}-)?[a-z][a-z0-9_]*-(x_low|low|medium|high)$/.test(String(v))) return
+    if (sampler.running) {
+      root.sampleNext = root.samplePlaying === v ? "" : v
+      sampler.running = false
+      return
+    }
+    root.samplePlaying = v
+    sampler.command = ["agentvoice", "voice", "sample", v,
+                       String(Number(root.setting("voiceSpeed", 100)) || 100)]
+    sampler.running = true
+  }
+  function stopSample() { root.sampleNext = ""; sampler.running = false }
+  Process {
+    id: sampler
+    onRunningChanged: {
+      if (running) return
+      root.samplePlaying = ""
+      if (root.sampleNext !== "") {
+        var v = root.sampleNext
+        root.sampleNext = ""
+        Qt.callLater(function() { root.playSample(v) })
+      }
+    }
+  }
+
+  // Not the default, which is the fallback for every other voice.
+  function removeVoice(v) {
+    if (!/^([a-z]{2}_[A-Z]{2}-)?[a-z][a-z0-9_]*-(x_low|low|medium|high)$/.test(String(v))) return
+    if (v === "lessac-medium" || voiceRemover.running) return
+    if (root.samplePlaying === v) root.stopSample()
+    voiceRemover.command = ["agentvoice", "voice", "remove", v]
+    voiceRemover.running = true
+  }
+  Process {
+    id: voiceRemover
+    onRunningChanged: if (!running) scanVoices.running = true
   }
 
   function trainVerifier() {

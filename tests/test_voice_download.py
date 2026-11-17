@@ -53,11 +53,12 @@ def test_a_voice_that_is_not_on_disk_can_be_downloaded():
 
 
 def test_the_voice_name_is_named_on_the_command_line():
-    """Not read back out of the setting: choosing a voice fires the installer
-    at once, and `omarchy bar set` has not necessarily landed yet."""
-    fetch = SETTINGS[SETTINGS.index("function fetchVoice"):]
+    """Not read back out of the setting: choosing a voice starts the download
+    at once, and `omarchy bar set` has not necessarily landed yet. It is an
+    argv for `agentvoice voice fetch`, with no shell in between."""
+    fetch = SETTINGS[SETTINGS.index("function nextFetch"):]
     fetch = fetch[:fetch.index("\n  }")]
-    assert "--voice=" in fetch
+    assert '["agentvoice", "voice", "fetch", v]' in fetch
 
 
 def test_only_a_real_voice_name_reaches_the_shell():
@@ -126,8 +127,10 @@ def test_the_installer_is_called_with_a_flag_it_accepts():
 
     # Only the places that actually run install.sh. `--json` elsewhere in the
     # file belongs to `omarchy bar set`, which is a different program.
+    # fetchVoice no longer runs it: a voice downloads through
+    # `agentvoice voice fetch` (test_voice_library.py).
     regions = [SETTINGS[m.start():SETTINGS.index("}", m.start())]
-               for m in re.finditer(r"function fetch(Now|Voice)", SETTINGS)]
+               for m in re.finditer(r"function fetchNow", SETTINGS)]
     regions += [m.group(1) for m in re.finditer(r"fetchNow\(\[([^\]]*)\]", SETTINGS)]
     for qml in overlay_files() + ["Panel.qml"]:
         text = (ROOT / qml).read_text()
@@ -139,7 +142,7 @@ def test_the_installer_is_called_with_a_flag_it_accepts():
         for flag in re.findall(r'--([a-z][a-z-]*)', region):
             found.add(flag)
             assert flag in accepted, f"install.sh does not accept --{flag}"
-    assert {"oww", "voice", "no-keybinds", "uninstall"} <= found, found
+    assert {"oww", "no-keybinds", "uninstall"} <= found, found
 
 
 def test_the_installer_fetches_both_the_named_and_the_configured_voice():
@@ -153,7 +156,7 @@ def test_the_installer_fetches_both_the_named_and_the_configured_voice():
     loop = install[install.index('for v in "$WANT_VOICE_ARG"'):]
     loop = loop[:loop.index("done") + 4]
     assert "$(configured voice)" in loop
-    assert 'fetch_voice "${v%-*}" "${v##*-}"' in loop
+    assert 'fetch_voice "$v"' in loop
     assert "--voice=*)" in install, "the flag has to be accepted"
 
 

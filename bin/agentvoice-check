@@ -273,11 +273,12 @@ for name, path in sources.items():
 # Every voice the settings page offers has to be installable, which now means
 # it has to be in the lock.
 hashed = set(re.findall(r"^sha256 (\S+)", text, re.M))
-offered = re.findall(r'value: "([a-z_]+-(?:x_low|low|medium|high))"',
+offered = re.findall(r'value: "((?:[a-z]{2}_[A-Z]{2}-)?[a-z_]+-(?:x_low|low|medium|high))"',
                      (root / "Settings.qml").read_text())
 for voice in sorted(set(offered)):
+    stem = voice if re.match(r"[a-z]{2}_[A-Z]{2}-", voice) else f"en_US-{voice}"
     for suffix in ("", ".json"):
-        wanted = f"en_US-{voice}.onnx{suffix}"
+        wanted = f"{stem}.onnx{suffix}"
         if wanted not in hashed:
             bad.append(f"{voice} is offered in the UI but {wanted} is not in "
                        f"models.lock, so choosing it cannot install it")

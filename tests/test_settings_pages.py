@@ -8,7 +8,10 @@ shows the gate, the Agents card names the voice) is fine; a second control
 for it is the scattering coming back.
 
 The popup's five quick toggles, voice and permission level are the deliberate
-exception, and live in Panel.qml, not in pages/.
+exception, and live in Panel.qml, not in pages/. So is the Voice page's
+library, whose "Use for" sets an agent's voice: it goes through the overlay's
+`assignVoice`, never a page's own put, so the Agents card stays the voice's
+one home and the library is a shortcut to it (held below).
 """
 from __future__ import annotations
 
@@ -54,3 +57,13 @@ def test_every_page_is_reachable_from_the_sidebar():
     settings = (ROOT / "Settings.qml").read_text()
     for p in PAGES:
         assert f"{p.stem} {{ s: root }}" in settings, f"{p.name} is never shown"
+
+
+def test_the_voice_librarys_shortcut_goes_through_one_function():
+    voice = (ROOT / "pages" / "VoicePage.qml").read_text()
+    assert "s.assignVoice(" in voice
+    assert not re.search(r'\bput\("(voice|voiceAgents)"', voice)
+    settings = (ROOT / "Settings.qml").read_text()
+    body = settings[settings.index("function assignVoice("):]
+    body = body[:body.index("\n  }")]
+    assert 'root.put("voice", v)' in body and "root.chooseVoice(v)" in body

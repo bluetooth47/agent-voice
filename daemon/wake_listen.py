@@ -58,7 +58,7 @@ from speech_text import (  # noqa: E402
     as_prompt, is_stop_command, safe_for_terminal,
 )
 from runtime import (  # noqa: E402
-    REPLY_MAX, RUNTIME_DIR, Config, History, Speaker, StateFile, speed_pct,
+    REPLY_MAX, RUNTIME_DIR, Config, History, Speaker, StateFile, instructions_text, speed_pct,
 )
 
 from paths import (  # noqa: E402
@@ -1499,6 +1499,7 @@ class Daemon:
         want_ask = want_level != "trusted"
         want_model = None if endpoint else self.cfg.model_for(want_name)
         want_effort = None if endpoint else self.cfg.effort_for(want_name)
+        want_instructions = instructions_text(self.cfg["agentInstructions"])
         # The endpoint's identity is its URL and model, not just its name:
         # switching which machine answers must rebuild, and they all report
         # the same name.
@@ -1519,6 +1520,7 @@ class Daemon:
                 and (endpoint is not None
                      or not takes_model(self.agent)
                      or getattr(self.agent, "model", None) == want_model)):
+            self.apply_instructions(want_instructions)
             self.apply_effort(want_effort)
             self.publish_agent()
             return
@@ -1528,7 +1530,8 @@ class Daemon:
             endpoint = {**endpoint, "key": endpoint_key(_host(endpoint["url"]))}
         self.agent = load_adapter(ask_permission=want_ask, cwd=want_cwd,
                                   level=want_level, endpoint=endpoint,
-                                  model=want_model, effort=want_effort)
+                                  model=want_model, effort=want_effort,
+                                  instructions=want_instructions)
         self.session_id = None
         self.publish_agent()
         where = f" · {want_cwd}" if getattr(self.agent, "has_tools", True) else ""
@@ -1555,6 +1558,20 @@ class Daemon:
                           f"  {YEL}conversation is on, but {self.agent.name} starts "
                           f"fresh every turn — it saves you the wake word and "
                           f"nothing more{OFF}")
+
+    def apply_instructions(self, want: str) -> None:
+        """Change the standing instructions, keeping the conversation.
+
+        Like an effort, they are read when the agent's process starts (Claude
+        Code takes them as a system-prompt file), so the idle process goes
+        and the next turn resumes the same session under the new ones.
+        """
+        if self.agent is None or getattr(self.agent, "instructions", "") == want:
+            return
+        self.agent.instructions = want
+        self.agent.cancel()
+        print(f"  {CYA}instructions: {'updated' if want else 'none'}{OFF}",
+              flush=True)
 
     def effort_in_force(self) -> str | None:
         """The effort the next turn will run at, or None for the default."""
@@ -2561,7 +2578,7 @@ class Daemon:
                 program, level=level, ask_permission=level != "trusted",
                 cwd=str(project_dir(spec["projectDir"])),
                 model=spec["model"] or None, effort=spec["effort"] or None,
-                named=p.name)
+                instructions=spec.get("instructions", ""), named=p.name)
             p.problem = "" if p.agent is not None else (
                 explain_agent(program) or f"{program} is not available")
         p.session_id = None
@@ -2576,17 +2593,22 @@ class Daemon:
     def _rebuild_persona(self, p: Persona, spec: dict) -> None:
         """Catch an idle extra agent up with changed settings.
 
-        An effort alone keeps the conversation, as it does for the main
-        agent; anything else -- program, model, folder, level -- starts a new
+        An effort, voice, speed or instructions keep the conversation, as
+        they do for the main agent; anything else -- program, model, folder, level -- starts a new
         one, because a session is scoped to all of those.
         """
         old = p.spec or {}
-        same = {k: v for k, v in spec.items()
-                if k not in ("effort", "voice", "speed")}
-        was = {k: v for k, v in old.items()
-               if k not in ("effort", "voice", "speed")}
+        kept = ("effort", "voice", "speed", "instructions")
+        same = {k: v for k, v in spec.items() if k not in kept}
+        was = {k: v for k, v in old.items() if k not in kept}
         if same == was and p.agent is not None:
             p.spec = spec
+            want = spec.get("instructions", "")
+            if getattr(p.agent, "instructions", "") != want:
+                p.agent.instructions = want
+                p.agent.cancel()            # read when its process starts
+                print(f"  {CYA}agent “{p.name}”: instructions "
+                      f"{'updated' if want else 'cleared'}{OFF}", flush=True)
             if takes_effort(p.agent):
                 before = getattr(p.agent, "effort", None)
                 p.agent.effort = spec["effort"] or None
@@ -3526,7 +3548,8 @@ def main() -> int:
                              cwd=str(project_dir(cfg.get_str("projectDir"))),
                              endpoint=spec,
                              model=None if spec else cfg.model_for(omarchy_default()),
-                             effort=None if spec else cfg.effort_for(omarchy_default()))
+                             effort=None if spec else cfg.effort_for(omarchy_default()),
+                             instructions=instructions_text(cfg["agentInstructions"]))
         if agent is None:
             which = omarchy_default()
             print(f"  {YEL}no agent: {explain_agent(which)}"

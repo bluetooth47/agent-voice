@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .base import (
-    Adapter, Chunk, Drain, SPOKEN_STYLE, Watchdog, feed, installed,
+    Adapter, Chunk, Drain, Watchdog, feed, installed,
     stop_tree,
 )
 
@@ -125,7 +125,7 @@ class Codex(Adapter):
 
     def send(self, text: str, session_id: str | None = None) -> Iterator[Chunk]:
         argv = self._argv(text, session_id)
-        prompt = f"{SPOKEN_STYLE}\n\n{text}" if self.spoken else text
+        prompt = self.with_preamble(text)
         try:
             # stdin carries the prompt and is then closed. Closing was always
             # required -- `codex exec` otherwise waits on it ("Reading

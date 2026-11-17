@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Iterator
 
 from .base import (
-    Adapter, Chunk, Drain, SPOKEN_STYLE, Watchdog, installed, stop_tree,
+    Adapter, Chunk, Drain, SPOKEN_STYLE, Watchdog, installed, prompt_file, stop_tree,
 )
 
 #: Every tool. The hook's `matcher` is also the limit of what the permission
@@ -256,8 +256,13 @@ class ClaudeCode(Adapter):
             "--verbose",                      # stream-json requires it
             "--permission-mode", self.permission_mode,
         ]
-        if self.spoken:
+        head = self.preamble()
+        if head == SPOKEN_STYLE:
+            # A constant this file ships, so argv is no leak.
             argv += ["--append-system-prompt", SPOKEN_STYLE]
+        elif head:
+            # The user's own words: off argv, into a private file.
+            argv += ["--append-system-prompt-file", prompt_file(head)]
         if self.ask_permission:
             argv += ["--settings", self._hook_settings(self.named)]
         if session_id:

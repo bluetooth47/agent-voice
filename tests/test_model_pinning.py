@@ -139,5 +139,6 @@ class TestTheLockItself:
         voices = listed.group(1).split()
         names = set(re.findall(r"^sha256 (\S+)", LOCK.read_text(), re.M))
         for v in voices:
-            assert f"en_US-{v}.onnx" in names, f"{v} is generated but not locked"
+            stem = v if re.match(r"[a-z]{2}_[A-Z]{2}-", v) else f"en_US-{v}"
+            assert f"{stem}.onnx" in names, f"{v} is generated but not locked"
         assert len([n for n in names if n.endswith(".onnx")]) == len(voices)

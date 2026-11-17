@@ -27,7 +27,7 @@ import threading
 from typing import Iterator
 
 from .base import (
-    Adapter, Chunk, Drain, SPOKEN_STYLE, Watchdog, feed, installed,
+    Adapter, Chunk, Drain, Watchdog, feed, installed,
     stop_tree,
 )
 
@@ -102,7 +102,7 @@ class CliAgent(Adapter):
         return f"{self.binary} is not installed — run it once to install it"
 
     def send(self, text: str, session_id: str | None = None) -> Iterator[Chunk]:
-        prompt = f"{SPOKEN_STYLE}\n\n{text}" if self.spoken else text
+        prompt = self.with_preamble(text)
         parts = shlex.split(self.template)
         if self.ask_permission:
             # None of these can raise a prompt, so the guard means refusing to

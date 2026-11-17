@@ -15,6 +15,7 @@ specific, and must survive `git pull` without showing up in `git status`.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -85,6 +86,26 @@ def sherpa_model() -> Path | None:
 
 def piper_voices() -> Path:
     return models_dir() / "piper"
+
+
+#: A voice as the settings spell it. American voices carry no locale, which is
+#: how every voice was named before any other was offered ("ryan-medium");
+#: any other locale is part of the name ("en_GB-alan-medium").
+VOICE_ID = re.compile(r"(?:[a-z]{2}_[A-Z]{2}-)?[a-z][a-z0-9_]{0,31}-(?:x_low|low|medium|high)")
+
+
+def voice_stem(voice: str) -> str:
+    """The file stem Piper's repository and the disk use for `voice`."""
+    return voice if re.match(r"[a-z]{2}_[A-Z]{2}-", voice) else f"en_US-{voice}"
+
+
+def voice_id(stem: str) -> str:
+    """The settings name for a file stem: the inverse of voice_stem."""
+    return stem.removeprefix("en_US-")
+
+
+def voice_file(voice: str) -> Path:
+    return piper_voices() / f"{voice_stem(voice)}.onnx"
 
 
 def vocab_file() -> Path:

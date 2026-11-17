@@ -21,8 +21,27 @@ SHERPA_URL=https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sh
 # Every voice the settings page offers, plus the ones the verifier trainer
 # fetches to contrast against. A voice absent from the lock is not installed,
 # so this list is the list.
-VOICES=(lessac-medium lessac-low amy-medium ryan-medium joe-medium
-        kristin-medium hfc_male-medium)
+#
+# An American voice is named without its locale ("ryan-medium", as it always
+# was); any other carries it ("en_GB-alan-medium"). Single-speaker voices
+# only: the daemon does not choose a speaker inside a multi-speaker model.
+VOICES=(lessac-medium lessac-low lessac-high amy-medium amy-low ryan-medium
+        ryan-low ryan-high joe-medium kristin-medium hfc_male-medium
+        hfc_female-medium bryce-medium danny-low john-medium kathleen-low
+        kusal-medium ljspeech-medium ljspeech-high mike-medium norman-medium
+        reza_ibrahim-medium sam-medium
+        en_GB-alan-medium en_GB-alan-low en_GB-alba-medium en_GB-cori-medium
+        en_GB-cori-high en_GB-jenny_dioco-medium
+        en_GB-northern_english_male-medium en_GB-southern_english_female-low)
+
+# locale, name, quality and file stem for one of those.
+voice_parts() {
+  local v="$1" loc=en_US
+  if [[ $v =~ ^([a-z]{2}_[A-Z]{2})-(.*)$ ]]; then
+    loc="${BASH_REMATCH[1]}"; v="${BASH_REMATCH[2]}"
+  fi
+  printf '%s %s %s %s\n' "$loc" "${v%-*}" "${v##*-}" "$loc-$v"
+}
 
 WANT_VOSK=0 WANT_SHERPA=0
 for a in "$@"; do
@@ -32,8 +51,10 @@ done
 
 note() { printf '%s\n' "$*" >&2; }
 
-REV="$(curl -sfL "https://huggingface.co/api/models/$REPO" \
-       | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])')"
+# PIPER_REV=<sha> keeps the revision already pinned, so adding a voice does
+# not also move every other voice to whatever upstream has now.
+REV="${PIPER_REV:-$(curl -sfL "https://huggingface.co/api/models/$REPO" \
+       | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])')}"
 [[ -n $REV ]] || { note "could not read the repository revision"; exit 1; }
 note "revision $REV"
 
@@ -62,8 +83,8 @@ HEADER
 # One request for every .onnx, answered from LFS metadata.
 paths=()
 for v in "${VOICES[@]}"; do
-  n="${v%-*}"; q="${v##*-}"
-  paths+=("en/en_US/$n/$q/en_US-$n-$q.onnx")
+  read -r loc n q stem < <(voice_parts "$v")
+  paths+=("en/$loc/$n/$q/$stem.onnx")
 done
 python3 - "$REPO" "$REV" "${paths[@]}" <<'PY'
 import json, subprocess, sys
@@ -84,17 +105,18 @@ missing = [p for p in paths if p not in found]
 if missing:
     sys.exit("not found at this revision: " + ", ".join(missing))
 for p in paths:
-    print(f"sha256 {p.rsplit('/', 1)[1]:<34} {found[p]}")
+    print(f"sha256 {p.rsplit('/', 1)[1]:<44} {found[p]}")
 PY
 
 # The .json files are small, so they are fetched and hashed.
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 for v in "${VOICES[@]}"; do
-  n="${v%-*}"; q="${v##*-}"; f="en_US-$n-$q.onnx.json"
+  read -r loc n q stem < <(voice_parts "$v")
+  f="$stem.onnx.json"
   curl -sfL --proto '=https' -o "$tmp/$f" \
-    "https://huggingface.co/$REPO/resolve/$REV/en/en_US/$n/$q/$f"
-  printf 'sha256 %-34s %s\n' "$f" "$(sha256sum "$tmp/$f" | cut -d' ' -f1)"
+    "https://huggingface.co/$REPO/resolve/$REV/en/$loc/$n/$q/$f"
+  printf 'sha256 %-44s %s\n' "$f" "$(sha256sum "$tmp/$f" | cut -d' ' -f1)"
 done
 
 echo
