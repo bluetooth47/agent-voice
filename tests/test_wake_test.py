@@ -63,13 +63,24 @@ def test_rate_and_near_misses():
     assert snap["left_s"] == 80
 
 
-def test_the_file_is_owner_only_and_goes_away(tmp_path):
+def test_the_file_is_owner_only_and_never_missing(tmp_path):
+    """The page watches this file, and a watcher cannot watch a file that
+    does not exist yet: deleting it at daemon start is why the first live
+    test showed nothing at all."""
     path = tmp_path / "wake-test.json"
     wake_test.write(path, WakeTest(now=0.0).snapshot(now=0.0))
     assert json.loads(path.read_text())["status"] == "running"
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     wake_test.write(path, None)
-    assert not path.exists()
+    assert json.loads(path.read_text()) == {"status": ""}
+
+
+def test_the_loudest_frame_is_kept_against_the_gate():
+    t = WakeTest(now=0.0)
+    for db in (-50.0, -31.5, -40.0):
+        t.on_level(db, -27.0)
+    snap = t.snapshot(now=1.0)
+    assert snap["peak_db"] == -31.5 and snap["gate_db"] == -27.0
 
 
 # --- through the daemon -------------------------------------------------------
@@ -139,7 +150,7 @@ def test_the_run_loop_asks_the_test_before_the_wake_word():
     from conftest import ROOT
     src = (ROOT / "daemon" / "wake_listen.py").read_text()
     hook = src.index('if phase == "wake" and self.wake_testing(pcm, level):')
-    wake = src.index('if self.pipe.feed_wake(pcm, level):\n                        capture_for')
+    wake = src.index('fired = self.pipe.feed_wake(pcm, level)')
     assert hook < wake
     assert "if self.apply_wake_test_command(cmd):" in src
 
@@ -151,3 +162,42 @@ def test_the_cli_and_the_page_know_it():
     assert 'send_command "wake-test-${2:-start}"' in cli
     assert "wake-test.json" in overlay()
     assert "page.s.wakeTest(" in page("Listening")
+
+
+# --- the automatic test -------------------------------------------------------
+
+def test_auto_clips_cover_names_stop_and_distractors():
+    import wake_auto
+    got = list(wake_auto.clips(["theo", "hey computer"], "full stop"))
+    assert ("Theo.", "theo") in got and ("Hey Theo.", "theo") in got
+    assert ("Hey Computer.", "hey computer") in got
+    assert ("Hey Hey Computer.", "hey computer") not in got
+    assert ("Full stop.", "full stop") in got
+    assert sum(1 for _, w in got if w == "") == len(wake_auto.DISTRACTORS)
+    assert not any(w == "full stop" for _, w in wake_auto.clips(["theo"], ""))
+
+
+def test_auto_tally():
+    import wake_auto
+    rows = [
+        {"text": "Theo.", "want": "theo", "woke": "theo", "how": "spotter", "voice": "amy"},
+        {"text": "Theo.", "want": "theo", "woke": "theo", "how": "second check", "voice": "ryan"},
+        {"text": "Theo.", "want": "theo", "woke": "", "how": "", "voice": "alan"},
+        {"text": "Theo.", "want": "theo", "woke": "sora", "how": "spotter", "voice": "x"},
+        {"text": "Video", "want": "", "woke": "theo", "how": "second check", "voice": "amy"},
+        {"text": "Okay", "want": "", "woke": "", "how": "", "voice": "amy"},
+    ]
+    t = wake_auto.tally(rows, ["theo", "sora"], "")
+    assert t["names"]["theo"] == {"tries": 4, "hits": 2, "spotter": 1,
+                                  "second check": 1, "other": 0}
+    assert t["names"]["sora"]["tries"] == 0
+    assert t["false"] == ["“Video” (amy) woke theo"] and t["distractors"] == 2
+
+
+def test_auto_is_reachable_from_the_cli_and_the_page():
+    from conftest import ROOT
+    from qml_sources import overlay, page
+    cli = (ROOT / "bin" / "agentvoice").read_text()
+    assert 'daemon/wake_auto.py' in cli and "auto-stop)" in cli
+    assert "wake-auto.json" in overlay()
+    assert "page.s.wakeTestAuto(" in page("Listening")

@@ -229,3 +229,21 @@ def test_the_window_is_a_setting_not_a_constant():
     assert len(_run(cut, "qLLLLqq")) == 1
     cut.max_ms = 600
     assert _run(cut, "qLLLLqq") == [], "800ms is over the new maximum"
+
+
+@pytest.mark.parametrize("mode, has_vote, vosk, text, want", [
+    ("whisper", set(), "", "Theo.", "theo"),
+    ("whisper", set(), "", "Theo, what is the time today?", ""),
+    ("whisper", set(), "theo", "Video.", ""),
+    ("vosk", {"theo"}, "theo", "", "theo"),
+    ("vosk", {"theo"}, "", "Theo.", ""),
+    ("bogus", {"theo"}, "theo", "Theo.", "theo"),
+])
+def test_modes(mode, has_vote, vosk, text, want):
+    assert decide(["theo", "sora"], has_vote, vosk, text, mode=mode)[0] == want
+
+
+def test_trailing_words_are_a_setting():
+    assert decide(["theo"], {"theo"}, "theo", "Theo, you there?", trailing=0)[0] == ""
+    assert decide(["theo"], {"theo"}, "theo", "Theo, you there?", trailing=2)[0] == "theo"
+    assert decide(["theo"], {"theo"}, "theo", "Theo, what time is it?", trailing=5)[0] == "theo"

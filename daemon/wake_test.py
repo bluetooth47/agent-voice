@@ -12,7 +12,8 @@ what the check would look at. Talking about something else while it runs
 counts as attempts too, so the screen says "say only the name".
 
 Pure: the daemon feeds it events and writes `snapshot()` to a file in the
-runtime directory (tmpfs, 0600), which the settings page watches. Nothing
+runtime directory (tmpfs, 0600), which the settings page watches. That file
+always exists while the daemon runs (IDLE when there is no test). Nothing
 said is stored, only names the engines produced and their reasons.
 """
 
@@ -46,6 +47,11 @@ class WakeTest:
         self.near: list[str] = []
         #: "running", then "done" (target reached), "timeout" or "stopped".
         self.status = "running"
+        #: The loudest frame heard, and the gate it had to clear to count as
+        #: a try: the answer to "0 of 0" is usually that one was under the
+        #: other.
+        self.peak_db = -99.0
+        self.gate_db = 0.0
 
     @property
     def running(self) -> bool:
@@ -54,6 +60,11 @@ class WakeTest:
     def on_attempt(self) -> None:
         if self.running:
             self.attempts += 1
+
+    def on_level(self, level_db: float, gate_db: float) -> None:
+        if self.running:
+            self.peak_db = max(self.peak_db, level_db)
+            self.gate_db = gate_db
 
     def on_wake(self, name: str, how: str) -> None:
         if not self.running:
@@ -83,6 +94,7 @@ class WakeTest:
         # ends, so for a moment there can be a hit with no attempt yet.
         tries = max(self.attempts, len(self.hits))
         return {
+            "mode": "manual",
             "status": self.status,
             "target": self.target,
             "hits": len(self.hits),
@@ -91,15 +103,22 @@ class WakeTest:
             "by": [h["name"] + " · " + h["how"] for h in self.hits],
             "near": list(self.near),
             "left_s": max(0, int(self.ends - now)) if self.running else 0,
+            "peak_db": round(self.peak_db, 1),
+            "gate_db": round(self.gate_db, 1),
         }
 
 
+#: What "no test" is written as. Never a missing file: the page's watcher
+#: cannot watch a file that does not exist yet, so a test that created it
+#: was never seen -- the button stayed "Start test" and nothing showed.
+IDLE = {"status": ""}
+
+
 def write(path: Path, snap: dict | None) -> None:
-    """The snapshot for the page, or remove the file for None."""
+    """The snapshot for the page; None writes IDLE."""
+    if snap is None:
+        snap = IDLE
     try:
-        if snap is None:
-            path.unlink(missing_ok=True)
-            return
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

@@ -875,3 +875,34 @@ user's configured model.
 
 Synthetic voices, no room noise: this says the transcripts have the right
 words, not how often a real "goodbye" across a room gets through.
+
+## 26. The automatic wake test, first run, and "full stop" as a keyword
+
+2026-11-17, i7-1185G7, the user's live settings: sherpa-onnx zh-en-3M at
+threshold 20%, short-name boost 150%, second check on with both engines
+voting, Whisper base.en, gate -27 dBFS. `daemon/wake_auto.py` (the
+automatic test) fed each clip through its own Pipeline: five Piper voices
+(alan, amy, lessac, ryan-high, ryan-medium), speech at -16 and -24 dBFS RMS
+over -60 dBFS noise, engine state reset between clips. 100 clips, 92s.
+
+| said | woke it | by the spotter | by the second check |
+|---|---|---|---|
+| "Theo." / "Hey Theo." | 15/20 | 3 | 12 |
+| "Sora." / "Hey Sora." | 16/20 | 8 | 8 |
+| "Full stop." (keyword) | 8/10 | 8 | — |
+
+False wakes: 0 of 50 clips (Video, Leo, Cleo, Story, Sorry, Okay, Thank
+you, Rodeo, "Hello there", a sentence; at -16 dBFS). The distractor list
+has since gained "Bus stop", "I'm full" and "Pull up", which this run did
+not include.
+
+The first live manual test reported 0 tries and 0 wakes in 90s, and the
+page showed nothing at all. The page half is found: the daemon deleted
+wake-test.json at start, and the page's file watcher, set up while the file
+was missing, never fired once it appeared. The file now always exists, and
+the page also re-reads it every second while open. The 0 tries is not
+explained: the daemon's timer ran, so frames reached the test, but nothing
+crossed the -27 dBFS gate for long enough to count. The test now reports
+the loudest frame against the gate, so the next run says which.
+
+Synthetic voices: compare settings with these, not your own rate.

@@ -54,6 +54,10 @@
           "TH IY1 AH0"
         ]
       },
+      "crossCheckEngines": "both",
+      "crossCheckTrailingWords": 3,
+      "crossCheckWhisperHint": true,
+      "fullStopAnytime": true,
       "conversationMode": true,
       "followUpMs": 7000,
       "livePartials": "auto",
@@ -330,6 +334,35 @@
         "description": "Longer than this is a sentence, and a name inside one is someone talking about the agent rather than to it."
       },
       {
+        "key": "crossCheckEngines",
+        "type": "enum",
+        "label": "Second check: who votes",
+        "options": [
+          "both",
+          "whisper",
+          "vosk"
+        ],
+        "defaultValue": "both",
+        "description": "both: Vosk and Whisper must hear the same name (FINDINGS §24). whisper: Whisper alone, on every short burst, about a second of CPU each. vosk: Vosk alone, cheap but wakes on sound-alikes such as \"Video\" for Theo."
+      },
+      {
+        "key": "crossCheckTrailingWords",
+        "type": "integer",
+        "label": "Second check: words allowed after the name",
+        "min": 0,
+        "max": 6,
+        "step": 1,
+        "defaultValue": 3,
+        "description": "\"Theo, you there?\" is two words after the name. More than this and it is someone talking about the agent. 0 accepts only the bare name."
+      },
+      {
+        "key": "crossCheckWhisperHint",
+        "type": "bool",
+        "label": "Second check: tell Whisper the names",
+        "defaultValue": true,
+        "description": "Prompts Whisper with the agents' names, which is how it spelled \"Theo\" right 10/10 (FINDINGS §24). Off, it transcribes with no hint."
+      },
+      {
         "key": "conversationMode",
         "type": "bool",
         "label": "Keep listening after a reply",
@@ -366,6 +399,13 @@
         "step": 500,
         "defaultValue": 7000,
         "description": "How long it keeps listening after speaking before it needs the wake word again."
+      },
+      {
+        "key": "fullStopAnytime",
+        "type": "bool",
+        "label": "\"Full stop\" works without the wake word",
+        "defaultValue": true,
+        "description": "sherpa-onnx listens for \"full stop\" in every frame, so it stops every agent at once, even while one is thinking. Not while one is speaking aloud: the microphone is the reply's then (on a headset, talking over it stops it)."
       },
       {
         "key": "livePartials",

@@ -162,6 +162,14 @@ Item {
     }
   }
 
+  readonly property var crossCheckOptions: [
+    { label: "Both agree", value: "both",
+      tooltip: "Vosk and Whisper must hear the same name. Fewest false wakes." },
+    { label: "Whisper only", value: "whisper",
+      tooltip: "Whisper alone, on every short burst: about a second of CPU each, and Vosk is unloaded." },
+    { label: "Vosk only", value: "vosk",
+      tooltip: "Cheap, but wakes on sound-alikes such as \"Video\" for Theo." }
+  ]
   readonly property var engineOptions: [
     { label: "Vosk", value: "vosk",
       tooltip: "Any phrase, and your other agents' names. Weaker at rejecting sound-alikes." },
@@ -405,7 +413,39 @@ Item {
     wakeTester.running = true
   }
   Process { id: wakeTester; command: ["agentvoice", "wake-test", "start"] }
+
+  // The automatic test: its own process, wake-auto.json beside the state.
+  property var vWakeAuto: ({})
+  readonly property bool wakeAutoRunning: ["loading", "running"].indexOf(String(vWakeAuto.status || "")) >= 0
+  function wakeTestAuto(start) {
+    if (!root.engineInstalled) return
+    wakeAutoRunner.command = ["agentvoice", "wake-test", start ? "auto" : "auto-stop"]
+    wakeAutoRunner.running = true
+  }
+  Process { id: wakeAutoRunner; command: ["agentvoice", "wake-test", "auto"] }
   FileView {
+    id: wakeAutoFile
+    path: (Quickshell.env("XDG_RUNTIME_DIR") || "/run/user/1000") + "/agentvoice/wake-auto.json"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoadFailed: root.vWakeAuto = ({})
+    onLoaded: {
+      try { var d = JSON.parse(text()); root.vWakeAuto = (d && typeof d === "object") ? d : ({}) }
+      catch (e) { root.vWakeAuto = ({}) }
+    }
+  }
+  // Both test files are also re-read on a clock while the overlay is open:
+  // a watcher set up before a file exists never fires for it, which is why
+  // the first live test showed nothing at all.
+  Timer {
+    interval: 1000
+    repeat: true
+    running: root.opened
+    onTriggered: { wakeTestFile.reload(); wakeAutoFile.reload() }
+  }
+  FileView {
+    id: wakeTestFile
     path: (Quickshell.env("XDG_RUNTIME_DIR") || "/run/user/1000") + "/agentvoice/wake-test.json"
     watchChanges: true
     printErrors: false

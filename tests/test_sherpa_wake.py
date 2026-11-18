@@ -207,8 +207,10 @@ def _pipe(monkeypatch, tmp_path, **cfg):
     pipe._reset_wake = lambda: pipe._vosk_built.append(
         (pipe.phrase, tuple(pipe.names)))
     pipe._knows_vosk = True
+    # The "full stop" keyword is off unless a test asks for it, so the
+    # phrase lists below stay the wake names.
     c = Cfg({"engine": "sherpa", "phrase": "computer", "model": "tiny.en",
-             "names": ["sarah"], **cfg})
+             "names": ["sarah"], "fullStopAnytime": False, **cfg})
     return pipe, c
 
 
@@ -498,3 +500,115 @@ def test_the_advanced_settings_are_drawn_on_the_listening_page():
                 "wakeAlsoSounds", "sherpaThresholdPct", "wakeCrossCheck"):
         assert f'"{key}"' in text, key
     assert 'title: "ADVANCED"' in text
+
+
+# --- "full stop" as a keyword ----------------------------------------------
+
+def test_full_stop_is_spotted_beside_the_names(monkeypatch, tmp_path):
+    import wake_listen
+    pipe, cfg = _pipe(monkeypatch, tmp_path, fullStopAnytime=True)
+    pipe.apply(cfg)
+    assert pipe._sherpa.phrases == ["computer", "sarah", wake_listen.STOP_PHRASE]
+    assert FakeSherpa.built == 1
+    cfg["fullStopAnytime"] = False
+    pipe.apply(cfg)
+    assert pipe._sherpa.phrases == ["computer", "sarah"]
+    assert FakeSherpa.built == 1, "the switch reloaded the model"
+
+
+def test_a_spotted_full_stop_is_reported_as_itself(monkeypatch, tmp_path):
+    import wake_listen
+    pipe, cfg = _pipe(monkeypatch, tmp_path, fullStopAnytime=True)
+    pipe.apply(cfg)
+    pipe._refractory_until = 0.0
+    pipe._sherpa.heard = "full stop"
+    assert pipe.feed_wake(b"\0" * 6400, -60.0)
+    assert pipe.heard_phrase == wake_listen.STOP_PHRASE
+
+
+def test_the_daemon_stops_everything_on_it_and_opens_no_capture():
+    """Read from the source: the run loop and the thinking-time watcher both
+    need a microphone to drive."""
+    from conftest import ROOT
+    src = (ROOT / "daemon" / "wake_listen.py").read_text()
+    loop = src[src.index("fired = self.pipe.feed_wake(pcm, level)"):]
+    loop = loop[:loop.index("capture_for = self._woken()")]
+    assert "self.heard_full_stop()" in loop and "self.full_stop()" in loop
+    assert "continue" in loop, "falls through into opening a capture"
+    watch = src[src.index("def _wake_watch_until"):]
+    watch = watch[:watch.index("def chime")]
+    assert "self.heard_full_stop()" in watch and "self.full_stop()" in watch
+    assert watch.index("heard_full_stop") < watch.index("self._woke = True")
+    # The wake test does not count it as a wake.
+    test = src[src.index("def wake_testing"):]
+    test = test[:test.index("def _write_wake_test")]
+    assert "not self.heard_full_stop()" in test
+
+
+# --- the second check's modes -------------------------------------------------
+
+class _Mode:
+    """A Pipeline with the votes stubbed, to see which engines are asked."""
+
+    def __init__(self, monkeypatch, mode, vosk="theo", text="Theo."):
+        import wake_listen
+        pipe = object.__new__(wake_listen.Pipeline)
+        pipe.phrase, pipe.names = "theo", ["sora"]
+        pipe.cc_engines, pipe.cc_trailing, pipe.cc_hint = mode, 3, True
+        pipe.threshold_db, pipe.refractory_ms = -40.0, 2000
+        pipe._log_speech = False
+        self.asked = []
+        pipe._burst_cutter = lambda: type("C", (), {"feed": lambda s, p, l: b"x"})()
+        pipe._vosk_vote = lambda a, n: (self.asked.append("vosk"), (vosk, {"theo", "sora"}))[1]
+        pipe._whisper_names = lambda a, n: (self.asked.append("whisper"), text)[1]
+        pipe._sherpa = type("S", (), {"reset": lambda s: None})()
+        self.pipe = pipe
+
+
+@pytest.mark.parametrize("mode, vosk, text, woke, asked", [
+    ("both", "theo", "Theo.", True, ["vosk", "whisper"]),
+    ("both", "", "Theo.", False, ["vosk"]),
+    ("whisper", "", "Theo.", True, ["whisper"]),
+    ("whisper", "", "Video.", False, ["whisper"]),
+    ("vosk", "theo", "", True, ["vosk"]),
+    ("vosk", "", "", False, ["vosk"]),
+])
+def test_each_mode_asks_only_its_engines(monkeypatch, mode, vosk, text, woke, asked):
+    m = _Mode(monkeypatch, mode, vosk, text)
+    assert m.pipe._second_check(b"\0" * 6400, -20.0) is woke
+    assert m.asked == asked
+    if woke:
+        assert m.pipe.heard_phrase == "theo" and m.pipe.wake_how == "second check"
+
+
+def test_whisper_only_mode_lets_vosk_go(monkeypatch, tmp_path):
+    pipe, cfg = _pipe(monkeypatch, tmp_path, crossCheckEngines="whisper")
+    pipe.apply(cfg)
+    assert pipe.cc_engines == "whisper" and not pipe._needs_vosk()
+    cfg["crossCheckEngines"] = "both"
+    pipe.apply(cfg)
+    assert pipe._needs_vosk()
+
+
+def test_the_whisper_hint_can_be_turned_off(monkeypatch):
+    import wake_listen
+    pipe = object.__new__(wake_listen.Pipeline)
+    seen = []
+
+    class Pool:
+        def submit(self, fn, audio, prompt):
+            seen.append(prompt)
+            return type("F", (), {"result": lambda s, timeout=None: ""})()
+    pipe._pool = Pool()
+    pipe.cc_hint = True
+    pipe._whisper_names(b"", ["theo", "sora"])
+    pipe.cc_hint = False
+    pipe._whisper_names(b"", ["theo", "sora"])
+    assert seen == ["Theo, Sora.", None]
+
+
+def test_the_new_controls_are_drawn():
+    text = page("Listening")
+    for key in ("crossCheckEngines", "crossCheckTrailingWords", "crossCheckWhisperHint"):
+        assert f'"{key}"' in text, key
+    assert '"fullStopAnytime"' in page("Conversation")

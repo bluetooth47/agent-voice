@@ -65,6 +65,17 @@ Column {
     s.put("wakeAlsoSounds", all)
   }
   property bool advancedOpen: false
+  readonly property string ccEngines: String(s.setting("crossCheckEngines", "both"))
+  // Which wake test is shown: "manual" (you say it) or "auto" (synthesized).
+  property string testMode: "manual"
+  function nameLine(name, row) {
+    var r = row || {}
+    var tries = Number(r.tries || 0), hits = Number(r.hits || 0)
+    return "“" + name + "”: " + hits + " of " + tries
+           + (tries > 0 ? " (" + Math.round(100 * hits / tries) + "%)" : "")
+           + (hits > 0 ? " — spotter " + Number(r.spotter || 0) + ", second check " + Number(r["second check"] || 0)
+                         + (Number(r.other || 0) > 0 ? ", other " + Number(r.other) : "") : "")
+  }
 
   spacing: Style.space(18)
 
@@ -323,6 +334,59 @@ Column {
         onReset: page.s.resetKey("crossCheckMaxMs")
       }
 
+      SettingRow {
+        width: parent.width
+        visible: page.s.sherpaLive && page.s.setting("wakeCrossCheck", true) === true
+        stacked: true
+        label: "Second check: who votes"
+        hint: page.ccEngines === "whisper" ? "Whisper alone decides, on every short burst: about a second of CPU each."
+              : page.ccEngines === "vosk" ? "Vosk alone decides. Cheap, and wakes on sound-alikes such as \"Video\" for Theo."
+              : "Vosk and Whisper must both hear the same name. Fewest false wakes (FINDINGS §24)."
+        changed: page.s.changed("crossCheckEngines")
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onReset: page.s.resetKey("crossCheckEngines")
+        SegmentedChoice {
+          options: page.s.crossCheckOptions
+          value: page.ccEngines
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          onCommitted: function(v) { page.s.put("crossCheckEngines", v) }
+        }
+      }
+
+      KnobRow {
+        width: parent.width
+        visible: page.s.sherpaLive && page.s.setting("wakeCrossCheck", true) === true
+                 && page.ccEngines !== "vosk"
+        foreground: page.s.foreground; fontFamily: page.s.fontFamily
+        label: "Second check: words after the name"
+        unit: ""
+        description: "How many words may follow the name. 0 takes only the bare name."
+        help: "\"Theo, you there?\" is two. Past this it is someone talking about the agent, " +
+              "not to it, so it does not wake."
+        value: page.s.setting("crossCheckTrailingWords", 3)
+        defaultValue: page.s.defaults.crossCheckTrailingWords !== undefined ? page.s.defaults.crossCheckTrailingWords : NaN
+        changed: page.s.changed("crossCheckTrailingWords")
+        minimum: 0; maximum: 6; stepSize: 1
+        onCommitted: function(v) { page.s.put("crossCheckTrailingWords", v) }
+        onReset: page.s.resetKey("crossCheckTrailingWords")
+      }
+
+      ToggleRow {
+        width: parent.width
+        visible: page.s.sherpaLive && page.s.setting("wakeCrossCheck", true) === true
+                 && page.ccEngines !== "vosk"
+        label: "Second check: tell Whisper the names"
+        hint: "Whisper is given the agents' names as a hint, which is how it spelled \"Theo\" right 10 of 10."
+        checked: page.s.setting("crossCheckWhisperHint", true) === true
+        changed: page.s.changed("crossCheckWhisperHint")
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onToggled: page.s.put("crossCheckWhisperHint", !checked)
+        onReset: page.s.resetKey("crossCheckWhisperHint")
+      }
+
       Text {
         width: parent.width
         visible: page.s.sherpaLive
@@ -365,65 +429,171 @@ Column {
         }
       }
 
-      // Test my wake word: ten tries, the hit rate, and what nearly woke it.
+      // Test my wake word: you say it ten times, or synthesized voices do.
       SettingRow {
         width: parent.width
         stacked: true
         label: "Test my wake word"
-        hint: !page.s.serviceActive ? "Start the service first."
-              : page.s.wakeTestRunning
-                ? "Say “" + page.s.activePhrase + "” on its own, with a pause after each. Nothing is answered while this runs. " + Number(page.s.vWakeTest.left_s || 0) + "s left."
-                : "Say the name ten times. Each wake is counted instead of answered, for up to 90 seconds."
+        hint: page.testMode === "manual"
+              ? "You say the name ten times. Each wake is counted instead of answered, for up to 90 seconds."
+              : "Every installed voice says each name, \"full stop\" and words that must not wake it, straight into the engines. About a minute and a half; the microphone is not used."
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
+        SegmentedChoice {
+          options: [{ label: "Manual", value: "manual" }, { label: "Automatic", value: "auto" }]
+          value: page.testMode
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          onCommitted: function(v) { page.testMode = v }
+        }
+      }
+
+      // --- manual ---
+      Column {
+        width: parent.width
+        spacing: Style.space(6)
+        visible: page.testMode === "manual"
+
+        Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          visible: !page.s.serviceActive || page.s.wakeTestRunning
+          text: !page.s.serviceActive ? "Start the service first."
+                : "Say “" + page.s.activePhrase + "” on its own, with a pause after each. Nothing is answered while this runs. "
+                  + Number(page.s.vWakeTest.left_s || 0) + "s left."
+          textFormat: Text.PlainText
+          color: page.s.wakeTestRunning ? page.s.accent : page.s.dim
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
         Button {
-          text: page.s.wakeTestRunning ? "Stop" : "Start test"
+          text: page.s.wakeTestRunning ? "Stop" : "Start manual test"
           bordered: true
           enabled: page.s.serviceActive
           foreground: page.s.foreground
           fontFamily: page.s.fontFamily
           onClicked: page.s.wakeTest(!page.s.wakeTestRunning)
         }
+
+        Column {
+          width: parent.width
+          spacing: Style.space(4)
+          visible: page.s.serviceActive && String(page.s.vWakeTest.status || "") !== ""
+          readonly property var t: page.s.vWakeTest
+
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: Number(parent.t.hits || 0) + " of " + Number(parent.t.attempts || 0) + " tries woke it"
+                  + (Number(parent.t.attempts || 0) > 0 ? "  (" + Math.round(Number(parent.t.rate || 0) * 100) + "%)" : "")
+                  + (parent.t.status === "done" ? " — done." : parent.t.status === "timeout" ? " — time is up."
+                     : parent.t.status === "stopped" ? " — stopped." : "")
+            textFormat: Text.PlainText
+            color: page.s.foreground
+            font.family: page.s.fontFamily
+            font.pixelSize: Style.font.body
+          }
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            readonly property real peak: Number(parent.t.peak_db !== undefined ? parent.t.peak_db : -99)
+            readonly property real gate: Number(parent.t.gate_db || 0)
+            text: "Loudest you were: " + (peak <= -99 ? "nothing heard" : peak.toFixed(0) + " dBFS")
+                  + ", gate " + gate.toFixed(0) + " dBFS."
+                  + (peak > -99 && peak < gate ? " You never reached the gate, so no try was counted: lower the microphone gate, or speak up." : "")
+            textFormat: Text.PlainText
+            color: peak > -99 && peak < gate ? page.s.urgent : page.s.dim
+            font.family: page.s.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            visible: text !== ""
+            text: Array.isArray(parent.t.by) && parent.t.by.length > 0 ? "Woke by: " + parent.t.by.join(", ") : ""
+            textFormat: Text.PlainText
+            color: page.s.dim
+            font.family: page.s.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            visible: text !== ""
+            text: Array.isArray(parent.t.near) && parent.t.near.length > 0
+                  ? "Near misses:\n• " + parent.t.near.join("\n• ")
+                  : Number(parent.t.attempts || 0) > Number(parent.t.hits || 0)
+                    ? "No near misses: the missed tries never reached a second look. Try a lower threshold or a higher short-name boost."
+                    : ""
+            textFormat: Text.PlainText
+            color: page.s.dim
+            font.family: page.s.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
       }
 
+      // --- automatic ---
       Column {
         width: parent.width
-        spacing: Style.space(4)
-        visible: page.s.serviceActive && String(page.s.vWakeTest.status || "") !== ""
+        spacing: Style.space(6)
+        visible: page.testMode === "auto"
+        readonly property var a: page.s.vWakeAuto
+        readonly property string st: String(a.status || "")
 
-        Text {
-          width: parent.width
-          wrapMode: Text.WordWrap
-          readonly property var t: page.s.vWakeTest
-          text: Number(t.hits || 0) + " of " + Number(t.attempts || 0) + " tries woke it"
-                + (Number(t.attempts || 0) > 0 ? "  (" + Math.round(Number(t.rate || 0) * 100) + "%)" : "")
-                + (t.status === "done" ? " — done." : t.status === "timeout" ? " — time is up."
-                   : t.status === "stopped" ? " — stopped." : "")
-          textFormat: Text.PlainText
-          color: page.s.foreground
-          font.family: page.s.fontFamily
-          font.pixelSize: Style.font.body
+        Button {
+          text: page.s.wakeAutoRunning ? "Stop" : "Start automatic test"
+          bordered: true
+          enabled: page.s.engineInstalled
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          onClicked: page.s.wakeTestAuto(!page.s.wakeAutoRunning)
         }
         Text {
           width: parent.width
           wrapMode: Text.WordWrap
-          visible: text !== ""
-          text: Array.isArray(page.s.vWakeTest.by) && page.s.vWakeTest.by.length > 0
-                ? "Woke by: " + page.s.vWakeTest.by.join(", ") : ""
+          visible: parent.st !== ""
+          text: parent.st === "loading" ? "Loading the engines…"
+                : parent.st === "failed" ? "It could not run: " + String(parent.a.error || "unknown error")
+                : (parent.st === "running" ? "Clip " : parent.st === "stopped" ? "Stopped after " : "Done: ")
+                  + Number(parent.a.done || 0) + " of " + Number(parent.a.total || 0)
+                  + (parent.st === "done" ? " clips in " + Number(parent.a.seconds || 0) + "s." : "")
+                  + (parent.a.settings ? "  ·  " + String(parent.a.settings) : "")
           textFormat: Text.PlainText
-          color: page.s.dim
+          color: parent.st === "failed" ? page.s.urgent : page.s.foreground
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Repeater {
+          model: parent.a.names ? Object.keys(parent.a.names) : []
+          delegate: Text {
+            required property var modelData
+            width: page.width
+            wrapMode: Text.WordWrap
+            text: page.nameLine(modelData, (page.s.vWakeAuto.names || {})[modelData])
+            textFormat: Text.PlainText
+            color: page.s.foreground
+            font.family: page.s.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+        Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          visible: Number(parent.a.distractors || 0) > 0
+          text: Array.isArray(parent.a["false"]) && parent.a["false"].length > 0
+                ? "False wakes:\n• " + parent.a["false"].join("\n• ")
+                : "No false wakes in " + Number(parent.a.distractors || 0) + " clips of sound-alikes and ordinary talk."
+          textFormat: Text.PlainText
+          color: Array.isArray(parent.a["false"]) && parent.a["false"].length > 0 ? page.s.urgent : page.s.dim
           font.family: page.s.fontFamily
           font.pixelSize: Style.font.caption
         }
         Text {
           width: parent.width
           wrapMode: Text.WordWrap
-          visible: text !== ""
-          text: Array.isArray(page.s.vWakeTest.near) && page.s.vWakeTest.near.length > 0
-                ? "Near misses:\n• " + page.s.vWakeTest.near.join("\n• ")
-                : Number(page.s.vWakeTest.attempts || 0) > Number(page.s.vWakeTest.hits || 0)
-                  ? "No near misses: the missed tries never reached a second look. Try a lower threshold or a higher short-name boost."
-                  : ""
+          visible: parent.st !== ""
+          text: String(parent.a.note || "")
           textFormat: Text.PlainText
           color: page.s.dim
           font.family: page.s.fontFamily

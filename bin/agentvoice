@@ -145,12 +145,32 @@ case "${1:-status}" in
     # The Listening page's "Test my wake word": for 90s, or ten wakes, a wake
     # is counted instead of answered. Results in $RUNDIR/wake-test.json.
     #   agentvoice wake-test start|stop
+    #   agentvoice wake-test auto|auto-stop
+    #     synthesized names through the same engines, in a process of its
+    #     own, so it never touches the microphone. Results in wake-auto.json.
     case "${2:-start}" in
-      start|stop) ;;
-      *) echo "usage: agentvoice wake-test start|stop" >&2; exit 2 ;;
+      start|stop)
+        if ! active; then echo "daemon not running" >&2; exit 1; fi
+        send_command "wake-test-${2:-start}"
+        ;;
+      auto)
+        mkdir -p "$RUNDIR"
+        if [[ -r $RUNDIR/wake-auto.pid ]] && kill -0 "$(cat "$RUNDIR/wake-auto.pid")" 2>/dev/null; then
+          echo "an automatic wake test is already running" >&2; exit 1
+        fi
+        REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+        PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+        [[ -x $PY ]] || { echo "no agentvoice Python at $PY; run install.sh" >&2; exit 1; }
+        setsid "$PY" "$REPO/daemon/wake_auto.py" > "$RUNDIR/wake-auto.log" 2>&1 < /dev/null &
+        ;;
+      auto-stop)
+        if [[ -r $RUNDIR/wake-auto.pid ]]; then
+          pid=$(cat "$RUNDIR/wake-auto.pid")
+          [[ $pid =~ ^[0-9]+$ ]] && kill "$pid" 2>/dev/null || true
+        fi
+        ;;
+      *) echo "usage: agentvoice wake-test start|stop|auto|auto-stop" >&2; exit 2 ;;
     esac
-    if ! active; then echo "daemon not running" >&2; exit 1; fi
-    send_command "wake-test-${2:-start}"
     ;;
   talk-end)
     # The key coming back up ends the turn. Ignored by the daemon unless a

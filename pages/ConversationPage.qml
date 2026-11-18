@@ -221,6 +221,23 @@ Column {
 
     ToggleRow {
       width: parent.width
+      label: "“Full stop” works without the wake word"
+      hint: "Stops every agent at once, even mid-thought. Not while it is speaking on speakers: the microphone is the reply's then."
+      help: "sherpa-onnx listens for \"full stop\" in every frame, so nothing waits for a " +
+            "wake word, a pause or Whisper. On synthesized clips it caught 8 of 10 and " +
+            "woke on none of 50 sound-alikes. Only with the sherpa-onnx engine; on the " +
+            "others say the wake word first."
+      disabledReason: page.s.usingSherpa ? "" : "Only with the sherpa-onnx engine."
+      checked: page.s.setting("fullStopAnytime", true) === true
+      changed: page.s.changed("fullStopAnytime")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onToggled: page.s.put("fullStopAnytime", !checked)
+      onReset: page.s.resetKey("fullStopAnytime")
+    }
+
+    ToggleRow {
+      width: parent.width
       label: "Interrupt by talking, on a headset"
       hint: "On headphones it stops as soon as you talk over it, and what you say is your next request."
       checked: page.s.setting("bargeOnHeadset", true) === true

@@ -104,16 +104,35 @@ def vosk_heard(text: str, means: dict[str, str]) -> str:
     return means[max(found, key=len)] if found else ""
 
 
+#: crossCheckEngines: which engines vote on a burst.
+#:   both    -- Vosk and Whisper must name the same agent (FINDINGS §24);
+#:   whisper -- Whisper alone, held to `trailing` words after the name. It
+#:              runs on every burst, about a second of CPU each;
+#:   vosk    -- Vosk alone. Cheap, and wakes on sound-alikes ("Video",
+#:              "Cleo" for Theo): only for a quiet room.
+MODES = ("both", "whisper", "vosk")
+
+
 def decide(names: list[str], has_vote: set[str], vosk: str,
-           whisper: str) -> tuple[str, str]:
+           whisper: str, mode: str = "both",
+           trailing: int = MAX_TRAILING_WORDS) -> tuple[str, str]:
     """(name to wake, why) or ("", why not).
 
     `has_vote` holds the names Vosk can hear at all; `vosk` is the name it
-    heard ("" for none); `whisper` is the raw transcript.
+    heard ("" for none); `whisper` is the raw transcript ("" when Whisper
+    was not asked). `trailing` is how many words may follow the name.
     """
+    if mode == "vosk":
+        return (vosk, "vosk alone") if vosk else ("", "")
     said, after = leading_name(whisper, names)
+    if mode == "whisper":
+        if not said:
+            return "", ""
+        if after <= trailing:
+            return said, "whisper alone"
+        return "", "whisper alone — too many words after the name"
     if said and said in has_vote:
-        if vosk == said and after <= MAX_TRAILING_WORDS:
+        if vosk == said and after <= trailing:
             return said, "vosk + whisper"
         if vosk == said:
             return "", "too many words after the name"

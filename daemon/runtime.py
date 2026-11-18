@@ -115,6 +115,15 @@ DEFAULTS = {
     # word -> other ways it is said, for sherpa-onnx: a word from its
     # lexicon, or phones written out ("TH IY1 AH0"). Was ALT_PHONES.
     "wakeAlsoSounds": {"theo": ["TH IY1 AH0"]},
+    # Which engines vote in the second check; crosscheck.MODES.
+    "crossCheckEngines": "both",
+    # Words allowed after the name ("Theo, you there?"). Was 3, fixed.
+    "crossCheckTrailingWords": 3,
+    # Whisper is prompted with the agents' names (FINDINGS §24).
+    "crossCheckWhisperHint": True,
+    # sherpa-onnx also listens for "full stop" in every frame, so it stops
+    # everything at once, with no wake word and no Whisper.
+    "fullStopAnytime": True,
     "leadInMs": 5000,
     "trailingSilenceMs": 1200,
     "quickEndMs": 800,
@@ -175,6 +184,10 @@ TOML_ALIASES = {
     "crossCheckMinMs": ("wake", "cross_check_min_ms"),
     "crossCheckMaxMs": ("wake", "cross_check_max_ms"),
     "wakeAlsoSounds": ("wake", "also_sounds"),
+    "crossCheckEngines": ("wake", "cross_check_engines"),
+    "crossCheckTrailingWords": ("wake", "cross_check_trailing_words"),
+    "crossCheckWhisperHint": ("wake", "cross_check_whisper_hint"),
+    "fullStopAnytime": ("wake", "full_stop_anytime"),
     "leadInMs": ("timing", "lead_in_ms"),
     "trailingSilenceMs": ("timing", "trailing_silence_ms"),
     "quickEndMs": ("timing", "quick_end_ms"),
@@ -391,6 +404,8 @@ class Config:
         - burst_min_ms / burst_max_ms: how long a burst of speech may be for
           the second check to look at it (was 300 and 2600). The minimum is
           kept below the maximum, so a hand edit cannot close the window;
+        - engines / trailing / whisper_hint: how the second check votes
+          (crosscheck.decide), unknown modes read as "both";
         - also_sounds: {word: [alternative, ...]}. An alternative is either
           lower-case words (one to three, looked up in the lexicon) or
           upper-case phones ("TH IY1 AH0"). Anything else is dropped here,
@@ -424,8 +439,12 @@ class Config:
                         clean.append(alt)
                 if clean:
                     also[word] = clean[:8]
+        engines = self.get_str("crossCheckEngines")
         return {"short_boost": boost, "burst_min_ms": lo, "burst_max_ms": hi,
-                "also_sounds": also}
+                "also_sounds": also,
+                "engines": engines if engines in ("both", "whisper", "vosk") else "both",
+                "trailing": clamp("crossCheckTrailingWords", 0, 6),
+                "whisper_hint": self.get_bool("crossCheckWhisperHint")}
 
     def agents(self) -> list[dict]:
         """The extra agents, each woken by its own name, cleaned up.

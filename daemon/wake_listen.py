@@ -242,6 +242,10 @@ ALT_PHONES = {
 SHORT_PHONES = 3
 SHORT_BOOST = 1.5
 
+#: Spotted alongside the names when fullStopAnytime is on, so "full stop"
+#: stops everything at once: no wake word, no capture, no Whisper.
+STOP_PHRASE = "full stop"
+
 
 def sherpa_lexicon(model_dir: Path, words) -> dict[str, list[str]]:
     """The CMU-style phones for each of `words` the model's lexicon has.
@@ -468,6 +472,14 @@ class Pipeline:
         # Read first: building the sherpa engine decides from it whether the
         # Vosk model is worth keeping.
         self.cross_check = cfg.get_bool("wakeCrossCheck")
+        tuning = cfg.wake_tuning() if hasattr(cfg, "wake_tuning") else {}
+        #: Which engines vote in the second check, and how (crosscheck.decide).
+        self.cc_engines = tuning.get("engines", "both")
+        self.cc_trailing = tuning.get("trailing", crosscheck.MAX_TRAILING_WORDS)
+        self.cc_hint = tuning.get("whisper_hint", True)
+        #: "full stop" spotted in every frame (sherpa-onnx only).
+        self.stop_keyword = (cfg.get_bool("fullStopAnytime")
+                             if hasattr(cfg, "wake_tuning") else False)
         # The verifier's mtime belongs in the spec: retraining rewrites that
         # file, and without it the daemon keeps the copy it loaded at startup
         # for ever. A freshly trained verifier then appears to do nothing --
@@ -495,7 +507,7 @@ class Pipeline:
         if getattr(self, "_sherpa", None) is not None:
             self._sherpa_listen(cfg)
             # Switched off: nothing else on this engine needs Vosk.
-            if not self.cross_check and getattr(self, "_partials", "auto") != "on":
+            if not self._needs_vosk() and getattr(self, "_partials", "auto") != "on":
                 self._drop_vosk()
 
         self.lead_in_ms = cfg.get_int("leadInMs")
@@ -660,9 +672,13 @@ class Pipeline:
         # As on openWakeWord: nothing needs Vosk here unless partials are
         # explicitly on or the second check votes with it, so give its
         # memory back.
-        if (getattr(self, "_partials", "auto") != "on"
-                and not getattr(self, "cross_check", False)):
+        if getattr(self, "_partials", "auto") != "on" and not self._needs_vosk():
             self._drop_vosk()
+
+    def _needs_vosk(self) -> bool:
+        """Whether the second check votes with Vosk at all."""
+        return (getattr(self, "cross_check", False)
+                and getattr(self, "cc_engines", "both") != "whisper")
 
     def _sherpa_listen(self, cfg: Config) -> None:
         """Point the spotter at the current names and threshold.
@@ -678,14 +694,19 @@ class Pipeline:
         also = tuning.get("also_sounds")
         frozen = (tuple(sorted((k, tuple(v)) for k, v in also.items()))
                   if also is not None else None)
-        spec = (names, threshold, boost, frozen)
+        stop = bool(getattr(self, "stop_keyword", False))
+        spec = (names, threshold, boost, frozen, stop)
         if spec == self._sherpa_spec:
             return
         if self._sherpa_spec is None or names != self._sherpa_spec[0]:
             self._choose_names(list(names))
         self._sherpa_spec = spec
-        self._sherpa.listen_for([self.phrase, *self.names], threshold,
-                                also=also, short_boost=boost)
+        phrases = [self.phrase, *self.names]
+        # Its own keyword, so it stops things without a wake word first. Not
+        # added when a name already is "full stop" -- that agent wins.
+        if stop and STOP_PHRASE not in phrases:
+            phrases.append(STOP_PHRASE)
+        self._sherpa.listen_for(phrases, threshold, also=also, short_boost=boost)
         for entry, why in getattr(self._sherpa, "unusable", {}).items():
             print(f"  {YEL}also sounds like “{entry}” not used: {why}{OFF}",
                   flush=True)
@@ -871,6 +892,7 @@ class Pipeline:
                 self._refractory_until = time.time() + self.refractory_ms / 1000.0
                 self.heard_phrase = hit
                 self.wake_how = "spotter"
+                # The caller tells "full stop" apart by heard_phrase.
                 self._burst_cutter().clear()
                 return True
             if getattr(self, "cross_check", False):
@@ -977,16 +999,25 @@ class Pipeline:
         if audio is None:
             return False
         names = [self.phrase, *self.names]
+        mode = getattr(self, "cc_engines", "both")
         t0 = time.perf_counter()
-        vosk, has_vote = self._vosk_vote(audio, names)
-        if not vosk and set(names) <= has_vote:
-            return False
-        try:
-            text = self._whisper_names(audio, names)
-        except Exception as e:
-            print(f"  {YEL}second check failed: {type(e).__name__}: {e}{OFF}")
-            return False
-        name, why = crosscheck.decide(names, has_vote, vosk, text)
+        vosk, has_vote = ("", set()) if mode == "whisper" else self._vosk_vote(audio, names)
+        # Whisper costs about a second, so it is skipped when its vote
+        # cannot change the answer: Vosk alone decides, or both must agree
+        # and Vosk heard nothing it could have heard.
+        if mode == "vosk" or (mode == "both" and not vosk and set(names) <= has_vote):
+            text = ""
+            if mode == "both":
+                return False
+        else:
+            try:
+                text = self._whisper_names(audio, names)
+            except Exception as e:
+                print(f"  {YEL}second check failed: {type(e).__name__}: {e}{OFF}")
+                return False
+        name, why = crosscheck.decide(names, has_vote, vosk, text, mode=mode,
+                                      trailing=getattr(self, "cc_trailing",
+                                                       crosscheck.MAX_TRAILING_WORDS))
         ms = (time.perf_counter() - t0) * 1000
         heard = (f" — whisper heard \"{safe_for_terminal(text.strip())}\""
                  if speech_is_logged(getattr(self, "_log_speech", False)) else "")
@@ -1024,7 +1055,8 @@ class Pipeline:
         """Whisper's reading of a burst, prompted with the names -- the
         prompt measured in FINDINGS §24. Through the one Whisper worker, so
         it never runs beside a piece of an abandoned utterance."""
-        prompt = ", ".join(n.title() for n in names) + "."
+        prompt = (", ".join(n.title() for n in names) + "."
+                  if getattr(self, "cc_hint", True) else None)
         if self._pool is None:
             from concurrent.futures import ThreadPoolExecutor
             self._pool = ThreadPoolExecutor(max_workers=1,
@@ -1661,9 +1693,10 @@ class Daemon:
         test = getattr(self, "wake_test", None)
         if test is None or not test.running:
             return False
+        test.on_level(level, self.pipe.threshold_db)
         if self._wake_test_cut.feed(pcm, level >= self.pipe.threshold_db) is not None:
             test.on_attempt()
-        if self.pipe.feed_wake(pcm, level):
+        if self.pipe.feed_wake(pcm, level) and not self.heard_full_stop():
             how = getattr(self.pipe, "wake_how", "") or "?"
             test.on_wake(self.pipe.heard_phrase, how)
             print(f"  {GRN}● wake test: {self.pipe.heard_phrase} by {how} "
@@ -1962,6 +1995,10 @@ class Daemon:
         if self.agent:
             self.agent.cancel()
         print(f"\n  {YEL}interrupted{OFF}")
+
+    def heard_full_stop(self) -> bool:
+        """Whether the wake engine's last hit was the "full stop" keyword."""
+        return getattr(self.pipe, "heard_phrase", "") == STOP_PHRASE
 
     def full_stop(self) -> None:
         """Stop everything: every agent's turn, every voice, every window.
@@ -2494,6 +2531,16 @@ class Daemon:
             except Exception as e:
                 self.say_once("wake-watch", f"  {YEL}wake word unavailable "
                               f"while working: {type(e).__name__}: {e}{OFF}")
+                return
+            if fired and self.heard_full_stop():
+                # Stop the turn and open nothing after it.
+                print(f"  {YEL}● full stop{OFF}  {DIM}(heard as a keyword){OFF}",
+                      flush=True)
+                self._interrupt.set()
+                for part in (self.speaker, self.agent):
+                    if part is not None:
+                        part.cancel()
+                self.full_stop()
                 return
             if fired:
                 print(f"  {GRN}● wake{OFF}  {DIM}stopping — go ahead{OFF}",
@@ -3448,7 +3495,15 @@ class Daemon:
                     continue
 
                 if phase == "wake":
-                    if self.pipe.feed_wake(pcm, level):
+                    fired = self.pipe.feed_wake(pcm, level)
+                    if fired and self.heard_full_stop():
+                        # Spotted as a keyword: stop everything now, and
+                        # open no capture -- there is nothing to say next.
+                        print(f"  {YEL}● full stop{OFF}  {DIM}(heard as a keyword){OFF}",
+                              flush=True)
+                        self.full_stop()
+                        continue
+                    if fired:
                         capture_for = self._woken() if crew else None
                         capture_kind = "wake"
                         who = (f" {capture_for.name}"
