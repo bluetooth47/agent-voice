@@ -431,7 +431,7 @@ Item {
   }
   function statusTone(status) {
     if (status === "thinking" || status === "speaking" || status === "transcribing") return "busy"
-    if (status === "off" || status === "paused") return "idle"
+    if (status === "off" || status === "paused" || status === "switched off") return "idle"
     return "active"
   }
 

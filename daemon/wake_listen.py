@@ -2665,11 +2665,22 @@ class Daemon:
             return
         agents = getattr(self.cfg, "agents", None)
         specs = {spec["name"]: spec for spec in agents()} if callable(agents) else {}
+        disabled = getattr(self.cfg, "disabled_agents", None)
+        off = disabled() if callable(disabled) else set()
         heard = set(getattr(self.pipe, "names", ()) or ())
         self._main.name = getattr(self.pipe, "phrase", "") or ""
         changed = False
         for name in list(self.crew):
             p = self.crew[name]
+            if p.busy and name in off:
+                # Switched off mid-turn: stopped now, not left to finish.
+                # A deleted agent still finishes its turn, as before; "off"
+                # is a switch somebody reached for, and it should act like one.
+                if not p.interrupt.is_set():
+                    print(f"  {CYA}agent “{name}” switched off: stopping its "
+                          f"turn{OFF}", flush=True)
+                    p.stop()
+                continue
             if (name in specs and name in heard) or p.busy:
                 continue
             if p.agent is not None:

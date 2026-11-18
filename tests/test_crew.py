@@ -93,6 +93,43 @@ class TestConfigAgents:
         cfg = cfg_factory(voiceAgents=[{"name": n} for n in names])
         assert len(cfg.agents()) == MAX_AGENTS
 
+    def test_an_agent_switched_off_is_left_out(self, cfg_factory):
+        cfg = cfg_factory(voiceAgents=[{"name": "friday", "enabled": False},
+                                       {"name": "jarvis"}])
+        assert [a["name"] for a in cfg.agents()] == ["jarvis"]
+        assert cfg.disabled_agents() == {"friday"}
+        assert cfg.agent_named("friday") is None
+
+    @pytest.mark.parametrize("value", [True, None, 0, "", "false", "off", []])
+    def test_only_an_explicit_false_switches_it_off(self, cfg_factory, value):
+        """Missing means on, so a list written before the switch existed
+        keeps every agent; a hand-edited oddity is not read as off either."""
+        cfg = cfg_factory(voiceAgents=[{"name": "friday", "enabled": value}])
+        assert [a["name"] for a in cfg.agents()] == ["friday"]
+        assert cfg.disabled_agents() == set()
+
+    def test_an_off_agent_keeps_its_name_taken(self, cfg_factory):
+        """Switching it back on must not find a second agent answering to
+        the same name."""
+        cfg = cfg_factory(voiceAgents=[{"name": "friday", "enabled": False},
+                                       {"name": "Friday", "model": "haiku"}])
+        assert cfg.agents() == []
+
+    def test_an_off_agent_counts_toward_the_ceiling(self, cfg_factory):
+        from runtime import MAX_AGENTS
+        names = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot",
+                 "golf", "hotel", "india"]
+        raw = [{"name": n, "enabled": False} for n in names[:2]]
+        raw += [{"name": n} for n in names[2:]]
+        cfg = cfg_factory(voiceAgents=raw)
+        assert len(cfg.agents()) + len(cfg.disabled_agents()) == MAX_AGENTS
+
+    def test_an_off_agent_is_not_listened_for(self, cfg_factory):
+        from wake_listen import wanted_names
+        cfg = cfg_factory(voiceAgents=[{"name": "friday", "enabled": False},
+                                       {"name": "jarvis"}])
+        assert wanted_names(cfg) == ["jarvis"]
+
     def test_agent_named(self, cfg_factory):
         cfg = cfg_factory(voiceAgents=[{"name": "friday", "level": "trusted"}])
         assert cfg.agent_named("friday")["level"] == "trusted"
@@ -349,6 +386,12 @@ class TestHookForANamedAgent:
     def test_corrupt_settings_still_ask(self, settings):
         use, _ = settings
         assert use(["claude", "friday"], voiceAgents="garbage") == ("ask", None)
+
+    def test_an_agent_switched_off_is_asked_about(self, settings):
+        use, _ = settings
+        assert use(["claude", "friday"],
+                   voiceAgents=[{"name": "friday", "enabled": False,
+                                 "level": "trusted"}]) == ("ask", None)
 
     def test_the_main_agent_is_unchanged(self, settings):
         use, _ = settings
@@ -792,6 +835,32 @@ class TestReconcile:
         _wait_idle(recon)
         recon.reconcile_crew()
         assert "jarvis" not in recon.crew
+
+    def test_switching_an_agent_off_stops_its_turn(self, recon):
+        """A deleted agent finishes its turn; one switched off is stopped
+        at once, then removed when its thread has ended."""
+        recon.cfg._values["voiceAgents"] = [{"name": "jarvis"}]
+        recon.reconcile_crew()
+        p = recon.crew["jarvis"]
+        p.agent.delay = 5.0
+        recon.dispatch(p, "a", {})
+        # Until the request is with the agent: the stand-in clears its stop
+        # flag when send() starts, so a cancel before that would be lost.
+        assert _until(lambda: p.busy and p.agent.sent)
+        recon.cfg._values["voiceAgents"] = [{"name": "jarvis", "enabled": False}]
+        recon.reconcile_crew()
+        assert p.interrupt.is_set() and p.agent.cancelled >= 1
+        _wait_idle(recon)
+        recon.reconcile_crew()
+        assert "jarvis" not in recon.crew
+
+    def test_an_agent_switched_back_on_comes_back(self, recon):
+        recon.cfg._values["voiceAgents"] = [{"name": "jarvis", "enabled": False}]
+        recon.reconcile_crew()
+        assert "jarvis" not in recon.crew
+        recon.cfg._values["voiceAgents"] = [{"name": "jarvis", "enabled": True}]
+        recon.reconcile_crew()
+        assert "jarvis" in recon.crew
 
     def test_the_main_agent_is_not_rebuilt_under_its_own_turn(self, recon):
         recon.cfg._values["voiceAgents"] = [{"name": "jarvis"}]

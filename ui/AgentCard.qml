@@ -14,7 +14,7 @@ import qs.Commons as Commons
 //   AgentCard {
 //     width: parent.width
 //     name: "Sarah"; wakeName: "sarah"; summary: "claude · opus · high"
-//     isDefault: false; status: "listening"
+//     isDefault: false; status: "listening"; switchedOff: false
 //     SettingRow { ... }
 //   }
 Rectangle {
@@ -28,6 +28,8 @@ Rectangle {
   property string tone: "idle"
   property bool isDefault: false
   property bool expanded: false
+  // Switched off on its card: the header is drawn dimmed, every setting kept.
+  property bool switchedOff: false
   // Shown under the header in the urgent colour when something stops this
   // agent working (no folder for "edits", a name the recogniser lacks).
   property string problem: ""
@@ -69,6 +71,7 @@ Rectangle {
       id: header
       width: parent.width
       height: Math.max(names.implicitHeight, side.implicitHeight)
+      opacity: card.switchedOff ? 0.5 : 1.0
 
       MouseArea {
         anchors.fill: parent

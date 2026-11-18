@@ -381,15 +381,29 @@ class Config:
         - a permission level that is not one of the three reads as "ask".
           An agent nobody has made a decision about has not been trusted.
 
+        An agent switched off (`"enabled": false`) is left out, so its name
+        leaves the wake grammar and nothing routes to it, but its name stays
+        taken: switching it back on must not find a second agent answering
+        to it. Only an explicit false is off; a missing or odd value is on,
+        so lists written before the switch existed don't change.
+
         At most MAX_AGENTS, in the order they were added.
         """
+        return self._agents()[0]
+
+    def disabled_agents(self) -> set[str]:
+        """The names of agents that are configured but switched off."""
+        return self._agents()[1]
+
+    def _agents(self) -> tuple[list[dict], set[str]]:
         raw = self["voiceAgents"]
         if not isinstance(raw, list):
-            return []
+            return [], set()
         out: list[dict] = []
+        off: set[str] = set()
         seen: set[str] = set()
         for entry in raw:
-            if len(out) >= MAX_AGENTS:
+            if len(out) + len(off) >= MAX_AGENTS:
                 break
             if not isinstance(entry, dict):
                 continue
@@ -398,6 +412,9 @@ class Config:
                     or name in seen):
                 continue
             seen.add(name)
+            if entry.get("enabled") is False:
+                off.add(name)
+                continue
             program = str(entry.get("agent") or "claude").strip().lower()
             model = entry.get("model")
             model = model.strip() if isinstance(model, str) else ""
@@ -419,7 +436,7 @@ class Config:
                 "level": level if level in ("ask", "edits", "trusted") else "ask",
                 "projectDir": folder.strip() if isinstance(folder, str) else "",
             })
-        return out
+        return out, off
 
     def agent_named(self, name: str | None) -> dict | None:
         """The extra agent called `name`, or None."""

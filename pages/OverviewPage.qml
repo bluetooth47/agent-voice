@@ -166,7 +166,7 @@ Column {
       StatusCard {
         required property var modelData
         readonly property string name: String(modelData.name || "")
-        readonly property string st: page.s.agentStatus(name)
+        readonly property string st: modelData.enabled === false ? "switched off" : page.s.agentStatus(name)
         width: parent ? parent.width : 0
         icon: "\u{f06a9}"
         title: name || "unnamed agent"

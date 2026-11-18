@@ -457,9 +457,11 @@ Panel {
   }
   readonly property bool usingEndpoint: String(pref("endpointUrl", "")) !== ""
                                         && String(pref("endpointModel", "")) !== ""
+  // Agents switched off on their card have no chip here: they can't be
+  // woken, so offering them would be offering nothing.
   readonly property var crew: {
     var v = pref("voiceAgents", [])
-    return Array.isArray(v) ? v : []
+    return Array.isArray(v) ? v.filter(function(a) { return (a || {}).enabled !== false }) : []
   }
 
   // The main agent's level as saved for it, else as the daemon reports it.

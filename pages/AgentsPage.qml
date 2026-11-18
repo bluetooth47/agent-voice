@@ -201,6 +201,16 @@ Column {
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
 
+    Text {
+      width: parent.width
+      wrapMode: Text.WordWrap
+      text: "Always on: something has to answer “" + page.s.activePhrase + "”. To silence everything, mute the microphone or stop the service."
+      textFormat: Text.PlainText
+      color: page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
     // One dropdown per engine rather than one that swaps its options.
     // Swapping left the previous engine's value displayed -- picking "hey
     // claude" under Vosk and then switching engines still showed "hey
@@ -650,6 +660,8 @@ Column {
       readonly property var efforts: Array.isArray(card.info.efforts) ? card.info.efforts : []
       readonly property var levels: Array.isArray(card.info.levels) ? card.info.levels : ["ask", "edits", "trusted"]
       readonly property string st: page.s.agentStatus(card.agentName)
+      // Missing means on, so lists from before the switch keep every agent.
+      readonly property bool on: card.modelData.enabled !== false
       property bool customModel: false
       property bool confirmRemove: false
 
@@ -657,9 +669,11 @@ Column {
       name: card.agentName || "New agent"
       wakeName: card.agentName
       summary: page.summary(card.program, card.model, card.effort, card.level, card.levels)
-      status: card.st
-      tone: page.s.statusTone(card.st)
-      problem: String(card.info.problem || "") !== "" ? String(card.info.problem)
+      status: card.on ? card.st : "switched off"
+      tone: card.on ? page.s.statusTone(card.st) : "idle"
+      switchedOff: !card.on
+      problem: !card.on ? ""
+               : String(card.info.problem || "") !== "" ? String(card.info.problem)
                : card.agentName !== "" && !/^[a-z]+( [a-z]+){0,2}$/.test(card.agentName)
                  ? "A name is one to three plain words, letters only." : ""
       expanded: page.isOpen(card.agentName)
@@ -668,6 +682,17 @@ Column {
       fontFamily: page.s.fontFamily
 
       Timer { id: removeTimeout; interval: 4000; onTriggered: card.confirmRemove = false }
+
+      ToggleRow {
+        width: parent.width
+        label: "On"
+        hint: card.on ? "Off keeps every setting here, but its name stops waking it and it leaves the popup and the Agents panel. A turn it is running is stopped."
+                      : "Switched off: saying “" + card.agentName + "” does nothing. Every setting is kept."
+        checked: card.on
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onToggled: page.updateAgent(card.index, "enabled", !card.on)
+      }
 
       SettingRow {
         width: parent.width
