@@ -96,6 +96,20 @@ threshold is tuned for whichever phrase it was set on, so measure the new
 one with `agentvoice monitor`: say the phrase, then say something that
 rhymes with it, and put the threshold between the two peaks.
 
+### Tuning a wake word that misses
+
+Listening → Advanced holds every wake setting that was tuned by hand: each
+engine's threshold, the second check and its burst window (300 to 2600ms),
+the short-name boost for names of three sounds or fewer, and "also sounds
+like" per name word: other readings for sherpa-onnx, written as words it
+knows (`thea`) or as phones (`TH IY1 AH0`). Each has a reset.
+
+**Test my wake word** (or `agentvoice wake-test start`) counts wakes
+instead of answering them, for ten wakes or 90 seconds. Say the name alone
+with a pause after each, then read off how many tries woke it, which path
+caught each one (spotter or second check), and the near misses the engines
+turned down. Only reasons are shown, never what was said.
+
 ## Principles
 
 1. **Baseline, not bolted on.** Installs like any Omarchy extension:

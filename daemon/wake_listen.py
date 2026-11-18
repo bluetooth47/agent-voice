@@ -51,6 +51,7 @@ from crew import (  # noqa: E402
 )
 from agents_panel import AgentsPanel, program_label, slug  # noqa: E402
 import crosscheck  # noqa: E402
+import wake_test  # noqa: E402
 import failure  # noqa: E402
 from chimes import Chimes  # noqa: E402
 from eager import Utterance, sounds_finished  # noqa: E402
@@ -869,6 +870,7 @@ class Pipeline:
             if hit:
                 self._refractory_until = time.time() + self.refractory_ms / 1000.0
                 self.heard_phrase = hit
+                self.wake_how = "spotter"
                 self._burst_cutter().clear()
                 return True
             if getattr(self, "cross_check", False):
@@ -879,6 +881,7 @@ class Pipeline:
             if self._oww.feed(pcm):
                 self._refractory_until = time.time() + self.refractory_ms / 1000.0
                 self.heard_phrase = self.phrase
+                self.wake_how = "openwakeword"
                 return True
             return False
 
@@ -926,6 +929,7 @@ class Pipeline:
             if self._loud_frames < self.min_loud_frames:
                 return False
         elif conf < self.wake_confidence:
+            self._near(f"vosk confidence {conf:.2f} < {self.wake_confidence:.2f}")
             if speech_is_logged(getattr(self, "_log_speech", False)):
                 print(f"  {DIM}(rejected \"{safe_for_terminal(text)}\" — confidence "
                       f"{conf:.2f} < {self.wake_confidence:.2f}){OFF}")
@@ -940,7 +944,21 @@ class Pipeline:
         self._loud_frames = 0
         self._refractory_until = time.time() + self.refractory_ms / 1000.0
         self.heard_phrase = matched
+        self.wake_how = "vosk"
         return True
+
+    def _near(self, why: str) -> None:
+        """A wake the engines came close to and turned down, for the wake
+        test. Reasons only: never what was said."""
+        near = getattr(self, "near_misses", None)
+        if near is None:
+            near = self.near_misses = []
+        near.append(why)
+        del near[:-20]
+
+    def take_near_misses(self) -> list[str]:
+        near, self.near_misses = getattr(self, "near_misses", None) or [], []
+        return near
 
     def _burst_cutter(self) -> crosscheck.Bursts:
         if getattr(self, "_bursts", None) is None:
@@ -975,11 +993,14 @@ class Pipeline:
         if not name:
             print(f"  {DIM}(second check: no wake — {why}{heard}, {ms:.0f}ms){OFF}",
                   flush=True)
+            if why:
+                self._near(f"second check: {why}")
             return False
         print(f"  {DIM}(second check: {name} by {why}{heard}, {ms:.0f}ms){OFF}",
               flush=True)
         self._refractory_until = time.time() + self.refractory_ms / 1000.0
         self.heard_phrase = name
+        self.wake_how = "second check"
         self._sherpa.reset()
         return True
 
@@ -1330,6 +1351,8 @@ class Daemon:
         self._chime_until = 0.0
         RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
         (RUNTIME_DIR / "pid").write_text(str(os.getpid()))
+        # A test result from the last run describes a daemon that is gone.
+        wake_test.write(RUNTIME_DIR / "wake-test.json", None)
         # Barge-in is not possible acoustically through laptop speakers: at
         # a normal listening volume our own playback reaches the mic at the
         # same level as the user's voice (SNR +1.2 dB), and detection falls
@@ -1612,6 +1635,56 @@ class Daemon:
               f"(told, not polled){OFF}", flush=True)
         self._publish()
         return True
+
+    #: Where the wake test's readout goes: beside the state file.
+    WAKE_TEST_FILE = RUNTIME_DIR / "wake-test.json"
+
+    def apply_wake_test_command(self, cmd: str | None) -> bool:
+        """`agentvoice wake-test start|stop`. True if it was one."""
+        if cmd not in ("wake-test-start", "wake-test-stop"):
+            return False
+        if cmd == "wake-test-start":
+            self.wake_test = wake_test.WakeTest()
+            self._wake_test_cut = crosscheck.Bursts(
+                CHUNK_MS, wake_test.MIN_ATTEMPT_MS, wake_test.MAX_ATTEMPT_MS)
+            print(f"\n  {CYA}wake test: say the name {self.wake_test.target} "
+                  f"times (wakes are counted, not answered){OFF}", flush=True)
+        elif getattr(self, "wake_test", None) is not None:
+            self.wake_test.stop()
+            print(f"  {CYA}wake test stopped{OFF}", flush=True)
+        self._write_wake_test()
+        return True
+
+    def wake_testing(self, pcm: bytes, level: float) -> bool:
+        """Feed one wake-phase frame to the running test. False when no test
+        is running, and the frame goes on to the wake word as usual."""
+        test = getattr(self, "wake_test", None)
+        if test is None or not test.running:
+            return False
+        if self._wake_test_cut.feed(pcm, level >= self.pipe.threshold_db) is not None:
+            test.on_attempt()
+        if self.pipe.feed_wake(pcm, level):
+            how = getattr(self.pipe, "wake_how", "") or "?"
+            test.on_wake(self.pipe.heard_phrase, how)
+            print(f"  {GRN}● wake test: {self.pipe.heard_phrase} by {how} "
+                  f"({len(test.hits)}/{test.target}){OFF}", flush=True)
+        take = getattr(self.pipe, "take_near_misses", None)
+        for why in (take() if callable(take) else []):
+            test.on_near(why)
+        test.tick()
+        if not test.running:
+            snap = test.snapshot()
+            print(f"  {CYA}wake test {snap['status']}: {snap['hits']} of "
+                  f"{snap['attempts']} attempts woke it{OFF}", flush=True)
+        self._write_wake_test()
+        return True
+
+    def _write_wake_test(self) -> None:
+        test = getattr(self, "wake_test", None)
+        snap = test.snapshot() if test is not None else None
+        if snap != getattr(self, "_wake_test_shown", None):
+            self._wake_test_shown = snap
+            wake_test.write(self.WAKE_TEST_FILE, snap)
 
     def arm_follow_up(self) -> bool:
         """Whether to keep listening after the turn without the wake word.
@@ -3204,6 +3277,8 @@ class Daemon:
                 # means the same thing wherever the daemon happens to be.
                 if self.apply_lock_command(cmd):
                     continue
+                if self.apply_wake_test_command(cmd):
+                    continue
                 if cmd == "talk" and self.listening:
                     if utt is not None:
                         utt.abandon()
@@ -3367,6 +3442,10 @@ class Daemon:
                             shown_partial = ""
                             self.state.publish("followup", **last)
                         # No `continue`: this frame is the capture's first.
+
+                # While the wake test runs, a wake is counted, not answered.
+                if phase == "wake" and self.wake_testing(pcm, level):
+                    continue
 
                 if phase == "wake":
                     if self.pipe.feed_wake(pcm, level):

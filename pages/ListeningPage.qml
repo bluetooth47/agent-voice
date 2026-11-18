@@ -40,7 +40,9 @@ Column {
     return out
   }
   function alsoSounds() {
-    var v = s.setting("wakeAlsoSounds", {})
+    // Unset means the shipped default (theo's second reading), as the
+    // daemon reads it, not an empty list.
+    var v = s.setting("wakeAlsoSounds", s.defaults.wakeAlsoSounds || {})
     return v && typeof v === "object" && !Array.isArray(v) ? v : ({})
   }
   function alsoText(word) {
@@ -360,6 +362,72 @@ Column {
               if (text.trim() !== page.alsoText(alsoRow.word)) page.setAlso(alsoRow.word, text)
             }
           }
+        }
+      }
+
+      // Test my wake word: ten tries, the hit rate, and what nearly woke it.
+      SettingRow {
+        width: parent.width
+        stacked: true
+        label: "Test my wake word"
+        hint: !page.s.serviceActive ? "Start the service first."
+              : page.s.wakeTestRunning
+                ? "Say “" + page.s.activePhrase + "” on its own, with a pause after each. Nothing is answered while this runs. " + Number(page.s.vWakeTest.left_s || 0) + "s left."
+                : "Say the name ten times. Each wake is counted instead of answered, for up to 90 seconds."
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        Button {
+          text: page.s.wakeTestRunning ? "Stop" : "Start test"
+          bordered: true
+          enabled: page.s.serviceActive
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          onClicked: page.s.wakeTest(!page.s.wakeTestRunning)
+        }
+      }
+
+      Column {
+        width: parent.width
+        spacing: Style.space(4)
+        visible: page.s.serviceActive && String(page.s.vWakeTest.status || "") !== ""
+
+        Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          readonly property var t: page.s.vWakeTest
+          text: Number(t.hits || 0) + " of " + Number(t.attempts || 0) + " tries woke it"
+                + (Number(t.attempts || 0) > 0 ? "  (" + Math.round(Number(t.rate || 0) * 100) + "%)" : "")
+                + (t.status === "done" ? " — done." : t.status === "timeout" ? " — time is up."
+                   : t.status === "stopped" ? " — stopped." : "")
+          textFormat: Text.PlainText
+          color: page.s.foreground
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.body
+        }
+        Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          visible: text !== ""
+          text: Array.isArray(page.s.vWakeTest.by) && page.s.vWakeTest.by.length > 0
+                ? "Woke by: " + page.s.vWakeTest.by.join(", ") : ""
+          textFormat: Text.PlainText
+          color: page.s.dim
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          visible: text !== ""
+          text: Array.isArray(page.s.vWakeTest.near) && page.s.vWakeTest.near.length > 0
+                ? "Near misses:\n• " + page.s.vWakeTest.near.join("\n• ")
+                : Number(page.s.vWakeTest.attempts || 0) > Number(page.s.vWakeTest.hits || 0)
+                  ? "No near misses: the missed tries never reached a second look. Try a lower threshold or a higher short-name boost."
+                  : ""
+          textFormat: Text.PlainText
+          color: page.s.dim
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
         }
       }
     }

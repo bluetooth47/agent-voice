@@ -141,6 +141,17 @@ case "${1:-status}" in
     # silently and in the unsafe direction.
     if [[ "$(vstate)" == locked ]]; then echo yes; else echo no; exit 1; fi
     ;;
+  wake-test)
+    # The Listening page's "Test my wake word": for 90s, or ten wakes, a wake
+    # is counted instead of answered. Results in $RUNDIR/wake-test.json.
+    #   agentvoice wake-test start|stop
+    case "${2:-start}" in
+      start|stop) ;;
+      *) echo "usage: agentvoice wake-test start|stop" >&2; exit 2 ;;
+    esac
+    if ! active; then echo "daemon not running" >&2; exit 1; fi
+    send_command "wake-test-${2:-start}"
+    ;;
   talk-end)
     # The key coming back up ends the turn. Ignored by the daemon unless a
     # push-to-talk capture is actually open.
@@ -245,7 +256,7 @@ case "${1:-status}" in
     active && echo yes || echo no
     ;;
   *)
-    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|interrupt|monitor|calibrate|voice|permit|pending|history|status|is-active]" >&2
+    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|interrupt|monitor|calibrate|voice|permit|pending|history|wake-test|status|is-active]" >&2
     exit 2
     ;;
 esac

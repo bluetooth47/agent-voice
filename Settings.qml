@@ -395,6 +395,28 @@ Item {
   }
   Process { id: interrupt; command: ["agentvoice", "interrupt"] }
 
+  // "Test my wake word" on the Listening page. The daemon counts wakes
+  // instead of answering them and writes wake-test.json beside the state.
+  property var vWakeTest: ({})
+  readonly property bool wakeTestRunning: serviceActive && String(vWakeTest.status || "") === "running"
+  function wakeTest(start) {
+    if (!root.serviceActive) return
+    wakeTester.command = ["agentvoice", "wake-test", start ? "start" : "stop"]
+    wakeTester.running = true
+  }
+  Process { id: wakeTester; command: ["agentvoice", "wake-test", "start"] }
+  FileView {
+    path: (Quickshell.env("XDG_RUNTIME_DIR") || "/run/user/1000") + "/agentvoice/wake-test.json"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoadFailed: root.vWakeTest = ({})
+    onLoaded: {
+      try { var d = JSON.parse(text()); root.vWakeTest = (d && typeof d === "object") ? d : ({}) }
+      catch (e) { root.vWakeTest = ({}) }
+    }
+  }
+
   // What the service is doing, in words, for the Overview and the cards.
   readonly property string stateLabel: {
     if (!engineInstalled) return "Not installed"
