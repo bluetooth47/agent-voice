@@ -299,3 +299,46 @@ def chat_command(text: str) -> tuple[str, str]:
     if m:
         return "continue", (m.group("about") or "").strip()
     return "", ""
+
+
+#: Keep the microphone open: no wake word until it is closed or goes quiet.
+_OPEN_MIC = frozenset({
+    "keep listening", "keep on listening", "stay listening", "lets keep talking",
+    "keep talking with me", "lets talk", "open mic", "open the mic",
+    "keep the mic open", "leave the mic open", "listen to me",
+    "start listening", "dont stop listening", "lets have a conversation",
+})
+#: Close it again. A goodbye and a full stop close it too; a plain "stop"
+#: stops the reply and leaves it open.
+_CLOSE_MIC = frozenset({
+    "stop listening", "close the mic", "close mic", "mic off",
+    "turn the mic off", "stop the open mic", "end the open mic",
+    "wait for your name", "wait for the wake word", "go back to sleep",
+    "go to sleep",
+})
+
+
+def open_mic_command(text: str) -> str:
+    """"open" for "keep listening", "close" for "stop listening", else ""."""
+    norm = _normalize(text)
+    for lead in ("please ", "okay ", "ok "):
+        if norm.startswith(lead):
+            norm = norm[len(lead):]
+    if norm in _OPEN_MIC:
+        return "open"
+    if norm in _CLOSE_MIC:
+        return "close"
+    return ""
+
+
+#: Move the conversation into a terminal, where typing continues it.
+_HANDOFF = re.compile(
+    r"^(?:please |can you |could you |lets )?"
+    r"(?:move|take|hand|send|open|continue|carry on|put|switch)"
+    r"(?: this| it| that| the chat| this chat| the conversation| this conversation)?"
+    r"(?: over)? (?:to|in|into|on) (?:a |the |my )?terminal$")
+
+
+def is_handoff(text: str) -> bool:
+    """True for "move this to a terminal" and the ways it is said, whole."""
+    return bool(_HANDOFF.match(_normalize(text)))

@@ -322,6 +322,31 @@ never read out. Only Claude Code and Codex report their tools; the others
 stay quiet. Each agent's card can choose its own level. Replayed against 31
 recorded turns, it spoke in 8 of them (FINDINGS §29).
 
+**Open mic.** Say "keep listening" (or "let's keep talking", or use the
+popup's **Open mic** tile) and it stops needing the wake word. It stays
+with the agent you said it to; say another agent's name and the open mic
+goes to that agent. "Stop listening", "goodbye", "full stop", the tile, a
+mute or a lock close it. So does ten minutes with nothing said
+(Conversation → Open mic → Closes after). While it is open, the bar icon
+is in the theme's accent colour and the readout says "OPEN MIC · THEO ·
+8 MIN LEFT". With **Only answer if it's meant for you** on (the default),
+each thing it hears goes to the agent with a note asking it to reply SKIP
+if it was said to somebody else or came from a television. A SKIP is
+never spoken or saved. That costs one agent turn for everything heard, so
+it is safer, not free. **Open the mic after every wake** makes every wake
+start one.
+
+**Move this to a terminal.** Say "Theo, move this to a terminal" and the
+conversation opens in a terminal, in the agent's project folder, with
+`claude --resume <session>` (Codex: `codex resume`), so typing carries it
+on with everything said so far. Voice stays out of that chat while the
+terminal is open. Asking that agent something then gets "That chat is open
+in a terminal. Say new chat to start another one, or close the terminal
+first." Once the terminal is closed, the next spoken turn resumes the chat,
+including what was typed. Gemini, Antigravity, Copilot and endpoints cannot
+resume a chat elsewhere and say so. A saved chat notes when it went on in a
+terminal.
+
 A failed turn says why: "Claude has hit its usage limit. It resets at
 7 PM.", "Claude needs you to sign in again.", "Claude could not reach its
 service." The error text itself is still never said or logged, because a CLI

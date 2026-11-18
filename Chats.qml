@@ -490,6 +490,9 @@ Item {
         text: view.agentName(view.chat) + " · " + (view.chat.backend ? view.s.programLabel(view.chat.backend) : "agent")
               + " · started " + view.whenOf(view.chat.started)
               + (view.inUse(view.chat) ? " · in use now" : "")
+              // What was typed there is in the agent's own session, not here.
+              + (Number(view.chat.terminal || 0) > 0
+                 ? " · went on in a terminal " + view.whenOf(view.chat.terminal) : "")
         textFormat: Text.PlainText
         color: view.s.dim
         font.family: view.s.fontFamily

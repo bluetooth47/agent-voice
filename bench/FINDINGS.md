@@ -1048,3 +1048,17 @@ activity parsing (`codex.activity_chunks`) is tested against the event shapes
 its adapter already handles, not a recording. Gemini, Antigravity, Copilot
 and endpoints stream no tool events, so they get no progress talk.
 
+## 30. What the terminal handoff costs a turn
+
+i7-1185G7, 2026-11-18. While an agent's chat is in a terminal, each turn to
+that agent first checks whether any process still has the session id in
+its arguments (`session_held_elsewhere`, a read of every
+`/proc/<pid>/cmdline` this user can see). With 286 processes running, it
+took a median of **4.1ms**, max 5.1ms, over 30 runs. It runs only for an
+agent whose chat was handed to a terminal, and stops for good once the
+terminal is closed.
+
+Nothing else in Phase E was measured. The open microphone and the handoff
+are tested for what they decide (`tests/test_open_mic.py`, 68 tests), not
+yet in a room.
+

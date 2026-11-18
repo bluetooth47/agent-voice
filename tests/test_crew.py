@@ -991,7 +991,7 @@ def test_the_loop_hands_a_second_agent_work_while_the_first_is_busy(
     sends = []
     real_send = crew._send
 
-    def send(p, text, last, clock):
+    def send(p, text, last, clock, open_turn=False):
         sends.append((p.name, text))
         real_send(p, text, last, clock)
         if len(sends) == 2:

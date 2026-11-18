@@ -131,6 +131,9 @@ class ChatStore:
             "started": chat.get("started", 0),
             "updated": chat.get("updated", 0),
             "pinned": bool(chat.get("pinned")),
+            # When it was last moved to a terminal, so the view can say the
+            # transcript here stops where the typing began.
+            "terminal": chat.get("terminal", 0),
             "count": len(ex),
             # For search in the list: the words, not the whole chat.
             "preview": str(ex[-1].get("transcript", ""))[:160] if ex else "",
@@ -245,6 +248,11 @@ class ChatStore:
 
     def pin(self, chat_id: str, on: bool = True) -> bool:
         return self._change(chat_id, lambda c: c.update(pinned=bool(on)))
+
+    def mark_terminal(self, chat_id: str, now: float | None = None) -> bool:
+        """Note that the chat went on in a terminal."""
+        when = round(time.time() if now is None else now)
+        return self._change(chat_id, lambda c: c.update(terminal=when))
 
     def delete(self, chat_id: str) -> bool:
         with self._locked():

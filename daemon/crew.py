@@ -86,6 +86,11 @@ class Persona:
         #: The chat as text, put ahead of the next request once, for a
         #: backend that cannot resume a session natively.
         self.replay = ""
+        #: The next turn was heard on the open microphone, without a name.
+        self.open_turn = False
+        #: The session handed to a terminal, while that terminal may still
+        #: hold it: voice does not touch it until it is closed.
+        self.terminal: str | None = None
 
     @property
     def main(self) -> bool:

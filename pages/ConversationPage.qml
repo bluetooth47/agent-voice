@@ -128,6 +128,69 @@ Column {
     }
   }
 
+  // An open conversation: no wake word until it is closed or goes quiet.
+  // Started by voice ("keep listening") or the popup's toggle.
+  SettingsGroup {
+    width: parent.width
+    title: "OPEN MIC"
+    foreground: page.s.foreground
+    fontFamily: page.s.fontFamily
+
+    Text {
+      width: parent.width
+      wrapMode: Text.WordWrap
+      text: "Say \"keep listening\" to talk without the wake word, and \"stop listening\", " +
+            "\"goodbye\" or \"full stop\" to end it. It stays with the agent you started it " +
+            "with; say another agent's name to hand it over. The bar icon and the HUD show " +
+            "while it is open."
+      textFormat: Text.PlainText
+      color: page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    KnobRow {
+      width: parent.width
+      foreground: page.s.foreground; fontFamily: page.s.fontFamily
+      label: "Closes after"
+      description: "Minutes with nothing said before it needs the wake word again."
+      value: page.s.setting("openMicIdleMin", 10)
+      defaultValue: page.dflt("openMicIdleMin")
+      changed: page.s.changed("openMicIdleMin")
+      minimum: 1; maximum: 60; stepSize: 1
+      unit: " min"
+      onCommitted: function(v) { page.s.put("openMicIdleMin", Math.round(v)) }
+      onReset: page.s.resetKey("openMicIdleMin")
+    }
+
+    ToggleRow {
+      width: parent.width
+      label: "Only answer if it's meant for you"
+      hint: "It stays silent when what it heard was said to someone else, or came from a television."
+      help: "Each thing heard on the open mic goes to the agent with a note asking it to " +
+            "reply SKIP if it was not said to it, and a SKIP is never spoken or kept. It " +
+            "costs a turn of the agent's time for everything heard."
+      checked: page.s.setting("openMicAddressedOnly", true) === true
+      changed: page.s.changed("openMicAddressedOnly")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onToggled: page.s.put("openMicAddressedOnly", !checked)
+      onReset: page.s.resetKey("openMicAddressedOnly")
+    }
+
+    ToggleRow {
+      width: parent.width
+      label: "Open the mic after every wake"
+      hint: "Every wake word starts an open conversation, as if you had said \"keep listening\"."
+      checked: page.s.setting("openMicAuto", false) === true
+      changed: page.s.changed("openMicAuto")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onToggled: page.s.put("openMicAuto", !checked)
+      onReset: page.s.resetKey("openMicAuto")
+    }
+  }
+
   // Progress talk. Off by default: what it says was written from recorded
   // turns (bench/narration), and is yours to switch on.
   SettingsGroup {

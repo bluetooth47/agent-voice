@@ -32,6 +32,8 @@ import contextlib
 import json
 import os
 import queue
+import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -58,8 +60,8 @@ from eager import Utterance, sounds_finished  # noqa: E402
 from noise_floor import MARGIN_MAX, MARGIN_MIN, NoiseFloor  # noqa: E402
 import headset  # noqa: E402
 from speech_text import (  # noqa: E402
-    as_prompt, chat_command, is_full_stop, is_goodbye, is_stop_command,
-    safe_for_terminal,
+    as_prompt, chat_command, is_full_stop, is_goodbye, is_handoff,
+    is_stop_command, open_mic_command, safe_for_terminal,
 )
 from chats import RETENTIONS, ChatStore, replay_context  # noqa: E402
 import narration  # noqa: E402
@@ -1382,6 +1384,55 @@ def _empty_turn() -> dict:
             "latency_ms": 0}
 
 
+#: What a turn heard on the open microphone is sent with, when "only answer
+#: if it's meant for you" is on. The agent is the only thing here that can
+#: tell a request from the television, so it is asked to.
+OPEN_MIC_PREAMBLE = (
+    "[Heard on an open microphone, without your name. If this was not said to "
+    "you -- someone talking to another person, a television, music -- reply "
+    "with exactly SKIP and nothing else.]\n")
+OPEN_MIC_SKIP = "SKIP"
+
+#: A session id that may go into a terminal's argv: what Claude Code and
+#: Codex print, and nothing a shell could read as more.
+_SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{7,79}")
+
+
+def terminal_resume_argv(program: str, session_id: str | None) -> list[str] | None:
+    """The command that carries `session_id` on in a terminal, or None when
+    the program cannot (or the id is not one)."""
+    if not session_id or not _SESSION_ID.fullmatch(session_id):
+        return None
+    if program == "claude":
+        return ["claude", "--resume", session_id]
+    if program == "codex":
+        return ["codex", "resume", session_id]
+    return None
+
+
+def session_held_elsewhere(session_id: str, proc_dir: str = "/proc") -> bool:
+    """Whether a process other than ours has `session_id` on its command
+    line: the terminal it was handed to, still open. Only this user's
+    processes can be read, which are the only ones that could hold it."""
+    me = os.getpid()
+    needle = session_id.encode()
+    try:
+        entries = os.listdir(proc_dir)
+    except OSError:
+        return False
+    for entry in entries:
+        if not entry.isdigit() or int(entry) == me:
+            continue
+        try:
+            with open(os.path.join(proc_dir, entry, "cmdline"), "rb") as f:
+                args = f.read().split(b"\0")
+        except OSError:
+            continue
+        if needle in args:
+            return True
+    return False
+
+
 #: A chunk that carries nothing: the stream was quiet for a moment.
 TICK = Chunk()
 
@@ -1511,6 +1562,10 @@ class Daemon:
         self.history = History()
         #: Saved chats, when `saveChats` is on. See chats.py.
         self.chats = ChatStore()
+        #: The agent the microphone is open for, without the wake word, and
+        #: until when (plan item 11). None when it is not open.
+        self.open_mic: Persona | None = None
+        self.open_mic_until = 0.0
         #: Until when a frame's loudness may be our own chime rather than the
         #: person. Not `_deaf_until`: deafness throws frames away, and the
         #: frame after a wake word may hold the start of the request.
@@ -2148,6 +2203,7 @@ class Daemon:
             p.follow_up = False
             if p.busy:
                 p.stop()
+        self.end_open_mic("full stop")
         # With one agent there is nothing else to stop: its turn runs on this
         # thread, so by the time a transcript is read it is already over, and
         # the wake word that let "full stop" be heard has stopped any reply.
@@ -2778,7 +2834,9 @@ class Daemon:
         hidden entirely behind a sentence that takes several to say.
         """
         prepare = getattr(self.agent, "prepare", None)
-        if prepare is None:
+        if prepare is None or self._persona().terminal:
+            # Not while a terminal has the chat: a process started now
+            # would hold it without what is typed there.
             return
         try:
             prepare(self.session_id)
@@ -2897,6 +2955,16 @@ class Daemon:
 
         if self.chat_turn(text, last, out, tail_ms):
             return
+        persona = self._persona()
+        open_turn = persona.open_turn and self.cfg.get_bool("openMicAddressedOnly")
+        persona.open_turn = False
+        if self.terminal_holds(persona):
+            line = ("That chat is open in a terminal. Say new chat to start "
+                    "another one, or close the terminal first.")
+            last["reply"] = line
+            out.publish("speaking", **last)
+            self.speak(line, tail_ms)
+            return
 
         out.publish("thinking", **last)
         t0 = time.time()
@@ -2907,13 +2975,15 @@ class Daemon:
         new_conversation = not self.session_id
         # A continued chat its backend cannot resume: the chat goes ahead of
         # this one request, then the session it starts carries it.
-        persona = self._persona()
         prompt = persona.replay + text if persona.replay else text
+        if open_turn:
+            prompt = OPEN_MIC_PREAMBLE + prompt
         persona.replay = ""
         reply_parts: list[str] = []
         ttft = None
         error = None
         kind = ""
+        skipped = False
         # Progress talk, when this agent has it on. The stream is then read
         # on a thread of its own so a quiet stretch -- a long command -- still
         # gives this one moments to speak in; with it off nothing changes.
@@ -2963,6 +3033,11 @@ class Daemon:
                     if self._interrupt.is_set() or not self.listening:
                         self.silence()
                         break
+                    if open_turn and not reply_parts and \
+                            sentence.strip().strip(".!").upper() == OPEN_MIC_SKIP:
+                        # Not meant for it: nothing said, nothing kept.
+                        skipped = True
+                        break
                     clock.setdefault("first_sentence", time.time())
                     if speech_is_logged(self.cfg.get_bool("logSpeech")):
                         print(f"  {CYA}{safe_for_terminal(sentence)}{OFF}", flush=True)
@@ -2993,6 +3068,13 @@ class Daemon:
                         out.publish(out.current, **last)
         except Exception as e:                  # a broken agent must not end the loop
             error = f"{type(e).__name__}: {e}"
+
+        if skipped:
+            # The open microphone heard something not meant for it. Silence
+            # and no record: it was never a turn.
+            print(f"  {DIM}(open mic: not meant for it){OFF}", flush=True)
+            out.publish("listening", **_empty_turn())
+            return
 
         if self._interrupt.is_set():
             # Killing the agent mid-stream usually surfaces as an error. It is
@@ -3148,6 +3230,7 @@ class Daemon:
     def new_chat(self, p: Persona) -> None:
         """Start `p` afresh: no session, no chat until its next turn."""
         p.session_id, p.chat_id, p.chat_continued, p.replay = None, None, False, ""
+        p.terminal = None
         try:
             self.chats.set_current(p.id, None)
         except (OSError, ValueError):
@@ -3220,6 +3303,172 @@ class Daemon:
                 self.new_chat(p)
                 print(f"  {CYA}agent “{p.label or 'main'}”: new chat{OFF}", flush=True)
             return True
+        return False
+
+    # --- open microphone (plan item 11) -------------------------------------
+
+    def open_mic_idle_s(self) -> float:
+        return 60.0 * min(60, max(1, self.cfg.get_int("openMicIdleMin")))
+
+    def open_mic_left_ms(self) -> int:
+        return max(0, int((self.open_mic_until - time.time()) * 1000))
+
+    def open_mic_field(self) -> dict:
+        p = self.open_mic
+        if p is None:
+            return {}
+        return {"who": p.label or "", "id": p.id or "main",
+                "until": round(self.open_mic_until)}
+
+    def start_open_mic(self, p: Persona, say: bool = True) -> None:
+        """Listen without the wake word, for `p`, until told to stop or
+        `openMicIdleMin` passes with nothing said."""
+        fresh = self.open_mic is None
+        self.open_mic, self.open_mic_until = p, time.time() + self.open_mic_idle_s()
+        if fresh:
+            mins = round(self.open_mic_idle_s() / 60)
+            print(f"  {CYA}● open mic{OFF}  {DIM}({p.label or 'main'}; "
+                  f"{mins} min after the last thing said){OFF}", flush=True)
+            self.publish_agent()
+            if say:
+                self._say_for(p, "I'm listening. Say stop listening when you're done.")
+
+    def touch_open_mic(self) -> None:
+        if self.open_mic is not None:
+            self.open_mic_until = time.time() + self.open_mic_idle_s()
+
+    def end_open_mic(self, why: str, say: bool = False) -> None:
+        p = self.open_mic
+        if p is None:
+            return
+        self.open_mic = None
+        self.open_mic_until = 0.0
+        print(f"  {CYA}● open mic closed{OFF}  {DIM}({why}){OFF}", flush=True)
+        self.publish_agent()
+        if say:
+            self._say_for(p, "Okay. Say my name when you need me.")
+
+    def pass_open_mic(self, p: Persona) -> None:
+        """Somebody else was named on the open microphone: it is theirs now."""
+        if self.open_mic is not None and self.open_mic is not p:
+            self.open_mic = p
+            self.touch_open_mic()
+            print(f"  {CYA}● open mic{OFF}  {DIM}(now {p.label or 'main'}){OFF}",
+                  flush=True)
+            self.publish_agent()
+
+    def apply_open_mic_command(self, cmd: str | None) -> bool:
+        """`agentvoice open-mic on|off [AGENT]`, from the popup's toggle."""
+        if not cmd or not cmd.startswith("open-mic"):
+            return False
+        parts = cmd.split()
+        want = parts[1] if len(parts) > 1 else ""
+        if want == "off":
+            self.end_open_mic("turned off")
+        elif want == "on" and self.listening:
+            p = self._persona_by_id("" if len(parts) < 3 or parts[2] == "main"
+                                    else parts[2])
+            self.start_open_mic(p or self._last_target or self._main, say=False)
+        return True
+
+    def _say_for(self, p: Persona, line: str) -> None:
+        """Something short said in `p`'s voice, from the run loop."""
+        with self._as(p):
+            if self.speaker and self.listening:
+                try:
+                    self.speak(line, self.cfg.get_int("echoTailMs"))
+                except Exception as e:
+                    print(f"  {YEL}could not say it: {type(e).__name__}{OFF}")
+
+    # --- spoken commands that are not requests -------------------------------
+
+    def voice_command(self, p: Persona, text: str) -> bool:
+        """"keep listening", "stop listening" and "move this to a terminal",
+        said to `p`. True when `text` was one of them and has been dealt
+        with; nothing then goes to the agent."""
+        mic = open_mic_command(text)
+        if mic == "open":
+            self.start_open_mic(p)
+            return True
+        if mic == "close":
+            if self.open_mic is not None:
+                self.end_open_mic("asked to", say=True)
+            return True
+        if is_handoff(text):
+            self.hand_off(p)
+            return True
+        return False
+
+    # --- moving a chat into a terminal (plan item 3) ---------------------------
+
+    def hand_off(self, p: Persona) -> bool:
+        """Carry `p`'s conversation on in a terminal, and stay out of it
+        until that terminal is closed. True if a terminal was opened."""
+        program = getattr(p.agent, "name", "") or ""
+        label = p.label or "it"
+        if p.agent is None:
+            self._say_for(p, f"{label} isn't set up, so there is nothing to move.")
+            return False
+        if not p.session_id:
+            self._say_for(p, "There's nothing to move yet. Ask me something first.")
+            return False
+        argv = terminal_resume_argv(program, p.session_id)
+        if argv is None:
+            self._say_for(p, f"{program_label(program) or program} can't carry a "
+                             "chat into a terminal, so it stays here.")
+            return False
+        if p.busy:
+            p.stop()
+            if p.thread is not None:
+                p.thread.join(timeout=5.0)
+        # The process kept warm for the next turn holds the old context:
+        # anything typed in the terminal would be missing from it.
+        cancel = getattr(p.agent, "cancel", None)
+        if cancel is not None:
+            try:
+                cancel()
+            except Exception:
+                pass
+        folder = getattr(p.agent, "cwd", None) or str(Path.home())
+        launcher = ["xdg-terminal-exec", f"--dir={folder}", *argv]
+        if shutil.which("uwsm-app"):
+            launcher = ["setsid", "uwsm-app", "--", *launcher]
+        try:
+            subprocess.Popen(launcher, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as e:
+            print(f"  {YEL}could not open a terminal: {type(e).__name__}{OFF}",
+                  flush=True)
+            self._say_for(p, "I couldn't open a terminal.")
+            return False
+        p.terminal = p.session_id
+        if self.open_mic is p:
+            self.end_open_mic("moved to a terminal")
+        if p.chat_id:
+            try:
+                self.chats.mark_terminal(p.chat_id)
+            except (OSError, ValueError):
+                pass
+        print(f"  {CYA}agent “{p.label or 'main'}”: moved to a terminal{OFF}",
+              flush=True)
+        self._say_for(p, "Moved to a terminal.")
+        return True
+
+    def terminal_holds(self, p: Persona) -> bool:
+        """Whether `p`'s chat is still open in the terminal it was handed to.
+        Once it is closed the chat is voice's again, with whatever was typed
+        there: the next turn resumes it."""
+        if not p.terminal:
+            return False
+        if p.terminal != p.session_id:
+            p.terminal = None           # a new chat since: nothing to wait for
+            return False
+        if session_held_elsewhere(p.terminal):
+            return True
+        p.terminal = None
+        print(f"  {CYA}agent “{p.label or 'main'}”: the terminal is closed — "
+              f"the chat is back{OFF}", flush=True)
         return False
 
     def _persona_by_id(self, agent_id: str) -> Persona | None:
@@ -3405,7 +3654,7 @@ class Daemon:
                            or (p.problem if p is not None else ""),
                 "voice": getattr(p.speaker, "name", "") if p and p.speaker else "",
             })
-        return {"crew": out}
+        return {"crew": out, "open_mic": self.open_mic_field()}
 
     def panel_agents(self, payload: dict) -> list[dict]:
         """Every agent as agents_panel.py draws it, from the payload just
@@ -3554,7 +3803,8 @@ class Daemon:
             return self._main
         return p
 
-    def _send(self, p: Persona, text: str, last: dict, clock: dict) -> None:
+    def _send(self, p: Persona, text: str, last: dict, clock: dict,
+              open_turn: bool = False) -> None:
         """Route what was said and hand it to an agent.
 
         A sentence that opens with an agent's name is for that agent, from
@@ -3579,6 +3829,12 @@ class Daemon:
                 p.stop()
                 print(f"  {DIM}(stopping {p.label}){OFF}")
             return
+        if name:
+            # Named on the open microphone: it is that agent's now.
+            self.pass_open_mic(p)
+        if self.voice_command(p, text):
+            return
+        p.open_turn = open_turn and not name and self.open_mic is p
         if p.agent is None and not p.main:
             # Said out loud through the echo path, rather than the transcript
             # read back, which is what a missing main agent gets.
@@ -3634,13 +3890,41 @@ class Daemon:
             self._recent = p
             self._recompose()
 
+    def open_mic_due(self, crew: bool) -> bool:
+        """Whether the run loop, waiting for the wake word, should listen
+        for the open microphone's agent instead. Closes it when it should
+        close: the microphone off (a mute, a lock, a lent microphone), too
+        long with nothing said, or its agent gone."""
+        om = self.open_mic
+        if om is None:
+            return False
+        if not self.listening:
+            self.end_open_mic("the microphone is off")
+            return False
+        if self.open_mic_until <= time.time():
+            self.end_open_mic(f"nothing said for {self.open_mic_idle_s() / 60:.0f} min")
+            return False
+        if not crew:
+            return True
+        if om is not self._main and self.crew.get(om.id) is not om:
+            self.end_open_mic("its agent is gone")
+            return False
+        return not (om.busy or om.follow_up or self._speaking or self._hold_speech
+                    or self._due_follow_up_blocked())
+
+    def _due_follow_up_blocked(self) -> bool:
+        """Another agent is mid-reply: the open microphone waits for it."""
+        owner = self._floor_owner
+        return owner is not None and owner is not self.open_mic and owner.busy
+
     def _due_follow_up(self) -> Persona | None:
         """The agent whose follow-up window should open now, if any.
 
         The one that answered last, while its answer is fresh and nobody else
         is mid-reply. Only one window at a time: the rest lapse.
         """
-        if not getattr(self.pipe, "conversation", False) or not self.listening:
+        if not (getattr(self.pipe, "conversation", False) or self.open_mic) \
+                or not self.listening:
             return None
         now = time.time()
         best = None
@@ -3729,6 +4013,8 @@ class Daemon:
                 if self.apply_lock_command(cmd):
                     continue
                 if self.apply_wake_test_command(cmd):
+                    continue
+                if self.apply_open_mic_command(cmd):
                     continue
                 if self.apply_chat_command(cmd):
                     continue
@@ -3857,6 +4143,30 @@ class Daemon:
                     last_poll = time.time()
                     self.refresh()
 
+                if phase == "wake" and self.open_mic is not None:
+                    # The open microphone: back to listening without the
+                    # wake word as soon as nothing else is going on. Closed
+                    # by a mute, a lock or a lent microphone, which is what
+                    # each of those means, and by going quiet for too long.
+                    om = self.open_mic
+                    if self.open_mic_due(crew):
+                        capture_for = om if crew else None
+                        capture_kind = "open"
+                        if crew:
+                            self._capture_for, self._recent = om, None
+                        phase, buf, cap = "capture", b"", self.pipe.new_capture()
+                        utt = self.pipe.new_utterance()
+                        with self._as(capture_for):
+                            self._interrupt.clear()     # see the wake branch
+                            self.prime_agent()
+                        woke_at = last_voice = time.time()
+                        heard = False
+                        active_lead_in = self.open_mic_left_ms()
+                        last = _empty_turn()
+                        shown_partial = ""
+                        self.state.publish("followup", **last)
+                        # No `continue`: this frame is the capture's first.
+
                 if phase == "wake" and crew:
                     # What the run loop used to do straight after a reply,
                     # done here because replies now end on their own threads:
@@ -3883,6 +4193,9 @@ class Daemon:
                         heard = kind == "barge"
                         active_lead_in = (self.pipe.follow_up_ms if kind == "followup"
                                           else self.pipe.lead_in_ms)
+                        if kind == "followup" and reopen is self.open_mic:
+                            capture_kind = "open"
+                            active_lead_in = max(active_lead_in, self.open_mic_left_ms())
                         if kind == "barge":
                             self._deaf_until = 0.0
                             self._hold(True)
@@ -4009,8 +4322,13 @@ class Daemon:
                     # Holding the key says "I am about to speak", so the
                     # lead-in timer does not run until it comes back up.
                     if ptt_done if ptt else elapsed_ms > active_lead_in:
-                        print(f"{cursor_home()}  {DIM}(nothing heard){OFF}"
-                              f"{' ' * 40}")
+                        if capture_kind == "open":
+                            # The open microphone's wait is the time it has
+                            # left: running out is the idle timeout.
+                            print(cursor_home(120), end="")
+                        else:
+                            print(f"{cursor_home()}  {DIM}(nothing heard){OFF}"
+                                  f"{' ' * 40}")
                         utt.abandon()
                         utt = None
                         phase = "wake"
@@ -4097,6 +4415,13 @@ class Daemon:
                     last = {**_empty_turn(), "transcript": text,
                             "ms": round(ms),
                             "audio_s": round(audio_ms / 1000, 2)}
+                    if text:
+                        # Something said: the open microphone's idle time
+                        # starts again, whoever it was for.
+                        self.touch_open_mic()
+                        if capture_kind == "wake" and self.open_mic is None \
+                                and self.cfg.get_bool("openMicAuto"):
+                            self.start_open_mic(capture_for or self._main, say=False)
 
                     # "stop", "cancel that", "never mind" and friends discard
                     # the turn instead of sending it. This is not an interrupt
@@ -4124,6 +4449,7 @@ class Daemon:
                         follow_up = False
                     elif text and is_goodbye(text):
                         print(f"  {DIM}(goodbye — waiting for the wake word){OFF}")
+                        self.end_open_mic("goodbye")
                         follow_up = False
                     elif text and is_stop_command(text):
                         print(f"  {DIM}(stopping){OFF}")
@@ -4132,9 +4458,13 @@ class Daemon:
                         # On its own thread: the loop goes straight back to
                         # listening, so another agent can be given something
                         # while this one works.
-                        self._send(capture_for or self._main, text, last, clock)
+                        self._send(capture_for or self._main, text, last, clock,
+                                   open_turn=capture_kind == "open")
+                        follow_up = False
+                    elif text and self.voice_command(self._main, text):
                         follow_up = False
                     elif text:
+                        self._main.open_turn = capture_kind == "open"
                         self.answer(text, last, clock=clock)
                         # Uncapped on purpose, and worth stating because it
                         # reads like an oversight: a follow-up window opens
@@ -4187,6 +4517,7 @@ class Daemon:
                     # short turn that is_stop_command() then discards.
                     heard = True
                     active_lead_in = self.pipe.lead_in_ms
+                    capture_kind = "barge"
                     last = _empty_turn()
                     shown_partial = ""
                     print(f"  {GRN}● go on{OFF}  {DIM}(talked over the reply"
@@ -4209,6 +4540,7 @@ class Daemon:
                     woke_at = last_voice = time.time()
                     heard = False
                     active_lead_in = self.pipe.lead_in_ms
+                    capture_kind = "wake"
                     last = _empty_turn()
                     shown_partial = ""
                     self.state.publish("capture", **last)
@@ -4224,6 +4556,10 @@ class Daemon:
                     woke_at = last_voice = time.time()
                     heard = False
                     active_lead_in = self.pipe.follow_up_ms
+                    capture_kind = "followup"
+                    if self.open_mic is self._main:
+                        capture_kind = "open"
+                        active_lead_in = max(active_lead_in, self.open_mic_left_ms())
                     print(f"  {CYA}● still listening{OFF}  {DIM}"
                           f"({active_lead_in / 1000:.0f}s — or say the wake word again)"
                           f"{OFF}", flush=True)

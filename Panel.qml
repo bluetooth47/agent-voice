@@ -48,6 +48,20 @@ Panel {
   // give: the user cannot tell a broken install from a broken switch.
   property string note: ""
   property string vState: "off"
+  // The open microphone (agentvoice open-mic, or "keep listening"): who it
+  // is open for and until when, from the daemon. Empty when it is closed.
+  property var openMic: ({})
+  readonly property bool openMicOn: serviceActive && openMic.until !== undefined
+  property real nowMs: Date.now()
+  readonly property int openMicMinutes: openMicOn
+    ? Math.max(1, Math.ceil((Number(openMic.until) * 1000 - nowMs) / 60000)) : 0
+  Timer {
+    interval: 15000
+    repeat: true
+    running: voice.openMicOn
+    triggeredOnStart: true
+    onTriggered: voice.nowMs = Date.now()
+  }
   property string lastTranscript: ""
   property int lastMs: 0
   property real lastAudioS: 0
@@ -84,7 +98,12 @@ Panel {
   }
 
   readonly property color barIconColor: {
-    if ((vState === "capture" || vState === "followup") && serviceActive)
+    if (vState === "capture" && serviceActive)
+      return bar ? bar.urgent : Commons.Color.urgent
+    // Its own colour, the whole time it is open: listening without the wake
+    // word is the thing you most need to know is happening.
+    if (openMicOn) return Commons.Color.accent
+    if (vState === "followup" && serviceActive)
       return bar ? bar.urgent : Commons.Color.urgent
     if (live) return barForeground
     return Qt.darker(barForeground, 1.55)
@@ -97,6 +116,9 @@ Panel {
     if (vState === "locked") return "CLOSED WHILE LOCKED"
     if (vState === "capture") return "LISTENING TO YOU"
     // Still hot after a reply, waiting to see if you carry on.
+    if (vState === "followup" && openMicOn)
+      return "OPEN MIC · " + String(openMic.who || "").toUpperCase() + " · "
+             + openMicMinutes + " MIN LEFT"
     if (vState === "followup") return "STILL LISTENING"
     // These were one state called "thinking", labelled "TRANSCRIBING" -- which
     // described the shorter half and then sat there through the longer one.
@@ -236,6 +258,13 @@ Panel {
   }
 
   Process { id: micToggle; command: ["agentvoice", "mic"] }
+  Process { id: openMicToggle; command: ["agentvoice", "open-mic", "off"] }
+  function toggleOpenMic() {
+    if (!voice.serviceActive) return
+    openMicToggle.command = voice.openMicOn ? ["agentvoice", "open-mic", "off"]
+                                            : ["agentvoice", "open-mic", "on"]
+    openMicToggle.running = true
+  }
   Process { id: interrupt; command: ["agentvoice", "interrupt"] }
 
   // What the agent is pointed at, and how much it may do there. On the panel
@@ -357,6 +386,7 @@ Panel {
         if (d.posture !== undefined) voice.vPosture = String(d.posture)
         if (d.remembers !== undefined) voice.vRemembers = (d.remembers === true)
         if (d.overriding !== undefined) voice.vOverriding = String(d.overriding)
+        voice.openMic = (d.open_mic && typeof d.open_mic === "object") ? d.open_mic : ({})
         if (d.governed !== undefined) voice.vGoverned = (d.governed === true)
       } catch (e) {
         voice.vState = "off"
@@ -555,6 +585,7 @@ Panel {
     out.push("agent:")
     for (var c = 0; c < voice.crew.length; c++) out.push("agent:" + voice.agentId(voice.crew[c]))
     for (var i = 0; i < voice.quickToggles.length; i++) out.push("toggle:" + voice.quickToggles[i].key)
+    if (voice.serviceActive) out.push("openmic")
     out.push("conversation")
     out.push("settings")
     return out
@@ -568,6 +599,7 @@ Panel {
     if (name === "service") voice.toggleService()
     else if (name === "mic") voice.toggleMic()
     else if (name === "stop") voice.stopTurn()
+    else if (name === "openmic") voice.toggleOpenMic()
     else if (name === "conversation") { conversation.running = true; voice.close() }
     else if (name === "settings") voice.summon({})
     else if (name.indexOf("agent:") === 0)
@@ -871,6 +903,20 @@ Panel {
             hasCursor: voice.cursorOn("toggle:" + modelData.key)
             onClicked: store.set(key, !on)
           }
+        }
+
+        // Not a setting: the daemon's state. On is "listening without the
+        // wake word right now", for the agent spoken to last.
+        QuickToggle {
+          visible: voice.serviceActive
+          width: (toggles.width - toggles.columnSpacing) / 2
+          on: voice.openMicOn
+          text: voice.openMicOn ? "Open mic · " + voice.openMicMinutes + " min" : "Open mic"
+          iconText: "\u{f036c}"
+          tooltipText: voice.openMicOn ? "Listening without the wake word. Click to close it."
+                                       : "Talk without the wake word until you stop or go quiet."
+          hasCursor: voice.cursorOn("openmic")
+          onClicked: voice.toggleOpenMic()
         }
       }
 
