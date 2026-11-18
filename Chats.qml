@@ -476,6 +476,13 @@ Item {
           view.renaming = false
         }
         Keys.onEscapePressed: view.renaming = false
+        // Inside the field: qmllint cannot see the base type's `text` from
+        // outside it (Omarchy's TextField wraps QtQuick.Controls').
+        function begin(title) {
+          text = title
+          forceActiveFocus()
+          selectAll()
+        }
       }
       Text {
         width: parent.width
@@ -506,10 +513,8 @@ Item {
           bordered: true
           fontFamily: view.s.fontFamily
           onClicked: {
-            renameField.text = String(view.chat.title || "")
             view.renaming = true
-            renameField.forceActiveFocus()
-            renameField.selectAll()
+            renameField.begin(String(view.chat.title || ""))
           }
         }
         Button {

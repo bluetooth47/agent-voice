@@ -140,7 +140,7 @@ Column {
     }
     var id = s.newAgentId(name)
     list.push({ id: id, name: name, label: "", agent: "claude", model: "", effort: "", voice: "",
-                speed: 0, instructions: "", level: "ask", projectDir: "" })
+                speed: 0, narration: "", instructions: "", level: "ask", projectDir: "" })
     s.focusAgent = id
     saveAgents(list)
   }
@@ -995,6 +995,33 @@ Column {
             onCommitted: function(v) {
               if (Math.round(v) !== card.speed) page.updateAgent(card.index, "speed", Math.round(v))
             }
+          }
+        }
+      }
+
+      SettingRow {
+        width: parent.width
+        stacked: true
+        label: "Talk while it works"
+        hint: String(card.modelData.narration || "") === ""
+              ? "Follows Conversation (" + String(page.s.setting("narration", "off")) + ")."
+              : "Its own choice, whatever the main setting is."
+        changed: String(card.modelData.narration || "") !== ""
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onReset: page.updateAgent(card.index, "narration", "")
+        SegmentedChoice {
+          options: [
+            { value: "", label: "Same as main" },
+            { value: "off", label: "Off" },
+            { value: "brief", label: "Brief" },
+            { value: "detailed", label: "Detailed" }
+          ]
+          value: String(card.modelData.narration || "")
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          onCommitted: function(v) {
+            if (v !== String(card.modelData.narration || "")) page.updateAgent(card.index, "narration", v)
           }
         }
       }

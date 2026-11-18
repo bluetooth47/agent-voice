@@ -1001,3 +1001,50 @@ has been spoken, so nobody waits for it. The search reads every chat of that
 agent, which grows with the count but stays well under the time it takes to
 say the reply. Off by default: with `saveChats` off, nothing above runs and
 nothing reaches the disk (`test_chats.py::test_nothing_is_written_with_saving_off`).
+
+## 29. Progress talk, replayed against recorded turns
+
+i7-1185G7, 2026-11-18. `bench/narration/record_turns.py` ran 31 real Claude
+Code turns (29 on Sonnet, 2 on the default model) in throwaway clones of
+this repository, with the voice preamble, and kept each stream-json line
+with the millisecond it arrived. `bench/narration/replay.py` puts each one
+through `claude_code.parse_line`, `iter_sentences` and `narration.Narrator`
+on the recorded clock. Speech lengths are estimated at 2.75 words a second,
+so the timings of spoken sentences are estimates, not measurements.
+
+| | brief | detailed |
+|---|---|---|
+| turns / tool calls | 31 / 125 | 31 / 125 |
+| turn length, median / longest | 8.7s / 121s | same |
+| turns of 15s or more | 10 | 10 |
+| progress lines said | 9, in 8 turns | 9, in 8 turns |
+| repeats, invented, secrets | 0, 0, 0 | 0, 0, 0 |
+| cut off by the agent's next sentence | 1 | 2 |
+
+What the recordings changed:
+
+- **Most turns need nothing.** Half end within 8.7s, before seven seconds
+  of quiet has passed, and Claude with the voice preamble already says a
+  sentence between most tool calls.
+- **Only while a tool is running.** The first version also spoke between
+  tools. In c16 its line started two seconds before the answer and was cut
+  off by it, because the model had already been writing the answer.
+- **Not what the agent just said.** "Running the project's check script
+  now." followed by "I'm running the checks." was the first line the replay
+  produced. A line whose words the agent's last sentence already covered is
+  dropped now.
+- **A helper's work is the helper's.** "I've started a helper" used to
+  come after the line about the helper's reads. Now the start is told only
+  when nothing else has happened yet.
+- **Long web queries are not read out.** An eight-word query took five
+  seconds to say and ran into the answer. Up to six words are said.
+
+The cuts that remain happen at the next chunk of audio, a word break, so
+the answer is never spoken over. Plan.md's target was zero; one line in
+31 turns (two at detailed) is the honest result.
+
+Codex: not recorded. The account hit its usage limit (until Nov 27), so its
+activity parsing (`codex.activity_chunks`) is tested against the event shapes
+its adapter already handles, not a recording. Gemini, Antigravity, Copilot
+and endpoints stream no tool events, so they get no progress talk.
+

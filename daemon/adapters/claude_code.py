@@ -143,6 +143,54 @@ def _write_turn(proc, text: str) -> bool:
         return False
 
 
+def parse_line(msg: dict) -> list[Chunk]:
+    """The chunks one stream-json line carries, apart from `result`.
+
+    Separate from send() so the narration replay reads a recorded turn
+    through exactly the code a live one goes through.
+    """
+    kind = msg.get("type")
+    if kind == "system" and msg.get("subtype") == "init":
+        return [Chunk(session_id=msg.get("session_id"))]
+    if kind == "stream_event":
+        event = msg.get("event") or {}
+        etype = event.get("type")
+        if etype == "message_start":
+            if msg.get("ttft_ms") is not None:
+                return [Chunk(ttft_ms=msg["ttft_ms"])]
+        elif etype == "content_block_delta":
+            delta = event.get("delta") or {}
+            if delta.get("type") == "text_delta":
+                return [Chunk(text=delta.get("text", ""))]
+        elif etype == "content_block_start":
+            block = event.get("content_block") or {}
+            if block.get("type") == "tool_use":
+                return [Chunk(tool=block.get("name"))]
+        return []
+    # The whole message, once a block is complete: the only place a tool's
+    # arguments arrive in one piece (the stream sends them as JSON
+    # fragments). A subagent's messages carry the id of the Task that
+    # started it, and stream no deltas of their own.
+    if kind == "assistant":
+        helper = bool(msg.get("parent_tool_use_id"))
+        out = []
+        for block in (msg.get("message") or {}).get("content") or []:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                out.append(Chunk(activity={
+                    "name": str(block.get("name") or ""),
+                    "input": block.get("input") if isinstance(block.get("input"), dict) else {},
+                    "id": str(block.get("id") or ""),
+                    "helper": helper}))
+        return out
+    if kind == "user":
+        content = (msg.get("message") or {}).get("content")
+        if isinstance(content, list):
+            return [Chunk(tool_done=str(b.get("tool_use_id") or ""))
+                    for b in content
+                    if isinstance(b, dict) and b.get("type") == "tool_result"]
+    return []
+
+
 class ClaudeCode(Adapter):
     name = "claude"
     guards_permissions = True
@@ -420,25 +468,10 @@ class ClaudeCode(Adapter):
 
                 kind = msg.get("type")
 
-                if kind == "system" and msg.get("subtype") == "init":
-                    yield Chunk(session_id=msg.get("session_id"))
+                if kind != "result":
+                    yield from parse_line(msg)
 
-                elif kind == "stream_event":
-                    event = msg.get("event") or {}
-                    etype = event.get("type")
-                    if etype == "message_start":
-                        if msg.get("ttft_ms") is not None:
-                            yield Chunk(ttft_ms=msg["ttft_ms"])
-                    elif etype == "content_block_delta":
-                        delta = event.get("delta") or {}
-                        if delta.get("type") == "text_delta":
-                            yield Chunk(text=delta.get("text", ""))
-                    elif etype == "content_block_start":
-                        block = event.get("content_block") or {}
-                        if block.get("type") == "tool_use":
-                            yield Chunk(tool=block.get("name"))
-
-                elif kind == "result":
+                else:
                     # Marked finished before anything else is yielded: a
                     # consumer that stops reading at the error chunk still
                     # leaves a process that has completed its turn, and that

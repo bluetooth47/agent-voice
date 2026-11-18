@@ -307,6 +307,21 @@ Whisper's at every pause you leave, so by the time you stop, what is on
 screen is what will be sent. Whisper's text never falls back to Vosk's for
 a part it has already read (FINDINGS §27).
 
+**Talk while it works** (Conversation page, off by default) fills the
+silence of a long turn with short sentences about what the agent is
+actually doing: "I'm running the tests.", "My helper has looked through
+three files and searched the code once." Each one comes from a tool the
+agent really ran, through a fixed table (`daemon/narration.py`), with no
+model writing them. **Brief** names the stage; **Detailed** also names
+files, searches and web pages. It waits for seven seconds of quiet
+(adjustable), then at least 10, 15, then 25 seconds between sentences. It
+only speaks while a tool is running, never repeats itself, and gives way at
+the next word break when the agent starts talking. Another agent's reply
+always comes first. A secret file is "a config file", and a command line is
+never read out. Only Claude Code and Codex report their tools; the others
+stay quiet. Each agent's card can choose its own level. Replayed against 31
+recorded turns, it spoke in 8 of them (FINDINGS §29).
+
 A failed turn says why: "Claude has hit its usage limit. It resets at
 7 PM.", "Claude needs you to sign in again.", "Claude could not reach its
 service." The error text itself is still never said or logged, because a CLI

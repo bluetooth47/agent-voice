@@ -197,6 +197,8 @@ DEFAULTS = {
     "yieldToRecorders": True,
     "logSpeech": False,
     "followUpMs": 7000,
+    "narration": "off",
+    "narrationSilenceS": 7,
     "voice": "lessac-medium",
     "voiceSpeed": 100,
     "agentInstructions": "",
@@ -263,6 +265,8 @@ TOML_ALIASES = {
     "yieldToRecorders": ("wake", "yield_to_recorders"),
     "logSpeech": ("ui", "log_speech"),
     "followUpMs": ("timing", "follow_up_ms"),
+    "narration": ("ui", "narration"),
+    "narrationSilenceS": ("timing", "narration_silence_s"),
     "agentsPanel": ("ui", "agents_panel"),
     "mainName": ("agent", "main_name"),
 }
@@ -557,6 +561,7 @@ class Config:
             folder = entry.get("projectDir")
             # 0 is "same as the main agent"; anything unreadable reads as that.
             speed = speed_pct(entry.get("speed"), 0)
+            talk = entry.get("narration")
             out.append({
                 "name": name,
                 "id": agent_id,
@@ -566,6 +571,8 @@ class Config:
                 "effort": effort if effort in EFFORT_LEVELS else "",
                 "voice": voice if _VOICE.fullmatch(voice) else "",
                 "speed": speed,
+                # "" follows the main setting.
+                "narration": talk if talk in NARRATION_LEVELS else "",
                 "instructions": instructions_text(entry.get("instructions")),
                 "level": level if level in ("ask", "edits", "trusted") else "ask",
                 "projectDir": folder.strip() if isinstance(folder, str) else "",
@@ -591,9 +598,26 @@ class Config:
                 return spec
         return None
 
+    def narration(self, spec: dict | None = None) -> str:
+        """How much an agent says while it works: its own choice on its
+        card, else the main setting. One of NARRATION_LEVELS."""
+        own = (spec or {}).get("narration") or ""
+        if own in NARRATION_LEVELS:
+            return own
+        level = self.get_str("narration")
+        return level if level in NARRATION_LEVELS else "off"
+
+    def narration_silence_s(self) -> float:
+        """Seconds of quiet before the first progress sentence, 3 to 30."""
+        return float(min(30, max(3, self.get_int("narrationSilenceS"))))
+
     def main_label(self, phrase: str = "") -> str:
         """The main agent's display name: `mainName`, else its wake phrase."""
         return display_name(self["mainName"], phrase or self.get_str("phrase"))
+
+
+#: How much progress talk: nothing, the stage, or files and searches too.
+NARRATION_LEVELS = ("off", "brief", "detailed")
 
 
 #: How much of a reply travels to the screen. It was 400 characters, which

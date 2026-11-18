@@ -45,7 +45,7 @@ from adapters import (  # noqa: E402
     explain as explain_agent, load as load_adapter, omarchy_default, sentences,
     takes_effort, takes_model,
 )
-from adapters.base import speech_safe  # noqa: E402
+from adapters.base import Chunk, speech_safe  # noqa: E402
 from crew import (  # noqa: E402
     FLOOR_LEASE_S, FOLLOW_UP_STALE_S, Persona, View, route,
 )
@@ -62,6 +62,7 @@ from speech_text import (  # noqa: E402
     safe_for_terminal,
 )
 from chats import RETENTIONS, ChatStore, replay_context  # noqa: E402
+import narration  # noqa: E402
 from runtime import (  # noqa: E402
     REPLY_MAX, RUNTIME_DIR, Config, History, Speaker, StateFile, instructions_text, speed_pct,
 )
@@ -1381,6 +1382,87 @@ def _empty_turn() -> dict:
             "latency_ms": 0}
 
 
+#: A chunk that carries nothing: the stream was quiet for a moment.
+TICK = Chunk()
+
+
+class Ticker:
+    """An agent's stream, read on a thread, with TICK while it is quiet.
+
+    Progress talk needs moments to speak in, and the reply loop only runs
+    when a chunk arrives -- nothing arrives during a two-minute test run.
+    So the adapter's generator is drained by a thread into a queue, and the
+    loop gets TICK whenever the queue has been empty for `every` seconds.
+
+    `words_waiting()` says whether the agent has written words that are not
+    yet read: a progress line being spoken stops for them.
+
+    Stopped early -- the loop broke out, or raised -- the agent is cancelled,
+    as closing the generator used to do: a process still answering the old
+    question must not be handed the next one.
+    """
+
+    _END = object()
+
+    def __init__(self, stream, every: float = 0.25, on_abandon=None) -> None:
+        self._queue: queue.Queue = queue.Queue()
+        self._stop = threading.Event()
+        self._every = every
+        self._on_abandon = on_abandon
+        self._thread = threading.Thread(target=self._pump, args=(stream,),
+                                        daemon=True)
+        self._thread.start()
+
+    def _pump(self, stream) -> None:
+        try:
+            for chunk in stream:
+                self._queue.put(chunk)
+                if self._stop.is_set():
+                    break
+        except BaseException as e:      # handed to the reader, raised there
+            self._queue.put(e)
+        finally:
+            close = getattr(stream, "close", None)
+            if close is not None:
+                try:
+                    close()
+                except Exception:
+                    pass
+            self._queue.put(self._END)
+
+    def words_waiting(self) -> bool:
+        with self._queue.mutex:
+            return any(getattr(c, "text", "") for c in self._queue.queue)
+
+    def __iter__(self):
+        ended = False
+        try:
+            while True:
+                try:
+                    item = self._queue.get(timeout=self._every)
+                except queue.Empty:
+                    yield TICK
+                    continue
+                if item is self._END:
+                    ended = True
+                    return
+                if isinstance(item, BaseException):
+                    ended = True
+                    raise item
+                yield item
+        finally:
+            self._stop.set()
+            # Left at the turn's last chunk (the reader stops at an error),
+            # the pump finishes on its own; only a turn still going is
+            # cancelled.
+            self._thread.join(0.5)
+            if not ended and self._thread.is_alive() and self._on_abandon is not None:
+                try:
+                    self._on_abandon()
+                except Exception:
+                    pass
+
+
 class Daemon:
     def __init__(self, cfg: Config, pipe: Pipeline, state: StateFile,
                  speaker: Speaker | None, agent=None):
@@ -2265,7 +2347,52 @@ class Daemon:
         if dropped:
             print(f"  {DIM}(dropped {dropped * CHUNK_MS}ms of echo){OFF}")
 
-    def speak(self, text: str, tail_ms: int) -> None:
+    def _narration_event(self, narr: "narration.Narrator", chunk) -> None:
+        """Tell the narrator what the agent just did."""
+        now = time.time()
+        if chunk.activity:
+            a = chunk.activity
+            act = narration.describe(a.get("name", ""), a.get("input"),
+                                     detailed=narr.detailed,
+                                     helper=bool(a.get("helper")))
+            narr.activity(act, now, str(a.get("id") or ""))
+        if chunk.tool_done:
+            narr.finished(chunk.tool_done)
+        if chunk.text:
+            narr.text()
+
+    def _floor_busy(self) -> bool:
+        """Someone else is talking or about to: progress talk waits, never
+        another agent's reply. Does not wait itself."""
+        with self._floor:
+            owner = self._floor_owner
+            mine = self._persona()
+            return bool(self._speaking or self._hold_speech or (
+                owner is not None and owner is not mine and owner.busy
+                and time.time() < self._floor_until))
+
+    def _narrate(self, narr, last: dict, out, tail_ms: int, ticker) -> None:
+        """Say a progress line if one is due. Lowest priority of anything
+        said: never over a permission prompt, the answer or another agent,
+        and cut short the moment the agent's own words arrive."""
+        if (not self.speaker or not self.listening or self._interrupt.is_set()
+                or self._floor_busy()):
+            return
+        line = narr.due(time.time())
+        if line is None:
+            return
+        if speech_is_logged(self.cfg.get_bool("logSpeech")):
+            print(f"  {DIM}(progress) {safe_for_terminal(line.text)}{OFF}", flush=True)
+        else:
+            print(f"  {DIM}(progress line){OFF}", flush=True)
+        # The same line as text, where the reply will go. A copy: the turn's
+        # record keeps only what the agent said.
+        out.publish("thinking", **{**last, "reply": line.text[:REPLY_MAX]})
+        self.speak(line.spoken, tail_ms,
+                   cut=ticker.words_waiting if ticker is not None else None)
+        narr.spoke(time.time())
+
+    def speak(self, text: str, tail_ms: int, cut=None) -> None:
         """Say something, then make sure we did not hear ourselves say it.
 
         The watch is unconditional, which is the whole point of it. Barge-in
@@ -2310,7 +2437,7 @@ class Daemon:
             if self.chimes is not None:
                 self.chimes.settle()    # never a chime under the first word
             with self._watching_session():
-                self.speaker.say(speech_safe(text), watch=self._watch(barge))
+                self.speaker.say(speech_safe(text), watch=self._watch(barge, cut))
         finally:
             self.deafen(tail_ms)
             with self._mic_lock:
@@ -2343,7 +2470,7 @@ class Daemon:
                 self._hold_speech = hold
                 self._floor.notify_all()
 
-    def _watch(self, barge):
+    def _watch(self, barge, cut=None):
         """What `Speaker.say()` checks between audio chunks.
 
         In-memory only. `reconcile_lock()` spawns
@@ -2356,6 +2483,10 @@ class Daemon:
         """
         def watch() -> bool:
             if self._interrupt.is_set() or not self.listening:
+                return True
+            # Progress talk gives way to the agent's own words, at the next
+            # chunk of audio rather than at the end of the sentence.
+            if cut is not None and cut():
                 return True
             return bool(barge is not None and barge())
 
@@ -2783,10 +2914,24 @@ class Daemon:
         ttft = None
         error = None
         kind = ""
+        # Progress talk, when this agent has it on. The stream is then read
+        # on a thread of its own so a quiet stretch -- a long command -- still
+        # gives this one moments to speak in; with it off nothing changes.
+        level = self.cfg.narration(persona.spec)
+        narr = ticker = None
+        if level != "off" and self.speaker:
+            narr = narration.Narrator(level, start=t0,
+                                      silence_s=self.cfg.narration_silence_s())
 
         def tap(stream):
             nonlocal ttft, error
             for chunk in stream:
+                if narr is not None:
+                    self._narration_event(narr, chunk)
+                    if chunk is TICK or chunk.activity or chunk.tool_done:
+                        self._narrate(narr, last, out, tail_ms, ticker)
+                    if chunk is TICK:
+                        continue
                 if chunk.text and "first_text" not in clock:
                     clock["first_text"] = time.time()
                 if chunk.session_id:
@@ -2801,7 +2946,11 @@ class Daemon:
 
         try:
             with self._watching_session(), self._hearing_wake():
-                for sentence in sentences(tap(self.agent.send(prompt, self.session_id))):
+                stream = self.agent.send(prompt, self.session_id)
+                if narr is not None:
+                    ticker = Ticker(stream, on_abandon=getattr(self.agent, "cancel", None))
+                    stream = ticker
+                for sentence in sentences(tap(stream)):
                     # Checked before the sentence is recorded, so the transcript
                     # in the panel is what was actually said out loud rather than
                     # what the agent had written by the time it was stopped.
@@ -2828,6 +2977,8 @@ class Daemon:
                     if self.speaker and self.listening:
                         out.publish("speaking", **last)
                         self.speak(sentence, tail_ms)
+                        if narr is not None:
+                            narr.agent_said(sentence, time.time())
                         # When the first sound actually went out, which the
                         # speaker records itself. Only one from this turn
                         # counts: a sentence that was never said leaves the
@@ -3168,7 +3319,8 @@ class Daemon:
         to all of those.
         """
         old = p.spec or {}
-        kept = ("effort", "voice", "speed", "instructions", "name", "label")
+        kept = ("effort", "voice", "speed", "instructions", "name", "label",
+                "narration")
         same = {k: v for k, v in spec.items() if k not in kept}
         was = {k: v for k, v in old.items() if k not in kept}
         if same == was and p.agent is not None:

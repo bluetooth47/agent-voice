@@ -128,6 +128,64 @@ Column {
     }
   }
 
+  // Progress talk. Off by default: what it says was written from recorded
+  // turns (bench/narration), and is yours to switch on.
+  SettingsGroup {
+    width: parent.width
+    title: "WHILE IT WORKS"
+    foreground: page.s.foreground
+    fontFamily: page.s.fontFamily
+
+    SettingRow {
+      width: parent.width
+      stacked: true
+      label: "Talk while it works"
+      hint: page.s.setting("narration", "off") === "detailed"
+            ? "Names files, searches and pages: \"I'm reading Panel.qml.\""
+            : page.s.setting("narration", "off") === "brief"
+            ? "Names the stage only: \"I'm running the tests.\""
+            : "Silent between its first sentence and its answer."
+      help: "Every sentence comes from a tool the agent really ran, never a guess. " +
+            "It waits for a quiet stretch, spaces its sentences further apart as a " +
+            "turn goes on, never repeats itself, and stops the moment the agent " +
+            "starts talking. Secret files are \"a config file\" and a command line is " +
+            "never read out. Claude Code and Codex report their tools; Gemini, " +
+            "Antigravity, Copilot and endpoints do not, so they stay quiet. Each " +
+            "agent's card can choose for itself."
+      changed: page.s.changed("narration")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onReset: page.s.resetKey("narration")
+      SegmentedChoice {
+        options: [
+          { value: "off", label: "Off" },
+          { value: "brief", label: "Brief" },
+          { value: "detailed", label: "Detailed" }
+        ]
+        value: page.s.setting("narration", "off")
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onCommitted: function(v) { page.s.put("narration", v) }
+      }
+    }
+
+    KnobRow {
+      width: parent.width
+      enabled: page.s.setting("narration", "off") !== "off"
+      opacity: enabled ? 1 : 0.45
+      foreground: page.s.foreground; fontFamily: page.s.fontFamily
+      label: "Quiet before it says anything"
+      description: "How long a turn has been silent before the first sentence. Later ones come at least 10, then 15, then 25 seconds apart."
+      value: page.s.setting("narrationSilenceS", 7)
+      defaultValue: page.dflt("narrationSilenceS")
+      changed: page.s.changed("narrationSilenceS")
+      minimum: 3; maximum: 30; stepSize: 1
+      unit: "s"
+      onCommitted: function(v) { page.s.put("narrationSilenceS", Math.round(v)) }
+      onReset: page.s.resetKey("narrationSilenceS")
+    }
+  }
+
   SettingsGroup {
     width: parent.width
     title: "WHEN A TURN STARTS AND ENDS"

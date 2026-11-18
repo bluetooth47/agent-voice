@@ -223,6 +223,11 @@ class Chunk:
     session_id: str | None = None
     ttft_ms: float | None = None
     tool: str | None = None          # a tool the agent decided to run
+    #: The same tool once its arguments are known, for progress talk:
+    #: {"name", "input", "id", "helper"}. `helper` is true for a tool a
+    #: subagent ran. Arrives after `tool`, which carries only the name.
+    activity: dict | None = None
+    tool_done: str | None = None     # the id of a tool that has returned
     done: bool = False
     error: str | None = None
     cost_usd: float | None = None

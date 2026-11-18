@@ -49,7 +49,7 @@ class TestConfigAgents:
             "projectDir": "~/code"}])
         assert cfg.agents() == [{
             "name": "jarvis", "id": "jarvis", "label": "Jarvis", "agent": "claude", "model": "sonnet",
-            "effort": "high", "voice": "amy-medium", "speed": 0, "instructions": "", "level": "edits",
+            "effort": "high", "voice": "amy-medium", "speed": 0, "narration": "", "instructions": "", "level": "edits",
             "projectDir": "~/code"}]
 
     def test_the_program_defaults_to_claude(self, cfg_factory):

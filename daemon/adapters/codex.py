@@ -53,6 +53,39 @@ _NOT_SPEECH = frozenset({
 })
 
 
+#: Item types that are something the agent did, for progress talk.
+_ACTIVITY = frozenset({"command_execution", "file_change", "web_search",
+                       "mcp_tool_call", "patch_apply"})
+
+
+def activity_chunks(kind: str, item: dict, started: set[str]) -> list[Chunk]:
+    """Progress-talk chunks for one `item.*` event.
+
+    The activity is announced once per item, on whichever event arrives
+    first (a file change has only `item.completed`), and its end on
+    `item.completed`. `started` holds the ids already announced, for the
+    turn. Separate from send() so the narration replay goes through it.
+    """
+    itype = str(item.get("type", ""))
+    if itype not in _ACTIVITY:
+        return []
+    item_id = str(item.get("id") or "")
+    out = []
+    if item_id:
+        new = item_id not in started
+        started.add(item_id)
+    else:
+        # No id to match on: announced where it begins.
+        new = kind == "item.started" or itype in ("file_change", "patch_apply")
+    if new:
+        name = "file_change" if itype == "patch_apply" else itype
+        out.append(Chunk(activity={"name": name, "input": item,
+                                   "id": item_id, "helper": False}))
+    if kind == "item.completed" and item_id:
+        out.append(Chunk(tool_done=item_id))
+    return out
+
+
 def _harvest_text(node: Any, depth: int = 0) -> str:
     """Pull assistant text out of an item of unknown shape."""
     if depth > 4:
@@ -154,6 +187,7 @@ class Codex(Adapter):
         spoken_any = False
         incomplete = ""
         tools_seen: set[str] = set()
+        started: set[str] = set()
         try:
             for line in proc.stdout:
                 dog.poke()
@@ -182,6 +216,7 @@ class Codex(Adapter):
                 elif kind.startswith("item."):
                     item = msg.get("item") or msg
                     itype = str(item.get("type", ""))
+                    yield from activity_chunks(kind, item, started)
                     if "tool" in itype or "command" in itype:
                         # Announced once, on whichever event arrives first.
                         if itype not in tools_seen:

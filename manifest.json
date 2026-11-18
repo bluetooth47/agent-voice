@@ -64,6 +64,8 @@
       "fullStopAnytime": true,
       "conversationMode": true,
       "followUpMs": 7000,
+      "narration": "off",
+      "narrationSilenceS": 7,
       "livePartials": "auto",
       "projectDir": "",
       "mainName": "",
@@ -441,6 +443,28 @@
         "step": 500,
         "defaultValue": 7000,
         "description": "How long it keeps listening after speaking before it needs the wake word again."
+      },
+      {
+        "key": "narration",
+        "type": "enum",
+        "label": "Talk while it works",
+        "options": [
+          "off",
+          "brief",
+          "detailed"
+        ],
+        "defaultValue": "off",
+        "description": "During a long turn, short sentences about what the agent is doing, from its real tool calls. Brief names the stage; detailed names files and searches."
+      },
+      {
+        "key": "narrationSilenceS",
+        "type": "integer",
+        "label": "Quiet before it says what it's doing (s)",
+        "min": 3,
+        "max": 30,
+        "step": 1,
+        "defaultValue": 7,
+        "description": "How long a turn has been silent before the first progress sentence."
       },
       {
         "key": "fullStopAnytime",
