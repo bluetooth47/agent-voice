@@ -555,7 +555,8 @@ class _Mode:
         pipe = object.__new__(wake_listen.Pipeline)
         pipe.phrase, pipe.names = "theo", ["sora"]
         pipe.cc_engines, pipe.cc_trailing, pipe.cc_hint = mode, 3, True
-        pipe.threshold_db, pipe.refractory_ms = -40.0, 2000
+        pipe.threshold_db = pipe.wake_gate_db = -40.0
+        pipe.refractory_ms = 2000
         pipe._log_speech = False
         self.asked = []
         pipe._burst_cutter = lambda: type("C", (), {"feed": lambda s, p, l: b"x"})()

@@ -614,7 +614,7 @@ Column {
     LevelMeter {
       width: parent.width
       levelDb: page.s.serviceActive ? page.s.levelDb : -99
-      gateDb: page.s.setting("micThresholdDb", -38)
+      gateDb: page.s.gateInForce
       minDb: -60
       idleText: page.s.serviceActive ? "no reading — the microphone is off"
                                      : "no reading — start the service to see your level"
@@ -622,10 +622,60 @@ Column {
       fontFamily: page.s.fontFamily
     }
 
+    ToggleRow {
+      width: parent.width
+      label: "Gate follows the room"
+      hint: "The line sits a margin above the room's own noise, and moves when the room gets louder or quieter."
+      help: "It learns the room only while nobody is talking to it: never while you speak a " +
+            "request, never while it speaks. It rises slowly and falls faster, because a gate " +
+            "too high cuts words off. It never goes below -55 or above -25 dBFS, and until it " +
+            "has heard three seconds of the room the fixed gate below is used. The wake " +
+            "word is judged 6 dB below the line, so a short name's quiet syllables still count."
+      checked: page.s.setting("adaptiveGate", false) === true
+      changed: page.s.changed("adaptiveGate")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onToggled: page.s.put("adaptiveGate", !checked)
+      onReset: page.s.resetKey("adaptiveGate")
+    }
+
+    // The live numbers, so "it moved" can be seen rather than taken on trust.
+    Text {
+      width: parent.width
+      visible: page.s.setting("adaptiveGate", false) === true
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: !page.s.serviceActive ? "Start the service to see the room's level."
+            : isNaN(page.s.floorDb) ? "Listening to the room… the fixed gate holds until then."
+            : "Room " + Math.round(page.s.floorDb) + " dBFS · gate " +
+              Math.round(page.s.gateDb) + " dBFS"
+      color: page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    KnobRow {
+      width: parent.width
+      visible: page.s.setting("adaptiveGate", false) === true
+      foreground: page.s.foreground; fontFamily: page.s.fontFamily
+      label: "Margin above the room"
+      unit: " dB"
+      description: "How far above the room's noise you have to be to count as talking."
+      help: "Lower hears softer speech, and more of the room. Higher needs you to speak up, " +
+            "and ignores more of the room. 10 dB suits a desk microphone."
+      value: page.s.setting("gateMarginDb", 10)
+      defaultValue: page.s.defaults.gateMarginDb !== undefined ? page.s.defaults.gateMarginDb : NaN
+      changed: page.s.changed("gateMarginDb")
+      minimum: 3; maximum: 25; stepSize: 1
+      onCommitted: function(v) { page.s.put("gateMarginDb", v) }
+      onReset: page.s.resetKey("gateMarginDb")
+    }
+
     KnobRow {
       width: parent.width
       foreground: page.s.foreground; fontFamily: page.s.fontFamily
-      label: "Microphone gate"
+      label: page.s.setting("adaptiveGate", false) === true
+             ? "Fixed gate (until it has heard the room)" : "Microphone gate"
       unit: " dBFS"
       description: "The red line above. Talk normally and put it under your voice."
       // It has one job on both engines -- deciding which frames count as you

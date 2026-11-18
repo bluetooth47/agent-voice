@@ -30,6 +30,11 @@ max_utterance_ms = 30000
 # Raise it (toward -30) if something across the room keeps waking it.
 mic_threshold_db = -38
 
+# Follow the room instead: the gate becomes the noise floor (learned only
+# while nobody is talking to it) plus this margin, held between -55 and -25.
+adaptive_gate = false
+gate_margin_db = 10
+
 # Minimum recogniser confidence in the wake phrase. A grammar must choose
 # between the phrase and [unk], so phonetically near misses score as matches;
 # this is what rejects them.

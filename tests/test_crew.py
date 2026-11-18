@@ -273,7 +273,8 @@ class TestWakeNames:
         pipe = _pipe(known=("computer", "sarah"))
         pipe._choose_names(["sarah"])
         pipe._oww, pipe._refractory_until, pipe._loud_frames = None, 0.0, 0
-        pipe.threshold_db, pipe.min_loud_frames = -40.0, 3
+        pipe.threshold_db = pipe.wake_gate_db = -40.0
+        pipe.min_loud_frames = 3
         pipe.wake_confidence, pipe.refractory_ms = 0.70, 1500
         pipe._log_speech = False
         calls = []
@@ -934,6 +935,10 @@ def test_the_loop_hands_a_second_agent_work_while_the_first_is_busy(
         detection_threshold = 0.9
         conversation = False
         follow_up_ms = 3000
+        floor_db = None
+
+        def learn_room(self, level):
+            return False
 
         def feed_wake(self, pcm, level):
             if pcm != loud or not wakes:

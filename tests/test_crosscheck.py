@@ -152,7 +152,8 @@ def _pipe(vosk="", has_vote=("theo", "sora"), whisper=""):
     pipe._oww, pipe._sherpa = None, FakeSherpa()
     pipe.phrase, pipe.names = "theo", ["sora"]
     pipe.cross_check, pipe._log_speech = True, False
-    pipe.threshold_db, pipe.refractory_ms = -40.0, 2000
+    pipe.threshold_db = pipe.wake_gate_db = -40.0
+    pipe.refractory_ms = 2000
     pipe._refractory_until = 0.0
     pipe.asked = []
     pipe._vosk_vote = lambda audio, names: (vosk, set(has_vote))

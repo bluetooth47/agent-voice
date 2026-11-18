@@ -132,10 +132,22 @@ class Utterance:
         self.busy_ms = 0.0
         #: How many pieces the finished transcript was made of.
         self.parts = 0
+        #: Every piece ever sent, kept or not: (start, end, result). What the
+        #: accurate live text is drawn from; see whisper_so_far().
+        self._sent: list[tuple[int, int, Future]] = []
+        #: The rough text to show where Whisper has not been yet.
+        self.live = LiveText()
 
     # --- driven by the frame loop -------------------------------------------
 
-    def add(self, pcm: bytes, loud: bool) -> None:
+    @property
+    def size(self) -> int:
+        """Bytes captured so far."""
+        return len(self._pcm)
+
+    def add(self, pcm: bytes, loud: bool) -> bool:
+        """One frame. True when it ended a pause and a piece went to Whisper:
+        the place the live text's rough part is cut too."""
         self._pcm += pcm
         if loud:
             self._quiet = 0
@@ -150,13 +162,36 @@ class Utterance:
                     self._start = end
                 else:
                     fut.cancel()      # heard again, as part of a longer piece
-            return
+            return False
         self._quiet += 1
         if (self._quiet == PAUSE_FRAMES and self._start is not None
                 and self._pending is None):
             end = len(self._pcm)
             self._pending = (end, self._submit(
                 self._job, bytes(self._pcm[self._start:end])))
+            self._sent.append((self._start, end, self._pending[1]))
+            return True
+        return False
+
+    def whisper_so_far(self) -> tuple[str, int]:
+        """Whisper's text for the audio it has finished, and where it ends.
+
+        Walks from the first piece: at each start, the longest finished piece
+        from there. A short piece later thrown away to be heard again as part
+        of a longer one still counts until the longer one is done, so the
+        text never falls back to Vosk's for audio Whisper has already read --
+        the flicker this mode was warned about. (0 when there is none.)"""
+        if not self._sent:
+            return "", 0
+        cursor, words, covered = self._sent[0][0], [], 0
+        while True:
+            done = [(end, fut) for start, end, fut in self._sent
+                    if start == cursor and end > cursor and _usable(fut)]
+            if not done:
+                return " ".join(w for w in words if w), covered
+            end, fut = max(done, key=lambda d: d[0])
+            words.append(fut.result())
+            cursor = covered = end
 
     def tail(self) -> str | None:
         """Everything said, if it is all transcribed and nothing has been
@@ -213,3 +248,52 @@ class Utterance:
     @staticmethod
     def _join(pieces: list[Future], timeout: float | None = None) -> str:
         return " ".join(t for f in pieces if (t := f.result(timeout)))
+
+
+def _usable(fut: Future) -> bool:
+    return fut.done() and not fut.cancelled() and fut.exception() is None
+
+
+class LiveText:
+    """What the "accurate" live transcript shows while somebody talks.
+
+    Vosk's rough text first, cut into segments at the same pauses where
+    Utterance sends a piece to Whisper; each segment is replaced by Whisper's
+    text once Whisper has read past it. Because both cut at the same frame,
+    Whisper's coverage always ends on a segment boundary, and the rough part
+    is simply every segment after it plus what Vosk is hearing now.
+    """
+
+    def __init__(self) -> None:
+        #: Closed segments: (end in bytes, Vosk's text for it).
+        self._segments: list[tuple[int, str]] = []
+        #: Vosk finals inside the open segment (it ends utterances itself).
+        self._finals: list[str] = []
+        #: Vosk's partial for the open segment.
+        self.partial = ""
+        #: Whether anybody has spoken since the last cut. Vosk makes words
+        #: out of the silence after one ("the"), and those were left on
+        #: screen behind Whisper's finished text; until speech resumes, the
+        #: open segment is not shown.
+        self.voiced = False
+
+    def heard(self, voiced: bool) -> None:
+        self.voiced = self.voiced or voiced
+
+    def final(self, text: str) -> None:
+        if text:
+            self._finals.append(text)
+        self.partial = ""
+
+    def cut(self, end: int, rest: str) -> None:
+        """Close the open segment at `end` bytes; `rest` is Vosk's flushed text."""
+        self.final(rest)
+        self._segments.append((end, " ".join(self._finals)))
+        self._finals = []
+        self.voiced = False
+
+    def render(self, whisper: str, covered: int) -> str:
+        rough = [t for end, t in self._segments if end > covered]
+        if self.voiced or not self._segments:
+            rough += [*self._finals, self.partial]
+        return " ".join(t for t in [whisper, *rough] if t)

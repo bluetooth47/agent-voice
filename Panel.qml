@@ -345,6 +345,7 @@ Panel {
         if (d.latency_ms !== undefined) voice.lastLatencyMs = Math.round(d.latency_ms)
         // Drawn on the panel's level meter; absent when nothing is listening.
         voice.levelDb = d.level_db !== undefined ? d.level_db : -99
+        if (d.gate_db !== undefined) voice.gateDb = d.gate_db
         if (d.levels !== undefined) voice.agentLevels = d.levels
         voice.agentLive = (d.live && typeof d.live === "object") ? d.live : ({})
         if (d.reply !== undefined) voice.lastReply = String(d.reply)
@@ -423,6 +424,8 @@ Panel {
   // permission level. Everything else stays in the overlay.
 
   property real levelDb: -99
+  // The gate in use, when it follows the room; see Settings.gateInForce.
+  property real gateDb: NaN
   // name -> what that agent is doing, with more than one agent.
   property var agentLive: ({})
   property var agentLevels: ["ask", "edits", "trusted"]
@@ -727,7 +730,8 @@ Panel {
             anchors.verticalCenter: parent.verticalCenter
             width: parent.width - micButton.width - parent.spacing
             levelDb: voice.levelDb
-            gateDb: voice.pref("micThresholdDb", -38)
+            gateDb: voice.pref("adaptiveGate", false) === true && !isNaN(voice.gateDb)
+                    ? voice.gateDb : voice.pref("micThresholdDb", -38)
             idleText: voice.vState === "yielded" ? "lent to another app — back when it stops"
                       : voice.vState === "locked" ? "closed while the screen is locked"
                       : voice.vState === "off" ? "microphone off" : ""

@@ -55,6 +55,7 @@ import wake_test  # noqa: E402
 import failure  # noqa: E402
 from chimes import Chimes  # noqa: E402
 from eager import Utterance, sounds_finished  # noqa: E402
+from noise_floor import MARGIN_MAX, MARGIN_MIN, NoiseFloor  # noqa: E402
 import headset  # noqa: E402
 from speech_text import (  # noqa: E402
     as_prompt, is_full_stop, is_goodbye, is_stop_command, safe_for_terminal,
@@ -507,7 +508,7 @@ class Pipeline:
         if getattr(self, "_sherpa", None) is not None:
             self._sherpa_listen(cfg)
             # Switched off: nothing else on this engine needs Vosk.
-            if not self._needs_vosk() and getattr(self, "_partials", "auto") != "on":
+            if not self._needs_vosk() and not self._partials_need_vosk():
                 self._drop_vosk()
 
         self.lead_in_ms = cfg.get_int("leadInMs")
@@ -516,7 +517,25 @@ class Pipeline:
         self.quick_end_ms = cfg.get_int("quickEndMs")
         self.min_utterance_ms = cfg.get_int("minUtteranceMs")
         self.max_utterance_ms = cfg.get_int("maxUtteranceMs")
-        self.threshold_db = float(cfg["micThresholdDb"])
+        # The gate. Fixed, or the room's noise floor plus a margin: see
+        # noise_floor.py. Plain numbers either way, so a change never rebuilds.
+        self.fixed_db = float(cfg["micThresholdDb"])
+        self.adaptive_gate = cfg.get_bool("adaptiveGate")
+        if getattr(self, "_floor", None) is None:
+            self._floor = NoiseFloor(CHUNK_MS)
+        self._floor.margin_db = float(max(MARGIN_MIN, min(MARGIN_MAX,
+                                                          cfg.get_int("gateMarginDb"))))
+        if not self.adaptive_gate:
+            # Switched off forgets the room, so switching it on again learns
+            # the room it is in then, not the one it was in last week.
+            self._floor.reset()
+        self.threshold_db = (self._floor.gate(self.fixed_db) if self.adaptive_gate
+                             else self.fixed_db)
+        #: The wake word's own gate (the Vosk grammar, the second check's
+        #: bursts): the same with the gate fixed, a little lower following
+        #: the room. See noise_floor.WAKE_SLACK_DB.
+        self.wake_gate_db = (self._floor.wake_gate(self.fixed_db) if self.adaptive_gate
+                             else self.fixed_db)
         # Assigned here rather than added to the spec above, like every other
         # knob on this list: it needs a different number, not a different model,
         # and a rebuild would drop and reload ~100MB for a slider move.
@@ -634,7 +653,7 @@ class Pipeline:
                 # Nothing needs Vosk on this engine unless partials are
                 # explicitly on. Give the memory back rather than hold it for
                 # an engine the user has just left.
-                if getattr(self, "_partials", "auto") != "on":
+                if not self._partials_need_vosk():
                     self._drop_vosk()
                 return
             except Exception as e:
@@ -672,8 +691,12 @@ class Pipeline:
         # As on openWakeWord: nothing needs Vosk here unless partials are
         # explicitly on or the second check votes with it, so give its
         # memory back.
-        if getattr(self, "_partials", "auto") != "on" and not self._needs_vosk():
+        if not self._partials_need_vosk() and not self._needs_vosk():
             self._drop_vosk()
+
+    def _partials_need_vosk(self) -> bool:
+        """"on" and "accurate" load Vosk for the live text; "auto" never does."""
+        return getattr(self, "_partials", "auto") in ("on", "accurate")
 
     def _needs_vosk(self) -> bool:
         """Whether the second check votes with Vosk at all."""
@@ -907,7 +930,7 @@ class Pipeline:
                 return True
             return False
 
-        if level_db < self.threshold_db:
+        if level_db < self.wake_gate_db:
             ended = self._loud_frames > 0
             self._loud_frames = 0
             if not ended:
@@ -969,6 +992,26 @@ class Pipeline:
         self.wake_how = "vosk"
         return True
 
+    def learn_room(self, level_db: float) -> bool:
+        """Feed the noise floor one frame of room, and move the gate with it.
+
+        Only frames that cannot be somebody talking to us: the caller feeds
+        the wake phase alone, outside the deaf window and never while we are
+        speaking. A no-op with the gate fixed. True when the gate moved.
+        """
+        if not getattr(self, "adaptive_gate", False):
+            return False
+        self._floor.feed(level_db)
+        before = self.threshold_db
+        self.threshold_db = self._floor.gate(self.fixed_db)
+        self.wake_gate_db = self._floor.wake_gate(self.fixed_db)
+        return self.threshold_db != before
+
+    @property
+    def floor_db(self) -> float | None:
+        floor = getattr(self, "_floor", None)
+        return floor.floor_db if floor is not None and self.adaptive_gate else None
+
     def _near(self, why: str) -> None:
         """A wake the engines came close to and turned down, for the wake
         test. Reasons only: never what was said."""
@@ -995,7 +1038,7 @@ class Pipeline:
         heard a name or cannot vote for one, so background talk costs a
         grammar pass rather than a transcription.
         """
-        audio = self._burst_cutter().feed(pcm, level_db >= self.threshold_db)
+        audio = self._burst_cutter().feed(pcm, level_db >= self.wake_gate_db)
         if audio is None:
             return False
         names = [self.phrase, *self.names]
@@ -1077,9 +1120,14 @@ class Pipeline:
         # resident for the wake word, and do not load it purely for them.
         if self._partials == "off":
             return False
-        if self._partials == "on":
+        if self._partials in ("on", "accurate"):
             return True
         return self.engine == "vosk"
+
+    @property
+    def accurate_partials(self) -> bool:
+        """Vosk's text first, each part replaced by Whisper's at the pauses."""
+        return getattr(self, "_partials", "auto") == "accurate"
 
     def _whisper_text(self, pcm: bytes, prompt: str | None) -> str:
         import numpy as np
@@ -1693,8 +1741,9 @@ class Daemon:
         test = getattr(self, "wake_test", None)
         if test is None or not test.running:
             return False
-        test.on_level(level, self.pipe.threshold_db)
-        if self._wake_test_cut.feed(pcm, level >= self.pipe.threshold_db) is not None:
+        gate = getattr(self.pipe, "wake_gate_db", self.pipe.threshold_db)
+        test.on_level(level, gate)
+        if self._wake_test_cut.feed(pcm, level >= gate) is not None:
             test.on_attempt()
         if self.pipe.feed_wake(pcm, level) and not self.heard_full_stop():
             how = getattr(self.pipe, "wake_how", "") or "?"
@@ -2065,7 +2114,9 @@ class Daemon:
         second = (f"detection {p.detection_threshold:.2f}"
                   if p.detection_threshold is not None
                   else f"confidence {p.wake_confidence:.2f}")
-        print(f"  {DIM}gate {p.threshold_db:.0f} dBFS · {second} "
+        gate = (f"gate follows the room (+{p._floor.margin_db:.0f} dB)"
+                if getattr(p, "adaptive_gate", False) else f"gate {p.threshold_db:.0f} dBFS")
+        print(f"  {DIM}{gate} · {second} "
               f"· {self.cfg.source}{OFF}")
         forgets = self.agent is not None and not getattr(self.agent, "remembers", False)
         if p.conversation and forgets:
@@ -2602,6 +2653,34 @@ class Daemon:
             self.say_once("prime", f"  {YEL}could not start "
                                    f"{getattr(self.agent, 'name', 'the agent')}"
                                    f" early: {type(e).__name__}{OFF}")
+
+    def hear(self, cap, utt, pcm: bytes, voiced: bool) -> str:
+        """One capture frame to Vosk and to the utterance; the text to show.
+
+        Vosk first, then the utterance, as the loop always did. With live text
+        "accurate", a pause that sends a piece to Whisper also flushes Vosk,
+        so the rough text is cut where Whisper's will start (eager.LiveText),
+        and what is shown is Whisper's text so far plus Vosk's after it.
+        Otherwise it is Vosk's partial, as before. "" means nothing new.
+        """
+        live = getattr(utt, "live", None)
+        partial = ""
+        if live is not None:
+            live.heard(voiced)
+        if cap is not None:
+            if cap.AcceptWaveform(pcm):
+                if live is not None:
+                    live.final(json.loads(cap.Result()).get("text", ""))
+            else:
+                partial = json.loads(cap.PartialResult()).get("partial", "")
+                if live is not None:
+                    live.partial = partial
+        cut = utt.add(pcm, voiced)
+        if live is None or not getattr(self.pipe, "accurate_partials", False):
+            return partial
+        if cut and cap is not None:
+            live.cut(utt.size, json.loads(cap.FinalResult()).get("text", ""))
+        return live.render(*utt.whisper_so_far())
 
     def turn_ended(self, quiet_ms: float, utt) -> bool:
         """Whether this much quiet means you have finished.
@@ -3303,7 +3382,7 @@ class Daemon:
             # does not need the wake word again.
             active_lead_in = self.pipe.lead_in_ms
 
-            level_shown = 0.0
+            level_shown = gate_shown = 0.0
             last_poll = last_lock_poll = time.time()
             # Push-to-talk: the key decides both ends of the turn, so the
             # wake word is bypassed and silence no longer endpoints.
@@ -3426,9 +3505,20 @@ class Daemon:
                 # by eye instead of by guesswork, so the level is published even
                 # while nothing is happening -- throttled, since this is every
                 # 100ms and the file is watched.
-                if phase == "wake" and abs(level - level_shown) > 1.5:
-                    level_shown = level
-                    self._publish(level_db=round(level, 1), **last)
+                #
+                # The same frames teach the adaptive gate the room: the wake
+                # phase only, never while we speak or a chime may be sounding.
+                if phase == "wake" and not self._speaking \
+                        and time.time() >= self._chime_until:
+                    self.pipe.learn_room(level)
+                gate = self.pipe.threshold_db
+                if phase == "wake" and (abs(level - level_shown) > 1.5
+                                        or abs(gate - gate_shown) >= 0.5):
+                    level_shown, gate_shown = level, gate
+                    floor = self.pipe.floor_db
+                    self._publish(level_db=round(level, 1), gate_db=round(gate, 1),
+                                  **({"floor_db": round(floor, 1)}
+                                     if floor is not None else {}), **last)
 
                 # Settings used to land only after the next turn, because the
                 # only refresh() was at a turn boundary -- so changing the
@@ -3471,9 +3561,7 @@ class Daemon:
                             self._hold(True)
                             for early in barged:
                                 buf += early
-                                if cap is not None:
-                                    cap.AcceptWaveform(early)
-                                utt.add(early, self.voiced(frame_db(early)))
+                                self.hear(cap, utt, early, self.voiced(frame_db(early)))
                             print(f"  {GRN}● go on{OFF}  {DIM}(talked over "
                                   f"{reopen.name or 'the reply'} — listening){OFF}",
                                   flush=True)
@@ -3546,9 +3634,7 @@ class Daemon:
                 # cap is None when live partials are off -- the turn runs
                 # exactly the same, it just shows nothing until Whisper
                 # returns. Endpointing below is energy-based either way.
-                partial = ""
-                if cap is not None and not cap.AcceptWaveform(pcm):
-                    partial = json.loads(cap.PartialResult()).get("partial", "")
+                #
                 # Energy decides when you stopped talking; Vosk's partials only
                 # say what it thinks you said. A pause between words produces no
                 # new partial but is not the end of a turn.
@@ -3568,7 +3654,7 @@ class Daemon:
                 # The same measurement that endpoints the turn decides where
                 # its pauses are, so a piece is never cut where the endpoint
                 # would have heard speech.
-                utt.add(pcm, voiced)
+                partial = self.hear(cap, utt, pcm, voiced)
                 if partial and partial != shown_partial:
                     shown_partial = partial
                     if speech_is_logged(self.cfg.get_bool("logSpeech")):
@@ -3766,9 +3852,7 @@ class Daemon:
                     self._deaf_until = 0.0
                     for early in barged:
                         buf += early
-                        if cap is not None:
-                            cap.AcceptWaveform(early)
-                        utt.add(early, self.voiced(frame_db(early)))
+                        self.hear(cap, utt, early, self.voiced(frame_db(early)))
                     woke_at = last_voice = time.time()
                     # Already heard: the lead-in timer is for somebody who
                     # has not started, and this person has. Silence from here

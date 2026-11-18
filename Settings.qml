@@ -265,6 +265,14 @@ Item {
 
   // --- the daemon's state -----------------------------------------------------
   property real levelDb: -99
+  // The gate the daemon is using and the room it measured, when the gate
+  // follows the room. NaN when there is no reading.
+  property real gateDb: NaN
+  property real floorDb: NaN
+  // What the meters draw as the line: the live gate when it follows the room
+  // and the daemon has said what it is, the setting otherwise.
+  readonly property real gateInForce: setting("adaptiveGate", false) === true && !isNaN(gateDb)
+                                      ? gateDb : setting("micThresholdDb", -38)
   property string vState: "off"
   property string lastTranscript: ""
   property string lastReply: ""
@@ -1083,6 +1091,8 @@ Item {
         var d = JSON.parse(text())
         root.vState = String(d.state || "off")
         root.levelDb = d.level_db !== undefined ? d.level_db : -99
+        if (d.gate_db !== undefined) root.gateDb = d.gate_db
+        if (d.floor_db !== undefined) root.floorDb = d.floor_db
         if (d.transcript !== undefined) root.lastTranscript = String(d.transcript)
         if (d.reply !== undefined) root.lastReply = String(d.reply)
         if (d.latency_ms !== undefined) root.lastLatencyMs = Math.round(d.latency_ms)

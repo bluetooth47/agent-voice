@@ -130,6 +130,10 @@ DEFAULTS = {
     "minUtteranceMs": 400,
     "maxUtteranceMs": 30000,
     "micThresholdDb": -38,
+    # Follow the room: the gate becomes the noise floor plus gateMarginDb.
+    # Off until it has been live-tested; see noise_floor.py.
+    "adaptiveGate": False,
+    "gateMarginDb": 10,
     "echoTailMs": 350,
     "refractoryMs": 2000,
     # The float is what the code reads; the percent is what the bar schema
@@ -195,6 +199,8 @@ TOML_ALIASES = {
     "maxUtteranceMs": ("timing", "max_utterance_ms"),
     "model": ("stt", "model"),
     "micThresholdDb": ("audio", "mic_threshold_db"),
+    "adaptiveGate": ("audio", "adaptive_gate"),
+    "gateMarginDb": ("audio", "gate_margin_db"),
     "echoTailMs": ("audio", "echo_tail_ms"),
     # No manifest entry, deliberately: a refractory window is a property of
     # how the detector behaves, not a knob worth a slider. It still needs a

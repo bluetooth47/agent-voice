@@ -202,7 +202,10 @@ Column {
       hint: "Rough text shown as you talk, before Whisper returns."
       help: "It needs the Vosk model resident. On the Vosk wake engine that model is " +
             "already loaded, so it is free; on openWakeWord or sherpa-onnx it is an extra 114MB. " +
-            "\"Auto\" shows it only when it is free."
+            "\"Auto\" shows it only when it is free.\n\n\"Accurate\" shows Vosk's rough text " +
+            "first, then replaces each part with Whisper's at every pause you leave, so what " +
+            "you see becomes what will be sent. It costs what \"On\" costs: Whisper is " +
+            "already reading those parts as you talk."
       changed: page.s.changed("livePartials")
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
@@ -211,6 +214,7 @@ Column {
         options: [
           { value: "auto", label: "Auto", tooltip: "Only when it costs nothing" },
           { value: "on", label: "On", tooltip: "Always; costs 114MB on the other engines" },
+          { value: "accurate", label: "Accurate", tooltip: "Vosk's text, replaced by Whisper's at every pause" },
           { value: "off", label: "Off" }
         ]
         value: page.s.setting("livePartials", "auto")

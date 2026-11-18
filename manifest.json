@@ -39,6 +39,8 @@
       "voice": "lessac-medium",
       "voiceSpeed": 100,
       "micThresholdDb": -38,
+      "adaptiveGate": false,
+      "gateMarginDb": 10,
       "wakeConfidencePct": 70,
       "echoTailMs": 350,
       "engine": "vosk",
@@ -97,6 +99,23 @@
         "step": 1,
         "defaultValue": -38,
         "description": "Guards the Vosk grammar and decides when your turn has ended. It does NOT gate openWakeWord or sherpa-onnx, which score every frame -- gating them discards most of the phrase."
+      },
+      {
+        "key": "adaptiveGate",
+        "type": "bool",
+        "label": "Gate follows the room",
+        "defaultValue": false,
+        "description": "The gate becomes the room's noise floor plus a margin, learned only while nobody is talking to it and never while it speaks. It rises slowly, falls faster, and stays between -55 and -25 dBFS. The fixed gate is used until it has heard 3s of the room."
+      },
+      {
+        "key": "gateMarginDb",
+        "type": "integer",
+        "label": "Margin above the room (dB)",
+        "min": 3,
+        "max": 25,
+        "step": 1,
+        "defaultValue": 10,
+        "description": "With the gate following the room: how far above the noise floor a frame must be to count as you talking. Lower hears softer speech and more of the room."
       },
       {
         "key": "wakeConfidencePct",
@@ -414,10 +433,11 @@
         "options": [
           "auto",
           "on",
+          "accurate",
           "off"
         ],
         "defaultValue": "auto",
-        "description": "Rough text shown as you talk, before Whisper returns. It needs the Vosk model, which costs 114MB resident. 'auto' shows it only when Vosk is already loaded for the wake word, so it is never paid for twice."
+        "description": "Rough text shown as you talk, before Whisper returns. It needs the Vosk model, which costs 114MB resident. 'auto' shows it only when Vosk is already loaded for the wake word, so it is never paid for twice. 'accurate' shows Vosk's text first and replaces each part with Whisper's at every pause, at no extra cost beyond Vosk."
       },
       {
         "key": "projectDir",

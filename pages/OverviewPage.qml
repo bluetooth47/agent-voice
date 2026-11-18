@@ -91,7 +91,8 @@ Column {
       }
       Text {
         anchors.right: parent.right
-        text: "gate " + page.s.setting("micThresholdDb", -38) + " dBFS · adjust ›"
+        text: (page.s.setting("adaptiveGate", false) === true ? "gate follows the room · "
+               : "gate " + page.s.setting("micThresholdDb", -38) + " dBFS · ") + "adjust ›"
         color: gateLink.containsMouse ? page.s.foreground : page.s.dim
         font.family: page.s.fontFamily
         font.pixelSize: Style.font.caption
@@ -108,7 +109,7 @@ Column {
     LevelMeter {
       width: parent.width
       levelDb: page.s.serviceActive ? page.s.levelDb : -99
-      gateDb: page.s.setting("micThresholdDb", -38)
+      gateDb: page.s.gateInForce
       idleText: page.s.serviceActive ? "no reading — the microphone is off"
                                      : "no reading — the service is off"
       foreground: page.s.foreground

@@ -906,3 +906,80 @@ crossed the -27 dBFS gate for long enough to count. The test now reports
 the loudest frame against the gate, so the next run says which.
 
 Synthetic voices: compare settings with these, not your own rate.
+
+## 27. A gate that follows the room, and live text that turns into Whisper's
+
+2026-11-17, i7-1185G7, branch `phase-b`. Both benches use synthetic audio:
+compare settings with them, not as the rates you will get.
+
+### The adaptive gate (`bench/gate_bench.py`)
+
+Six synthetic rooms, each 40s of the bed alone and then, in shuffled
+order, requests, wake names and sound-alikes at -26 dBFS speech: a quiet
+room (white noise, -62), a fan (pink, -46), a loud fan (pink, -36, above the
+shipped fixed gate), music (synthesized chords, -42), a TV (one low-passed
+Piper voice with gaps, -42) and people talking (three of those, -40). Three
+Piper voices, 15 requests per room (two with a 0.5s pause mid-sentence), 12
+wake clips ("Theo.", "Hey Theo.", "Sora.", "Hey Sora."), 18 sound-alikes.
+The live wake engine (sherpa-onnx, second check, both engines). The fixed
+gate is the shipped -38; the adaptive one learns as the daemon does, from
+every frame outside a capture. Margin 10 dB. Endpointing is the run loop's
+energy rule with a 1.2s pause: "on time" ends within a second of that.
+
+The first version took the floor as the 10th percentile, so it sat in the
+gaps. Beside the TV that put the gate at -51, under the TV's own speech,
+and held 6 of 6 turns open (`--quick`, two voices). Three percentiles, run
+side by side:
+
+| floor | TV turns held open | rooms worse than fixed on wakes |
+|---|---|---|
+| 10th percentile | 6/6 | TV (2/8 vs 7/8) |
+| 30th | 0 | music (6/8 vs 7/8) |
+| median | 0 | none |
+
+Those three ran in parallel, and the second check timed out now and then
+under the load, so their wake counts are rough. Everything below ran alone.
+
+The median at full size beat the fixed gate on every turn, but lost wakes:
+TV 8/12 against 11/12, people talking 8 against 9, music 10 against 11.
+The gate, 6 to 8 dB higher there, cut the quiet syllables out of a short
+name, and the second check's bursts came up short. So the wake word's own
+checks (the second check's bursts, the Vosk grammar) now use a gate
+`WAKE_SLACK_DB` = 6 dB lower than the one that ends a turn. With that:
+
+| room | gate | adaptive at | turns on time / late / held open | wakes | false wakes |
+|---|---|---|---|---|---|
+| quiet room | fixed | -38 | 15 / 0 / 0 | 12/12 | 0/18 |
+| | adaptive | -52.0 | 15 / 0 / 0 | 12/12 | 0/18 |
+| fan | fixed | -38 | 15 / 0 / 0 | 11/12 | 0/18 |
+| | adaptive | -36.7 | 15 / 0 / 0 | 12/12 | 0/18 |
+| loud fan | fixed | -38 | 0 / 2 / 13 | 1/12 | 0/18 |
+| | adaptive | -26.9 | 15 / 0 / 0 | 9/12 | 0/18 |
+| music | fixed | -38 | 5 / 10 / 0 | 9/12 | 0/18 |
+| | adaptive | -34.1 | 15 / 0 / 0 | 10/12 | 0/18 |
+| TV | fixed | -38 | 12 / 3 / 0 | 10/12 | 0/18 |
+| | adaptive | -31.5 | 15 / 0 / 0 | 10/12 | 0/18 |
+| people talking | fixed | -38 | 4 / 6 / 5 | 8/12 | 0/18 |
+| | adaptive | -29.7 | 15 / 0 / 0 | 10/12 | 0/18 |
+
+No turn was cut off and no request was missed in any room, either way.
+396s. At least as good as the fixed gate in every room on every measure,
+which is the bar the plan set; it still ships off by default until it has
+been tried in a real room. The fixed gate's own wake counts move by one or
+two between runs of identical audio (quiet room 10/12 in one run, 12/12 in
+the next), so a difference of one is noise; the loud fan is not.
+
+### Accurate live text (`bench/live_text_bench.py`)
+
+Six requests with one to three parts and 0.7s pauses, two Piper voices, at
+-24 dBFS. Frames through the daemon's own `hear()` at real time, with the
+real Vosk recogniser and Whisper base.en on its worker.
+
+- Fallbacks (Whisper's text replaced by Vosk's again): **0** in 12.
+- Pause to swap: median **0.78s**, max 0.98s.
+- Last text on screen equal to the transcript sent: **12/12**.
+- Updates on screen per request: median 13.5.
+
+The run before showed 11/12: Vosk made "the" out of the silence after the
+last pause, and it stayed on screen behind Whisper's finished text. The open
+rough segment is now hidden until somebody speaks after a cut.

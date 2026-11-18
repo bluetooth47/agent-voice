@@ -110,6 +110,23 @@ with a pause after each, then read off how many tries woke it, which path
 caught each one (spotter or second check), and the near misses the engines
 turned down. Only reasons are shown, never what was said.
 
+### A gate that follows the room
+
+The microphone gate decides which frames are you talking, which is what ends
+your turn. A fixed number suits one room: a fan coming on puts the noise above
+it and a turn never ends until its 30-second ceiling, while a quiet evening
+leaves it far above the floor and a soft word is cut off. **Gate follows the
+room** (Listening → Microphone, off by default) makes the gate the room's
+noise floor plus a margin, and shows both live.
+
+It learns only from frames that cannot be you talking to it: the wake phase,
+never a capture, never while it speaks. The floor is the median of the last
+30 seconds of those, so a wake word now and then does not move it, and a TV
+or music counts as the room it is. It rises at 0.5 dB a second and falls at
+3, never goes below -55 or above -25 dBFS, and the fixed gate holds until it
+has heard three seconds of the room. See FINDINGS §27 for six synthetic rooms
+against the fixed gate.
+
 ## Principles
 
 1. **Baseline, not bolted on.** Installs like any Omarchy extension:
@@ -248,6 +265,12 @@ It is kept beside the state file, in the runtime directory: memory only,
 readable by you alone, gone when you log out, never the journal and never
 the disk. **Keep this session's conversation** turns it off, and turning it
 off deletes what is already kept. Clear empties it on the spot.
+
+While you talk, Voice → **Live transcript** can show what is heard so far.
+**Accurate** shows Vosk's rough text first and replaces each part with
+Whisper's at every pause you leave, so by the time you stop, what is on
+screen is what will be sent. Whisper's text never falls back to Vosk's for
+a part it has already read (FINDINGS §27).
 
 A failed turn says why: "Claude has hit its usage limit. It resets at
 7 PM.", "Claude needs you to sign in again.", "Claude could not reach its

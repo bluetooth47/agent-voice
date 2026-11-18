@@ -613,9 +613,16 @@ def _drive_one_turn(daemon, monkeypatch, said, *, logs=False, on_answer=None):
         detection_threshold = 0.9
         conversation = False
         follow_up_ms = 3000
+        floor_db = None
 
         def __init__(self):
             self.woke = False
+            #: Every level the adaptive gate was taught, in order.
+            self.learned: list[float] = []
+
+        def learn_room(self, level):
+            self.learned.append(level)
+            return False
 
         def feed_wake(self, pcm, level):
             if self.woke:                    # once, on the first frame
@@ -926,3 +933,13 @@ def test_a_left_click_on_the_bar_icon_never_stops_a_turn():
     assert "voice.toggle()" in press
     assert "voice.toggleMic()" in press and "voice.toggleService()" in press
     assert "click to stop" not in PANEL, "the tooltip still promises a stop"
+
+
+def test_the_room_is_learned_in_the_wake_phase_only(daemon, monkeypatch):
+    """The adaptive gate must never learn from somebody talking to it: the
+    capture's frames are the person, and learning them would push the gate
+    up under their own voice. Driven, so the guard is seen to hold."""
+    _drive_one_turn(daemon, monkeypatch, "what time is it")
+    learned = daemon.pipe.learned
+    assert len(learned) == 1, f"learned {len(learned)} frames, capture included"
+    assert learned[0] > -10, "the waking frame, before the capture opened"
