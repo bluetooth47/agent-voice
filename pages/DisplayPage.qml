@@ -159,7 +159,7 @@ Column {
         { keys: "F8", what: "While it replies: stop it." },
         { keys: "Super+Ctrl+Space", what: "Stop the reply and everything the agent started." },
         { keys: "Super+Alt+Space", what: "Release the microphone entirely, or take it back." },
-        { keys: "Click the bar icon", what: "While it works: stop. Otherwise: open the panel." },
+        { keys: "Click the bar icon", what: "Open the panel. Its STOP button stops a turn." },
         { keys: "Right-click the bar icon", what: "Mute or unmute the microphone." },
         { keys: "Middle-click the bar icon", what: "Start or stop the service." }
       ]

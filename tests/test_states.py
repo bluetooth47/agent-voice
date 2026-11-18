@@ -897,10 +897,9 @@ def test_the_stop_is_the_loudest_thing_in_the_panel():
 
 
 def test_the_stop_has_one_guard_and_two_ways_in():
-    """The panel's STOP and a left click on the bar icon, because clicking the
-    icon is what somebody actually reached for while it was talking. Same rule
-    as toggleMic and toggleService: the guard belongs in the function every
-    entry point passes through."""
+    """The panel's STOP and the popup's 's' key (plus the IPC "stop"). Same
+    rule as toggleMic and toggleService: the guard belongs in the function
+    every entry point passes through."""
     panel = _uncommented(PANEL)
     assert "function stopTurn()" in panel
 
@@ -910,23 +909,20 @@ def test_the_stop_has_one_guard_and_two_ways_in():
     assert "vTurnRunning" in fn, "nothing to stop outside a turn"
 
     assert panel.count("voice.stopTurn()") >= 2, \
-        "the panel control and the bar icon should share the one path"
-    # The bar icon must not reach the Process behind the function's back, and
-    # must actually be wired to the turn state. Counting call sites was not
-    # enough: disabling the condition left the call in place and the first
-    # version of this test passed.
+        "the panel control and the key should share the one path"
+
+
+def test_a_left_click_on_the_bar_icon_never_stops_a_turn():
+    """Plan item 8: clicking the icon to see what it is doing used to end the
+    turn. A left click now always opens the popup, which has STOP; right
+    (mute) and middle (service) clicks are unchanged."""
+    panel = _uncommented(PANEL)
     press = panel[panel.index("onPressed: function(buttonCode)"):]
     press = press[:press.index("\n    }")]
-    assert "interrupt.running" not in press, \
-        "the bar click bypasses the guard the way the old right click did"
-    assert "voice.stopTurn()" in press, "a left click cannot stop anything"
-    assert "voice.vTurnRunning" in press, \
-        "the left click does not depend on there being a turn, so it either " \
-        "never stops or it never opens the panel"
-
-
-def test_a_click_that_changes_meaning_says_so():
-    """A control whose behaviour depends on state and does not mention it is
-    how "I clicked it and nothing happened" starts -- which is the report
-    this came from."""
-    assert "click to stop" in PANEL
+    assert "stopTurn" not in press, "a left click still stops the turn"
+    assert "interrupt.running" not in press
+    assert "vTurnRunning" not in press, \
+        "the left click still behaves differently during a turn"
+    assert "voice.toggle()" in press
+    assert "voice.toggleMic()" in press and "voice.toggleService()" in press
+    assert "click to stop" not in PANEL, "the tooltip still promises a stop"

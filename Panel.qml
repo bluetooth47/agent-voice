@@ -370,26 +370,18 @@ Panel {
     text: voice.icon
     fontFamily: voice.bar ? voice.bar.fontFamily : Style.font.family
     foreground: voice.barIconColor
-    // During a turn the click does something else, so it says so. A control
-    // whose behaviour changes with state and does not mention it is how
-    // "I clicked it and nothing happened" starts.
-    tooltipText: voice.opened ? ""
-                 : voice.vTurnRunning ? "Agent Voice — click to stop"
-                 : "Agent Voice — " + voice.stateLabel
+    tooltipText: voice.opened ? "" : "Agent Voice — " + voice.stateLabel
     // WidgetButton emits pressed(buttonCode); there is no onClicked.
+    // A left click always opens the popup, turn or no turn. It used to stop
+    // the turn, which meant a click meant to look at what it was doing ended
+    // it. The popup's STOP is one more click, and "full stop" and the wake
+    // word still stop everything hands-free.
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) {
         if (voice.serviceActive) voice.toggleMic()
         else voice.toggleService()
       } else if (buttonCode === Qt.MiddleButton) {
         voice.toggleService()
-      } else if (voice.vTurnRunning) {
-        // The reflex this is here for: it is talking, you click it, it stops.
-        // Opening a panel to find a button is the wrong thing to ask of
-        // somebody who wants it to stop now. The panel is still a click away
-        // the moment the turn ends, which is when its readout is worth
-        // reading anyway.
-        voice.stopTurn()
       } else {
         voice.toggle()
       }
