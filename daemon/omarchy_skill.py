@@ -50,14 +50,32 @@ SKIP_WORDS = ("install", "remove", "reset", "setup", "hybrid gpu",
               "toggle suspend", "toggle enabled", "crash capture")
 
 #: Hyprland actions the commands above do not cover, checked against
-#: Omarchy's own bindings (default/hypr/bindings/tiling.lua).
-HYPR_ACTIONS = (
+#: Omarchy's own bindings (default/hypr/bindings/tiling.lua). Two spellings:
+#: Hyprland with a Lua config (Omarchy 4.5 on 0.56) reads `hyprctl
+#: dispatch` as Lua and rejects the old form outright.
+HYPR_ACTIONS_LUA = (
+    ("Show or hide the scratchpad",
+     """hyprctl dispatch 'hl.dsp.workspace.toggle_special("scratchpad")'"""),
+    ("Move the focused window to the scratchpad",
+     """hyprctl dispatch 'hl.dsp.window.move({ workspace = "special:scratchpad", follow = false })'"""),
+    ("Go to workspace N", """hyprctl dispatch 'hl.dsp.focus({ workspace = "N" })'"""),
+    ("List windows", "hyprctl -j clients"),
+)
+HYPR_ACTIONS_LEGACY = (
     ("Show or hide the scratchpad", "hyprctl dispatch togglespecialworkspace scratchpad"),
     ("Move the focused window to the scratchpad",
      "hyprctl dispatch movetoworkspacesilent special:scratchpad"),
     ("Go to workspace N", "hyprctl dispatch workspace N"),
     ("List windows", "hyprctl -j clients"),
 )
+
+
+def hypr_actions(config_dir: Path | None = None):
+    """The spelling this machine's Hyprland reads."""
+    base = config_dir or Path(os.environ.get("XDG_CONFIG_HOME")
+                              or Path.home() / ".config") / "hypr"
+    return HYPR_ACTIONS_LUA if (base / "hyprland.lua").is_file() else HYPR_ACTIONS_LEGACY
+
 
 #: hyprctl's modmask bits, in the order Omarchy writes them.
 _MODS = ((64, "SUPER"), (4, "CTRL"), (8, "ALT"), (1, "SHIFT"))
@@ -162,7 +180,8 @@ GROUP_TITLES = {
 
 
 def skill_markdown(cmds: list[dict], binds: list[tuple[str, str]],
-                   version: str) -> str:
+                   version: str, actions=None) -> str:
+    actions = actions if actions is not None else hypr_actions()
     lines = [
         "---",
         "name: omarchy",
@@ -182,7 +201,7 @@ def skill_markdown(cmds: list[dict], binds: list[tuple[str, str]],
         "## Quick actions",
         "",
     ]
-    for what, cmd in HYPR_ACTIONS:
+    for what, cmd in actions:
         lines.append(f"- {what}: `{cmd}`")
     group = None
     for c in cmds:
@@ -201,12 +220,12 @@ def skill_markdown(cmds: list[dict], binds: list[tuple[str, str]],
     return "\n".join(lines) + "\n"
 
 
-def instructions_text(cmds: list[dict]) -> str:
+def instructions_text(cmds: list[dict], actions=None) -> str:
     """The short form, for a backend's instructions: routes and summaries."""
     head = ("This desktop runs Omarchy. For desktop actions use these commands "
             "(run with your shell tool) rather than searching for a way:")
     lines = [head]
-    for what, cmd in HYPR_ACTIONS[:2]:
+    for what, cmd in (actions if actions is not None else hypr_actions())[:2]:
         lines.append(f"- {cmd} : {what.lower()}")
     size = sum(len(l) + 1 for l in lines)
     for c in cmds:

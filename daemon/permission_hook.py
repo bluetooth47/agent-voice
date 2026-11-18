@@ -90,6 +90,70 @@ DESKTOP_SENSITIVE_READ = {"clipboard_read"}
 #: agent, which has no hook at all, is still asked.
 DESKTOP_SELF_ASKED = {"screenshot"}
 
+#: Claude in Chrome (plan 12d). Its tools act in the person's real browser,
+#: signed in as them, so a click can send, buy or post. Those are asked
+#: about at every level -- Trusted and "allow all in this chat" included --
+#: out loud and on screen. The rest of the browser follows the level.
+BROWSER_PREFIX = "mcp__claude-in-chrome__"
+#: The hook's matcher for an agent that is otherwise trusted: only the
+#: browser, so nothing else pays for a process per tool call.
+BROWSER_MATCHER = "mcp__claude-in-chrome__.*"
+#: `computer` actions that do something on the page, as opposed to looking.
+BROWSER_ACTING = {"left_click", "right_click", "double_click", "triple_click",
+                  "type", "key", "left_click_drag"}
+#: Words in an action's own summary that mean it has consequences beyond the
+#: page. Claude in Chrome asks the model to state the effect of every click,
+#: key and form fill in `action_summary` ("Sends the drafted reply to pat").
+#: A false match costs a question; a miss costs a purchase, so the list leans
+#: wide.
+BROWSER_CONSEQUENCE = re.compile(
+    r"\b(submit|send|post|publish|buy|purchas|order|pay|checkout|check out|"
+    r"place|confirm|delet|remov|transfer|book|reserv|subscrib|sign up|"
+    r"signup|register|tweet|repl(y|ies|ied)|comment|share|upload|donat|"
+    r"accept|agree|approv|merg|deploy|apply|invit|cancel|withdraw|"
+    r"sell|bid|checkin|check in|log ?out|sign ?out|save|archive|forward)\w*",
+    re.I)
+
+
+def browser_consequence(tool_name: str, tool_input: dict) -> str:
+    """Why a browser action needs asking whatever the level, or "".
+
+    Reading is never this: tabs, page text, find, screenshots, scrolling,
+    hovering, navigating. Running code in the page and uploading a file
+    always are. A click, key, typed text or form fill is when its summary
+    says it sends, buys, posts or the like -- or when it gives no summary,
+    because an action that will not say what it does is not one to wave
+    through.
+    """
+    name = tool_name[len(BROWSER_PREFIX):] if tool_name.startswith(BROWSER_PREFIX) else ""
+    if not name:
+        return ""
+    if name == "javascript_tool":
+        return "it runs code in the page, which can do anything the page can"
+    if name == "file_upload":
+        return "it uploads a file from this machine to the page"
+    if name == "browser_batch":
+        for item in tool_input.get("actions") or []:
+            if not isinstance(item, dict):
+                return "a batch with an item that cannot be read"
+            inner = item.get("input")
+            why = browser_consequence(BROWSER_PREFIX + str(item.get("name") or ""),
+                                      inner if isinstance(inner, dict) else {})
+            if why:
+                return why
+        return ""
+    acting = name == "form_input" or (
+        name == "computer" and tool_input.get("action") in BROWSER_ACTING)
+    if not acting:
+        return ""
+    summary = " ".join(str(tool_input.get("action_summary") or "").split())[:200]
+    if not summary:
+        return "it does not say what this click or key will do"
+    if BROWSER_CONSEQUENCE.search(summary):
+        return f"this may send, buy or post: {summary}"
+    return ""
+
+
 #: Everything else is asked about, including every `mcp__*` tool the user has
 #: configured, WebSearch, WebFetch, Task and Skill. That is the point of the
 #: `.*` matcher in adapters/claude_code.py: before it, those never reached
@@ -468,6 +532,12 @@ def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, st
     if tool_name in NO_EFFECT:
         return "allow", ""
 
+    # Before the grant and the level: these are asked about at every level,
+    # and "allow all in this chat" is not an answer to "buy this".
+    why = browser_consequence(tool_name, tool_input)
+    if why:
+        return _ask(tool_name, tool_input, note=why, announce=True)
+
     desktop = tool_name[len(DESKTOP_PREFIX):] if tool_name.startswith(DESKTOP_PREFIX) else ""
     if desktop in DESKTOP_READ_ONLY or desktop in DESKTOP_SELF_ASKED:
         return "allow", ""
@@ -526,7 +596,7 @@ def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, st
 
 
 def _ask(tool_name: str, tool_input: dict, note: str = "",
-         session: str = "") -> tuple[str, str]:
+         session: str = "", announce: bool = False) -> tuple[str, str]:
     """Put the question on screen and wait for an answer.
 
     Split out of decide() so both the write path and the read-a-secret
@@ -552,6 +622,7 @@ def _ask(tool_name: str, tool_input: dict, note: str = "",
                   or tool_input.get("file_path")
                   or tool_input.get("path")
                   or tool_input.get("url")
+                  or tool_input.get("action_summary")
                   or tool_input.get("pattern") or "")
     # Truncated, but never silently. `echo ok` followed by 400 spaces and
     # `; rm -rf ~/work` displayed as `echo ok`, which is a prompt that lies
@@ -583,6 +654,9 @@ def _ask(tool_name: str, tool_input: dict, note: str = "",
         # Whether "allow everything in this chat" can be offered: only when
         # there is a conversation to scope it to.
         "sessionWide": bool(_SESSION.fullmatch(session or "")),
+        # Said out loud by the daemon as well as shown (plan 12d): a
+        # purchase should not wait on somebody happening to look.
+        "announce": bool(announce),
     }))
     staged.chmod(0o600)
     staged.replace(request)

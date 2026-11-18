@@ -199,6 +199,9 @@ DEFAULTS = {
     # Plan 12a and 12b. Desktop tools are opt-in: they reach outside the
     # project, and at "trusted" they act without asking.
     "desktopTools": False,
+    # Plan 12d: Claude in Chrome for Claude Code agents. Opt-in: it is the
+    # person's own signed-in browser.
+    "browserTools": False,
     "omarchySkill": True,
     "conversationMode": True,
     "yieldToRecorders": True,
@@ -274,6 +277,7 @@ TOML_ALIASES = {
     "endpointTimeoutS": ("agent", "endpoint_timeout_s"),
     "endpointHistoryTurns": ("agent", "endpoint_history_turns"),
     "desktopTools": ("agent", "desktop_tools"),
+    "browserTools": ("agent", "browser_tools"),
     "omarchySkill": ("agent", "omarchy_skill"),
     "conversationMode": ("wake", "conversation_mode"),
     "yieldToRecorders": ("wake", "yield_to_recorders"),

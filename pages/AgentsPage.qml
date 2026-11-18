@@ -1084,6 +1084,24 @@ Column {
 
     ToggleRow {
       width: parent.width
+      label: "Browser"
+      hint: "Claude Code agents can use Claude in Chrome: your own browser, signed in as you."
+      help: "Reading pages, finding things and scrolling follow the agent's permission " +
+            "level. Anything whose own description says it sends, buys, posts, books, " +
+            "deletes or the like, running code in a page, uploading a file, and any " +
+            "click that does not say what it does are asked about at every level, " +
+            "Trusted and \u201callow all in this chat\u201d included. The question is " +
+            "said out loud as well as shown.\n\nNeeds the Claude in Chrome extension."
+      checked: page.s.setting("browserTools", false) === true
+      changed: page.s.changed("browserTools")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onToggled: page.s.put("browserTools", !checked)
+      onReset: page.s.resetKey("browserTools")
+    }
+
+    ToggleRow {
+      width: parent.width
       label: "Omarchy skill"
       hint: "Agents know this machine's omarchy commands and keybindings, so “open a " +
             "scratchpad” or “next background” is one command, not a search."

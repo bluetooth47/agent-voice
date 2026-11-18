@@ -1120,3 +1120,65 @@ permission rules. The presets offered are the four from §14, which did
 answer real turns. The thinking filter, the URL clean-up, the connection test
 and the model list are tested against a real HTTP server on localhost
 (`tests/test_endpoints.py`).
+
+## 32. The editor, the browser, Hyprland's Lua dispatch, and a second mouse
+
+i7-1185G7, Hyprland 0.56.2 with Omarchy 4.5's Lua config, VS Code 1.146
+with the Claude Code extension 2.1.327, 2026-11-18.
+
+**A bug from §31 the stubs could not see.** Hyprland with a Lua config reads
+`hyprctl dispatch X` as Lua, so `hyprctl dispatch closewindow
+address:0x…` is a syntax error ("')' expected near 'address'"). Phase F's
+focus, move, close and workspace tools all used that form, and so did the
+skill's scratchpad lines. The unit tests had passed because the stub
+`hyprctl` answers "ok" to anything. The tools now send the Lua form first
+(`hl.dsp.window.close({ window = "address:0x…" })`) and fall back to the
+old one, as Omarchy's own scripts do. Against the real compositor: focus
+"done", close "ok", scratchpad toggled and back "ok". The skill picks its
+spelling from whether `~/.config/hypr/hyprland.lua` exists.
+
+**Editor tools** (`open_in_editor`, `show_changes`), against the real
+desktop with `code` as Omarchy's default editor:
+- `open_in_editor calc.py line 4 col 7` opened VS Code at that line.
+- `show_changes` on a scratch repo with one edited file opened a VS Code
+  diff of HEAD against the working copy. The HEAD copy is written to
+  `$XDG_RUNTIME_DIR/agentvoice/diffs/` (0700, file 0600).
+
+**`--ide` was not shown to work, so it is not offered.** VS Code was opened
+three times on a scratch folder. Each time the extension (auto-updated to
+2.1.327 on the first start) never activated: no line in the extension host
+log and no `~/.claude/ide/*.lock`, which `claude --ide` needs to find the
+editor. Without a lock file there is nothing for a voice session to connect
+to, and the repo rule is one real turn before a feature ships. Worth
+retrying once VS Code has been restarted by hand after the update.
+
+**The browser.** Claude in Chrome was not connected during this session
+(Chrome was not running), so the browser rule has no real turn yet. What it
+decides is tested (`tests/test_desktop_tools.py`: 13 consequential
+actions, 10 ordinary ones, at Trusted, through a chat grant).
+
+**A second mouse (plan 12c spike).**
+- (c) **Hyprland has no second pointer.** Its binary implements
+  `zwlr_virtual_pointer_manager_v1`, which drives the seat's one pointer,
+  and nothing for more than one seat. `hyprctl devices` lists one pointer.
+  ydotool works the same way, through `/dev/uinput`. Either one moves your
+  cursor.
+- (a) **Acting without the pointer works.** Window commands (hyprctl Lua
+  dispatch), the editor (`code --goto`, `--diff`) and the browser (Claude
+  in Chrome drives the page through the extension, not the OS pointer) all
+  act with the pointer where you left it. `hyprctl cursorpos` read
+  `971, 1977` before and after the window and editor runs above. The ghost
+  cursor prototype (`bench/spike/ghost/`) is a Quickshell overlay-layer
+  surface with an empty input region and no keyboard focus. It drew over
+  the real desktop (screenshot checked) and the cursor did not move.
+  Click-through was not measured, because that needs a pointer event, which
+  is what this avoids.
+- (b) A headless monitor for the agent was not tried. Option (a) needs no
+  second output, and clicks there would still borrow the one pointer.
+
+**Decision:** option (a). The agent acts through commands. Where it acts on
+screen, it is shown by a ghost cursor on the overlay layer. The real pointer
+is never moved, and `ydotool` is never used for the agent. The overlay is
+the next thing to build. It needs a source of "where": a window's centre
+for the desktop tools, and the click coordinates of a browser action,
+which arrive in the tool input the hook already sees.

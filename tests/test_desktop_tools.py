@@ -130,10 +130,24 @@ def test_focus_move_close_and_workspace_use_hyprctl(stubs):
     desktop_mcp.call("close_window", {"address": "0x1a"})
     desktop_mcp.call("switch_workspace", {"workspace": 4})
     assert calls(stubs) == [
-        "hyprctl dispatch focuswindow address:0x1a",
-        "hyprctl dispatch movetoworkspacesilent 3,address:0x1a",
-        "hyprctl dispatch closewindow address:0x1a",
-        "hyprctl dispatch workspace 4"]
+        'hyprctl dispatch hl.dsp.focus({ window = "address:0x1a" })',
+        'hyprctl dispatch hl.dsp.window.move({ workspace = "3", follow = false, window = "address:0x1a" })',
+        'hyprctl dispatch hl.dsp.window.close({ window = "address:0x1a" })',
+        'hyprctl dispatch hl.dsp.focus({ workspace = "4" })']
+
+
+def test_an_older_hyprland_gets_the_old_dispatcher(stubs, monkeypatch):
+    """Hyprland with a Lua config reads dispatch as Lua; an older one
+    answers the Lua form with an error and takes the old form."""
+    answers = iter(["error: unknown dispatcher", "ok"])
+    monkeypatch.setattr(desktop_mcp, "_run", lambda argv, **kw: next(answers))
+    assert desktop_mcp.call("close_window", {"address": "0x1a"}) == "done"
+
+
+def test_a_failed_dispatch_is_an_error(stubs, monkeypatch):
+    monkeypatch.setattr(desktop_mcp, "_run", lambda argv, **kw: "error: no such window")
+    with pytest.raises(desktop_mcp.ToolError, match="no such window"):
+        desktop_mcp.call("focus_window", {"address": "0x1a"})
 
 
 @pytest.mark.parametrize("args", [{"address": "0x1a; rm -rf ~"},
@@ -313,7 +327,9 @@ def test_reading_windows_is_free_and_changes_are_asked(monkeypatch, asked, level
                  "volume", "media", "notify", "clipboard_write", "lock_screen",
                  "suspend", "open_project_layout", "clipboard_read"):
         assert hook.decide(P + tool, {})[0] == "deny", tool
-    assert len(asked) == 12
+    for tool in ("open_in_editor", "show_changes"):
+        assert hook.decide(P + tool, {})[0] == "deny", tool
+    assert len(asked) == 14
 
 
 def test_trusted_lets_changes_through(monkeypatch, asked):
@@ -431,13 +447,14 @@ def test_the_skill_is_a_plugin_folder_claude_can_load(tmp_path):
     out = omarchy_skill.build(tmp_path, cmds=omarchy_skill.commands(RAW),
                               binds=omarchy_skill.keybindings(BINDS), version="4.5.0")
     assert out["commands"] == 2
+    assert out["commands"] == 2
     manifest = json.loads((tmp_path / ".claude-plugin/plugin.json").read_text())
     assert manifest["name"] == "agentvoice-omarchy"
     skill = (tmp_path / "skills/omarchy/SKILL.md").read_text()
     head = skill.split("---")[1]
     assert "name: omarchy" in head and "description:" in head
     assert "`omarchy theme set <name>`: Apply a theme" in skill
-    assert "togglespecialworkspace scratchpad" in skill
+    assert "scratchpad" in skill
     assert "- SUPER + S: Toggle scratchpad" in skill
     assert "omarchy update" not in skill
     text = omarchy_skill.instructions(tmp_path)
@@ -471,3 +488,246 @@ def test_loading_a_deferred_tools_schema_is_not_asked_about(monkeypatch, asked):
     _at(monkeypatch, "ask")
     assert hook.decide("ToolSearch", {"query": "select:mcp__agentvoice-desktop__notify"})[0] == "allow"
     assert asked == []
+
+
+
+def test_the_skill_speaks_the_hyprland_this_machine_has(tmp_path):
+    """A Lua config rejects `hyprctl dispatch togglespecialworkspace` outright
+    (found on the first real run), so the skill writes what it reads."""
+    (tmp_path / "hyprland.lua").write_text("")
+    lua = dict(omarchy_skill.hypr_actions(tmp_path))
+    assert lua["Show or hide the scratchpad"] == \
+        """hyprctl dispatch 'hl.dsp.workspace.toggle_special("scratchpad")'"""
+    legacy = dict(omarchy_skill.hypr_actions(tmp_path / "none"))
+    assert legacy["Show or hide the scratchpad"] == \
+        "hyprctl dispatch togglespecialworkspace scratchpad"
+
+
+# --- the editor (plan 12d) ------------------------------------------------------
+
+@pytest.fixture
+def editor(tmp_path, monkeypatch):
+    def use(name):
+        state = tmp_path / "state/omarchy/defaults"
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "editor").write_text(name + "\n")
+        monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    return use
+
+
+def test_a_file_opens_at_its_line_in_vscode(stubs, editor, tmp_path):
+    for name in ("code", "nvim", "omarchy-launch-tui"):
+        f = Path(os.environ["PATH"].split(":")[0]) / name
+        f.write_text((Path(os.environ["PATH"].split(":")[0]) / "hyprctl").read_text())
+        f.chmod(0o755)
+    editor("code")
+    src = tmp_path / "calc.py"
+    src.write_text("x = 1\n")
+    assert desktop_mcp.call("open_in_editor", {"path": str(src), "line": 4, "column": 7}) \
+        == "opened calc.py at line 4 in code"
+    assert calls(stubs) == [f"uwsm-app -- code --goto {src}:4:7"]
+
+
+def test_a_terminal_editor_gets_plus_line(stubs, editor, tmp_path):
+    bin_ = Path(os.environ["PATH"].split(":")[0])
+    for name in ("nvim", "omarchy-launch-tui"):
+        (bin_ / name).write_text((bin_ / "hyprctl").read_text())
+        (bin_ / name).chmod(0o755)
+    editor("nvim")
+    src = tmp_path / "calc.py"
+    src.write_text("x = 1\n")
+    desktop_mcp.call("open_in_editor", {"path": str(src), "line": 2})
+    assert calls(stubs) == [f"omarchy-launch-tui nvim +2 -- {src}"]
+
+
+def test_a_missing_file_is_not_opened(stubs, editor):
+    editor("code")
+    with pytest.raises(desktop_mcp.ToolError):
+        desktop_mcp.call("open_in_editor", {"path": "/no/such/file"})
+    assert calls(stubs) == []
+
+
+def _repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True,
+                                    capture_output=True)
+    run("init", "-q")
+    (repo / "a.py").write_text("one\n")
+    (repo / "b.py").write_text("two\n")
+    run("add", ".")
+    run("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
+    return repo
+
+
+def test_changes_open_as_diffs_against_the_last_commit(stubs, editor, tmp_path, monkeypatch):
+    import paths
+    bin_ = Path(os.environ["PATH"].split(":")[0])
+    (bin_ / "code").write_text((bin_ / "hyprctl").read_text())
+    (bin_ / "code").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_}:/usr/bin:/bin")
+    monkeypatch.setattr(paths, "RUNTIME_DIR", tmp_path / "run")
+    editor("code")
+    repo = _repo(tmp_path)
+    (repo / "a.py").write_text("one, changed\n")
+    assert desktop_mcp.call("show_changes", {"folder": str(repo)}) == "opened diffs of a.py"
+    (base,) = (tmp_path / "run/diffs").iterdir()
+    assert base.read_text() == "one\n"
+    assert base.stat().st_mode & 0o777 == 0o600
+    assert (tmp_path / "run/diffs").stat().st_mode & 0o777 == 0o700
+    assert calls(stubs) == [f"uwsm-app -- code --diff {base} {repo / 'a.py'}"]
+
+
+def test_no_changes_opens_nothing(stubs, editor, tmp_path):
+    editor("code")
+    repo = _repo(tmp_path)
+    assert desktop_mcp.call("show_changes", {"folder": str(repo)}) == \
+        "nothing has changed since the last commit"
+    assert calls(stubs) == []
+
+
+def test_a_folder_outside_git_is_said_plainly(stubs, editor, tmp_path):
+    editor("code")
+    with pytest.raises(desktop_mcp.ToolError, match="not in a git repository"):
+        desktop_mcp.call("show_changes", {"folder": str(tmp_path)})
+
+
+# --- the browser (plan 12d) -----------------------------------------------------
+
+B = "mcp__claude-in-chrome__"
+
+
+def click(summary=None, action="left_click"):
+    inp = {"action": action, "tabId": 1, "coordinate": [10, 10]}
+    if summary is not None:
+        inp["action_summary"] = summary
+    return inp
+
+
+@pytest.mark.parametrize("tool, inp", [
+    ("computer", click("Sends the drafted reply to pat@example.com")),
+    ("computer", click("Places the order for 2 items")),
+    ("computer", click("Clicks Buy now")),
+    ("computer", click("Submits the signup form")),
+    ("computer", click("Posts the comment", action="key")),
+    ("computer", click("Deletes the selected emails")),
+    ("computer", click(None)),                                  # says nothing
+    ("computer", click("")),
+    ("form_input", {"ref": "ref_1", "value": "x", "tabId": 1,
+                    "action_summary": "Confirms the booking"}),
+    ("javascript_tool", {"action": "javascript_exec", "text": "1", "tabId": 1}),
+    ("file_upload", {"paths": ["/tmp/x"], "ref": "ref_1", "tabId": 1}),
+    ("browser_batch", {"actions": [
+        {"name": "navigate", "input": {"url": "https://shop.example", "tabId": 1}},
+        {"name": "computer", "input": click("Pays with the saved card")}]}),
+    ("browser_batch", {"actions": ["garbage"]}),
+])
+def test_a_consequential_browser_action_has_a_reason(tool, inp):
+    assert hook.browser_consequence(B + tool, inp)
+
+
+@pytest.mark.parametrize("tool, inp", [
+    ("computer", click("Opens the Filters menu")),
+    ("computer", click("Focuses the search box")),
+    ("computer", {"action": "screenshot", "tabId": 1}),
+    ("computer", {"action": "scroll", "tabId": 1, "coordinate": [1, 1]}),
+    ("navigate", {"url": "https://example.com"}),
+    ("read_page", {"tabId": 1}),
+    ("find", {"query": "buy button", "tabId": 1}),
+    ("get_page_text", {"tabId": 1}),
+    ("form_input", {"ref": "ref_1", "value": "kettle", "tabId": 1,
+                    "action_summary": "Types kettle into the search field"}),
+    ("browser_batch", {"actions": [{"name": "navigate", "input": {"url": "https://x"}}]}),
+])
+def test_looking_and_ordinary_clicks_are_not(tool, inp):
+    assert hook.browser_consequence(B + tool, inp) == ""
+
+
+def test_another_servers_tools_are_not_judged_as_the_browser():
+    assert hook.browser_consequence("mcp__other__computer", click(None)) == ""
+
+
+def test_a_purchase_is_asked_at_trusted_and_through_a_chat_grant(monkeypatch):
+    seen = []
+
+    def ask(tool, args, note="", session="", announce=False):
+        seen.append((tool, note, session, announce))
+        return "deny", "asked"
+
+    monkeypatch.setattr(hook, "_ask", ask)
+    monkeypatch.setattr(hook, "granted", lambda s: True)
+    monkeypatch.setattr(hook, "_settings", lambda: ("trusted", None))
+    sid = "12345678-1234-1234-1234-123456789abc"
+    assert hook.decide(B + "computer", click("Places the order"), sid)[0] == "deny"
+    ((tool, note, session, announce),) = seen
+    assert note.startswith("this may send, buy or post")
+    assert session == "" and announce is True     # no "allow all in this chat"
+    # An ordinary click at trusted is not asked.
+    assert hook.decide(B + "computer", click("Opens the menu"), sid)[0] == "allow"
+    assert len(seen) == 1
+
+
+def test_the_question_is_marked_to_be_said(monkeypatch):
+    monkeypatch.setattr(hook, "TIMEOUT", 0.2)
+    import threading, time as _t
+    seen = {}
+
+    def peek():
+        end = _t.time() + 3
+        while _t.time() < end:
+            for r in hook.PENDING.glob("*.request"):
+                seen.update(json.loads(r.read_text()))
+                return
+            _t.sleep(0.01)
+
+    t = threading.Thread(target=peek)
+    t.start()
+    hook._ask(B + "computer", click("Sends the email"), note="n", announce=True)
+    t.join()
+    assert seen["announce"] is True
+    assert seen["summary"] == "Sends the email"
+    assert seen["sessionWide"] is False
+
+
+def test_claude_asks_for_the_browser_or_refuses_it():
+    from adapters.claude_code import ClaudeCode
+    a = ClaudeCode(ask_permission=False)
+    argv = a._argv("", None)
+    assert "--no-chrome" in argv and "--chrome" not in argv and "--settings" not in argv
+    a.browser_tools = True
+    argv = a._argv("", None)
+    assert "--chrome" in argv
+    # Trusted with the browser: a hook on the browser's tools alone.
+    settings = json.loads(argv[argv.index("--settings") + 1])
+    (entry,) = settings["hooks"]["PreToolUse"]
+    assert entry["matcher"] == hook.BROWSER_MATCHER
+
+
+def test_below_trusted_the_whole_hook_still_guards_the_browser():
+    from adapters.claude_code import GUARDED_TOOLS, ClaudeCode
+    a = ClaudeCode(ask_permission=True)
+    a.browser_tools = True
+    argv = a._argv("", None)
+    settings = json.loads(argv[argv.index("--settings") + 1])
+    assert settings["hooks"]["PreToolUse"][0]["matcher"] == GUARDED_TOOLS
+
+
+def test_the_daemon_says_its_own_agents_browser_question_once(cfg_factory, tmp_path, monkeypatch):
+    from crew import Persona
+    from wake_listen import Daemon
+    monkeypatch.setattr(hook, "PENDING", tmp_path)
+    d = Daemon.__new__(Daemon)
+    said = []
+    d.speak = lambda text, tail_ms, cut=None: said.append(text)
+    nova = Persona("nova", {"id": "nova-k3f", "label": "Nova"})
+    (tmp_path / "a1.request").write_text(json.dumps({
+        "announce": True, "who": "nova-k3f",
+        "input": {"action_summary": "Places the order.", "text": "card 4242"}}))
+    (tmp_path / "b2.request").write_text(json.dumps({
+        "announce": False, "who": "nova-k3f", "input": {}}))
+    (tmp_path / "c3.request").write_text(json.dumps({
+        "announce": True, "who": "someone-else", "input": {}}))
+    assert d.announce_permission(nova, 0) is True
+    assert said == ["Nova is asking first: Places the order. Answer on screen."]
+    assert "4242" not in said[0]
+    assert d.announce_permission(nova, 0) is False     # once

@@ -65,6 +65,17 @@ Column {
   property string keyPending: ""
   property var result: null
   property bool customModel: false
+  property string keyDraft: ""
+  // Flipped to empty the key field once its key has been handed over.
+  property int keyCleared: 0
+
+  function saveKey() {
+    if (keyDraft.trim() === "" || url.trim() === "") return
+    keyPending = keyDraft.trim()
+    keyDraft = ""
+    keyCleared++
+    run(keySetProc, ["key", "set", url])
+  }
 
   function run(proc, args) {
     if (proc.running) return
@@ -261,12 +272,19 @@ Column {
       width: parent.width
       spacing: Style.space(8)
       TextField {
-        id: keyField
         width: parent.width - saveKey.width - clearKey.width - parent.spacing * 2
         password: true
         placeholderText: ed.keyShown !== "" ? ed.keyShown : "paste a key"
         foreground: ed.foreground
         font.family: ed.fontFamily
+        // The draft lives on ed, and is emptied from there once saved: read
+        // and cleared only from inside this field, where `text` is its own.
+        onTextChanged: ed.keyDraft = text
+        onAccepted: ed.saveKey()
+        Connections {
+          target: ed
+          function onKeyClearedChanged() { parent.text = "" }
+        }
       }
       Button {
         id: saveKey
@@ -274,12 +292,7 @@ Column {
         bordered: true
         foreground: ed.foreground
         fontFamily: ed.fontFamily
-        onClicked: {
-          if (keyField.text.trim() === "" || ed.url.trim() === "") return
-          ed.keyPending = keyField.text.trim()
-          keyField.text = ""
-          ed.run(keySetProc, ["key", "set", ed.url])
-        }
+        onClicked: ed.saveKey()
       }
       Button {
         id: clearKey

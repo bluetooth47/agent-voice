@@ -32,6 +32,7 @@ already has Bash, and Bash goes through the hook.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import re
@@ -95,6 +96,19 @@ TOOLS = [
            "editor": {"type": "boolean", "default": True},
            "url": {"type": "string", "maxLength": 2048,
                    "description": "http(s) URL to open in the browser"}},
+          ["folder"]),
+    _tool("open_in_editor", "Open a file in the person's editor, at a line "
+          "and column when given.",
+          {"path": {"type": "string", "maxLength": 4096},
+           "line": {"type": "integer", "minimum": 1},
+           "column": {"type": "integer", "minimum": 1}}, ["path"]),
+    _tool("show_changes", "Open a side-by-side diff in the editor of what has "
+          "changed in a git folder since the last commit: one file, or up to "
+          "five.",
+          {"folder": {"type": "string", "maxLength": 4096},
+           "path": {"type": "string", "maxLength": 4096,
+                    "description": "One file inside the folder; all changed "
+                                   "files when left out"}},
           ["folder"]),
     _tool("media", "Control what is playing: play-pause, play, pause, next, "
           "previous, stop.",
@@ -161,11 +175,25 @@ def _hypr_json(what: str):
     return json.loads(_run(["hyprctl", "-j", what]) or "null")
 
 
-def _dispatch(*args: str) -> str:
-    out = _run(["hyprctl", "dispatch", *args]).strip()
-    if out and out.lower() != "ok":
-        raise ToolError(out[:300])
-    return "done"
+def _dispatch(lua: str, *legacy: str) -> str:
+    """Run a Hyprland dispatcher: the Lua form first, then the old one.
+
+    Hyprland 0.56 with a Lua config (Omarchy's, from 4.5) reads
+    `hyprctl dispatch X` as Lua, so `closewindow address:0x1` is a syntax
+    error there -- found on the first real run, after the stubbed tests had
+    passed. Older Hyprland reads only the old form. Omarchy's own scripts
+    try both in this order, and so does this. Every value interpolated into
+    `lua` has already been checked against a pattern (an address, a number).
+    """
+    out = _run(["hyprctl", "dispatch", lua]).strip()
+    if out.lower() == "ok":
+        return "done"
+    if legacy:
+        old = _run(["hyprctl", "dispatch", *legacy]).strip()
+        if old.lower() == "ok" or not old:
+            return "done"
+        raise ToolError(old[:300])
+    raise ToolError(out[:300])
 
 
 def _window(c: dict, focused: str = "") -> dict:
@@ -281,16 +309,25 @@ def call(name: str, args: dict):
         address = str(args.get("address", ""))
         if not re.fullmatch(r"0x[0-9a-fA-F]{1,16}", address):
             raise ToolError("that is not a window address")
+        win = f'window = "address:{address}"'
         if name == "focus_window":
-            return _dispatch("focuswindow", f"address:{address}")
+            return _dispatch(f"hl.dsp.focus({{ {win} }})",
+                             "focuswindow", f"address:{address}")
         if name == "close_window":
-            return _dispatch("closewindow", f"address:{address}")
-        return _dispatch("movetoworkspacesilent",
-                         f"{_workspace(args)},address:{address}")
+            return _dispatch(f"hl.dsp.window.close({{ {win} }})",
+                             "closewindow", f"address:{address}")
+        n = _workspace(args)
+        return _dispatch(f'hl.dsp.window.move({{ workspace = "{n}", follow = false, {win} }})',
+                         "movetoworkspacesilent", f"{n},address:{address}")
     if name == "switch_workspace":
-        return _dispatch("workspace", str(_workspace(args)))
+        n = _workspace(args)
+        return _dispatch(f'hl.dsp.focus({{ workspace = "{n}" }})', "workspace", str(n))
     if name == "open_project_layout":
         return _layout(args)
+    if name == "open_in_editor":
+        return _open_in_editor(args)
+    if name == "show_changes":
+        return _show_changes(args)
     if name == "media":
         return _media(str(args.get("action", "")))
     if name == "volume":
@@ -361,6 +398,120 @@ def _layout(args: dict) -> str:
         _spawn(["omarchy-launch-browser", url])
         done.append("browser")
     return f"opened {', '.join(done) or 'nothing'} for {folder}"
+
+
+#: Editors that take `--goto file:line:col` and `--diff a b`.
+VSCODE_LIKE = ("code", "codium", "code-oss", "cursor", "windsurf")
+#: Editors that run in a terminal and take `+line`.
+TERMINAL_EDITORS = ("nvim", "vim", "vi", "hx", "helix", "nano", "micro")
+#: The most files show_changes opens at once.
+MAX_DIFFS = 5
+
+
+def default_editor() -> str:
+    """Omarchy's default editor, as `omarchy default editor` stores it."""
+    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
+    try:
+        name = (state / "omarchy/defaults/editor").read_text().split()[0]
+    except (OSError, IndexError):
+        name = "nvim"
+    name = Path(name).name
+    return "subl" if name == "sublime_text" else name
+
+
+def _real_file(raw, what="file") -> Path:
+    path = Path(str(raw or "")).expanduser()
+    try:
+        path = path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise ToolError(f"no {what} {raw!r}")
+    return path
+
+
+def _open_in_editor(args: dict) -> str:
+    path = _real_file(args.get("path"))
+    if not path.is_file():
+        raise ToolError(f"{path} is not a file")
+    line = _positive(args.get("line"))
+    col = _positive(args.get("column"))
+    editor = default_editor()
+    where = f"{path}:{line}" + (f":{col}" if col else "") if line else str(path)
+    if editor in VSCODE_LIKE and shutil.which(editor):
+        _spawn(["uwsm-app", "--", editor, "--goto", where] if shutil.which("uwsm-app")
+               else [editor, "--goto", where])
+    elif editor in ("zed", "zeditor") and shutil.which(editor):
+        _spawn(["uwsm-app", "--", editor, where])
+    elif editor in TERMINAL_EDITORS and shutil.which(editor):
+        _spawn(["omarchy-launch-tui", editor] + ([f"+{line}"] if line else [])
+               + ["--", str(path)])
+    else:
+        _spawn(["omarchy-launch-editor", str(path)])
+    return f"opened {path.name}" + (f" at line {line}" if line else "") + f" in {editor}"
+
+
+def _positive(value) -> int | None:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n >= 1 else None
+
+
+def _git(folder: Path, *args: str) -> str:
+    return _run(["git", "-C", str(folder), *args])
+
+
+def _show_changes(args: dict) -> str:
+    folder = _real_file(args.get("folder"), "folder")
+    if not folder.is_dir():
+        raise ToolError(f"{folder} is not a folder")
+    try:
+        top = Path(_git(folder, "rev-parse", "--show-toplevel").strip())
+    except ToolError:
+        raise ToolError(f"{folder} is not in a git repository")
+    changed = [l for l in _git(top, "diff", "--name-only", "HEAD", "--").splitlines() if l]
+    if args.get("path"):
+        want = _real_file(args["path"])
+        try:
+            rel = str(want.relative_to(top))
+        except ValueError:
+            raise ToolError(f"{want} is not inside {top}")
+        if rel not in changed:
+            return f"{rel} has no changes since the last commit"
+        changed = [rel]
+    if not changed:
+        return "nothing has changed since the last commit"
+    editor = default_editor()
+    if editor not in VSCODE_LIKE or not shutil.which(editor):
+        stat = _git(top, "diff", "--stat", "HEAD", "--").strip()
+        return (f"diffs open only in a VS Code-style editor (yours is {editor}); "
+                f"changed since the last commit:\n{stat}")[:4000]
+    from paths import RUNTIME_DIR
+    base_dir = RUNTIME_DIR / "diffs"
+    base_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(base_dir, 0o700)
+    opened = []
+    for rel in changed[:MAX_DIFFS]:
+        current = top / rel
+        try:
+            before = subprocess.run(["git", "-C", str(top), "show", f"HEAD:{rel}"],
+                                    capture_output=True, timeout=CMD_TIMEOUT_S).stdout
+        except (OSError, subprocess.SubprocessError):
+            before = b""
+        # The last commit's copy, in the private runtime directory: tmpfs,
+        # 0700, gone at logout. Named so the editor's tab says what it is.
+        tag = hashlib.sha256(f"{top}\0{rel}".encode()).hexdigest()[:10]
+        base = base_dir / f"{tag}-HEAD-{Path(rel).name}"
+        fd = os.open(base, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(before)
+        target = current if current.exists() else Path(os.devnull)
+        _spawn(["uwsm-app", "--", editor, "--diff", str(base), str(target)]
+               if shutil.which("uwsm-app") else [editor, "--diff", str(base), str(target)])
+        opened.append(rel)
+    more = len(changed) - len(opened)
+    return ("opened diffs of " + ", ".join(opened)
+            + (f" ({more} more changed; ask for one by path)" if more > 0 else ""))
 
 
 _MPRIS = "org.mpris.MediaPlayer2"

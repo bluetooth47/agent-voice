@@ -223,6 +223,8 @@ class ClaudeCode(Adapter):
         #: omarchySkill. Both are read when the process starts.
         self.desktop_tools = False
         self.skill_dir: str | None = None
+        #: Claude in Chrome (plan 12d), from browserTools.
+        self.browser_tools = False
         #: Applied only when the model takes it: see efforts().
         self.effort = effort
         self.spoken = spoken
@@ -253,7 +255,7 @@ class ClaudeCode(Adapter):
         _LIVE.add(self)
 
     @classmethod
-    def _hook_settings(cls, named: str = "") -> str:
+    def _hook_settings(cls, named: str = "", matcher: str = "") -> str:
         """A PreToolUse hook, passed inline as JSON.
 
         `--settings` takes a JSON string and loads it *in addition to* the
@@ -277,7 +279,7 @@ class ClaudeCode(Adapter):
             parts.append(named)
         command = " ".join(shlex.quote(part) for part in parts)
         return json.dumps({"hooks": {"PreToolUse": [{
-            "matcher": GUARDED_TOOLS,
+            "matcher": matcher or GUARDED_TOOLS,
             # ".*" -- every tool, with permission_hook.py deciding which ones
             # are free. A matcher that named the dangerous tools left every
             # other one outside the permission system altogether: `mcp__*`
@@ -309,6 +311,10 @@ class ClaudeCode(Adapter):
             "--include-partial-messages",
             "--verbose",                      # stream-json requires it
             "--permission-mode", self.permission_mode,
+            # Print mode leaves Claude in Chrome off even when it is the
+            # default in the user's own settings, so it is asked for or
+            # refused outright, from browserTools (plan 12d).
+            "--chrome" if self.browser_tools else "--no-chrome",
         ]
         head = self.preamble()
         if head == SPOKEN_STYLE:
@@ -319,6 +325,12 @@ class ClaudeCode(Adapter):
             argv += ["--append-system-prompt-file", prompt_file(head)]
         if self.ask_permission:
             argv += ["--settings", self._hook_settings(self.named)]
+        elif self.browser_tools:
+            # Trusted, but a click in a signed-in browser can still buy or
+            # post, and that is asked about at every level: a hook on the
+            # browser's tools alone, so nothing else is slowed.
+            from permission_hook import BROWSER_MATCHER
+            argv += ["--settings", self._hook_settings(self.named, BROWSER_MATCHER)]
         if self.desktop_tools:
             # Agent Voice's desktop tools (plan 12a), as this agent: the
             # server files a screenshot question under the same id the hook

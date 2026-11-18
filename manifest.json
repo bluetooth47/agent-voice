@@ -83,6 +83,7 @@
       "endpointTimeoutS": 0,
       "endpointHistoryTurns": 8,
       "desktopTools": false,
+      "browserTools": false,
       "omarchySkill": true,
       "bargeIn": false,
       "bargeOnHeadset": true,
@@ -585,6 +586,13 @@
         "label": "Desktop tools",
         "defaultValue": false,
         "description": "Give Claude Code agents tools for the desktop: open apps, move and close windows, workspaces, media and volume, notifications, the clipboard, a screenshot, lock and suspend. Each goes through the agent's permission level; a screenshot is asked about every time."
+      },
+      {
+        "key": "browserTools",
+        "type": "bool",
+        "label": "Browser",
+        "defaultValue": false,
+        "description": "Let Claude Code agents use Claude in Chrome: your real browser, signed in as you. Anything that may send, buy or post is asked about at every level, out loud and on screen."
       },
       {
         "key": "omarchySkill",

@@ -2345,6 +2345,44 @@ class Daemon:
         self.reconcile_crew()
         print(f"  {CYA}knobs updated{OFF}")
 
+    def announce_permission(self, p: Persona, tail_ms: int) -> bool:
+        """Say a pending question out loud, once, if the hook marked it to be
+        and it is this agent's. True if something was said.
+
+        Only ever a fixed sentence and the action's own summary -- never the
+        tool's input, which for a typed action is the text being typed."""
+        from permission_hook import PENDING
+        said = self.__dict__.setdefault("_announced", set())
+        try:
+            requests = sorted(PENDING.glob("*.request"))
+        except OSError:
+            return False
+        for path in requests:
+            if path.stem in said:
+                continue
+            try:
+                req = json.loads(path.read_text())
+            except (OSError, ValueError):
+                continue
+            if not isinstance(req, dict) or req.get("announce") is not True:
+                continue
+            if str(req.get("who") or "") != (p.id or ""):
+                continue
+            said.add(path.stem)
+            summary = ""
+            inp = req.get("input")
+            if isinstance(inp, dict):
+                summary = " ".join(str(inp.get("action_summary") or "").split())[:160]
+            who = p.label or req.get("label") or "The agent"
+            line = (f"{who} is asking first: {summary.rstrip('.')}. Answer on screen."
+                    if summary else
+                    f"{who} is asking first before it acts in your browser. "
+                    f"Answer on screen.")
+            print(f"  {CYA}browser question said out loud{OFF}", flush=True)
+            self.speak(line, tail_ms)
+            return True
+        return False
+
     def reconcile_extras(self) -> None:
         """Desktop tools and the Omarchy skill, on every idle agent (plan 12a,
         12b). Outside the reload guard: the skill is a file, rebuilt when
@@ -2384,6 +2422,10 @@ class Daemon:
             want = self.cfg.get_bool("desktopTools")
             if agent.desktop_tools != want:
                 agent.desktop_tools, changed = want, True
+        if hasattr(agent, "browser_tools"):
+            want = self.cfg.get_bool("browserTools")
+            if agent.browser_tools != want:
+                agent.browser_tools, changed = want, True
         if hasattr(agent, "skill_dir"):
             want = omarchy_skill.plugin_dir() if skill_on else None
             if agent.skill_dir != want:
@@ -3056,10 +3098,19 @@ class Daemon:
         if level != "off" and self.speaker:
             narr = narration.Narrator(level, start=t0,
                                       silence_s=self.cfg.narration_silence_s())
+        # A browser question is said out loud (plan 12d). The agent's stream
+        # is silent while the hook waits for an answer, so the same quiet
+        # ticks progress talk uses are where it is said, on this turn's own
+        # thread and floor.
+        announcing = bool(self.speaker and getattr(self.agent, "browser_tools", False))
 
         def tap(stream):
             nonlocal ttft, error
             for chunk in stream:
+                if chunk is TICK and announcing:
+                    self.announce_permission(persona, tail_ms)
+                if narr is None and chunk is TICK:
+                    continue
                 if narr is not None:
                     self._narration_event(narr, chunk)
                     if chunk is TICK or chunk.activity or chunk.tool_done:
@@ -3085,7 +3136,7 @@ class Daemon:
         try:
             with self._watching_session(), self._hearing_wake():
                 stream = self.agent.send(prompt, self.session_id)
-                if narr is not None:
+                if narr is not None or announcing:
                     ticker = Ticker(stream, on_abandon=getattr(self.agent, "cancel", None))
                     stream = ticker
                 for sentence in sentences(tap(stream)):

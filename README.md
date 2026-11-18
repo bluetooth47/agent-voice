@@ -455,6 +455,23 @@ or reading the clipboard, is asked about below Trusted; a screenshot is
 asked about every time, at every level. Locking and suspending work only
 when the request you just made says so.
 
+With desktop tools on, agents can also open a file in your editor at a
+line (VS Code-style editors take `--goto`; terminal editors get `+line`),
+and open a side-by-side diff of what changed in a git folder since the last
+commit. Diffs need a VS Code-style editor. On Hyprland with a Lua config
+(Omarchy 4.5), window commands are sent in Lua, with the old form as a
+fallback.
+
+**Browser** (off by default) gives Claude Code agents Claude in Chrome, which
+is your own browser, signed in as you. Reading pages follows the agent's
+level. A click, key, typed text or form fill whose own summary says it
+sends, buys, posts, books, deletes or the like is asked about at every
+level, Trusted and "allow all in this chat" included. So is running code
+in a page, uploading a file, or a click that does not say what it does.
+The question is said out loud ("Theo is asking first: places the order.
+Answer on screen.") as well as shown. A trusted agent with the browser
+gets a hook on the browser's tools only, so nothing else is slowed.
+
 **Omarchy skill** (on) tells agents the exact `omarchy` commands this
 machine has, and what each keybinding does. It is built at install from
 `omarchy commands --json` and `hyprctl binds -j`, and built again when
