@@ -46,6 +46,14 @@
       "owwThresholdPct": 90,
       "sherpaThresholdPct": 15,
       "wakeCrossCheck": true,
+      "shortNameBoostPct": 150,
+      "crossCheckMinMs": 300,
+      "crossCheckMaxMs": 2600,
+      "wakeAlsoSounds": {
+        "theo": [
+          "TH IY1 AH0"
+        ]
+      },
       "conversationMode": true,
       "followUpMs": 7000,
       "livePartials": "auto",
@@ -290,6 +298,36 @@
         "label": "Second check for short names",
         "defaultValue": true,
         "description": "When sherpa-onnx lets a short burst of speech pass, Vosk and Whisper both listen to it, and it wakes if both hear the same name. Caught short names like Theo the spotter missed half the time, with no extra false wakes on the test clips (FINDINGS §24). Keeps the Vosk model loaded (about 114MB)."
+      },
+      {
+        "key": "shortNameBoostPct",
+        "type": "integer",
+        "label": "Short-name boost (%)",
+        "min": 50,
+        "max": 300,
+        "step": 10,
+        "defaultValue": 150,
+        "description": "sherpa-onnx: how hard to listen for names of three sounds or fewer, such as Theo. 150 caught \"theo\" 8/30 against 5/30 at 50; 300 let \"Thank you\" and \"Rodeo\" wake it (synthesized clips)."
+      },
+      {
+        "key": "crossCheckMinMs",
+        "type": "integer",
+        "label": "Second check: shortest burst (ms)",
+        "min": 100,
+        "max": 1000,
+        "step": 50,
+        "defaultValue": 300,
+        "description": "A burst of speech shorter than this is a click or a breath, and the second check ignores it."
+      },
+      {
+        "key": "crossCheckMaxMs",
+        "type": "integer",
+        "label": "Second check: longest burst (ms)",
+        "min": 1000,
+        "max": 5000,
+        "step": 100,
+        "defaultValue": 2600,
+        "description": "Longer than this is a sentence, and a name inside one is someone talking about the agent rather than to it."
       },
       {
         "key": "conversationMode",

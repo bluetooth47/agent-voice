@@ -18,6 +18,52 @@ Column {
 
   required property var s
 
+  // --- the Advanced wake settings ------------------------------------------
+  // The words "also sounds like" can be set for: every word of the main
+  // phrase and of each agent switched on, once each.
+  readonly property var wakeWords: {
+    var seen = {}, out = []
+    function add(name, who) {
+      var ws = String(name || "").toLowerCase().split(" ")
+      for (var i = 0; i < ws.length; i++) {
+        var w = ws[i]
+        if (!/^[a-z]+$/.test(w) || seen[w]) continue
+        seen[w] = true
+        out.push({ word: w, who: who })
+      }
+    }
+    add(s.activePhrase, "main")
+    for (var i = 0; i < s.voiceAgents.length; i++) {
+      var a = s.voiceAgents[i] || {}
+      if (a.enabled !== false) add(a.name, String(a.name || ""))
+    }
+    return out
+  }
+  function alsoSounds() {
+    var v = s.setting("wakeAlsoSounds", {})
+    return v && typeof v === "object" && !Array.isArray(v) ? v : ({})
+  }
+  function alsoText(word) {
+    var list = alsoSounds()[word]
+    return Array.isArray(list) ? list.join(", ") : ""
+  }
+  function alsoDefault(word) {
+    var d = s.defaults.wakeAlsoSounds || {}
+    return Array.isArray(d[word]) ? d[word].join(", ") : ""
+  }
+  // Comma-separated in the box; a list per word in the setting. Lower case
+  // is words, capitals are phones: that is how the daemon tells them apart.
+  function setAlso(word, text) {
+    var all = {}, cur = alsoSounds()
+    for (var k in cur) all[k] = cur[k]
+    var parts = String(text).split(",").map(function(t) { return t.trim().replace(/\s+/g, " ") })
+                                       .filter(function(t) { return t !== "" })
+    if (parts.length === 0) all[word] = []
+    else all[word] = parts.slice(0, 8)
+    s.put("wakeAlsoSounds", all)
+  }
+  property bool advancedOpen: false
+
   spacing: Style.space(18)
 
   PageHeader {
@@ -128,73 +174,194 @@ Column {
       }
     }
 
-    KnobRow {
-      width: parent.width
-      visible: page.s.owwLive
-      foreground: page.s.foreground; fontFamily: page.s.fontFamily
-      label: "Detection threshold"
-      unit: "%"
-      description: "Higher rejects more near misses; lower wakes more easily."
-      help: "Measured on a 2014 MacBook Pro: the real phrase peaks near 99 and a " +
-            "phonetically similar phrase near 90, so 90 rejects the near miss and " +
-            "still fires reliably."
-      value: page.s.setting("owwThresholdPct", 90)
-      defaultValue: page.s.defaults.owwThresholdPct !== undefined ? page.s.defaults.owwThresholdPct : NaN
-      changed: page.s.changed("owwThresholdPct")
-      minimum: 10; maximum: 99; stepSize: 1
-      onCommitted: function(v) { page.s.put("owwThresholdPct", v) }
-      onReset: page.s.resetKey("owwThresholdPct")
-    }
+  }
 
-    // sherpa-onnx shares Vosk's phrase above -- both take it as text -- but
-    // not its confidence bar: it has a keyword threshold of its own.
-    KnobRow {
-      width: parent.width
-      visible: page.s.sherpaLive
-      foreground: page.s.foreground; fontFamily: page.s.fontFamily
-      label: "Detection threshold"
-      unit: "%"
-      description: "Higher rejects more sound-alikes; lower wakes more easily."
-      help: "Measured on synthesized speech: anywhere from 15 to 35 caught the same " +
-            "wakes, and higher mostly cut sound-alikes such as \"Sarong\" for \"Sarah\". " +
-            "At 50 it missed about half the real ones."
-      value: page.s.setting("sherpaThresholdPct", 15)
-      defaultValue: page.s.defaults.sherpaThresholdPct !== undefined ? page.s.defaults.sherpaThresholdPct : NaN
-      changed: page.s.changed("sherpaThresholdPct")
-      minimum: 10; maximum: 60; stepSize: 5
-      onCommitted: function(v) { page.s.put("sherpaThresholdPct", v) }
-      onReset: page.s.resetKey("sherpaThresholdPct")
-    }
+  // Folded: what was tuned by hand to get short names waking, for someone
+  // who wants to tune it again. The thresholds live here too.
+  SettingsGroup {
+    width: parent.width
+    title: "ADVANCED"
+    foreground: page.s.foreground
+    fontFamily: page.s.fontFamily
 
-    ToggleRow {
+    SettingRow {
       width: parent.width
-      visible: page.s.sherpaLive
-      label: "Second check for short names"
-      hint: "If the spotter misses a short burst, Vosk and Whisper both listen, and it wakes when both hear the same name."
-      checked: page.s.setting("wakeCrossCheck", true) === true
-      changed: page.s.changed("wakeCrossCheck")
+      label: "Wake word tuning"
+      hint: "Thresholds, the second check, and how short names are listened for. Each has a reset."
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      onToggled: page.s.put("wakeCrossCheck", !checked)
-      onReset: page.s.resetKey("wakeCrossCheck")
+      Button {
+        text: page.advancedOpen ? "Hide" : "Show"
+        bordered: true
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onClicked: page.advancedOpen = !page.advancedOpen
+      }
     }
 
-    KnobRow {
+    Column {
       width: parent.width
-      visible: !page.s.owwLive && !page.s.sherpaLive
-      foreground: page.s.foreground; fontFamily: page.s.fontFamily
-      label: "Grammar confidence"
-      unit: "%"
-      description: "How sure it must be that it heard the phrase."
-      help: "Weak against phonetic neighbours by nature: a grammar must pick between " +
-            "the phrase and anything-else, so \"hey cloud\" scores as high as \"hey " +
-            "claude\". Switch engines if a phone keeps waking it."
-      value: page.s.setting("wakeConfidencePct", 70)
-      defaultValue: page.s.defaults.wakeConfidencePct !== undefined ? page.s.defaults.wakeConfidencePct : NaN
-      changed: page.s.changed("wakeConfidencePct")
-      minimum: 0; maximum: 100; stepSize: 5
-      onCommitted: function(v) { page.s.put("wakeConfidencePct", v) }
-      onReset: page.s.resetKey("wakeConfidencePct")
+      visible: page.advancedOpen
+      spacing: Style.space(14)
+
+      KnobRow {
+        width: parent.width
+        visible: page.s.owwLive
+        foreground: page.s.foreground; fontFamily: page.s.fontFamily
+        label: "Detection threshold"
+        unit: "%"
+        description: "Higher rejects more near misses; lower wakes more easily."
+        help: "Measured on a 2014 MacBook Pro: the real phrase peaks near 99 and a " +
+              "phonetically similar phrase near 90, so 90 rejects the near miss and " +
+              "still fires reliably."
+        value: page.s.setting("owwThresholdPct", 90)
+        defaultValue: page.s.defaults.owwThresholdPct !== undefined ? page.s.defaults.owwThresholdPct : NaN
+        changed: page.s.changed("owwThresholdPct")
+        minimum: 10; maximum: 99; stepSize: 1
+        onCommitted: function(v) { page.s.put("owwThresholdPct", v) }
+        onReset: page.s.resetKey("owwThresholdPct")
+      }
+
+      // sherpa-onnx shares Vosk's phrase above -- both take it as text -- but
+      // not its confidence bar: it has a keyword threshold of its own.
+      KnobRow {
+        width: parent.width
+        visible: page.s.sherpaLive
+        foreground: page.s.foreground; fontFamily: page.s.fontFamily
+        label: "Detection threshold"
+        unit: "%"
+        description: "Higher rejects more sound-alikes; lower wakes more easily."
+        help: "Measured on synthesized speech: anywhere from 15 to 35 caught the same " +
+              "wakes, and higher mostly cut sound-alikes such as \"Sarong\" for \"Sarah\". " +
+              "At 50 it missed about half the real ones."
+        value: page.s.setting("sherpaThresholdPct", 15)
+        defaultValue: page.s.defaults.sherpaThresholdPct !== undefined ? page.s.defaults.sherpaThresholdPct : NaN
+        changed: page.s.changed("sherpaThresholdPct")
+        minimum: 10; maximum: 60; stepSize: 5
+        onCommitted: function(v) { page.s.put("sherpaThresholdPct", v) }
+        onReset: page.s.resetKey("sherpaThresholdPct")
+      }
+
+      ToggleRow {
+        width: parent.width
+        visible: page.s.sherpaLive
+        label: "Second check for short names"
+        hint: "If the spotter misses a short burst, Vosk and Whisper both listen, and it wakes when both hear the same name."
+        checked: page.s.setting("wakeCrossCheck", true) === true
+        changed: page.s.changed("wakeCrossCheck")
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onToggled: page.s.put("wakeCrossCheck", !checked)
+        onReset: page.s.resetKey("wakeCrossCheck")
+      }
+
+      KnobRow {
+        width: parent.width
+        visible: !page.s.owwLive && !page.s.sherpaLive
+        foreground: page.s.foreground; fontFamily: page.s.fontFamily
+        label: "Grammar confidence"
+        unit: "%"
+        description: "How sure it must be that it heard the phrase."
+        help: "Weak against phonetic neighbours by nature: a grammar must pick between " +
+              "the phrase and anything-else, so \"hey cloud\" scores as high as \"hey " +
+              "claude\". Switch engines if a phone keeps waking it."
+        value: page.s.setting("wakeConfidencePct", 70)
+        defaultValue: page.s.defaults.wakeConfidencePct !== undefined ? page.s.defaults.wakeConfidencePct : NaN
+        changed: page.s.changed("wakeConfidencePct")
+        minimum: 0; maximum: 100; stepSize: 5
+        onCommitted: function(v) { page.s.put("wakeConfidencePct", v) }
+        onReset: page.s.resetKey("wakeConfidencePct")
+      }
+
+      KnobRow {
+        width: parent.width
+        visible: page.s.sherpaLive
+        foreground: page.s.foreground; fontFamily: page.s.fontFamily
+        label: "Short-name boost"
+        unit: "%"
+        description: "How hard sherpa-onnx listens for names of three sounds or fewer, such as Theo."
+        help: "Measured for \"theo\" on synthesized clips: 50 caught 5/30, 150 caught 8/30 " +
+              "with no false wakes, and 300 caught 4/30 while \"Thank you\" and \"Rodeo\" woke it."
+        value: page.s.setting("shortNameBoostPct", 150)
+        defaultValue: page.s.defaults.shortNameBoostPct !== undefined ? page.s.defaults.shortNameBoostPct : NaN
+        changed: page.s.changed("shortNameBoostPct")
+        minimum: 50; maximum: 300; stepSize: 10
+        onCommitted: function(v) { page.s.put("shortNameBoostPct", v) }
+        onReset: page.s.resetKey("shortNameBoostPct")
+      }
+
+      KnobRow {
+        width: parent.width
+        visible: page.s.sherpaLive && page.s.setting("wakeCrossCheck", true) === true
+        foreground: page.s.foreground; fontFamily: page.s.fontFamily
+        label: "Second check: shortest burst"
+        unit: " ms"
+        description: "Shorter bursts are clicks or breaths, and the second check skips them."
+        value: page.s.setting("crossCheckMinMs", 300)
+        defaultValue: page.s.defaults.crossCheckMinMs !== undefined ? page.s.defaults.crossCheckMinMs : NaN
+        changed: page.s.changed("crossCheckMinMs")
+        minimum: 100; maximum: 1000; stepSize: 50
+        onCommitted: function(v) { page.s.put("crossCheckMinMs", v) }
+        onReset: page.s.resetKey("crossCheckMinMs")
+      }
+
+      KnobRow {
+        width: parent.width
+        visible: page.s.sherpaLive && page.s.setting("wakeCrossCheck", true) === true
+        foreground: page.s.foreground; fontFamily: page.s.fontFamily
+        label: "Second check: longest burst"
+        unit: " ms"
+        description: "Longer is a sentence: a name inside one is someone talking about the agent, not to it."
+        help: "Each check costs about a second of Whisper, so a wider window means more of them."
+        value: page.s.setting("crossCheckMaxMs", 2600)
+        defaultValue: page.s.defaults.crossCheckMaxMs !== undefined ? page.s.defaults.crossCheckMaxMs : NaN
+        changed: page.s.changed("crossCheckMaxMs")
+        minimum: 1000; maximum: 5000; stepSize: 100
+        onCommitted: function(v) { page.s.put("crossCheckMaxMs", v) }
+        onReset: page.s.resetKey("crossCheckMaxMs")
+      }
+
+      Text {
+        width: parent.width
+        visible: page.s.sherpaLive
+        wrapMode: Text.WordWrap
+        text: "ALSO SOUNDS LIKE — other ways each name gets said, separated by commas. " +
+              "Lower case is words it knows (\"thea\"); capitals are sounds written out " +
+              "(\"TH IY1 AH0\"). One that can't be used is skipped, and the journal says why."
+        textFormat: Text.PlainText
+        color: page.s.dim
+        font.family: page.s.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+
+      Repeater {
+        model: page.s.sherpaLive ? page.wakeWords.length : 0
+        delegate: SettingRow {
+          id: alsoRow
+          required property int index
+          readonly property var entry: page.wakeWords[alsoRow.index] || ({})
+          readonly property string word: String(alsoRow.entry.word || "")
+          width: page.width
+          stacked: true
+          label: "“" + alsoRow.word + "”" + (alsoRow.entry.who === "main" ? "  (main agent)" : "")
+          changed: page.alsoText(alsoRow.word) !== page.alsoDefault(alsoRow.word)
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          onReset: {
+            var d = page.alsoDefault(alsoRow.word)
+            page.setAlso(alsoRow.word, d)
+          }
+          TextField {
+            text: page.alsoText(alsoRow.word)
+            placeholderText: "nothing extra"
+            foreground: page.s.foreground
+            font.family: page.s.fontFamily
+            onEditingFinished: {
+              if (text.trim() !== page.alsoText(alsoRow.word)) page.setAlso(alsoRow.word, text)
+            }
+          }
+        }
+      }
     }
   }
 

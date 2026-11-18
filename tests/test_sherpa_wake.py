@@ -162,9 +162,10 @@ class FakeSherpa:
     def knows(self, word):
         return word.lower() in {"hey", "computer", "sarah", "jarvis"}
 
-    def listen_for(self, phrases, threshold):
+    def listen_for(self, phrases, threshold, also=None, short_boost=None):
         self.phrases, self.threshold = list(phrases), threshold
         self.streams.append((tuple(phrases), threshold))
+        self.tuning = (also, short_boost)
 
     def feed(self, pcm):
         self.fed += 1
@@ -185,6 +186,10 @@ class Cfg(dict):
 
     def agents(self):
         return [{"name": n} for n in self.get("names", [])]
+
+    def wake_tuning(self):
+        from runtime import Config
+        return Config.wake_tuning(self)
 
 
 def _pipe(monkeypatch, tmp_path, **cfg):
@@ -393,3 +398,103 @@ def test_the_model_finder_wants_every_file(tmp_path, monkeypatch):
               "joiner-epoch-13-avg-2-chunk-16-left-64.onnx"):
         (d / n).write_text("")
     assert paths.sherpa_model() == d
+
+
+# --- the Advanced wake settings (plan item 9) -------------------------------
+
+def test_boost_and_also_sounds_change_the_stream_not_the_model(monkeypatch, tmp_path):
+    pipe, cfg = _pipe(monkeypatch, tmp_path)
+    pipe.apply(cfg)
+    assert pipe._sherpa.tuning == ({"theo": ["TH IY1 AH0"]}, 1.5), \
+        "the shipped default is what ALT_PHONES and SHORT_BOOST were"
+    cfg["shortNameBoostPct"] = 200
+    pipe.apply(cfg)
+    assert pipe._sherpa.tuning[1] == 2.0
+    cfg["wakeAlsoSounds"] = {"sarah": ["sara", "S AA1 R AH0"]}
+    pipe.apply(cfg)
+    assert pipe._sherpa.tuning[0] == {"sarah": ["sara", "S AA1 R AH0"]}
+    assert len(pipe._sherpa.streams) == 3
+    assert FakeSherpa.built == 1, "a tuning change reloaded the model"
+    pipe.apply(cfg)
+    assert len(pipe._sherpa.streams) == 3, "no change, but a new stream"
+
+
+def test_the_burst_window_reaches_the_cutter(monkeypatch, tmp_path):
+    pipe, cfg = _pipe(monkeypatch, tmp_path, crossCheckMinMs=500,
+                      crossCheckMaxMs=1800)
+    pipe.apply(cfg)
+    cutter = pipe._burst_cutter()
+    assert (cutter.min_ms, cutter.max_ms) == (500, 1800)
+
+
+def test_also_sounds_lines_carry_the_names_tag_and_the_boost(model):
+    import wake_listen
+    lex = wake_listen.sherpa_lexicon(model, ["sarah", "hey"])
+    text = wake_listen.sherpa_keywords(
+        ["sarah"], lex, 0.2, alts={"sarah": [["S", "AA1", "R", "AH0"],
+                                             ["S", "EH1", "R", "AH0"]]},
+        short_boost=2.0)
+    # The duplicate of the dictionary reading is dropped; the new one wakes
+    # the same agent.
+    assert text.splitlines() == [
+        f"S EH1 R AH0 :{wake_listen.SHERPA_BOOST} #0.20 @sarah",
+        f"S AA1 R AH0 :{wake_listen.SHERPA_BOOST} #0.20 @sarah",
+    ]
+    short = wake_listen.sherpa_keywords(["hey"], lex, 0.2, alts={}, short_boost=2.0)
+    assert short == "HH EY1 :2.0 #0.20 @hey", "a short phrase takes the boost given"
+
+
+def test_alternatives_are_resolved_and_bad_ones_skipped(model):
+    import wake_listen
+    (model / "tokens.txt").write_text(
+        "\n".join(f"{t} {i}" for i, t in enumerate(
+            ["TH", "IY1", "AH0", "OW0", "S", "EH1", "R", "HH", "EY1"])) + "\n")
+    spot = object.__new__(wake_listen.SherpaWake)
+    spot.model_dir, spot._lexicon, spot._tokens, spot.unusable = model, {}, None, {}
+    got = spot.alternatives(["theo", "sarah"], {
+        "theo": ["TH IY1 AH0", "TH IY1 XX9"],
+        "sarah": ["hey sarah", "ziggy"],
+        "nobody": ["TH"]})
+    assert got == {"theo": [["TH", "IY1", "AH0"]],
+                   "sarah": [["HH", "EY1", "S", "EH1", "R", "AH0"]]}
+    assert set(spot.unusable) == {"theo: TH IY1 XX9", "sarah: ziggy"}
+
+
+@pytest.mark.parametrize("raw, want", [
+    ({"theo": ["thea", "TH IY1 AH0"]}, {"theo": ["thea", "TH IY1 AH0"]}),
+    ({"Theo": ["  thea  "]}, {"theo": ["thea"]}),
+    ({"theo": ["Thea", "rm -rf", "TH;", "a b c d", 7, "thea", "thea"]}, {"theo": ["thea"]}),
+    ({"theo": []}, {}),
+    ({"two words": ["x"]}, {}),
+    ("theo", {}),
+    (None, {}),
+    ({"theo": "thea"}, {}),
+])
+def test_also_sounds_is_cleaned(raw, want):
+    from runtime import Config
+    cfg = Config.__new__(Config)
+    cfg._values = {"wakeAlsoSounds": raw}
+    assert cfg.wake_tuning()["also_sounds"] == want
+
+
+@pytest.mark.parametrize("values, want", [
+    ({}, (1.5, 300, 2600)),
+    ({"shortNameBoostPct": 9999, "crossCheckMinMs": 1, "crossCheckMaxMs": 99999}, (3.0, 100, 5000)),
+    ({"shortNameBoostPct": "abc"}, (1.5, 300, 2600)),
+    # A window that would close keeps the minimum under the maximum.
+    ({"crossCheckMinMs": 1000, "crossCheckMaxMs": 1000}, (1.5, 300, 1000)),
+])
+def test_the_numbers_are_clamped(values, want):
+    from runtime import Config
+    cfg = Config.__new__(Config)
+    cfg._values = dict(values)
+    t = cfg.wake_tuning()
+    assert (t["short_boost"], t["burst_min_ms"], t["burst_max_ms"]) == want
+
+
+def test_the_advanced_settings_are_drawn_on_the_listening_page():
+    text = page("Listening")
+    for key in ("shortNameBoostPct", "crossCheckMinMs", "crossCheckMaxMs",
+                "wakeAlsoSounds", "sherpaThresholdPct", "wakeCrossCheck"):
+        assert f'"{key}"' in text, key
+    assert 'title: "ADVANCED"' in text

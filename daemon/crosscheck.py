@@ -136,8 +136,13 @@ class Bursts:
     the preroll and the quiet tail, which Vosk needs to finish a word.
     """
 
-    def __init__(self, frame_ms: int) -> None:
+    def __init__(self, frame_ms: int, min_ms: int = MIN_BURST_MS,
+                 max_ms: int = MAX_BURST_MS) -> None:
         self.frame_ms = frame_ms
+        #: The window, from crossCheckMinMs / crossCheckMaxMs. Plain
+        #: attributes, so a new setting applies to the next burst.
+        self.min_ms = min_ms
+        self.max_ms = max_ms
         self._pre: list[bytes] = []
         self._buf: list[bytes] = []
         self._loud = 0
@@ -159,9 +164,9 @@ class Bursts:
             self._quiet = 0
             # A burst that has run past the limit is a sentence; drop it now
             # rather than buffer a monologue.
-            if self._loud * self.frame_ms > MAX_BURST_MS:
+            if self._loud * self.frame_ms > self.max_ms:
                 self._buf = self._buf[-1:]
-                self._loud = MAX_BURST_MS // self.frame_ms + 1
+                self._loud = self.max_ms // self.frame_ms + 1
             return None
         self._quiet += 1
         if self._quiet < QUIET_END_FRAMES:
@@ -169,6 +174,6 @@ class Bursts:
         speech_ms = self._loud * self.frame_ms
         audio = b"".join(self._buf)
         self.clear()
-        if MIN_BURST_MS <= speech_ms <= MAX_BURST_MS:
+        if self.min_ms <= speech_ms <= self.max_ms:
             return audio
         return None

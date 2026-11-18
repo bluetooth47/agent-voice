@@ -91,6 +91,12 @@ def instructions_text(value) -> str:
     text = _CONTROL.sub("", value.replace("\r\n", "\n").replace("\t", " ")).strip()
     return text[:INSTRUCTIONS_MAX].rstrip()
 
+#: wakeAlsoSounds: a key is one plain word; an alternative is one to three
+#: plain words, or up to twelve ARPAbet phones in capitals.
+_ALSO_WORD = re.compile(r"[a-z]{1,32}")
+_ALSO_WORDS = re.compile(r"[a-z]{1,32}( [a-z]{1,32}){0,2}")
+_ALSO_PHONES = re.compile(r"[A-Z]{1,3}[0-2]?( [A-Z]{1,3}[0-2]?){0,11}")
+
 DEFAULTS = {
     "engine": "vosk",
     "phrase": "hey computer",
@@ -101,6 +107,14 @@ DEFAULTS = {
     "sherpaThresholdPct": 15,
     # Vosk + Whisper re-check short bursts sherpa-onnx let pass; crosscheck.py.
     "wakeCrossCheck": True,
+    # The Advanced wake settings: everything tuned by hand to get "theo"
+    # waking, each one a setting now. See Config.wake_tuning().
+    "shortNameBoostPct": 150,
+    "crossCheckMinMs": 300,
+    "crossCheckMaxMs": 2600,
+    # word -> other ways it is said, for sherpa-onnx: a word from its
+    # lexicon, or phones written out ("TH IY1 AH0"). Was ALT_PHONES.
+    "wakeAlsoSounds": {"theo": ["TH IY1 AH0"]},
     "leadInMs": 5000,
     "trailingSilenceMs": 1200,
     "quickEndMs": 800,
@@ -157,6 +171,10 @@ TOML_ALIASES = {
     "owwThresholdPct": ("wake", "oww_threshold_pct"),
     "sherpaThresholdPct": ("wake", "sherpa_threshold_pct"),
     "wakeCrossCheck": ("wake", "cross_check"),
+    "shortNameBoostPct": ("wake", "short_name_boost_pct"),
+    "crossCheckMinMs": ("wake", "cross_check_min_ms"),
+    "crossCheckMaxMs": ("wake", "cross_check_max_ms"),
+    "wakeAlsoSounds": ("wake", "also_sounds"),
     "leadInMs": ("timing", "lead_in_ms"),
     "trailingSilenceMs": ("timing", "trailing_silence_ms"),
     "quickEndMs": ("timing", "quick_end_ms"),
@@ -364,6 +382,50 @@ class Config:
             return None
         value = raw.get(agent)
         return value if isinstance(value, str) and value in EFFORT_LEVELS else None
+
+    def wake_tuning(self) -> dict:
+        """The Advanced wake settings, clamped and cleaned.
+
+        - short_boost: sherpa-onnx boost for names of three phones or fewer
+          (was SHORT_BOOST, 1.5), 0.5 to 3.0;
+        - burst_min_ms / burst_max_ms: how long a burst of speech may be for
+          the second check to look at it (was 300 and 2600). The minimum is
+          kept below the maximum, so a hand edit cannot close the window;
+        - also_sounds: {word: [alternative, ...]}. An alternative is either
+          lower-case words (one to three, looked up in the lexicon) or
+          upper-case phones ("TH IY1 AH0"). Anything else is dropped here,
+          and a phone the model has no token for is dropped when listening
+          starts. At most 16 words with 8 alternatives each.
+        """
+        def clamp(key, lo, hi):
+            return max(lo, min(hi, self.get_int(key)))
+
+        boost = clamp("shortNameBoostPct", 50, 300) / 100.0
+        lo = clamp("crossCheckMinMs", 100, 1000)
+        hi = clamp("crossCheckMaxMs", 1000, 5000)
+        if lo >= hi:
+            lo = min(DEFAULTS["crossCheckMinMs"], hi - 100)
+        raw = self["wakeAlsoSounds"]
+        also: dict[str, list[str]] = {}
+        if isinstance(raw, dict):
+            for word, alts in raw.items():
+                if len(also) >= 16:
+                    break
+                word = str(word).strip().lower()
+                if not _ALSO_WORD.fullmatch(word) or not isinstance(alts, list):
+                    continue
+                clean = []
+                for alt in alts:
+                    if not isinstance(alt, str):
+                        continue
+                    alt = " ".join(alt.split())
+                    if alt and alt not in clean and (
+                            _ALSO_WORDS.fullmatch(alt) or _ALSO_PHONES.fullmatch(alt)):
+                        clean.append(alt)
+                if clean:
+                    also[word] = clean[:8]
+        return {"short_boost": boost, "burst_min_ms": lo, "burst_max_ms": hi,
+                "also_sounds": also}
 
     def agents(self) -> list[dict]:
         """The extra agents, each woken by its own name, cleaned up.

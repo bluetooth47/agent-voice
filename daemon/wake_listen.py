@@ -228,6 +228,8 @@ EXTRA_PHONES = {
 #: Second pronunciations listened for alongside the dictionary's. A short
 #: name gets few chances to land, and the model hears "Theo" as either
 #: ending: on synthesized clips TH IY1 OW0 alone woke 8/30, both 9/30.
+#: The shipped default only: the live list is the wakeAlsoSounds setting
+#: (Config.wake_tuning), which starts out holding exactly this.
 ALT_PHONES = {
     "theo": [["TH", "IY1", "AH0"]],
 }
@@ -261,20 +263,28 @@ def sherpa_lexicon(model_dir: Path, words) -> dict[str, list[str]]:
 
 
 def sherpa_keywords(phrases, lexicon: dict[str, list[str]],
-                    threshold: float) -> str:
+                    threshold: float, alts: dict[str, list[list[str]]] | None = None,
+                    short_boost: float = SHORT_BOOST) -> str:
     """The keyword text for a stream: one line per phrase.
 
     The tag after @ is what the spotter reports. It cannot hold a space, so
-    "hey sarah" travels as hey_sarah and SherpaWake turns it back.
+    "hey sarah" travels as hey_sarah and SherpaWake turns it back. `alts`
+    holds other phone spellings per word (ALT_PHONES when not given); each
+    one is another line with the same tag, so it wakes the same agent.
     """
+    if alts is None:
+        alts = ALT_PHONES
     lines = []
     for phrase in phrases:
         spellings = [[]]
         for word in phrase.split():
-            options = [lexicon[word], *ALT_PHONES.get(word, [])]
+            options = [lexicon[word]]
+            for alt in alts.get(word, []):
+                if alt not in options:
+                    options.append(alt)
             spellings = [s + o for s in spellings for o in options]
         for phones in spellings:
-            boost = SHORT_BOOST if len(phones) <= SHORT_PHONES else SHERPA_BOOST
+            boost = short_boost if len(phones) <= SHORT_PHONES else SHERPA_BOOST
             lines.append(f"{' '.join(phones)} :{boost} #{threshold:.2f} "
                          f"@{phrase.replace(' ', '_')}")
     return "\n".join(lines)
@@ -301,6 +311,10 @@ class SherpaWake:
         self.threshold = threshold
         self.phrases: list[str] = []
         self._lexicon: dict[str, list[str]] = {}
+        self._tokens: set[str] | None = None
+        #: "also sounds like" entries the last listen_for() could not use,
+        #: each with why, so the settings can say so.
+        self.unusable: dict[str, str] = {}
         chunk = "epoch-13-avg-2-chunk-16-left-64.onnx"
         fd, kw = tempfile.mkstemp(suffix=".txt", prefix="agentvoice-kws-")
         try:
@@ -326,18 +340,59 @@ class SherpaWake:
             self._lexicon.update(sherpa_lexicon(self.model_dir, [word]))
         return word in self._lexicon
 
-    def listen_for(self, phrases: list[str], threshold: float) -> None:
+    def tokens(self) -> set[str]:
+        """The phones the model has a token for, from its tokens.txt."""
+        if self._tokens is None:
+            with open(self.model_dir / "tokens.txt", encoding="utf-8") as f:
+                self._tokens = {line.split()[0] for line in f if line.split()}
+        return self._tokens
+
+    def alternatives(self, words, also: dict[str, list[str]]) -> dict[str, list[list[str]]]:
+        """Phone spellings for each of `words` from wakeAlsoSounds.
+
+        An entry in capitals is phones and every one must be a model token;
+        one in lower case is words, and every word must be in the lexicon.
+        Anything else is left out and noted in `unusable`, never raised: a
+        typo in an advanced setting must not stop the wake word working.
+        """
+        out: dict[str, list[list[str]]] = {}
+        self.unusable = {}
+        for word in words:
+            for alt in also.get(word, []):
+                if alt.upper() == alt:
+                    phones = alt.split()
+                    bad = [p for p in phones if p not in self.tokens()]
+                    if bad:
+                        self.unusable[f"{word}: {alt}"] = f"no sound “{bad[0]}”"
+                        continue
+                else:
+                    missing = [w for w in alt.split() if not self.knows(w)]
+                    if missing:
+                        self.unusable[f"{word}: {alt}"] = f"unknown word “{missing[0]}”"
+                        continue
+                    phones = [p for w in alt.split() for p in self._lexicon[w]]
+                out.setdefault(word, []).append(phones)
+        return out
+
+    def listen_for(self, phrases: list[str], threshold: float,
+                   also: dict[str, list[str]] | None = None,
+                   short_boost: float = SHORT_BOOST) -> None:
         """Start a stream that spots exactly `phrases` at `threshold`.
 
         Cheap enough to call on any change: the model stays, only the stream
         is new. A word outside the lexicon raises ValueError naming it --
-        callers check with knows() first, so this is the backstop.
+        callers check with knows() first, so this is the backstop. `also` is
+        wakeAlsoSounds as Config.wake_tuning cleaned it; None means the
+        shipped ALT_PHONES.
         """
-        for word in {w for p in phrases for w in p.split()}:
+        words = {w for p in phrases for w in p.split()}
+        for word in words:
             if not self.knows(word):
                 raise ValueError(f"its lexicon has no word “{word}”")
         self.phrases, self.threshold = list(phrases), threshold
-        text = sherpa_keywords(self.phrases, self._lexicon, threshold)
+        alts = None if also is None else self.alternatives(sorted(words), also)
+        text = sherpa_keywords(self.phrases, self._lexicon, threshold,
+                               alts=alts, short_boost=short_boost)
         self._stream = self._spotter.create_stream(text)
 
     def reset(self) -> None:
@@ -465,6 +520,12 @@ class Pipeline:
             self._oww.threshold = cfg.get_int("owwThresholdPct") / 100.0
         self.refractory_ms = int(cfg["refractoryMs"])
         self.wake_confidence = float(cfg["wakeConfidence"])
+        # Plain numbers on the burst cutter: a new window costs nothing.
+        if hasattr(cfg, "wake_tuning"):
+            tuning = cfg.wake_tuning()
+            cutter = self._burst_cutter()
+            cutter.min_ms = tuning["burst_min_ms"]
+            cutter.max_ms = tuning["burst_max_ms"]
         # Changing the transcription model used to be a silent no-op: it was
         # built once in __init__ and never consulted again, so the setting
         # appeared to do nothing until the service restarted.
@@ -611,12 +672,22 @@ class Pipeline:
         """
         names = tuple(wanted_names(cfg))
         threshold = cfg.get_int("sherpaThresholdPct") / 100.0
-        if (names, threshold) == self._sherpa_spec:
+        tuning = cfg.wake_tuning() if hasattr(cfg, "wake_tuning") else {}
+        boost = tuning.get("short_boost", SHORT_BOOST)
+        also = tuning.get("also_sounds")
+        frozen = (tuple(sorted((k, tuple(v)) for k, v in also.items()))
+                  if also is not None else None)
+        spec = (names, threshold, boost, frozen)
+        if spec == self._sherpa_spec:
             return
         if self._sherpa_spec is None or names != self._sherpa_spec[0]:
             self._choose_names(list(names))
-        self._sherpa_spec = (names, threshold)
-        self._sherpa.listen_for([self.phrase, *self.names], threshold)
+        self._sherpa_spec = spec
+        self._sherpa.listen_for([self.phrase, *self.names], threshold,
+                                also=also, short_boost=boost)
+        for entry, why in getattr(self._sherpa, "unusable", {}).items():
+            print(f"  {YEL}also sounds like “{entry}” not used: {why}{OFF}",
+                  flush=True)
 
     def _choose_names(self, wanted: list[str]) -> None:
         """Keep the names Vosk can actually hear, and say why for the rest.

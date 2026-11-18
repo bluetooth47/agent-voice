@@ -219,3 +219,13 @@ def test_the_setting_exists_in_all_three_places():
     assert TOML_ALIASES["wakeCrossCheck"] == ("wake", "cross_check")
     assert any(e["key"] == "wakeCrossCheck" for e in manifest["schema"])
     assert 's.put("wakeCrossCheck"' in page("Listening")
+
+
+def test_the_window_is_a_setting_not_a_constant():
+    """crossCheckMinMs / crossCheckMaxMs: plain attributes, so a change
+    applies to the next burst."""
+    cut = Bursts(200, min_ms=600, max_ms=800)
+    assert _run(cut, "qLLqq") == [], "400ms is under a 600ms minimum"
+    assert len(_run(cut, "qLLLLqq")) == 1
+    cut.max_ms = 600
+    assert _run(cut, "qLLLLqq") == [], "800ms is over the new maximum"
