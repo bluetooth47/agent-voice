@@ -103,6 +103,53 @@ def _harvest_text(node: Any, depth: int = 0) -> str:
     return ""
 
 
+def _codex_home() -> Path:
+    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+
+
+_CACHE: dict = {}
+
+
+def codex_models() -> list[dict]:
+    """The models Codex itself offers, from the list it caches.
+
+    Codex fetches its model list from the server and keeps it in
+    models_cache.json, which is the only place the names that work for this
+    account are written down -- they change every few months, and a list
+    typed in here would be stale by the next release. The ones Codex hides
+    from its own picker (review models, retired ones) are left out.
+    """
+    path = _codex_home() / "models_cache.json"
+    try:
+        stamp = path.stat().st_mtime_ns
+        if _CACHE.get("stamp") == (str(path), stamp):
+            return _CACHE["models"]
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return []
+    out = []
+    for m in data.get("models") or []:
+        if not isinstance(m, dict) or not m.get("slug"):
+            continue
+        if m.get("visibility", "list") != "list":
+            continue
+        out.append(m)
+    out.sort(key=lambda m: m.get("priority", 999))
+    # Read once per change: it is 600KB, and the settings ask often.
+    _CACHE.update(stamp=(str(path), stamp), models=out)
+    return out
+
+
+def codex_default_model() -> str:
+    """The model in Codex's own config.toml, which it uses when given none."""
+    try:
+        import tomllib
+        with open(_codex_home() / "config.toml", "rb") as f:
+            return str(tomllib.load(f).get("model") or "")
+    except (OSError, ValueError):
+        return ""
+
+
 class Codex(Adapter):
     name = "codex"
     remembers = True          # resume <thread_id>, verified across two turns
@@ -110,8 +157,9 @@ class Codex(Adapter):
     # Codex's own spelling of "do not stop to ask", as used by omarchy-agent.
     def __init__(self, model: str | None = None, spoken: bool = True,
                  cwd: str | None = None, full_auto: bool | None = None,
-                 ask_permission: bool = True):
+                 ask_permission: bool = True, effort: str | None = None):
         self.model = model
+        self.effort = effort
         self.spoken = spoken
         self.cwd = cwd
         # --approve-for-me is Codex's unattended mode. Without it Codex uses
@@ -144,12 +192,39 @@ class Codex(Adapter):
             argv += ["resume", session_id]
         if self.model:
             argv += ["-m", self.model]
+        if self.effort and self.effort in self.efforts():
+            argv += ["-c", f'model_reasoning_effort="{self.effort}"']
         if self.full_auto:
             argv.append("--approve-for-me")
         # The prompt is NOT appended: it goes to stdin, because argv is world
         # readable through /proc/<pid>/cmdline. `codex exec` with no trailing
         # prompt reads one from stdin -- verified against the real CLI.
         return argv
+
+    @classmethod
+    def models(cls) -> list[dict]:
+        """Model choices for the settings: Codex's own list, best first."""
+        out = []
+        for m in codex_models():
+            name = str(m.get("display_name") or m["slug"])
+            about = str(m.get("description") or "").rstrip(".")
+            out.append({"value": m["slug"],
+                        "label": f"{name} — {about}" if about else name})
+        return out
+
+    def efforts(self) -> tuple[str, ...]:
+        """The reasoning levels the model in force takes, from Codex's list.
+
+        Its own default when none is chosen. A model the list does not know
+        gets none: a level Codex would reject is worse than no slider.
+        """
+        want = (self.model or "").strip() or codex_default_model()
+        for m in codex_models():
+            if m["slug"] == want:
+                return tuple(str(level["effort"]) for level in
+                             m.get("supported_reasoning_levels") or []
+                             if isinstance(level, dict) and level.get("effort"))
+        return ()
 
     def why_unavailable(self) -> str:
         if not installed("codex"):

@@ -137,6 +137,20 @@ def _accepts(adapter, parameter: str) -> bool:
         return False
 
 
+def model_lists() -> dict[str, list[dict]]:
+    """{program: [{value, label}, ...]} for every program that lists its
+    own models. Never raises: a list is a convenience, not a requirement."""
+    out = {}
+    for name, cls in REGISTRY.items():
+        try:
+            listed = cls.models()
+        except Exception:
+            continue
+        if listed:
+            out[name] = listed
+    return out
+
+
 def takes_model(adapter) -> bool:
     """Whether this adapter class, or instance, can be told which model."""
     return _accepts(adapter, "model")

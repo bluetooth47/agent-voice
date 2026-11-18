@@ -292,6 +292,9 @@ Item {
   property bool vGoverned: true
   property bool vVerifier: false
   property bool vTakesModel: false
+  // Model choices the daemon read from each program itself -- Codex's own
+  // list, which changes with its releases. Keyed by program.
+  property var modelLists: ({})
   // The effort levels the running agent takes with its model, lowest first,
   // as the daemon works them out. Empty means no effort control.
   property var vEfforts: []
@@ -617,7 +620,8 @@ Item {
   })
   function agentModelChoices(program, current) {
     var out = [{ label: "Default  (whatever " + (program || "the agent") + " uses on its own)", value: "" }]
-    var presets = root.modelPresets[program] || []
+    var listed = root.modelLists[program]
+    var presets = (listed && listed.length) ? listed : (root.modelPresets[program] || [])
     var known = current === ""
     for (var i = 0; i < presets.length; i++) {
       out.push(presets[i])
@@ -630,7 +634,7 @@ Item {
 
   readonly property var effortNames: ({
     "low": "Low", "medium": "Medium", "high": "High",
-    "xhigh": "Extra high", "max": "Max"
+    "xhigh": "Extra high", "max": "Max", "ultra": "Ultra"
   })
   // Segmented-choice options for an effort list: Default, then each level.
   function effortChoices(efforts) {
@@ -1177,6 +1181,7 @@ Item {
         if (d.governed !== undefined) root.vGoverned = (d.governed === true)
         if (d.verifier !== undefined) root.vVerifier = (d.verifier === true)
         if (d.takes_model !== undefined) root.vTakesModel = (d.takes_model === true)
+        if (d.model_lists && typeof d.model_lists === "object") root.modelLists = d.model_lists
         // Reset when absent rather than kept: with no agent running the
         // field is not published, and a control left over from the last one
         // would be a control that does nothing.

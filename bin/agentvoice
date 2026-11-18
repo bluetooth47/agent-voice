@@ -194,6 +194,31 @@ case "${1:-status}" in
       *) echo "usage: agentvoice wake-test start|stop|auto|auto-stop" >&2; exit 2 ;;
     esac
     ;;
+  type)
+    # Send an agent a message without speaking: no microphone, a wake word
+    # that will not fire, or a room where you would rather not talk. The text
+    # comes on stdin, never argv -- /proc/<pid>/cmdline is readable by every
+    # account on the machine.
+    #   echo "what's on my calendar" | agentvoice type [AGENT_ID] [--line]
+    # A name at the start routes it, as it does spoken: "Sora, ...".
+    agent="${2:-main}"
+    [[ $agent =~ ^[a-z0-9][a-z0-9-]{0,47}$ ]] || { echo "usage: agentvoice type [AGENT_ID] < text" >&2; exit 2; }
+    active || { echo "agentvoice is not running" >&2; exit 1; }
+    if [[ ${3:-} == --line ]]; then
+      # One line, so a caller that cannot close stdin (the panel) is not
+      # left waiting for an end of file.
+      IFS= read -r -n 32000 text || true
+    else
+      [[ -t 0 ]] && echo "type the message, then ctrl-d" >&2
+      text=$(head -c 32000)
+    fi
+    [[ -n ${text//[[:space:]]/} ]] || { echo "nothing to send" >&2; exit 2; }
+    ( umask 077
+      mkdir -p "$RUNDIR/typed"
+      name="$(date +%s%N)-$$"
+      printf '%s\n%s' "$agent" "$text" > "$RUNDIR/typed/$name.tmp" &&
+        mv -f "$RUNDIR/typed/$name.tmp" "$RUNDIR/typed/$name.msg" )
+    ;;
   talk-end)
     # The key coming back up ends the turn. Ignored by the daemon unless a
     # push-to-talk capture is actually open.
@@ -348,7 +373,7 @@ case "${1:-status}" in
     active && echo yes || echo no
     ;;
   *)
-    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|interrupt|monitor|calibrate|voice|permit|pending|history|chats|endpoint|open-mic|wake-test|status|is-active]" >&2
+    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|interrupt|monitor|calibrate|voice|permit|pending|history|chats|endpoint|open-mic|wake-test|status|is-active]" >&2
     exit 2
     ;;
 esac

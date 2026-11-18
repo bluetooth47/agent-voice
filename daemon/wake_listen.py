@@ -45,7 +45,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from adapters import (  # noqa: E402
     explain as explain_agent, load as load_adapter, omarchy_default, sentences,
-    takes_effort, takes_model,
+    model_lists, takes_effort, takes_model,
 )
 from adapters.base import Chunk, speech_safe  # noqa: E402
 from crew import (  # noqa: E402
@@ -81,6 +81,9 @@ from paths import (  # noqa: E402
 #: run-up, monitor's end-of-speech wait. CHUNK_MS exists so the next one
 #: cannot be written down by hand and be wrong.
 RATE, CHUNK = 16_000, 3200
+
+#: The longest typed message accepted, in characters.
+TYPED_MAX = 8000
 CHUNK_MS = 1000 * CHUNK // RATE     # 200
 
 #: How much of a reasoning model's thinking is kept for the conversation view.
@@ -1767,7 +1770,12 @@ class Daemon:
     #: had deliberately turned it off.
     @property
     def listening(self) -> bool:
-        return self.enabled and not self.locked and not self.yielded
+        # A typed turn is answered with the microphone switched off: typing is
+        # what you do when you cannot, or would rather not, talk. A lock and a
+        # borrowed microphone still stop it -- nothing is said to a locked
+        # room or over somebody's call.
+        typed = getattr(self._here, "typed", False)
+        return (self.enabled or typed) and not self.locked and not self.yielded
 
     def silence(self) -> None:
         """Stop talking, stop thinking, and forget what is already captured.
@@ -2195,6 +2203,9 @@ class Daemon:
             # the notches the model has.
             efforts=list(self.efforts()),
             effort=self.effort_in_force() or "",
+            # Model choices per program, for the ones that can list theirs:
+            # Codex's change with every release, so they are read from it.
+            model_lists=model_lists(),
             # The daemon has always known this and only ever said it in a log
             # line nobody reads. A verifier is the one layer that knows who is
             # talking, so whether it is in force belongs on screen.
@@ -2271,6 +2282,74 @@ class Daemon:
             return cmd
         except OSError:
             return None
+
+    def take_typed(self) -> tuple[str, str] | None:
+        """The oldest message from `agentvoice type`, as (agent id, text).
+
+        A folder of files rather than the command file: a message can be any
+        length and hold anything, and a command read by the lock poll in the
+        middle of a reply would be lost. Each file is the agent id on its
+        first line and the text after it, written privately and renamed into
+        place by the CLI, which takes the text on stdin -- argv is readable
+        by every account through /proc.
+        """
+        now = time.time()
+        if now - getattr(self, "_typed_polled", 0.0) < 0.2:
+            return None
+        self._typed_polled = now
+        folder = RUNTIME_DIR / "typed"
+        try:
+            names = sorted(e.name for e in os.scandir(folder)
+                           if e.is_file() and e.name.endswith(".msg"))
+        except OSError:
+            return None
+        for name in names:
+            path = folder / name
+            try:
+                raw = path.read_bytes()[:TYPED_MAX * 4]
+                path.unlink()
+            except OSError:
+                continue
+            head, _, body = raw.decode("utf-8", "replace").partition("\n")
+            agent_id = head.strip()
+            if agent_id and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,47}", agent_id):
+                continue
+            text = " ".join(body.split())[:TYPED_MAX]
+            if text:
+                return agent_id, text
+        return None
+
+    def handle_typed(self, agent_id: str, text: str, crew: bool) -> None:
+        """A typed message, sent the way a transcript would be."""
+        if self.locked or self.yielded:
+            print(f"  {DIM}(typed message dropped: the microphone is "
+                  f"{'locked' if self.locked else 'lent out'}){OFF}", flush=True)
+            return
+        p = self._persona_by_id("" if agent_id in ("", "main") else agent_id)
+        if p is None:
+            print(f"  {YEL}typed message for an agent that is not here{OFF}",
+                  flush=True)
+            return
+        if speech_is_logged(self.cfg.get_bool("logSpeech")):
+            print(f"  {GRN}⌨ typed{OFF}  {BLD}{safe_for_terminal(text)}{OFF}",
+                  flush=True)
+        else:
+            print(f"  {GRN}⌨ typed{OFF}", flush=True)
+        last = {**_empty_turn(), "transcript": text, "typed": True}
+        if is_full_stop(text):
+            self.full_stop()
+        elif crew:
+            self._send(p, text, last, {}, typed=True)
+        elif is_stop_command(text):
+            self.silence()
+        else:
+            with self._as(p):
+                self._here.typed = True
+                try:
+                    if not self.voice_command(self._main, text):
+                        self.answer(text, last)
+                finally:
+                    self._here.typed = False
 
     def _publish(self, **extra):
         # "locked" is its own state rather than "off": the panel should be
@@ -4025,7 +4104,7 @@ class Daemon:
         return p
 
     def _send(self, p: Persona, text: str, last: dict, clock: dict,
-              open_turn: bool = False) -> None:
+              open_turn: bool = False, typed: bool = False) -> None:
         """Route what was said and hand it to an agent.
 
         A sentence that opens with an agent's name is for that agent, from
@@ -4060,10 +4139,13 @@ class Daemon:
             # Said out loud through the echo path, rather than the transcript
             # read back, which is what a missing main agent gets.
             text = f"{p.label} cannot answer: {p.problem or 'it is not set up'}."
-        self.dispatch(p, text, last, clock)
+        if typed:
+            self.dispatch(p, text, last, clock, typed=True)
+        else:
+            self.dispatch(p, text, last, clock)
 
     def dispatch(self, p: Persona, text: str, last: dict,
-                 clock: dict | None = None) -> bool:
+                 clock: dict | None = None, typed: bool = False) -> bool:
         """Start a turn for `p` on its own thread. False if it could not.
 
         An agent already working is stopped first: one conversation cannot
@@ -4084,19 +4166,22 @@ class Daemon:
         self._last_target = p
         self._recent = None
         p.thread = threading.Thread(target=self._turn,
-                                    args=(p, text, turn, clock),
+                                    args=(p, text, turn, clock, typed),
                                     name=f"turn-{p.name or 'main'}",
                                     daemon=True)
         p.thread.start()
         return True
 
     def _turn(self, p: Persona, text: str, last: dict,
-              clock: dict | None) -> None:
+              clock: dict | None, typed: bool = False) -> None:
         self._here.persona = p
         self._here.turn = True
+        self._here.typed = typed
         try:
             self.answer(text, last, clock=clock)
-            p.follow_up = self.arm_follow_up()
+            # Not after a typed turn: whoever typed may not be in a position
+            # to talk, and a window would take the room's next sentence.
+            p.follow_up = self.arm_follow_up() and not typed
         except Exception as e:      # a broken turn must not take a thread down silently
             print(f"  {YEL}{p.label or 'agent'}: turn failed: "
                   f"{type(e).__name__}: {e}{OFF}", flush=True)
@@ -4182,6 +4267,46 @@ class Daemon:
         time.sleep(0.02)
         return None
 
+    @contextlib.contextmanager
+    def _microphone(self, sd, device, cb):
+        """The input stream, or silence in its place when there is none.
+
+        With no microphone at all the stream would not open and the daemon
+        would exit, taking typed messages and spoken replies with it. Silence
+        at the same pace keeps every part of the loop running: nothing is
+        ever heard, and `agentvoice type` still reaches the agents.
+        """
+        stream = None
+        try:
+            stream = sd.RawInputStream(samplerate=RATE, channels=1, dtype="int16",
+                                       blocksize=CHUNK, device=device, callback=cb)
+            stream.__enter__()
+        except Exception as e:
+            print(f"  {YEL}no microphone ({type(e).__name__}: {e}) — running "
+                  f"without one; typed messages still work{OFF}", flush=True)
+            stream = None
+        if stream is not None:
+            try:
+                yield
+            finally:
+                stream.__exit__(None, None, None)
+            return
+        stop = threading.Event()
+
+        def feed():
+            silence = bytes(CHUNK * 2)
+            due = time.time()
+            while not stop.is_set():
+                cb(silence, CHUNK, None, None)
+                due += CHUNK / RATE
+                stop.wait(max(0.0, due - time.time()))
+
+        threading.Thread(target=feed, name="no-microphone", daemon=True).start()
+        try:
+            yield
+        finally:
+            stop.set()
+
     def run(self, device: int | None) -> int:
         import sounddevice as sd
 
@@ -4198,8 +4323,7 @@ class Daemon:
         last = _empty_turn()
         shown_partial = ""
 
-        with sd.RawInputStream(samplerate=RATE, channels=1, dtype="int16",
-                              blocksize=CHUNK, device=device, callback=cb):
+        with self._microphone(sd, device, cb):
             phase = "wake"
             buf = b""
             cap = None
@@ -4239,6 +4363,13 @@ class Daemon:
                     continue
                 if self.apply_chat_command(cmd):
                     continue
+                if phase == "wake":
+                    # Only between captures: a message typed while somebody
+                    # is talking waits for them to finish.
+                    typed = self.take_typed()
+                    if typed is not None:
+                        self.handle_typed(*typed, crew)
+                        continue
                 if cmd == "talk" and self.listening:
                     if utt is not None:
                         utt.abandon()

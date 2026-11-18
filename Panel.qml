@@ -267,6 +267,41 @@ Panel {
   }
   Process { id: interrupt; command: ["agentvoice", "interrupt"] }
 
+  // Typed messages. The text goes over stdin, never argv: /proc/<pid>/cmdline
+  // is readable by every account on the machine. One line, ended by the
+  // newline, so the CLI does not wait for an end of file.
+  property string typeTarget: ""          // agent id; "" is the main agent
+  readonly property string typeTargetLabel: {
+    if (voice.typeTarget === "") return voice.mainLabel
+    var e = voice.crewEntry(voice.typeTarget)
+    return e && e.name ? voice.agentLabel(e) : voice.mainLabel
+  }
+  function nextTypeTarget() {
+    var ids = [""].concat(voice.crew.map(function(a) { return voice.agentId(a) }))
+    var i = ids.indexOf(voice.typeTarget)
+    voice.typeTarget = ids[(i + 1) % ids.length]
+  }
+  property var typedQueue: []
+  function sendTyped(t) {
+    voice.typedQueue = voice.typedQueue.concat([{ to: voice.typeTarget || "main", text: t }])
+    if (!typer.running) voice.sendNextTyped()
+  }
+  function sendNextTyped() {
+    if (voice.typedQueue.length === 0) return
+    var next = voice.typedQueue[0]
+    voice.typedQueue = voice.typedQueue.slice(1)
+    typer.pending = next.text.replace(/[\r\n]+/g, " ")
+    typer.command = ["agentvoice", "type", next.to, "--line"]
+    typer.running = true
+  }
+  Process {
+    id: typer
+    property string pending: ""
+    stdinEnabled: true
+    onStarted: { write(typer.pending + "\n"); typer.pending = "" }
+    onExited: voice.sendNextTyped()
+  }
+
   // What the agent is pointed at, and how much it may do there. On the panel
   // rather than behind the gear because it is the thing to check *before*
   // speaking -- what am I about to change, and can it act without asking.
@@ -879,6 +914,45 @@ Panel {
                          : "Answers to “" + String(entry.name || "") + "” · " + voice.programLabel(String(entry.agent || "claude"))
             onClicked: voice.summon({ page: "agents", agent: modelData === "" ? "main" : modelData })
           }
+        }
+      }
+
+      // --- typing ---
+      // For when talking is not an option: no microphone, a wake word that
+      // will not fire, a room where you would rather not. Sent the way a
+      // transcript is, so "Sora, ..." still picks Sora.
+      Row {
+        width: parent.width
+        spacing: Style.space(6)
+        visible: voice.serviceActive
+
+        TextField {
+          id: typeField
+          width: parent.width - (typeTo.visible ? typeTo.width + parent.spacing : 0)
+          foreground: voice.fg
+          font.family: voice.fontFamily
+          placeholderText: "Type to " + voice.typeTargetLabel + "…  Enter sends"
+          onAccepted: {
+            var t = text.trim()
+            if (t === "") return
+            voice.sendTyped(t)
+            text = ""
+          }
+          Keys.onEscapePressed: { if (text !== "") text = ""; else voice.close() }
+        }
+        // Who it goes to, when there is more than one agent. A click moves
+        // to the next.
+        Button {
+          id: typeTo
+          visible: voice.crew.length > 0
+          text: voice.typeTargetLabel
+          bordered: true
+          focusable: false
+          foreground: voice.fg
+          fontFamily: voice.fontFamily
+          fontSize: Style.font.caption
+          tooltipText: "Who the message goes to. Starting it with a name works too."
+          onClicked: voice.nextTypeTarget()
         }
       }
 

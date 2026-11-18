@@ -367,6 +367,15 @@ class Adapter(ABC):
     def cancel(self) -> None:
         """Abandon the turn in progress. Default: nothing to abandon."""
 
+    @classmethod
+    def models(cls) -> list[dict]:
+        """Model choices for the settings, as {value, label}, best first.
+
+        Empty means the settings fall back to their own short list, or to a
+        typed name. Default: none.
+        """
+        return []
+
     def efforts(self) -> tuple[str, ...]:
         """The effort levels this backend accepts with its model, lowest first.
 
