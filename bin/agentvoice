@@ -251,6 +251,35 @@ case "${1:-status}" in
     PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
     exec "$PY" "$REPO/daemon/voices.py" "$@"
     ;;
+  chats)
+    # Saved conversations (saveChats). The daemon holds which chat each
+    # agent is in, so continuing or starting one is a command to it; the
+    # rest change the files directly, under the same lock the daemon takes.
+    #   agentvoice chats [list]          one line per chat
+    #   agentvoice chats show ID         as Markdown
+    #   agentvoice chats rename ID TITLE / pin ID / unpin ID / delete ID
+    #   agentvoice chats export ID [DIR] write it as Markdown, print where
+    #   agentvoice chats continue ID     its agent's next turn goes into it
+    #   agentvoice chats new [AGENT]     that agent (main if none) starts afresh
+    case ${2:-list} in
+      continue)
+        [[ ${3:-} =~ ^[0-9a-f]{16}$ ]] || { echo "usage: agentvoice chats continue ID" >&2; exit 2; }
+        active || { echo "agentvoice is not running" >&2; exit 1; }
+        send_command "chat-continue $3"
+        ;;
+      new)
+        [[ ${3:-main} =~ ^[a-z0-9][a-z0-9-]{0,47}$ ]] || { echo "usage: agentvoice chats new [AGENT_ID]" >&2; exit 2; }
+        active || { echo "agentvoice is not running" >&2; exit 1; }
+        send_command "chat-new ${3:-main}"
+        ;;
+      *)
+        REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+        PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+        shift
+        exec "$PY" "$REPO/daemon/chats.py" "$@"
+        ;;
+    esac
+    ;;
   history)
     # This session's conversation, which the daemon keeps beside the state
     # file for the conversation view: tmpfs, 0600, gone at logout.
@@ -276,7 +305,7 @@ case "${1:-status}" in
     active && echo yes || echo no
     ;;
   *)
-    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|interrupt|monitor|calibrate|voice|permit|pending|history|wake-test|status|is-active]" >&2
+    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|interrupt|monitor|calibrate|voice|permit|pending|history|chats|wake-test|status|is-active]" >&2
     exit 2
     ;;
 esac

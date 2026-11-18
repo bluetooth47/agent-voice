@@ -712,6 +712,8 @@ Item {
       if (p.mode === "permission") mode = "permission"
       if (p.mode === "history") mode = "history"
       if (p.id) wanted = String(p.id)
+      // A saved chat to open in the conversation view (Chats.qml).
+      openChat = /^[0-9a-f]{16}$/.test(String(p.chat || "")) ? String(p.chat) : ""
     } catch (e) { p = {} }
 
     opened = true
@@ -771,6 +773,11 @@ Item {
   // the way the state file is, rather than through the CLI.
 
   ListModel { id: historyModel }
+  // For the saved-chats browser (Chats.qml), which shows this session too.
+  property alias historyRows: historyModel
+  function clearSession() { clearHistory.running = true }
+  readonly property bool saveChats: setting("saveChats", false) === true
+  property string openChat: ""
 
   // What has already been turned into rows. A new turn only ever appends to
   // the file, so only the lines past this are parsed and added -- rebuilding
@@ -1191,7 +1198,7 @@ Item {
       anchors.centerIn: parent
       // The settings get a sidebar and room beside it; the conversation is
       // text to read; the prompt is one question.
-      width: Math.min(Style.space(root.mode === "history" ? 680
+      width: Math.min(Style.space(root.mode === "history" ? (root.saveChats ? 980 : 680)
                                   : root.mode === "permission" ? 560 : 880),
                       parent.width - Style.gapsOut * 2)
       height: root.mode === "permission"
@@ -1526,11 +1533,20 @@ Item {
         }
 
         // --- the conversation -----------------------------------------
-        Item {
-          id: historyPage
-          visible: root.mode === "history"
+        // With saved chats: a list of them beside whichever is open, and
+        // this session's conversation as the first entry.
+        Chats {
+          visible: root.mode === "history" && root.saveChats
           width: parent.width
           height: body.height - y - Style.spacing.md
+          s: root
+        }
+
+        Item {
+          id: historyPage
+          visible: root.mode === "history" && !root.saveChats
+          width: parent.width
+          height: visible ? body.height - y - Style.spacing.md : 0
 
           ListView {
             id: historyList
@@ -1555,8 +1571,7 @@ Item {
             onMovementEnded: following = atYEnd
             onCountChanged: if (following) Qt.callLater(historyList.positionViewAtEnd)
 
-            delegate: Column {
-              id: turn
+            delegate: ExchangeItem {
               required property int index
               required property real at
               required property string agent
@@ -1568,105 +1583,18 @@ Item {
               required property int latency
 
               width: ListView.view ? ListView.view.width - Style.space(10) : 0
-              spacing: Style.space(4)
-
-              // Where a conversation began: a turn sent with no session to
-              // continue. "What did I ask it earlier" is usually this one.
-              Item {
-                visible: turn.fresh && turn.index > 0
-                width: parent.width
-                height: visible ? newLabel.implicitHeight + Style.space(10) : 0
-                PanelSeparator {
-                  anchors.verticalCenter: newLabel.verticalCenter
-                  width: parent.width
-                  foreground: root.foreground
-                }
-                Text {
-                  id: newLabel
-                  anchors.horizontalCenter: parent.horizontalCenter
-                  leftPadding: Style.space(8)
-                  rightPadding: Style.space(8)
-                  text: "new conversation"
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  Rectangle {
-                    z: -1
-                    anchors.fill: parent
-                    color: root.background
-                  }
-                }
-              }
-
-              Text {
-                text: root.timeOf(turn.at)
-                      + (turn.agent !== "" ? " · " + turn.agent : "")
-                      + (turn.latency > 0
-                         ? " · answered in " + (turn.latency / 1000).toFixed(1) + "s" : "")
-                textFormat: Text.PlainText
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              // TextEdit, read-only, rather than Text: selectable, so a path
-              // or a command the agent read out can be copied, not retyped.
-              // Plain text for the same reason every other transcript here
-              // is -- neither half of this was written by us.
-              TextEdit {
-                width: parent.width
-                readOnly: true
-                selectByMouse: true
-                wrapMode: TextEdit.Wrap
-                textFormat: TextEdit.PlainText
-                text: turn.transcript
-                color: root.foreground
-                selectionColor: Qt.rgba(root.foreground.r, root.foreground.g,
-                                        root.foreground.b, 0.3)
-                selectedTextColor: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-              }
-
-              Item {
-                visible: turn.reply !== ""
-                width: parent.width
-                height: replyText.implicitHeight
-
-                // A rule down the left of the answer, rather than an arrow in
-                // its text that would come along with every copy.
-                Rectangle {
-                  width: Style.space(2)
-                  height: parent.height
-                  color: Qt.rgba(root.foreground.r, root.foreground.g,
-                                 root.foreground.b, 0.35)
-                }
-                TextEdit {
-                  id: replyText
-                  x: Style.space(10)
-                  width: parent.width - x
-                  readOnly: true
-                  selectByMouse: true
-                  wrapMode: TextEdit.Wrap
-                  textFormat: TextEdit.PlainText
-                  text: turn.reply
-                  color: Qt.rgba(root.foreground.r, root.foreground.g,
-                                 root.foreground.b, 0.8)
-                  selectionColor: Qt.rgba(root.foreground.r, root.foreground.g,
-                                          root.foreground.b, 0.3)
-                  selectedTextColor: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
-                }
-              }
-
-              Text {
-                visible: turn.failed !== "" || turn.stopped
-                text: turn.failed !== "" ? "failed" : "stopped part-way"
-                color: turn.failed !== "" ? root.urgent : root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
+              when: root.timeOf(at)
+              who: agent
+              latencyMs: latency
+              heard: transcript
+              answer: reply
+              failure: failed
+              wasStopped: stopped
+              startsNew: fresh && index > 0
+              foreground: root.foreground
+              background: root.background
+              urgent: root.urgent
+              fontFamily: root.fontFamily
             }
           }
 

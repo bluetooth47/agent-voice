@@ -78,6 +78,14 @@ class Persona:
         self.finished_at = 0.0
         #: Why this agent cannot answer, when it cannot, for the settings.
         self.problem = ""
+        #: The saved chat its turns go into (chats.py), when chats are saved.
+        self.chat_id: str | None = None
+        #: Set by Continue: the next turn belongs to `chat_id` even though it
+        #: starts a new session, because the chat is being replayed.
+        self.chat_continued = False
+        #: The chat as text, put ahead of the next request once, for a
+        #: backend that cannot resume a session natively.
+        self.replay = ""
 
     @property
     def main(self) -> bool:

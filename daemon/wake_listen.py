@@ -58,8 +58,10 @@ from eager import Utterance, sounds_finished  # noqa: E402
 from noise_floor import MARGIN_MAX, MARGIN_MIN, NoiseFloor  # noqa: E402
 import headset  # noqa: E402
 from speech_text import (  # noqa: E402
-    as_prompt, is_full_stop, is_goodbye, is_stop_command, safe_for_terminal,
+    as_prompt, chat_command, is_full_stop, is_goodbye, is_stop_command,
+    safe_for_terminal,
 )
+from chats import RETENTIONS, ChatStore, replay_context  # noqa: E402
 from runtime import (  # noqa: E402
     REPLY_MAX, RUNTIME_DIR, Config, History, Speaker, StateFile, instructions_text, speed_pct,
 )
@@ -1425,6 +1427,8 @@ class Daemon:
         self.chimes: Chimes | None = None
         #: The session's exchanges, for the conversation view.
         self.history = History()
+        #: Saved chats, when `saveChats` is on. See chats.py.
+        self.chats = ChatStore()
         #: Until when a frame's loudness may be our own chime rather than the
         #: person. Not `_deaf_until`: deafness throws frames away, and the
         #: frame after a wake word may hold the start of the request.
@@ -2760,6 +2764,9 @@ class Daemon:
                 self.speak(text, tail_ms)       # echo mode
             return
 
+        if self.chat_turn(text, last, out, tail_ms):
+            return
+
         out.publish("thinking", **last)
         t0 = time.time()
         clock["sent"] = t0
@@ -2767,6 +2774,11 @@ class Daemon:
         # a line there, because "what did I ask it earlier" is usually about
         # this conversation, not the one before.
         new_conversation = not self.session_id
+        # A continued chat its backend cannot resume: the chat goes ahead of
+        # this one request, then the session it starts carries it.
+        persona = self._persona()
+        prompt = persona.replay + text if persona.replay else text
+        persona.replay = ""
         reply_parts: list[str] = []
         ttft = None
         error = None
@@ -2789,7 +2801,7 @@ class Daemon:
 
         try:
             with self._watching_session(), self._hearing_wake():
-                for sentence in sentences(tap(self.agent.send(text, self.session_id))):
+                for sentence in sentences(tap(self.agent.send(prompt, self.session_id))):
                     # Checked before the sentence is recorded, so the transcript
                     # in the panel is what was actually said out loud rather than
                     # what the agent had written by the time it was stopped.
@@ -2904,7 +2916,11 @@ class Daemon:
         What was said aloud, not everything the agent wrote: a reply stopped
         halfway is kept as far as it got, and marked, so the record matches
         what you heard rather than what you were spared.
+
+        Saved chats are their own switch: keeping this session's view is not
+        a promise to keep anything on disk, and the reverse holds too.
         """
+        self.save_chat(heard, reply, kind=kind, stopped=stopped, new=new)
         if not self.cfg.get_bool("keepHistory"):
             return
         who = getattr(self.agent, "name", "") or ""
@@ -2923,6 +2939,140 @@ class Daemon:
             "new": bool(new),
             "latency_ms": int(last.get("latency_ms") or 0),
         })
+
+    # --- saved chats -----------------------------------------------------------
+
+    def save_chat(self, heard: str, reply: str, *, kind: str, stopped: bool,
+                  new: bool) -> None:
+        """Add the exchange to the agent's saved chat, when chats are saved.
+
+        A turn that started a new session starts a new chat, unless Continue
+        put it in one. Never costs the turn: a disk that will not take the
+        write loses the record, not the reply."""
+        if not self.cfg.get_bool("saveChats") or not heard:
+            return
+        p = self._persona()
+        chat_id = None if (new and not p.chat_continued) else p.chat_id
+        try:
+            p.chat_id = self.chats.record(
+                chat_id=chat_id, agent_id=p.id,
+                agent_label=p.label or getattr(self.agent, "name", "") or "Agent",
+                backend=getattr(self.agent, "name", "") or "",
+                session_id=self.session_id,
+                project_dir=str(getattr(self.agent, "cwd", "") or ""),
+                exchange={"transcript": heard, "reply": reply, "error": kind,
+                          "stopped": stopped})
+            p.chat_continued = False
+            if p.chat_id != chat_id:
+                retention = self.cfg.get_str("chatRetention")
+                if retention in RETENTIONS:
+                    self.chats.prune(retention)
+        except (OSError, ValueError) as e:
+            print(f"  {YEL}chat not saved: {type(e).__name__}{OFF}", flush=True)
+
+    def continue_chat(self, p: Persona, chat: dict) -> str:
+        """Make `chat` the one `p`'s next turn goes into. Returns how:
+        "resumed" when its backend takes the session back natively, else
+        "replayed", when the chat is put ahead of the next request."""
+        agent = p.agent
+        here = str(getattr(agent, "cwd", "") or "")
+        if (agent is not None and getattr(agent, "remembers", False)
+                and chat.get("session_id")
+                and chat.get("backend") == getattr(agent, "name", "")
+                and chat.get("project_dir", "") == here):
+            p.session_id, p.replay, how = chat["session_id"], "", "resumed"
+        else:
+            # A session is one backend's, in one folder: anything else gets
+            # the words, which costs tokens and says so on screen.
+            p.session_id, p.replay, how = None, replay_context(chat), "replayed"
+        p.chat_id, p.chat_continued = chat["id"], True
+        try:
+            self.chats.set_current(p.id, chat["id"])
+        except (OSError, ValueError):
+            pass
+        print(f"  {CYA}agent “{p.label or 'main'}”: continuing a saved chat "
+              f"({how}){OFF}", flush=True)
+        return how
+
+    def new_chat(self, p: Persona) -> None:
+        """Start `p` afresh: no session, no chat until its next turn."""
+        p.session_id, p.chat_id, p.chat_continued, p.replay = None, None, False, ""
+        try:
+            self.chats.set_current(p.id, None)
+        except (OSError, ValueError):
+            pass
+
+    def chat_turn(self, text: str, last: dict, out, tail_ms: int) -> bool:
+        """ "new chat" and "continue the chat about ..." said to an agent.
+
+        Handled here rather than sent: True when it was one of them, and
+        the answer has been said. Continuing only searches this agent's own
+        chats, because another backend's session is not one it can take
+        up. Two close matches are named rather than guessed between."""
+        kind, about = chat_command(text)
+        if not kind:
+            return False
+        p = self._persona()
+        if kind == "new":
+            self.new_chat(p)
+            msg = "Starting a new chat."
+        elif not self.cfg.get_bool("saveChats"):
+            msg = "Saved chats are off. Turn on Save conversations in the Display settings."
+        else:
+            try:
+                found = self.chats.find(about, p.id)
+            except (OSError, ValueError):
+                found = []
+            if not found:
+                msg = (f"I couldn't find a chat about {about}." if about
+                       else "There's no saved chat to continue.")
+            elif (len(found) > 1 and found[1]["score"] >= found[0]["score"] * 0.8):
+                msg = (f"Two chats match: {found[0]['title']}, and "
+                       f"{found[1]['title']}. Say a few more words about which one.")
+            else:
+                chat = self.chats.load(found[0]["id"])
+                if chat is None:
+                    msg = "That chat is gone."
+                else:
+                    self.continue_chat(p, chat)
+                    msg = f"Continuing {chat.get('title') or 'that chat'}. Go ahead."
+        print(f"  {DIM}({kind} chat){OFF}", flush=True)
+        out.publish("speaking", **{**last, "reply": msg})
+        if self.speaker:
+            self.speak(msg, tail_ms)
+        return True
+
+    def apply_chat_command(self, cmd: str | None) -> bool:
+        """`agentvoice chats continue ID` and `chats new [AGENT]`, from the
+        conversation view. True if `cmd` was one of them."""
+        if not cmd or not cmd.startswith("chat-"):
+            return False
+        verb, _, arg = cmd.partition(" ")
+        arg = arg.strip()
+        if verb == "chat-continue":
+            chat = self.chats.load(arg) if arg else None
+            if chat is None:
+                print(f"  {YEL}no such chat to continue{OFF}", flush=True)
+                return True
+            p = self._persona_by_id(chat.get("agent_id", ""))
+            if p is None:
+                print(f"  {YEL}that chat's agent is not here any more{OFF}", flush=True)
+            elif p.busy:
+                print(f"  {YEL}agent “{p.label}” is working; continue it when it "
+                      f"has finished{OFF}", flush=True)
+            else:
+                self.continue_chat(p, chat)
+            return True
+        if verb == "chat-new":
+            p = self._persona_by_id("" if arg in ("", "main") else arg)
+            if p is not None and not p.busy:
+                self.new_chat(p)
+                print(f"  {CYA}agent “{p.label or 'main'}”: new chat{OFF}", flush=True)
+            return True
+        return False
+
+    def _persona_by_id(self, agent_id: str) -> Persona | None:
+        return self._main if not agent_id else self.crew.get(agent_id)
 
     # --- extra agents --------------------------------------------------------
 
@@ -3427,6 +3577,8 @@ class Daemon:
                 if self.apply_lock_command(cmd):
                     continue
                 if self.apply_wake_test_command(cmd):
+                    continue
+                if self.apply_chat_command(cmd):
                     continue
                 if cmd == "talk" and self.listening:
                     if utt is not None:
@@ -4012,6 +4164,11 @@ def main() -> int:
     cfg = Config()
     print(f"  {DIM}knobs: {cfg.source} · build {build_id()}{OFF}")
     forget_chat_grants()
+    # No agent has a session after a restart, so none is in a saved chat.
+    try:
+        ChatStore().forget_current()
+    except OSError:
+        pass
 
     # Writing new files with the right mode does nothing for the ones already
     # there. Somebody who trained a verifier while these directories were

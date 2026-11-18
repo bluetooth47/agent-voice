@@ -270,3 +270,32 @@ def is_stop_command(text: str) -> bool:
     """
     norm = _normalize(text)
     return norm in _STOP_PHRASES or is_full_stop(norm) or is_goodbye(norm)
+
+
+#: "new chat" and the ways it is said. Whole transcript only, like a stop.
+_NEW_CHATS = frozenset({
+    "new chat", "a new chat", "start a new chat", "new conversation",
+    "start a new conversation", "fresh chat", "start a fresh chat",
+    "start a fresh conversation", "lets start a new chat",
+    "lets start a new conversation",
+})
+_CONTINUE = re.compile(
+    r"^(?:please |can you |could you |lets )?"
+    r"(?:continue|resume|go back to|pick up|reopen)"
+    r"(?: the| our| my| that)? (?:chat|conversation)"
+    r"(?:(?: about| on| from| where| with| we had about) (?P<about>.+))?$")
+
+
+def chat_command(text: str) -> tuple[str, str]:
+    """("new", "") for "new chat", ("continue", what) for "continue the chat
+    about the HUD" -> "the hud"... or ("", "") for anything else.
+
+    Matched on the whole transcript, so "can you continue the work" or a
+    sentence that merely mentions a chat is an ordinary request."""
+    norm = _normalize(text)
+    if norm in _NEW_CHATS:
+        return "new", ""
+    m = _CONTINUE.match(norm)
+    if m:
+        return "continue", (m.group("about") or "").strip()
+    return "", ""

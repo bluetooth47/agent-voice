@@ -983,3 +983,21 @@ real Vosk recogniser and Whisper base.en on its worker.
 The run before showed 11/12: Vosk made "the" out of the silence after the
 last pause, and it stayed on screen behind Whisper's finished text. The open
 rough segment is now hidden until somebody speaks after a cut.
+
+## 28. What a saved chat costs
+
+i7-1185G7, 2026-11-17, `daemon/chats.py` on the home SSD, while the
+installer box was downloading in the background (so if anything these are
+high). Synthetic chats of ten exchanges each (12-word requests, 40-word
+replies), timed with `perf_counter` over 30 records and 5 searches:
+
+| saved chats | one turn recorded (median / max) | "continue the chat about …" search |
+|---|---|---|
+| 100 | 6.7ms / 9.4ms | 59ms |
+| 500 | 12.6ms / 18.2ms | 188ms |
+
+A record rewrites the chat file and the index under a lock, after the reply
+has been spoken, so nobody waits for it. The search reads every chat of that
+agent, which grows with the count but stays well under the time it takes to
+say the reply. Off by default: with `saveChats` off, nothing above runs and
+nothing reaches the disk (`test_chats.py::test_nothing_is_written_with_saving_off`).

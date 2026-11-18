@@ -266,6 +266,41 @@ readable by you alone, gone when you log out, never the journal and never
 the disk. **Keep this session's conversation** turns it off, and turning it
 off deletes what is already kept. Clear empties it on the spot.
 
+### Saved conversations
+
+Off by default. Display → **Save conversations** keeps each chat on disk so
+it can be browsed and picked up again later: in
+`~/.local/share/agentvoice/chats/`, one file per chat, readable by you
+alone. The session view above stays memory-only either way. **Keep saved
+chats** chooses how long: forever (the default, since you asked to keep
+them), 90 or 30 days since a chat was last used, or the last 100. Pinned
+chats are always kept. Uninstalling leaves them and says where they are.
+
+A chat is everything one agent said in one conversation. It starts when the
+agent starts a new session and is titled from the first request. With saving
+on, the conversation view gets a list beside it: this session first, then
+Pinned, Today, This week and Older, with a search box and an agent filter.
+Open a chat for **Continue**, **Rename**, **Pin**, **Export to Markdown**
+(into `~/Documents`) and **Delete**. "In use" marks the chat each agent is
+in right now.
+
+**Continue** makes it that agent's current chat. Claude Code takes the
+session back with `--resume` when it is the same program in the same
+project folder. Anything else (another program, another folder, a backend
+that keeps no session) gets the chat's words sent once, ahead of your next
+request, which costs tokens, and the view says so.
+
+By voice: "Theo, new chat" starts afresh, and "Theo, continue the chat
+about the HUD" finds that agent's chat by its title and words and answers
+"Continuing *HUD sizing*. Go ahead." When two chats match about equally it
+names both and asks for a few more words rather than guessing. Both have to
+be the whole sentence, so a request that only mentions a chat goes to the
+agent as usual. In a terminal: `agentvoice chats` lists them, and `show`,
+`rename`, `pin`, `delete`, `export`, `continue` and `new` do the rest.
+
+"Allow all in this chat" still ends when the service restarts, including
+for a chat continued afterwards.
+
 While you talk, Voice → **Live transcript** can show what is heard so far.
 **Accurate** shows Vosk's rough text first and replaces each part with
 Whisper's at every pause you leave, so by the time you stop, what is on

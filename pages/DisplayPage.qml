@@ -107,6 +107,47 @@ Column {
 
     ToggleRow {
       width: parent.width
+      label: "Save conversations"
+      hint: "Keep chats on disk so they can be browsed and continued later. Readable by you alone."
+      help: "Saved in ~/.local/share/agentvoice/chats, one file per chat, owner-only. " +
+            "Off by default, because nothing said is written to disk unless you choose it. " +
+            "Switching it off stops saving; chats already saved stay until you delete them " +
+            "in the conversation view.\n\nWith it on, say “new chat” to start afresh, or " +
+            "“continue the chat about …” to pick one up again."
+      checked: page.s.setting("saveChats", false) === true
+      changed: page.s.changed("saveChats")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onToggled: page.s.put("saveChats", !checked)
+      onReset: page.s.resetKey("saveChats")
+    }
+
+    SettingRow {
+      width: parent.width
+      stacked: true
+      visible: page.s.setting("saveChats", false) === true
+      label: "Keep saved chats"
+      hint: "Counted from when each was last used. Pinned chats are always kept."
+      changed: page.s.changed("chatRetention")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onReset: page.s.resetKey("chatRetention")
+      SegmentedChoice {
+        options: [
+          { value: "forever", label: "Forever" },
+          { value: "90d", label: "90 days" },
+          { value: "30d", label: "30 days" },
+          { value: "last100", label: "Last 100" }
+        ]
+        value: String(page.s.setting("chatRetention", "forever"))
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onCommitted: function(v) { page.s.put("chatRetention", v) }
+      }
+    }
+
+    ToggleRow {
+      width: parent.width
       label: "Step aside when another app records"
       hint: "Stops listening during dictation, a call or a recording, and starts again after."
       help: "Without this, saying the wake phrase while dictating elsewhere makes the " +

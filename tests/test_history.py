@@ -329,8 +329,12 @@ def _blocks(src: str, opener: str) -> list[str]:
 
 
 def test_what_was_said_is_selectable_and_never_rendered_as_markup():
+    """One exchange is drawn by ui/ExchangeItem.qml, for this session's view
+    and a saved chat alike, so that is where both halves are checked."""
     page = SETTINGS[SETTINGS.index("id: historyPage"):]
-    edits = _blocks(page, "TextEdit {")
+    assert "delegate: ExchangeItem {" in page
+    assert _code(ROOT / "Chats.qml").count("delegate: ExchangeItem {") == 2
+    edits = _blocks(_code(ROOT / "ui/ExchangeItem.qml"), "TextEdit {")
     assert len(edits) >= 2
     for block in edits:
         assert "readOnly: true" in block
@@ -344,3 +348,15 @@ def test_clearing_takes_two_presses():
     page = page[:page.index("\n            }\n")]
     assert "root.confirmClear" in page
     assert '["agentvoice", "history", "clear"]' in SETTINGS
+
+
+def test_a_saved_chat_is_never_rendered_as_markup():
+    """Titles come from what was said, names are any text, and a note can
+    quote the CLI's error: every Text in the browser that shows one is
+    plain."""
+    src = _code(ROOT / "Chats.qml")
+    risky = re.compile(r"text:[^\n]*(title|agentName|note|preview|\.c\b|chat\.)")
+    shown = [b for b in _blocks(src, "Text {") if risky.search(b)]
+    assert len(shown) >= 5
+    for block in shown:
+        assert "textFormat: Text.PlainText" in block, block[:200]

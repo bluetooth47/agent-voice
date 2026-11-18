@@ -185,6 +185,36 @@ def test_uninstall_leaves_nothing_when_there_was_nothing_to_keep(tmp_path):
     assert "verifiers" not in done.stdout
 
 
+def test_uninstall_keeps_saved_chats_and_says_where(tmp_path):
+    app = _install_tree(tmp_path)
+    chats = app.parent / "chats"
+    chats.mkdir()
+    (chats / "0123456789abcdef.json").write_text("{}")
+    (chats / "index.json").write_text("{}")
+
+    done = _run(app, tmp_path, "--uninstall", "--yes")
+
+    assert done.returncode == 0, done.stderr
+    assert (chats / "0123456789abcdef.json").exists()
+    assert str(chats) in done.stdout, "kept what was said without saying where"
+
+
+def test_uninstall_removes_a_chats_folder_with_no_chats(tmp_path):
+    app = _install_tree(tmp_path)
+    data = app.parent
+    (data / "verifiers" / "hey_jarvis.pkl").unlink()
+    chats = data / "chats"
+    chats.mkdir()
+    (chats / "index.json").write_text("{}")
+    (chats / ".lock").write_text("")
+
+    done = _run(app, tmp_path, "--uninstall", "--yes")
+
+    assert done.returncode == 0, done.stderr
+    assert not data.exists(), f"left behind: {list(data.rglob('*'))}"
+    assert "conversations" not in done.stdout
+
+
 def test_declining_does_not_remove_anything_and_says_no(tmp_path):
     """Exit status matters: the button chains `&& omarchy plugin remove`."""
     app = _install_tree(tmp_path)

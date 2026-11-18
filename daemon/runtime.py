@@ -168,6 +168,10 @@ DEFAULTS = {
     "speakReplies": True,
     "chimes": True,
     "keepHistory": True,
+    # Saved chats (chats.py): off, because the conversation was memory-only
+    # by design and writing it to disk is the user's choice to make.
+    "saveChats": False,
+    "chatRetention": "forever",
     "livePartials": "auto",
     "bargeIn": False,
     "bargeOnHeadset": True,
@@ -244,6 +248,8 @@ TOML_ALIASES = {
     "hudLingerMs": ("ui", "hud_linger_ms"),
     "chimes": ("ui", "chimes"),
     "keepHistory": ("ui", "keep_history"),
+    "saveChats": ("ui", "save_chats"),
+    "chatRetention": ("ui", "chat_retention"),
     "bargeFactor": ("audio", "barge_factor"),
     "permissions": ("agent", "permissions"),
     "agentModels": ("agent", "models"),

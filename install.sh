@@ -342,6 +342,18 @@ if [[ $UNINSTALL == 1 ]]; then
       rmdir "$DATA/$d" 2>/dev/null || true
     fi
   done
+  # Saved conversations (saveChats): what you said, kept because you asked
+  # for it. Named on the way out rather than left as a reason the data
+  # directory survived with nothing said.
+  KEPT_CHATS=""
+  if [[ -d "$DATA/chats" ]]; then
+    if compgen -G "$DATA/chats/[0-9a-f]*.json" >/dev/null; then
+      KEPT_CHATS="$DATA/chats"
+    else
+      rm -f "$DATA/chats/index.json" "$DATA/chats/.lock" 2>/dev/null || true
+      rmdir "$DATA/chats" 2>/dev/null || true
+    fi
+  fi
   # rmdir, not rm -rf: it goes only if something above was genuinely kept.
   rmdir "$DATA" 2>/dev/null || true
 
@@ -378,6 +390,7 @@ if [[ $UNINSTALL == 1 ]]; then
   want them again:
 NEXT
   [[ -n $KEPT ]] && printf "  Your voice — recordings and trained verifiers:%b\n\n" "$KEPT"
+  [[ -n $KEPT_CHATS ]] && printf "  Saved conversations (delete the folder to remove them):\n    %s\n\n" "$KEPT_CHATS"
   [[ -n $KEPT_KEY ]] && printf "  An API key you put in a file:\n    %s\n\n" "$KEPT_KEY"
   [[ -n $KEPT_CFG ]] && printf "  Your own settings files:\n    %s\n\n" "$KEPT_CFG"
   cat <<NEXT
