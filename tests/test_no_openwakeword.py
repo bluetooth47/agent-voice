@@ -186,5 +186,9 @@ def test_the_endpoint_is_what_the_main_agent_runs_on():
     assert '"endpointIsAgent"' in card
     runs_on = card[card.index('label: "Runs on"'):]
     runs_on = runs_on[:runs_on.index("\n    }")]
-    assert 'page.s.put("endpointUrl", "")' in runs_on, \
+    assert "page.runOn(" in runs_on
+    # The choice itself, shared by the picker and its reset.
+    run_on = agents[agents.index("function runOn("):]
+    run_on = run_on[:run_on.index("\n  }")]
+    assert 'page.s.put("endpointUrl", "")' in run_on, \
         "choosing Omarchy's agent must clear the endpoint, or it keeps answering"

@@ -516,7 +516,9 @@ Panel {
     onLoaded: voice.defaultAgent = String(text()).trim()
     onLoadFailed: voice.defaultAgent = ""
   }
-  readonly property string mainAgent: vAgent !== "" ? vAgent : defaultAgent
+  // What the daemon runs, else what it will run: its own choice, else Omarchy's.
+  readonly property string mainAgent: vAgent !== "" ? vAgent
+                                      : (String(pref("mainProgram", "")) || defaultAgent)
   // As the settings name them; the same list as Settings.programOptions.
   function programLabel(value) {
     var names = { claude: "Claude Code", codex: "Codex", gemini: "Gemini",

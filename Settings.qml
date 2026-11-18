@@ -318,7 +318,9 @@ Item {
     onLoaded: root.defaultAgent = String(text()).trim()
     onLoadFailed: root.defaultAgent = ""
   }
-  readonly property string mainAgent: vAgent !== "" ? vAgent : defaultAgent
+  // What the daemon runs, else what it will run: its own choice, else Omarchy's.
+  readonly property string mainAgent: vAgent !== "" ? vAgent
+                                      : (String(setting("mainProgram", "")) || defaultAgent)
   readonly property bool usingEndpoint: String(setting("endpointUrl", "")) !== ""
                                         && String(setting("endpointModel", "")) !== ""
 
@@ -621,6 +623,7 @@ Item {
   function agentModelChoices(program, current) {
     var out = [{ label: "Default  (whatever " + (program || "the agent") + " uses on its own)", value: "" }]
     var listed = root.modelLists[program]
+    if (!(listed && listed.length) && program === "codex") listed = root.codexModels
     var presets = (listed && listed.length) ? listed : (root.modelPresets[program] || [])
     var known = current === ""
     for (var i = 0; i < presets.length; i++) {
@@ -1151,6 +1154,32 @@ Item {
         }
         root.customModels = out
       }
+    }
+  }
+
+  // Codex's own model list, read here as well as from the daemon: the
+  // daemon publishes it only while it runs, and an agent is often set up
+  // while it does not. Hidden models (review, retired) are left out, best
+  // first, as Codex's own picker shows them.
+  property var codexModels: []
+  FileView {
+    id: codexModelsFile
+    path: (Quickshell.env("CODEX_HOME") || (Quickshell.env("HOME") + "/.codex")) + "/models_cache.json"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: codexModelsFile.reload()
+    onLoadFailed: root.codexModels = []
+    onLoaded: {
+      try {
+        var all = (JSON.parse(text()).models || []).filter(function(m) {
+          return m && m.slug && (m.visibility || "list") === "list" })
+        all.sort(function(a, b) { return (a.priority || 999) - (b.priority || 999) })
+        root.codexModels = all.map(function(m) {
+          var name = String(m.display_name || m.slug)
+          var about = String(m.description || "").replace(/\.$/, "")
+          return { value: String(m.slug), label: about ? name + " — " + about : name }
+        })
+      } catch (e) { root.codexModels = [] }
     }
   }
 

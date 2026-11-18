@@ -72,6 +72,7 @@
       "livePartials": "auto",
       "projectDir": "",
       "mainName": "",
+      "mainProgram": "",
       "agentInstructions": "",
       "permissions": {},
       "agentModels": {},
@@ -524,6 +525,13 @@
         "label": "Main agent's name",
         "defaultValue": "",
         "description": "What the main agent is called on screen, in saved chats and in the Agents panel. Any text. Empty uses its wake phrase. The wake phrase is set separately."
+      },
+      {
+        "key": "mainProgram",
+        "type": "string",
+        "label": "Main agent's program",
+        "defaultValue": "",
+        "description": "What the main agent runs: claude, codex, gemini, agy or copilot. Empty follows Omarchy's default agent (`omarchy default agent`). An OpenAI-compatible endpoint, when one is filled in, answers instead."
       },
       {
         "key": "projectDir",

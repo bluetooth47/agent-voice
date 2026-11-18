@@ -52,6 +52,16 @@ def omarchy_default() -> str | None:
     return value or None
 
 
+def main_program(setting: str | None) -> str | None:
+    """The main agent's program: `setting` when it names one this project can
+    run, else Omarchy's default. An unknown name falls back rather than
+    leaving the main agent with nothing."""
+    want = (setting or "").strip()
+    if want in REGISTRY or want in CLI_TEMPLATES:
+        return want
+    return omarchy_default()
+
+
 def load(name: str | None = None, level: str | None = None,
          endpoint: dict | None = None, model: str | None = None,
          effort: str | None = None, instructions: str = "",

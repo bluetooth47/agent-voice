@@ -220,6 +220,8 @@ DEFAULTS = {
     # The main agent's display name: shown in the readout, the popup, saved
     # chats and the Agents panel. Empty is its wake phrase, capitalised.
     "mainName": "",
+    # The program the main agent runs; empty follows `omarchy default agent`.
+    "mainProgram": "",
 }
 
 # The TOML predates the plugin and uses snake_case under sections. Kept working
@@ -291,6 +293,7 @@ TOML_ALIASES = {
     "openMicAuto": ("wake", "open_mic_auto"),
     "agentsPanel": ("ui", "agents_panel"),
     "mainName": ("agent", "main_name"),
+    "mainProgram": ("agent", "main_program"),
 }
 
 

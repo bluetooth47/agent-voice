@@ -165,6 +165,18 @@ Column {
   property bool endpointChosen: s.usingEndpoint || String(s.setting("endpointUrl", "")) !== ""
   property bool customModel: false
   onMainChanged: customModel = false
+  // The main agent's own program; "" follows Omarchy's default.
+  readonly property string mainProgram: String(s.setting("mainProgram", ""))
+  function runOn(v) {
+    if (v === "endpoint") { page.endpointChosen = true; return }
+    page.endpointChosen = false
+    page.customModel = false
+    var program = v === "omarchy" ? "" : v
+    if (program !== page.mainProgram) page.s.put("mainProgram", program)
+    // Clearing both is what hands the turn back from an endpoint.
+    if (String(page.s.setting("endpointUrl", "")) !== "") page.s.put("endpointUrl", "")
+    if (String(page.s.setting("endpointModel", "")) !== "") page.s.put("endpointModel", "")
+  }
   // A move to "trusted" waits here for a second click.
   property string trustPending: ""
 
@@ -297,24 +309,25 @@ Column {
       label: "Runs on"
       hint: page.endpointChosen
             ? "Any OpenAI-compatible endpoint: Ollama, LM Studio, vLLM, OpenAI, xAI, Hermes."
-            : "Omarchy's default coding agent. Change it with `omarchy default agent`."
+            : page.mainProgram === ""
+              ? "Omarchy's default coding agent, which `omarchy default agent` changes."
+              : "Its own choice, whatever Omarchy's default agent is."
+      changed: page.mainProgram !== "" || page.endpointChosen
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      SegmentedChoice {
-        options: [
-          { value: "omarchy", label: "Omarchy's default" + (page.s.defaultAgent ? " (" + page.s.defaultAgent + ")" : "") },
-          { value: "endpoint", label: "OpenAI-compatible endpoint" }
-        ]
-        value: page.endpointChosen ? "endpoint" : "omarchy"
+      onReset: page.runOn("omarchy")
+      // A dropdown: seven choices do not fit on one row of chips.
+      Dropdown {
+        width: parent.width
+        showLabel: false
+        // The same programs an extra agent can run, after Omarchy's default.
+        options: [{ value: "omarchy", label: "Omarchy's default" + (page.s.defaultAgent ? " (" + page.s.programLabel(page.s.defaultAgent) + ")" : "") }]
+                 .concat(page.s.programOptions.map(function(o) {
+                   return o.value === "endpoint" ? { value: "endpoint", label: "OpenAI-compatible endpoint" } : o }))
+        value: page.endpointChosen ? "endpoint" : (page.mainProgram || "omarchy")
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
-        onCommitted: function(v) {
-          if (v === "endpoint") { page.endpointChosen = true; return }
-          page.endpointChosen = false
-          // Clearing both is what hands the turn back to Omarchy's agent.
-          if (String(page.s.setting("endpointUrl", "")) !== "") page.s.put("endpointUrl", "")
-          if (String(page.s.setting("endpointModel", "")) !== "") page.s.put("endpointModel", "")
-        }
+        onChanged: function(v) { page.runOn(v) }
       }
     }
 

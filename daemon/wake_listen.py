@@ -44,7 +44,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from adapters import (  # noqa: E402
-    explain as explain_agent, load as load_adapter, omarchy_default, sentences,
+    explain as explain_agent, load as load_adapter, main_program, omarchy_default,
+    sentences,
     model_lists, takes_effort, takes_model,
 )
 from adapters.base import Chunk, speech_safe  # noqa: E402
@@ -2006,6 +2007,10 @@ class Daemon:
         if not self.apply_lock_command(self.take_command()):
             self.reconcile_lock()
 
+    def main_program(self) -> str | None:
+        """What the main agent runs: its own setting, else Omarchy's default."""
+        return main_program(self.cfg.get_str("mainProgram"))
+
     def reconcile_agent(self) -> None:
         """Rebuild the agent when the project or permission level changes.
 
@@ -2022,7 +2027,7 @@ class Daemon:
             # it. The idle poll comes round again.
             return
         endpoint = self.endpoint_spec()
-        want_name = "endpoint" if endpoint else omarchy_default()
+        want_name = "endpoint" if endpoint else self.main_program()
         want_cwd = str(project_dir(self.cfg.get_str("projectDir")))
         want_level = self.cfg.level_for(want_name)
         want_ask = want_level != "trusted"
@@ -2062,7 +2067,8 @@ class Daemon:
             self.agent.cancel()
         if endpoint:
             endpoint = {**endpoint, "key": endpoint_key(_host(endpoint["url"]))}
-        self.agent = load_adapter(ask_permission=want_ask, cwd=want_cwd,
+        self.agent = load_adapter(name=None if endpoint else want_name,
+                                  ask_permission=want_ask, cwd=want_cwd,
                                   level=want_level, endpoint=endpoint,
                                   model=want_model, effort=want_effort,
                                   instructions=want_instructions)
@@ -2077,7 +2083,7 @@ class Daemon:
         # the guard above can never match, so this ran on every idle poll.
         self.say_once("agent", f"  {CYA}agent: {want_name or 'nobody'}{where}{OFF}"
                                f"  {DIM}({self.posture()}){OFF}")
-        chosen = omarchy_default()
+        chosen = self.main_program()
         if want_name == "endpoint" and chosen:
             self.say_once("override",
                           f"  {YEL}the endpoint setting is answering instead of "
@@ -2170,7 +2176,7 @@ class Daemon:
         if self.agent is None:
             # Echoing instead of answering looks like a broken assistant. Say
             # which agent is missing and why, where it can actually be read.
-            name = omarchy_default() or ""
+            name = self.main_program() or ""
             self.state.describe(agent=name, level="ask", levels=["ask"],
                                 posture=explain_agent(name) or "no agent",
                                 **self.crew_fields())
@@ -2179,7 +2185,7 @@ class Daemon:
         # reasonable rule and an unreasonable surprise: choosing Claude in
         # Omarchy's settings and having nothing change is indistinguishable
         # from the setting being broken. Name what is being overridden.
-        chosen = omarchy_default() or ""
+        chosen = self.main_program() or ""
         endpoint_wins = getattr(self.agent, "name", "") == "endpoint" and chosen
         self.state.describe(
             agent=getattr(self.agent, "name", "") or "",
@@ -5044,15 +5050,16 @@ def main() -> int:
         spec = ({"url": url, "model": model, "key": endpoint_key(_host(url)),
                  "is_agent": cfg.get_bool("endpointIsAgent")}
                 if url and model else None)
-        level = cfg.level_for("endpoint" if spec else omarchy_default())
+        which = main_program(cfg.get_str("mainProgram"))
+        level = cfg.level_for("endpoint" if spec else which)
         agent = load_adapter(ask_permission=level != "trusted", level=level,
                              cwd=str(project_dir(cfg.get_str("projectDir"))),
                              endpoint=spec,
-                             model=None if spec else cfg.model_for(omarchy_default()),
-                             effort=None if spec else cfg.effort_for(omarchy_default()),
+                             name=None if spec else which,
+                             model=None if spec else cfg.model_for(which),
+                             effort=None if spec else cfg.effort_for(which),
                              instructions=instructions_text(cfg["agentInstructions"]))
         if agent is None:
-            which = omarchy_default()
             print(f"  {YEL}no agent: {explain_agent(which)}"
                   f"; echoing instead{OFF}")
 
