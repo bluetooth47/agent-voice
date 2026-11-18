@@ -351,7 +351,7 @@ Panel {
         if (d.reply !== undefined) voice.lastReply = String(d.reply)
         // Absent with a single agent, and then cleared rather than kept: a
         // name left over from when there were several would be wrong.
-        voice.lastWho = d.who !== undefined ? String(d.who) : ""
+        voice.lastWho = d.who_label !== undefined ? String(d.who_label) : ""
         if (d.agent !== undefined) voice.vAgent = String(d.agent)
         if (d.level !== undefined) voice.permissionLevel = String(d.level)
         if (d.posture !== undefined) voice.vPosture = String(d.posture)
@@ -466,6 +466,30 @@ Panel {
     var v = pref("voiceAgents", [])
     return Array.isArray(v) ? v.filter(function(a) { return (a || {}).enabled !== false }) : []
   }
+  // As Settings.agentId / agentLabel: ids for lookups, names for reading.
+  function agentId(a) {
+    var raw = typeof (a || {}).id === "string" ? a.id.trim() : ""
+    if (/^[a-z0-9][a-z0-9-]{0,47}$/.test(raw) && raw !== "main") return raw
+    var slug = String((a || {}).name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-")
+                 .replace(/^-+|-+$/g, "").slice(0, 48).replace(/-+$/g, "")
+    return slug === "main" ? "agent-main" : slug
+  }
+  function capitalised(phrase) {
+    return String(phrase || "").split(" ").map(function(w) {
+      return w.charAt(0).toUpperCase() + w.slice(1) }).join(" ")
+  }
+  function cleanLabel(text) {
+    return String(text || "").replace(/\s+/g, " ").replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 40).trim()
+  }
+  function agentLabel(a) {
+    return cleanLabel((a || {}).label) || capitalised(String((a || {}).name || ""))
+  }
+  function crewEntry(id) {
+    for (var i = 0; i < voice.crew.length; i++)
+      if (voice.agentId(voice.crew[i]) === id) return voice.crew[i]
+    return ({})
+  }
+  readonly property string mainLabel: cleanLabel(pref("mainName", "")) || capitalised(voice.activePhrase)
 
   // The main agent's level as saved for it, else as the daemon reports it.
   readonly property string mainLevel: {
@@ -490,7 +514,8 @@ Panel {
   function agentState(name) {
     if (!voice.serviceActive) return "off"
     var live = voice.agentLive || {}
-    if (name !== "" && live[name] !== undefined) return String(live[name])
+    // By id; "" is the main agent, which has its own entry with several.
+    if (live[name] !== undefined) return String(live[name])
     if (name === "" && Object.keys(live).length === 0) {
       if (vState === "thinking" || vState === "speaking" || vState === "transcribing") return vState
     }
@@ -528,7 +553,7 @@ Panel {
     if (voice.serviceActive) out.push("mic")
     if (voice.vTurnRunning) out.push("stop")
     out.push("agent:")
-    for (var c = 0; c < voice.crew.length; c++) out.push("agent:" + String(voice.crew[c].name || ""))
+    for (var c = 0; c < voice.crew.length; c++) out.push("agent:" + voice.agentId(voice.crew[c]))
     for (var i = 0; i < voice.quickToggles.length; i++) out.push("toggle:" + voice.quickToggles[i].key)
     out.push("conversation")
     out.push("settings")
@@ -801,13 +826,14 @@ Panel {
         visible: voice.engineInstalled
 
         Repeater {
-          model: [""].concat(voice.crew.map(function(a) { return String((a || {}).name || "") }))
+          // Ids; "" is the main agent.
+          model: [""].concat(voice.crew.map(function(a) { return voice.agentId(a) }))
           Button {
             required property string modelData
+            readonly property var entry: voice.crewEntry(modelData)
             readonly property string st: voice.agentState(modelData)
             readonly property bool busyNow: st === "thinking" || st === "speaking" || st === "transcribing"
-            text: (modelData === "" ? (voice.usingEndpoint ? "endpoint" : (voice.mainAgent || "agent")) : modelData)
-                  + "  ·  " + st
+            text: (modelData === "" ? voice.mainLabel : voice.agentLabel(entry)) + "  ·  " + st
             iconText: busyNow ? "\u{f0e4e}" : "\u{f06a9}"
             bordered: true
             selected: busyNow
@@ -815,7 +841,9 @@ Panel {
             foreground: voice.fg
             fontFamily: voice.fontFamily
             fontSize: Style.font.caption
-            tooltipText: modelData === "" ? "Answers to “" + voice.activePhrase + "”" : "Answers to “" + modelData + "”"
+            tooltipText: modelData === ""
+                         ? "Answers to “" + voice.activePhrase + "” · " + (voice.usingEndpoint ? "endpoint" : (voice.programLabel(voice.mainAgent) || "no agent"))
+                         : "Answers to “" + String(entry.name || "") + "” · " + voice.programLabel(String(entry.agent || "claude"))
             onClicked: voice.summon({ page: "agents", agent: modelData === "" ? "main" : modelData })
           }
         }

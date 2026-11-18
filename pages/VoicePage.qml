@@ -32,8 +32,8 @@ Column {
   readonly property var agentChoices: {
     var out = [{ label: "Main agent", value: "" }]
     for (var i = 0; i < s.voiceAgents.length; i++) {
-      var n = String((s.voiceAgents[i] || {}).name || "")
-      if (n !== "") out.push({ label: n.charAt(0).toUpperCase() + n.slice(1), value: n })
+      var a = s.voiceAgents[i] || {}
+      if (String(a.name || "") !== "") out.push({ label: s.agentLabel(a), value: s.agentId(a) })
     }
     return out
   }

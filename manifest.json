@@ -64,6 +64,7 @@
       "followUpMs": 7000,
       "livePartials": "auto",
       "projectDir": "",
+      "mainName": "",
       "agentInstructions": "",
       "permissions": {},
       "agentModels": {},
@@ -438,6 +439,13 @@
         ],
         "defaultValue": "auto",
         "description": "Rough text shown as you talk, before Whisper returns. It needs the Vosk model, which costs 114MB resident. 'auto' shows it only when Vosk is already loaded for the wake word, so it is never paid for twice. 'accurate' shows Vosk's text first and replaces each part with Whisper's at every pause, at no extra cost beyond Vosk."
+      },
+      {
+        "key": "mainName",
+        "type": "string",
+        "label": "Main agent's name",
+        "defaultValue": "",
+        "description": "What the main agent is called on screen, in saved chats and in the Agents panel. Any text. Empty uses its wake phrase. The wake phrase is set separately."
       },
       {
         "key": "projectDir",

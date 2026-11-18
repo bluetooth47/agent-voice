@@ -151,9 +151,11 @@ Column {
       width: parent.width
       readonly property string st: page.s.agentStatus("")
       icon: "\u{f06a9}"
-      title: page.s.usingEndpoint ? "Endpoint · " + page.s.setting("endpointModel", "")
-                                  : (page.s.mainAgent ? page.s.programLabel(page.s.mainAgent) : "No default agent")
-      subtitle: "“" + page.s.activePhrase + "” · default"
+      title: page.s.mainLabel
+      subtitle: "“" + page.s.activePhrase + "” · " +
+                (page.s.usingEndpoint ? "endpoint · " + page.s.setting("endpointModel", "")
+                                      : (page.s.mainAgent ? page.s.programLabel(page.s.mainAgent) : "no default agent")) +
+                " · default"
       status: st
       tone: page.s.statusTone(st)
       clickable: true
@@ -167,18 +169,19 @@ Column {
       StatusCard {
         required property var modelData
         readonly property string name: String(modelData.name || "")
-        readonly property string st: modelData.enabled === false ? "switched off" : page.s.agentStatus(name)
+        readonly property string agentId: page.s.agentId(modelData)
+        readonly property string st: modelData.enabled === false ? "switched off" : page.s.agentStatus(agentId)
         width: parent ? parent.width : 0
         icon: "\u{f06a9}"
-        title: name || "unnamed agent"
+        title: page.s.agentLabel(modelData) || "unnamed agent"
         subtitle: "“" + name + "” · " + page.s.programLabel(String(modelData.agent || "claude"))
                   + (modelData.model ? " · " + modelData.model : "")
         status: st
-        tone: String((page.s.crewInfo(name) || {}).problem || "") !== "" ? "alert" : page.s.statusTone(st)
+        tone: String((page.s.crewInfo(agentId) || {}).problem || "") !== "" ? "alert" : page.s.statusTone(st)
         clickable: true
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
-        onClicked: page.s.goTo("agents", name)
+        onClicked: page.s.goTo("agents", agentId)
       }
     }
 

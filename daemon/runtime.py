@@ -37,6 +37,12 @@ EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 #: three plain lowercase words. Letters only, because it goes into a Vosk
 #: grammar and is matched against what Whisper writes.
 _AGENT_NAME = re.compile(r"[a-z]+( [a-z]+){0,2}")
+#: An agent's stable id: what grants, the Agents panel, saved chats and the
+#: permission hook know it by, so renaming it or changing its wake phrase
+#: breaks none of them. Plain, because it travels in argv and file names.
+_AGENT_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
+#: The longest display name kept. Any text, but it is drawn on one line.
+LABEL_MAX = 40
 
 #: The program behind an agent, as Omarchy spells it. Checked against the
 #: adapters that exist when the agent is built; this only keeps the value a
@@ -78,6 +84,24 @@ def speed_pct(value, fallback: int = 100) -> int:
 INSTRUCTIONS_MAX = 2000
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def agent_id_for(name: str) -> str:
+    """The id an agent saved before ids existed gets: its wake phrase, as the
+    Agents panel already spelled it. So nothing it owned -- a panel record, a
+    grant, a running process's hook -- changes name on the upgrade. "main"
+    is the main agent's, so an extra agent called that is "agent-main"."""
+    s = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")[:48].strip("-")
+    return "agent-main" if s == "main" else s
+
+
+def display_name(value, fallback: str) -> str:
+    """A display name as shown: any text, one line, at most LABEL_MAX
+    characters, control characters dropped. Empty falls back to the wake
+    phrase with each word capitalised ("hey jarvis" -> "Hey Jarvis")."""
+    text = " ".join((value if isinstance(value, str) else "").split())
+    text = "".join(c for c in text if c.isprintable())[:LABEL_MAX].strip()
+    return text or " ".join(w[:1].upper() + w[1:] for w in (fallback or "").split())
 
 
 def instructions_text(value) -> str:
@@ -173,6 +197,9 @@ DEFAULTS = {
     "voiceSpeed": 100,
     "agentInstructions": "",
     "agentsPanel": True,
+    # The main agent's display name: shown in the readout, the popup, saved
+    # chats and the Agents panel. Empty is its wake phrase, capitalised.
+    "mainName": "",
 }
 
 # The TOML predates the plugin and uses snake_case under sections. Kept working
@@ -231,6 +258,7 @@ TOML_ALIASES = {
     "logSpeech": ("ui", "log_speech"),
     "followUpMs": ("timing", "follow_up_ms"),
     "agentsPanel": ("ui", "agents_panel"),
+    "mainName": ("agent", "main_name"),
 }
 
 
@@ -479,7 +507,7 @@ class Config:
         return self._agents()[0]
 
     def disabled_agents(self) -> set[str]:
-        """The names of agents that are configured but switched off."""
+        """The ids of agents that are configured but switched off."""
         return self._agents()[1]
 
     def _agents(self) -> tuple[list[dict], set[str]]:
@@ -489,6 +517,7 @@ class Config:
         out: list[dict] = []
         off: set[str] = set()
         seen: set[str] = set()
+        seen_ids: set[str] = set()
         for entry in raw:
             if len(out) + len(off) >= MAX_AGENTS:
                 break
@@ -499,8 +528,18 @@ class Config:
                     or name in seen):
                 continue
             seen.add(name)
+            raw_id = entry.get("id")
+            agent_id = raw_id.strip() if isinstance(raw_id, str) else ""
+            if not _AGENT_ID.fullmatch(agent_id) or agent_id == "main":
+                agent_id = agent_id_for(name)
+            if agent_id in seen_ids:
+                # Two agents answering to one id would share grants, chats
+                # and a panel record. Only a hand edit can do this; the
+                # settings page never writes a duplicate.
+                continue
+            seen_ids.add(agent_id)
             if entry.get("enabled") is False:
-                off.add(name)
+                off.add(agent_id)
                 continue
             program = str(entry.get("agent") or "claude").strip().lower()
             model = entry.get("model")
@@ -514,6 +553,8 @@ class Config:
             speed = speed_pct(entry.get("speed"), 0)
             out.append({
                 "name": name,
+                "id": agent_id,
+                "label": display_name(entry.get("label"), name),
                 "agent": program if _PROGRAM.fullmatch(program) else "",
                 "model": model if _MODEL_NAME.fullmatch(model) else "",
                 "effort": effort if effort in EFFORT_LEVELS else "",
@@ -526,13 +567,27 @@ class Config:
         return out, off
 
     def agent_named(self, name: str | None) -> dict | None:
-        """The extra agent called `name`, or None."""
+        """The extra agent whose wake phrase is `name`, or None."""
         if not name:
             return None
         for spec in self.agents():
             if spec["name"] == name:
                 return spec
         return None
+
+    def agent_by_id(self, agent_id: str | None) -> dict | None:
+        """The extra agent with this stable id, or None. What the permission
+        hook and saved chats look an agent up by: a rename keeps the id."""
+        if not agent_id:
+            return None
+        for spec in self.agents():
+            if spec["id"] == agent_id:
+                return spec
+        return None
+
+    def main_label(self, phrase: str = "") -> str:
+        """The main agent's display name: `mainName`, else its wake phrase."""
+        return display_name(self["mainName"], phrase or self.get_str("phrase"))
 
 
 #: How much of a reply travels to the screen. It was 400 characters, which

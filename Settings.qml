@@ -492,7 +492,8 @@ Item {
   function agentStatus(name) {
     if (!serviceActive) return "off"
     var live = root.vLive || {}
-    if (name !== "" && live[name] !== undefined) return String(live[name])
+    // By id; "" is the main agent, which has its own entry with several.
+    if (live[name] !== undefined) return String(live[name])
     if (name === "" && (root.lastWho === "" || Object.keys(live).length === 0)) {
       if (vState === "thinking" || vState === "speaking" || vState === "transcribing") return vState
     }
@@ -535,11 +536,53 @@ Item {
     "max", "hal"
   ]
 
-  function crewInfo(name) {
+  // By id: what the daemon publishes each agent under.
+  function crewInfo(id) {
     for (var i = 0; i < root.vCrew.length; i++)
-      if (root.vCrew[i] && root.vCrew[i].name === name) return root.vCrew[i]
+      if (root.vCrew[i] && root.vCrew[i].id === id) return root.vCrew[i]
     return ({})
   }
+
+  // --- names and ids ------------------------------------------------------------
+  // Every agent has a Name (any text, what it is called on screen) and a wake
+  // phrase (`name` in the saved entry, as it always was), and an `id` that
+  // neither changes: grants, saved chats and the Agents panel know it by that.
+  // An entry saved before ids existed has none; it gets the one the daemon
+  // derives (runtime.agent_id_for), and the page writes it down before the
+  // first change, so changing the wake phrase cannot change the id.
+  function agentId(a) {
+    var raw = typeof (a || {}).id === "string" ? a.id.trim() : ""
+    if (/^[a-z0-9][a-z0-9-]{0,47}$/.test(raw) && raw !== "main") return raw
+    var slug = String((a || {}).name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-")
+                 .replace(/^-+|-+$/g, "").slice(0, 48).replace(/-+$/g, "")
+    return slug === "main" ? "agent-main" : slug
+  }
+  // A fresh id for a new agent: its wake phrase and a few random letters, so
+  // an agent deleted and made again under the same name does not inherit
+  // the old one's saved chats.
+  function newAgentId(name) {
+    var base = String(name || "agent").toLowerCase().replace(/[^a-z0-9]+/g, "-")
+                 .replace(/^-+|-+$/g, "").slice(0, 40) || "agent"
+    var taken = {}
+    for (var i = 0; i < voiceAgents.length; i++) taken[agentId(voiceAgents[i])] = true
+    for (;;) {
+      var id = base + "-" + Math.floor(Math.random() * 46656).toString(36)
+      if (!taken[id]) return id
+    }
+  }
+  function capitalised(phrase) {
+    return String(phrase || "").split(" ").map(function(w) {
+      return w.charAt(0).toUpperCase() + w.slice(1) }).join(" ")
+  }
+  // As runtime.display_name: one line of at most 40 characters, else the
+  // wake phrase capitalised.
+  function cleanLabel(text) {
+    return String(text || "").replace(/\s+/g, " ").replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 40).trim()
+  }
+  function agentLabel(a) {
+    return cleanLabel((a || {}).label) || capitalised(String((a || {}).name || ""))
+  }
+  readonly property string mainLabel: cleanLabel(setting("mainName", "")) || capitalised(activePhrase)
 
   // The model dropdown. Known aliases per agent, then whatever custom name is
   // already saved (so it stays selectable), then "Other…" for typing one.
@@ -651,7 +694,7 @@ Item {
     for (var i = 0; i < vCrew.length; i++) {
       var c = vCrew[i] || {}
       if (String(c.problem || "") !== "")
-        out.push({ text: String(c.name) + ": " + String(c.problem), page: "agents", agent: String(c.name) })
+        out.push({ text: String(c.label || c.name) + ": " + String(c.problem), page: "agents", agent: String(c.id || "") })
     }
     if (setting("conversationMode", true) === true && !vRemembers && serviceActive)
       out.push({ text: (mainAgent || "This agent") + " starts fresh every turn, so follow-ups have no memory.",
@@ -965,21 +1008,22 @@ Item {
         var copy = {}
         var a = root.voiceAgents[i] || {}
         for (var k in a) copy[k] = a[k]
-        if (String(a.name || "") === who) copy.voice = v
+        copy.id = root.agentId(a)
+        if (copy.id === who) copy.voice = v
         list.push(copy)
       }
       root.put("voiceAgents", list)
     }
     root.chooseVoice(v)
   }
-  // Who speaks in `v` now: "main" and the names of extra agents.
+  // Who speaks in `v` now: "main" and the display names of extra agents.
   function voiceUsers(v) {
     var out = []
     if (String(root.setting("voice", "lessac-medium")) === v) out.push("main")
     for (var i = 0; i < root.voiceAgents.length; i++) {
       var a = root.voiceAgents[i] || {}
       var own = String(a.voice || "")
-      if (own === v) out.push(String(a.name || ""))
+      if (own === v) out.push(root.agentLabel(a))
     }
     return out
   }
@@ -1238,7 +1282,7 @@ Item {
           Text {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: (root.request.who ? "The agent “" + root.request.who + "”"
+            text: (root.request.who ? "The agent “" + (root.request.label || root.request.who) + "”"
                                     : "The agent") +
                   " wants to run " + (root.request.tool || "a tool") + "."
             textFormat: Text.PlainText
@@ -1344,7 +1388,7 @@ Item {
               visible: root.request.sessionWide === true
               text: "Allow all in this chat"
               tooltipText: "Allow this and everything else " +
-                           (root.request.who ? root.request.who : "the agent") +
+                           (root.request.who ? (root.request.label || root.request.who) : "the agent") +
                            " asks for until the conversation ends"
               fontFamily: root.fontFamily
               bordered: true

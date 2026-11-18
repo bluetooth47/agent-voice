@@ -217,11 +217,11 @@ class TestDaemon:
         daemon.cfg._values["voiceAgents"] = [
             {"name": "jarvis", "agent": "codex", "level": "ask"},
             {"name": "friday"}]
-        jarvis = daemon.crew["jarvis"] = Persona("jarvis", {"name": "jarvis"})
+        jarvis = daemon.crew["jarvis"] = Persona("jarvis", {"name": "jarvis", "id": "jarvis"})
         jarvis.agent = type("A", (), {"name": "codex", "model": "", "effort": None})()
         jarvis.state = "speaking"
         jarvis.thread = type("T", (), {"is_alive": lambda self: True})()
-        daemon.crew["friday"] = Persona("friday", {"name": "friday"})
+        daemon.crew["friday"] = Persona("friday", {"name": "friday", "id": "friday"})
         daemon._mic_shown = ("listening", {})
         agents = {a["key"]: a for a in daemon.panel_agents({"state": "speaking", "who": "jarvis"})}
         assert agents["main"]["activity"] == "idle"

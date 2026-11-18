@@ -328,6 +328,18 @@ agent does not trust the others, and the permission hook is told which
 agent it is guarding. One it cannot find in the settings, or one whose
 program has changed since, is asked about rather than allowed.
 
+Every agent, the main one included, has a **Name** apart from its **wake
+phrase**. The name is any text, and it is what the readout, the popup, the
+permission card, the conversation and the Agents panel call it. The wake
+phrase is what you say, one to three words the engine can hear. Leave the
+name empty and it is the wake phrase, capitalised. Behind both is an id
+that neither changes, and grants, the permission hook and the Agents panel
+know the agent by that id. So renaming an agent or giving it a new wake
+phrase keeps its conversation and its "allow all in this chat". An agent
+saved before names existed gets its old wake word as its id, which is what
+everything already called it, so nothing moves. Two agents may share a
+name, but never a wake phrase.
+
 ### In Omarchy's Agents panel
 
 Each voice agent also gets a section in Omarchy's own Agents panel, the one

@@ -167,13 +167,15 @@ def _settings() -> tuple[str, Path | None]:
         # cannot be resolved, and an unresolved level is "ask" -- a hook that
         # does not know who it is guarding must not stop guarding.
         agent = sys.argv[1] if len(sys.argv) > 1 else ""
-        # argv[2], when present, is the extra agent this process belongs to,
-        # which has a level and a folder of its own. One that is no longer
+        # argv[2], when present, is the stable id of the extra agent this
+        # process belongs to, which has a level and a folder of its own. An
+        # id, not a name, so renaming the agent or changing its wake phrase
+        # leaves this process guarded by the same decision. One that is no longer
         # configured, or that now names a different program, has nobody's
         # decision behind it: "ask", and no folder, so "edits" cannot widen.
         named = _named()
         if named:
-            spec = cfg.agent_named(named)
+            spec = cfg.agent_by_id(named)
             if spec is None or spec.get("agent") != agent:
                 return "ask", None
             return spec["level"], scope_root(spec["projectDir"])
@@ -183,8 +185,24 @@ def _settings() -> tuple[str, Path | None]:
 
 
 def _named() -> str:
-    """The extra agent this hook guards, or "" for the main one."""
+    """The id of the extra agent this hook guards, or "" for the main one."""
     return sys.argv[2] if len(sys.argv) > 2 else ""
+
+
+def _label() -> str:
+    """What the person calls the agent asking, for the card on screen. Its
+    display name, read fresh; the id when it cannot be read. Never decides
+    anything: only `_named()` reaches a grant."""
+    named = _named()
+    try:
+        from runtime import Config
+        cfg = Config()
+        if not named:
+            return cfg.main_label()
+        spec = cfg.agent_by_id(named)
+        return spec["label"] if spec else named
+    except Exception:
+        return named
 
 
 def _inside(path: str, root: Path | None) -> bool:
@@ -527,6 +545,7 @@ def _ask(tool_name: str, tool_input: dict, note: str = "",
         # work at once, and a card that only says "the agent" cannot be
         # answered knowingly.
         "who": _named(),
+        "label": _label(),
         "summary": shown,
         "note": note,
         "truncated": cut,

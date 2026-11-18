@@ -2908,11 +2908,14 @@ class Daemon:
         if not self.cfg.get_bool("keepHistory"):
             return
         who = getattr(self.agent, "name", "") or ""
+        agent_id = ""
         if self.crew_mode:
-            who = self._persona().name or who
+            p = self._persona()
+            who, agent_id = p.label or who, p.id
         self.history.append({
             "at": round(time.time(), 1),
             "agent": who,
+            "agent_id": agent_id,
             "transcript": heard,
             "reply": reply[:REPLY_MAX],
             "error": kind,
@@ -2934,38 +2937,42 @@ class Daemon:
         if self.pipe is None:
             return
         agents = getattr(self.cfg, "agents", None)
-        specs = {spec["name"]: spec for spec in agents()} if callable(agents) else {}
+        # By id, so a new wake phrase or display name is a change to the same
+        # agent -- same conversation, same grants -- not a new one.
+        specs = {spec["id"]: spec for spec in agents()} if callable(agents) else {}
         disabled = getattr(self.cfg, "disabled_agents", None)
         off = disabled() if callable(disabled) else set()
         heard = set(getattr(self.pipe, "names", ()) or ())
         self._main.name = getattr(self.pipe, "phrase", "") or ""
+        label = getattr(self.cfg, "main_label", None)
+        self._main.label = label(self._main.name) if callable(label) else self._main.name
         changed = False
-        for name in list(self.crew):
-            p = self.crew[name]
-            if p.busy and name in off:
+        for key in list(self.crew):
+            p = self.crew[key]
+            if p.busy and key in off:
                 # Switched off mid-turn: stopped now, not left to finish.
                 # A deleted agent still finishes its turn, as before; "off"
                 # is a switch somebody reached for, and it should act like one.
                 if not p.interrupt.is_set():
-                    print(f"  {CYA}agent “{name}” switched off: stopping its "
+                    print(f"  {CYA}agent “{p.label}” switched off: stopping its "
                           f"turn{OFF}", flush=True)
                     p.stop()
                 continue
-            if (name in specs and name in heard) or p.busy:
+            if (key in specs and specs[key]["name"] in heard) or p.busy:
                 continue
             if p.agent is not None:
                 p.agent.cancel()
-            del self.crew[name]
+            del self.crew[key]
             changed = True
-            print(f"  {CYA}agent “{name}” removed{OFF}", flush=True)
-        for name, spec in specs.items():
-            if name not in heard:
+            print(f"  {CYA}agent “{p.label}” removed{OFF}", flush=True)
+        for key, spec in specs.items():
+            if spec["name"] not in heard:
                 continue
-            p = self.crew.get(name)
+            p = self.crew.get(key)
             if p is not None and p.busy:
                 continue
             if p is None:
-                p = self.crew[name] = Persona(name, spec)
+                p = self.crew[key] = Persona(spec["name"], spec)
                 self._build_persona(p, spec)
                 changed = True
             elif p.spec != spec:
@@ -2979,6 +2986,7 @@ class Daemon:
     def _build_persona(self, p: Persona, spec: dict) -> None:
         """The adapter for an extra agent, from its own settings."""
         p.spec = spec
+        p.id, p.name, p.label = spec["id"], spec["name"], spec["label"]
         program = spec["agent"]
         if not program:
             p.agent, p.problem = None, "no agent program is chosen for it"
@@ -2988,7 +2996,7 @@ class Daemon:
                 program, level=level, ask_permission=level != "trusted",
                 cwd=str(project_dir(spec["projectDir"])),
                 model=spec["model"] or None, effort=spec["effort"] or None,
-                instructions=spec.get("instructions", ""), named=p.name)
+                instructions=spec.get("instructions", ""), named=p.id)
             p.problem = "" if p.agent is not None else (
                 explain_agent(program) or f"{program} is not available")
         p.session_id = None
@@ -2996,35 +3004,41 @@ class Daemon:
                  f"{' · ' + spec['effort'] + ' effort' if spec['effort'] else ''}"
                  f" · {spec['level']}")
         if p.problem:
-            print(f"  {YEL}agent “{p.name}”: {p.problem}{OFF}", flush=True)
+            print(f"  {YEL}agent “{p.label}”: {p.problem}{OFF}", flush=True)
         else:
-            print(f"  {CYA}agent “{p.name}”: {where}{OFF}", flush=True)
+            print(f"  {CYA}agent “{p.label}”: {where}{OFF}", flush=True)
 
     def _rebuild_persona(self, p: Persona, spec: dict) -> None:
         """Catch an idle extra agent up with changed settings.
 
         An effort, voice, speed or instructions keep the conversation, as
-        they do for the main agent; anything else -- program, model, folder, level -- starts a new
-        one, because a session is scoped to all of those.
+        they do for the main agent, and so do its display name and wake
+        phrase: the permission hook knows it by id. Anything else -- program,
+        model, folder, level -- starts a new one, because a session is scoped
+        to all of those.
         """
         old = p.spec or {}
-        kept = ("effort", "voice", "speed", "instructions")
+        kept = ("effort", "voice", "speed", "instructions", "name", "label")
         same = {k: v for k, v in spec.items() if k not in kept}
         was = {k: v for k, v in old.items() if k not in kept}
         if same == was and p.agent is not None:
             p.spec = spec
+            if (p.name, p.label) != (spec["name"], spec["label"]):
+                print(f"  {CYA}agent “{p.label}” is now “{spec['label']}”, woken by "
+                      f"“{spec['name']}”{OFF}", flush=True)
+            p.name, p.label = spec["name"], spec["label"]
             want = spec.get("instructions", "")
             if getattr(p.agent, "instructions", "") != want:
                 p.agent.instructions = want
                 p.agent.cancel()            # read when its process starts
-                print(f"  {CYA}agent “{p.name}”: instructions "
+                print(f"  {CYA}agent “{p.label}”: instructions "
                       f"{'updated' if want else 'cleared'}{OFF}", flush=True)
             if takes_effort(p.agent):
                 before = getattr(p.agent, "effort", None)
                 p.agent.effort = spec["effort"] or None
                 if before != p.agent.effort:
                     p.agent.cancel()        # the waiting process had the old flag
-                    print(f"  {CYA}agent “{p.name}”: effort "
+                    print(f"  {CYA}agent “{p.label}”: effort "
                           f"{spec['effort'] or 'default'}{OFF}", flush=True)
             return
         if p.agent is not None:
@@ -3050,17 +3064,17 @@ class Daemon:
             if getattr(p.speaker, "speed", 100) == speed:
                 return False
             p.speaker.speed = speed
-            self.say_once(f"speed:{p.name}", f"  {CYA}agent “{p.name}” speaks at "
+            self.say_once(f"speed:{p.id}", f"  {CYA}agent “{p.label}” speaks at "
                                              f"{speed}%{OFF}")
             return True
         try:
             p.speaker = self.make_speaker(wanted)
             p.speaker.speed = speed
         except Exception as e:
-            self.say_once(f"voice:{p.name}", f"  {YEL}agent “{p.name}”: voice "
+            self.say_once(f"voice:{p.id}", f"  {YEL}agent “{p.label}”: voice "
                                              f"{wanted} unavailable: {e}{OFF}")
             return False
-        self.say_once(f"voice:{p.name}", f"  {CYA}agent “{p.name}” speaks as "
+        self.say_once(f"voice:{p.id}", f"  {CYA}agent “{p.label}” speaks as "
                                          f"{p.speaker.name}{OFF}")
         return True
 
@@ -3073,10 +3087,12 @@ class Daemon:
         unheard = dict(getattr(self.pipe, "unheard", {}) or {})
         out = []
         for spec in specs:
-            p = self.crew.get(spec["name"])
+            p = self.crew.get(spec["id"])
             a = p.agent if p is not None else None
             out.append({
+                "id": spec["id"],
                 "name": spec["name"],
+                "label": spec["label"],
                 "efforts": list(getattr(a, "efforts", tuple)()) if a else [],
                 "levels": list(getattr(a, "levels", ("ask", "trusted")))
                           if a else ["ask", "edits", "trusted"],
@@ -3116,7 +3132,10 @@ class Daemon:
             "key": "main",
             # Named for what answers it: "Claude Code (voice)". The wake
             # phrase is already in its status line.
-            "label": program_label(program) if program else "Agent Voice",
+            # A display name somebody chose wins; with none it keeps
+            # naming what answers, as before.
+            "label": (self._main.label if self.cfg.get_str("mainName").strip()
+                      else program_label(program) if program else "Agent Voice"),
             "program": program,
             "model": getattr(main.agent, "model", None) or "",
             # Read off the main agent itself, not effort_in_force(): this can
@@ -3125,25 +3144,26 @@ class Daemon:
             "level": self.cfg.level_for(program) if program else "",
             "phrase": phrase,
             "activity": main_activity,
-            "hearing": hearing and who in ("", main.name),
+            "hearing": hearing and who in ("", main.id),
             "problem": "" if program else (payload.get("posture") or ""),
         }]
         unheard = dict(getattr(self.pipe, "unheard", {}) or {})
         agents = getattr(self.cfg, "agents", None)
         for spec in (agents() if callable(agents) else []):
             name = spec["name"]
-            p = self.crew.get(name)
+            p = self.crew.get(spec["id"])
             a = p.agent if p is not None else None
             out.append({
-                "key": slug(name),
-                "label": name.title(),
+                # The id, not the wake phrase: a renamed agent keeps its record.
+                "key": slug(spec["id"]),
+                "label": spec["label"],
                 "program": spec.get("agent", "") if a is not None else "",
                 "model": getattr(a, "model", None) or spec.get("model") or "",
                 "effort": getattr(a, "effort", None) or spec.get("effort") or "",
                 "level": spec.get("level", ""),
                 "phrase": name,
                 "activity": (p.state if p is not None and p.busy else "idle"),
-                "hearing": hearing and who == name,
+                "hearing": hearing and who == spec["id"],
                 "problem": unheard.get(name, "") or (p.problem if p is not None else ""),
             })
         return out
@@ -3184,8 +3204,9 @@ class Daemon:
         if not self.crew_mode:
             return state, extra
         everyone = self.personas()
-        live = {p.name: (p.state if p.busy else "idle")
-                for p in everyone if p.name}
+        # By id, "" being the main agent: a display name is any text and
+        # need not be unique, and the screen looks agents up by id.
+        live = {p.id: (p.state if p.busy else "idle") for p in everyone}
         if state == "listening":
             speaking = [p for p in everyone if p.busy and p.state == "speaking"]
             thinking = sorted((p for p in everyone
@@ -3194,18 +3215,20 @@ class Daemon:
                               reverse=True)
             shown = (speaking or thinking or [None])[0]
             if shown is not None:
-                merged = {**shown.last, "who": shown.name, "live": live}
+                merged = {**shown.last, "who": shown.id, "who_label": shown.label,
+                          "live": live}
                 if "level_db" in extra:
                     merged["level_db"] = extra["level_db"]
                 return shown.state, merged
             recent = self._recent
             if recent is not None:
-                return state, {**extra, **recent.last, "who": recent.name,
-                               "live": live}
-        who = self._capture_for.name if (
-            self._capture_for is not None
-            and state in ("capture", "transcribing", "followup")) else ""
-        return state, {**extra, "who": who, "live": live}
+                return state, {**extra, **recent.last, "who": recent.id,
+                               "who_label": recent.label, "live": live}
+        capturing = self._capture_for is not None and state in (
+            "capture", "transcribing", "followup")
+        who = self._capture_for if capturing else None
+        return state, {**extra, "who": who.id if who else "",
+                       "who_label": who.label if who else "", "live": live}
 
     def _woken(self) -> Persona:
         """The agent whose name the wake engine just heard.
@@ -3214,10 +3237,10 @@ class Daemon:
         agent there used to be -- the others carry on.
         """
         heard = getattr(self.pipe, "heard_phrase", "") or ""
-        p = self.crew.get(heard, self._main)
+        p = next((q for q in self.crew.values() if q.name == heard), self._main)
         if p.busy:
             p.stop()
-            print(f"  {GRN}● {p.name or 'wake'}{OFF}  {DIM}stopping it — go "
+            print(f"  {GRN}● {p.label or 'wake'}{OFF}  {DIM}stopping it — go "
                   f"ahead{OFF}", flush=True)
         return p
 
@@ -3225,7 +3248,7 @@ class Daemon:
         """Who push-to-talk speaks to: whoever was spoken to last, unless the
         sentence starts with somebody else's name."""
         p = self._last_target
-        if p is None or (p is not self._main and self.crew.get(p.name) is not p):
+        if p is None or (p is not self._main and self.crew.get(p.id) is not p):
             return self._main
         return p
 
@@ -3252,12 +3275,12 @@ class Daemon:
             p.follow_up = False
             if p.busy:
                 p.stop()
-                print(f"  {DIM}(stopping {p.name}){OFF}")
+                print(f"  {DIM}(stopping {p.label}){OFF}")
             return
         if p.agent is None and not p.main:
             # Said out loud through the echo path, rather than the transcript
             # read back, which is what a missing main agent gets.
-            text = f"{p.name} cannot answer: {p.problem or 'it is not set up'}."
+            text = f"{p.label} cannot answer: {p.problem or 'it is not set up'}."
         self.dispatch(p, text, last, clock)
 
     def dispatch(self, p: Persona, text: str, last: dict,
@@ -3272,7 +3295,7 @@ class Daemon:
             p.stop()
             p.thread.join(timeout=5.0)
             if p.busy:
-                print(f"  {YEL}{p.name or 'the agent'} did not stop; not "
+                print(f"  {YEL}{p.label or 'the agent'} did not stop; not "
                       f"sending{OFF}", flush=True)
                 return False
         p.interrupt.clear()
@@ -3296,7 +3319,7 @@ class Daemon:
             self.answer(text, last, clock=clock)
             p.follow_up = self.arm_follow_up()
         except Exception as e:      # a broken turn must not take a thread down silently
-            print(f"  {YEL}{p.name or 'agent'}: turn failed: "
+            print(f"  {YEL}{p.label or 'agent'}: turn failed: "
                   f"{type(e).__name__}: {e}{OFF}", flush=True)
             p.follow_up = False
         finally:
@@ -3563,7 +3586,7 @@ class Daemon:
                                 buf += early
                                 self.hear(cap, utt, early, self.voiced(frame_db(early)))
                             print(f"  {GRN}● go on{OFF}  {DIM}(talked over "
-                                  f"{reopen.name or 'the reply'} — listening){OFF}",
+                                  f"{reopen.label or 'the reply'} — listening){OFF}",
                                   flush=True)
                             last = _empty_turn()
                             shown_partial = ""
@@ -3571,7 +3594,7 @@ class Daemon:
                         else:
                             print(f"  {CYA}● still listening{OFF}  {DIM}"
                                   f"({active_lead_in / 1000:.0f}s for "
-                                  f"{reopen.name or 'it'} — or say a name){OFF}",
+                                  f"{reopen.label or 'it'} — or say a name){OFF}",
                                   flush=True)
                             last = _empty_turn()
                             shown_partial = ""
@@ -3594,8 +3617,8 @@ class Daemon:
                     if fired:
                         capture_for = self._woken() if crew else None
                         capture_kind = "wake"
-                        who = (f" {capture_for.name}"
-                               if capture_for is not None and capture_for.name else "")
+                        who = (f" {capture_for.label}"
+                               if capture_for is not None and capture_for.label else "")
                         print(f"  {GRN}● wake{who}{OFF}  {DIM}go ahead"
                               f" ({self.pipe.lead_in_ms / 1000:.1f}s to start){OFF}",
                               flush=True)

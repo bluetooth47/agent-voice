@@ -48,7 +48,7 @@ class TestConfigAgents:
             "effort": "high", "voice": "amy-medium", "level": "edits",
             "projectDir": "~/code"}])
         assert cfg.agents() == [{
-            "name": "jarvis", "agent": "claude", "model": "sonnet",
+            "name": "jarvis", "id": "jarvis", "label": "Jarvis", "agent": "claude", "model": "sonnet",
             "effort": "high", "voice": "amy-medium", "speed": 0, "instructions": "", "level": "edits",
             "projectDir": "~/code"}]
 
@@ -511,7 +511,8 @@ def crew(daemon):
     daemon._main.agent = SlowAgent(["Main one.", "Main two."])
     daemon._main.speaker = Voice("main", log)
     for name in ("jarvis", "friday"):
-        p = daemon.crew[name] = Persona(name, {"name": name})
+        p = daemon.crew[name] = Persona(name, {"name": name, "id": name,
+                                               "label": name.title()})
         p.agent = SlowAgent([f"{name} one.", f"{name} two."])
         p.speaker = Voice(name, log)
     daemon.log = log
@@ -634,11 +635,13 @@ class TestSideBySide:
         (RUNTIME_DIR / "command").unlink()
 
     def test_history_names_the_agent_by_its_name(self, crew):
+        """By its display name for the screen, and by its id for anything
+        that has to find it again after a rename."""
         crew.cfg._values["keepHistory"] = True
         crew.dispatch(crew.crew["friday"], "b", {"transcript": "b"})
         _wait_idle(crew)
         lines = [json.loads(l) for l in crew.history.path.read_text().splitlines()]
-        assert lines[-1]["agent"] == "friday"
+        assert lines[-1]["agent"] == "Friday" and lines[-1]["agent_id"] == "friday"
 
 
 class TestWhoItIsFor:
@@ -747,6 +750,7 @@ class TestReadout:
         assert _until(lambda: crew.crew["jarvis"].state == "thinking")
         state, extra = crew._compose("listening", {"level_db": -50.0})
         assert state == "thinking" and extra["who"] == "jarvis"
+        assert extra["who_label"] == "Jarvis"
         assert extra["transcript"] == "a" and extra["level_db"] == -50.0
         gate.set()
         _wait_idle(crew)

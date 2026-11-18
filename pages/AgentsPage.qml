@@ -111,6 +111,9 @@ Column {
       var copy = {}
       var a = s.voiceAgents[i] || {}
       for (var k in a) copy[k] = a[k]
+      // Written down before anything changes, the wake phrase above all: an
+      // entry from before ids existed is known by the one derived from it.
+      copy.id = s.agentId(a)
       if (i === index) copy[key] = value
       list.push(copy)
     }
@@ -127,10 +130,18 @@ Column {
     var name = ""
     for (var j = 0; j < s.nameSuggestions.length && name === ""; j++)
       if (!taken[s.nameSuggestions[j]]) name = s.nameSuggestions[j]
-    var list = s.voiceAgents.slice()
-    list.push({ name: name, agent: "claude", model: "", effort: "", voice: "",
+    var list = []
+    for (var n = 0; n < s.voiceAgents.length; n++) {
+      var copy = {}
+      var a = s.voiceAgents[n] || {}
+      for (var k in a) copy[k] = a[k]
+      copy.id = s.agentId(a)
+      list.push(copy)
+    }
+    var id = s.newAgentId(name)
+    list.push({ id: id, name: name, label: "", agent: "claude", model: "", effort: "", voice: "",
                 speed: 0, instructions: "", level: "ask", projectDir: "" })
-    s.focusAgent = name
+    s.focusAgent = id
     saveAgents(list)
   }
 
@@ -182,13 +193,13 @@ Column {
     id: mainCard
     width: parent.width
     readonly property string st: page.s.agentStatus("")
-    name: page.endpointChosen ? "Endpoint" : (page.main ? page.s.programLabel(page.main) : "No default agent")
+    name: page.s.mainLabel
     wakeName: page.s.activePhrase
     isDefault: true
     summary: page.endpointChosen
-             ? String(page.s.setting("endpointModel", "") || "no model yet") + " · " +
+             ? "Endpoint · " + String(page.s.setting("endpointModel", "") || "no model yet") + " · " +
                String(page.s.setting("endpointUrl", "") || "no address yet")
-             : page.summary(page.main, page.mainModel, page.mainEffort, page.mainLevel, page.s.agentLevels, page.main !== "")
+             : page.summary(page.main, page.mainModel, page.mainEffort, page.mainLevel, page.s.agentLevels, false)
     status: st
     tone: page.s.statusTone(st)
     problem: !page.endpointChosen && page.main === ""
@@ -209,6 +220,27 @@ Column {
       color: page.s.dim
       font.family: page.s.fontFamily
       font.pixelSize: Style.font.caption
+    }
+
+    SettingRow {
+      width: parent.width
+      stacked: true
+      label: "Name"
+      hint: "What it is called on screen, in saved chats and in the Agents panel. Any text. Empty uses the wake phrase."
+      changed: page.s.changed("mainName")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onReset: page.s.resetKey("mainName")
+      TextField {
+        text: String(page.s.setting("mainName", ""))
+        placeholderText: page.s.capitalised(page.s.activePhrase)
+        foreground: page.s.foreground
+        font.family: page.s.fontFamily
+        onEditingFinished: {
+          var v = page.s.cleanLabel(text)
+          if (v !== String(page.s.setting("mainName", ""))) page.s.put("mainName", v)
+        }
+      }
     }
 
     // One dropdown per engine rather than one that swaps its options.
@@ -650,23 +682,26 @@ Column {
       readonly property var modelData: page.s.voiceAgents[card.index] || ({})
 
       readonly property string agentName: String(modelData.name || "")
+      // What everything else knows it by; see Settings.agentId.
+      readonly property string agentId: page.s.agentId(modelData)
+      readonly property string label: page.s.agentLabel(modelData)
       readonly property string program: String(modelData.agent || "claude")
       readonly property string model: String(modelData.model || "")
       readonly property string effort: String(modelData.effort || "")
       // 0 (or nothing) is "same as the main agent".
       readonly property int speed: Number(modelData.speed || 0)
       readonly property string level: String(modelData.level || "ask")
-      readonly property var info: page.s.crewInfo(card.agentName)
+      readonly property var info: page.s.crewInfo(card.agentId)
       readonly property var efforts: Array.isArray(card.info.efforts) ? card.info.efforts : []
       readonly property var levels: Array.isArray(card.info.levels) ? card.info.levels : ["ask", "edits", "trusted"]
-      readonly property string st: page.s.agentStatus(card.agentName)
+      readonly property string st: page.s.agentStatus(card.agentId)
       // Missing means on, so lists from before the switch keep every agent.
       readonly property bool on: card.modelData.enabled !== false
       property bool customModel: false
       property bool confirmRemove: false
 
       width: page.width
-      name: card.agentName || "New agent"
+      name: card.label || "New agent"
       wakeName: card.agentName
       summary: page.summary(card.program, card.model, card.effort, card.level, card.levels)
       status: card.on ? card.st : "switched off"
@@ -675,9 +710,9 @@ Column {
       problem: !card.on ? ""
                : String(card.info.problem || "") !== "" ? String(card.info.problem)
                : card.agentName !== "" && !/^[a-z]+( [a-z]+){0,2}$/.test(card.agentName)
-                 ? "A name is one to three plain words, letters only." : ""
-      expanded: page.isOpen(card.agentName)
-      onToggled: function(open) { page.setOpen(card.agentName, open) }
+                 ? "A wake phrase is one to three plain words, letters only." : ""
+      expanded: page.isOpen(card.agentId)
+      onToggled: function(open) { page.setOpen(card.agentId, open) }
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
 
@@ -686,7 +721,7 @@ Column {
       ToggleRow {
         width: parent.width
         label: "On"
-        hint: card.on ? "Off keeps every setting here, but its name stops waking it and it leaves the popup and the Agents panel. A turn it is running is stopped."
+        hint: card.on ? "Off keeps every setting here, but its wake phrase stops waking it and it leaves the popup and the Agents panel. A turn it is running is stopped."
                       : "Switched off: saying “" + card.agentName + "” does nothing. Every setting is kept."
         checked: card.on
         foreground: page.s.foreground
@@ -698,22 +733,36 @@ Column {
         width: parent.width
         stacked: true
         label: "Name"
-        hint: "The word that wakes it. One to three plain words."
+        hint: "What it is called on screen, in saved chats and in the Agents panel. Any text. Empty uses the wake phrase."
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        TextField {
+          text: page.s.cleanLabel(card.modelData.label)
+          placeholderText: page.s.capitalised(card.agentName) || "a name to show"
+          foreground: page.s.foreground
+          font.family: page.s.fontFamily
+          onEditingFinished: {
+            var v = page.s.cleanLabel(text)
+            if (v !== page.s.cleanLabel(card.modelData.label)) page.updateAgent(card.index, "label", v)
+          }
+        }
+      }
+
+      SettingRow {
+        width: parent.width
+        stacked: true
+        label: "Wake phrase"
+        hint: "What you say to wake it. One to three plain words. Changing it keeps the conversation."
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
         TextField {
           text: card.agentName
-          placeholderText: "a name — the word that wakes it"
+          placeholderText: "the word that wakes it"
           foreground: page.s.foreground
           font.family: page.s.fontFamily
           onEditingFinished: {
-            var v = text.trim().toLowerCase()
-            if (v !== card.agentName) {
-              page.setOpen(card.agentName, false)
-              page.setOpen(v, true)
-              page.s.focusAgent = v
-              page.updateAgent(card.index, "name", v)
-            }
+            var v = text.trim().toLowerCase().replace(/\s+/g, " ")
+            if (v !== card.agentName) page.updateAgent(card.index, "name", v)
           }
         }
       }
@@ -812,18 +861,18 @@ Column {
           SegmentedChoice {
             width: parent.width
             options: page.s.levelChoices(card.levels)
-            value: page.trustPending === card.agentName ? "trusted" : card.level
+            value: page.trustPending === card.agentId ? "trusted" : card.level
             foreground: page.s.foreground
             accent: card.level === "trusted" ? page.s.urgent : page.s.accent
             fontFamily: page.s.fontFamily
             onCommitted: function(v) {
-              if (v === "trusted") { page.trustPending = card.agentName; return }
+              if (v === "trusted") { page.trustPending = card.agentId; return }
               page.trustPending = ""
               page.updateAgent(card.index, "level", v)
             }
           }
           Row {
-            visible: page.trustPending === card.agentName
+            visible: page.trustPending === card.agentId
             spacing: Style.space(10)
             Text {
               anchors.verticalCenter: parent.verticalCenter
@@ -878,7 +927,7 @@ Column {
         fontFamily: page.s.fontFamily
         InstructionsBox {
           value: String(card.modelData.instructions || "")
-          placeholder: "What " + (card.modelData.name || "this agent") + " should always keep in mind"
+          placeholder: "What " + (card.label || "this agent") + " should always keep in mind"
           foreground: page.s.foreground
           fontFamily: page.s.fontFamily
           onCommitted: function(t) { page.updateAgent(card.index, "instructions", t) }
@@ -951,8 +1000,8 @@ Column {
       }
 
       Button {
-        text: card.confirmRemove ? "Remove " + (card.agentName || "this agent") + "? Click again"
-                                 : "Remove " + (card.agentName || "this agent")
+        text: card.confirmRemove ? "Remove " + (card.label || "this agent") + "? Click again"
+                                 : "Remove " + (card.label || "this agent")
         iconText: "\u{f0a7a}"
         bordered: true
         foreground: card.confirmRemove ? page.s.urgent : page.s.foreground

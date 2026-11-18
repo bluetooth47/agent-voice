@@ -56,6 +56,12 @@ class Persona:
         #: Its settings as Config.agents() cleaned them, or None for the main
         #: agent, whose settings are the ordinary ones.
         self.spec = spec
+        #: What grants, the permission hook, saved chats and the Agents panel
+        #: know it by. Stays put when its name or wake phrase changes. ""
+        #: for the main agent, which the hook knows by having no id.
+        self.id = (spec or {}).get("id", "")
+        #: What it is called on screen and out loud. Any text.
+        self.label = (spec or {}).get("label", "") or name
         self.agent = None
         #: Its own conversation: agents never share one.
         self.session_id: str | None = None
