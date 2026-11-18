@@ -163,6 +163,27 @@ def _run(argv, *, input_text=None, timeout=CMD_TIMEOUT_S) -> str:
     return out.stdout
 
 
+def _copy(text: str) -> None:
+    """Put text on the clipboard with wl-copy.
+
+    Not through _run: wl-copy forks a process that holds the selection until
+    something else is copied, and that process keeps whatever stdout and
+    stderr it was given. Captured, those pipes never close, so the call
+    waited out its whole timeout and reported a failure for a copy that had
+    worked (found on the real desktop; the stub did not fork).
+    """
+    if not shutil.which("wl-copy"):
+        raise ToolError("wl-copy is not installed")
+    try:
+        out = subprocess.run(["wl-copy"], input=text, text=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             timeout=CMD_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        raise ToolError(f"wl-copy did not finish in {CMD_TIMEOUT_S}s")
+    if out.returncode != 0:
+        raise ToolError("wl-copy failed")
+
+
 def _spawn(argv) -> None:
     """Start something that outlives this call, detached from the agent."""
     if not shutil.which(argv[0]):
@@ -346,7 +367,7 @@ def call(name: str, args: dict):
             raise
         return text[:CLIPBOARD_MAX]
     if name == "clipboard_write":
-        _run(["wl-copy"], input_text=str(args.get("text", "")))
+        _copy(str(args.get("text", "")))
         return "copied"
     if name == "screenshot":
         return _screenshot(args)

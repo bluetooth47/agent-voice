@@ -524,6 +524,24 @@ Item {
     { label: "Copilot", value: "copilot" },
     { label: "Endpoint", value: "endpoint" }
   ]
+  // Who is asking, by name. The hook sends the main agent's name as `label`
+  // with no `who`; an extra agent has both.
+  function askerName() {
+    return String(root.request.label || root.request.who || "")
+  }
+  // A tool name as words. MCP tools arrive as mcp__<server>__<tool>, which
+  // means nothing to someone deciding whether to allow it.
+  function toolWords(tool) {
+    var t = String(tool || "")
+    if (t === "") return "run a tool"
+    var m = t.match(/^mcp__(.+?)__(.+)$/)
+    if (!m) return "run " + t
+    var what = m[2].replace(/_/g, " ")
+    if (m[1] === "claude-in-chrome") return "act in your browser (" + what + ")"
+    if (m[1] === "agentvoice-desktop") return "use a desktop tool (" + what + ")"
+    return "use " + what + " from " + m[1]
+  }
+
   function programLabel(value) {
     for (var i = 0; i < programOptions.length; i++)
       if (programOptions[i].value === value) return programOptions[i].label
@@ -1291,9 +1309,8 @@ Item {
           Text {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: (root.request.who ? "The agent “" + (root.request.label || root.request.who) + "”"
-                                    : "The agent") +
-                  " wants to run " + (root.request.tool || "a tool") + "."
+            text: (root.askerName() !== "" ? "The agent “" + root.askerName() + "”" : "The agent") +
+                  " wants to " + root.toolWords(root.request.tool) + "."
             textFormat: Text.PlainText
             color: root.foreground
             font.family: root.fontFamily
@@ -1397,7 +1414,7 @@ Item {
               visible: root.request.sessionWide === true
               text: "Allow all in this chat"
               tooltipText: "Allow this and everything else " +
-                           (root.request.who ? (root.request.label || root.request.who) : "the agent") +
+                           (root.askerName() || "the agent") +
                            " asks for until the conversation ends"
               fontFamily: root.fontFamily
               bordered: true

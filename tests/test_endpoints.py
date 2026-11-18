@@ -412,3 +412,15 @@ def test_every_preset_is_one_a_real_turn_went_through():
     findings = (ROOT / "bench/FINDINGS.md").read_text()
     for p in endpoints.PRESETS:
         assert f"| {p['label']}" in findings, p["label"]
+
+
+
+def test_the_helpers_never_send_a_key_over_plain_http_to_a_public_host():
+    """A-05 mutation M7 survived without this: the adapter's own check is
+    tested, the connection test's and model list's were not."""
+    req = endpoints._request("http://api.example.com/v1/models", "sk-secret")
+    assert "Authorization" not in req.headers
+    req = endpoints._request("https://api.example.com/v1/models", "sk-secret")
+    assert req.headers["Authorization"] == "Bearer sk-secret"
+    req = endpoints._request("http://192.168.1.5:11434/v1/models", "sk-secret")
+    assert req.headers["Authorization"] == "Bearer sk-secret"

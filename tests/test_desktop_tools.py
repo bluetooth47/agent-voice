@@ -731,3 +731,18 @@ def test_the_daemon_says_its_own_agents_browser_question_once(cfg_factory, tmp_p
     assert said == ["Nova is asking first: Places the order. Answer on screen."]
     assert "4242" not in said[0]
     assert d.announce_permission(nova, 0) is False     # once
+
+
+
+# --- found by the full test run (testresults.md) ---------------------------------
+
+def test_a_copy_that_forks_a_holder_returns_at_once(stubs, monkeypatch):
+    """wl-copy leaves a process holding the selection, with the stdout it was
+    given. A stub that does the same: the call must not wait for it."""
+    import time as _t
+    bin_ = Path(os.environ["PATH"].split(":")[0])
+    (bin_ / "wl-copy").write_text("#!/bin/sh\ncat > /dev/null\n(sleep 30) &\nexit 0\n")
+    (bin_ / "wl-copy").chmod(0o755)
+    t = _t.time()
+    assert desktop_mcp.call("clipboard_write", {"text": "x"}) == "copied"
+    assert _t.time() - t < 5

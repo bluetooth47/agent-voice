@@ -30,6 +30,15 @@ ShellRoot {
     }
     function click(item, label) {
       if (!item) { console.warn("PREVIEW miss " + label); return }
+      // Scrolled into view first: a control below the fold is outside the
+      // window, and a synthetic click there lands on nothing. The Voice
+      // page's model chips sit under a 31-voice library, which is how this
+      // target came to report a miss that was not one.
+      var flick = overlay.pageScroll
+      if (flick && content()) {
+        var y = item.mapToItem(content(), 0, 0).y
+        flick.contentY = Math.max(0, Math.min(y - 120, flick.contentHeight - flick.height))
+      }
       console.warn("PREVIEW click " + label)
       input.mouseClick(item, item.width / 2, item.height / 2, Qt.LeftButton, Qt.NoModifier, -1)
     }

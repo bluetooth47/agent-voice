@@ -75,7 +75,11 @@ send_command() {
 
 case "${1:-status}" in
   start)
-    active || systemctl --user start "$UNIT"
+    # A start somebody asked for clears systemd's start limit first: after a
+    # few quick restarts (a crash loop, or the switch flicked on and off) it
+    # refuses every start until reset-failed, and the switch looked dead.
+    active || { systemctl --user reset-failed "$UNIT" 2>/dev/null || true
+                systemctl --user start "$UNIT"; }
     ;;
   stop)
     systemctl --user stop "$UNIT" 2>/dev/null || true
@@ -207,6 +211,13 @@ case "${1:-status}" in
       exit 2
     fi
     D="$RUNDIR/permissions"
+    # Only a question that is waiting gets an answer. Answering an id that
+    # is not pending left a .response behind for nobody (found in testing:
+    # one from a timed-out card was still there hours later).
+    if [[ ! -f $D/$id.request ]]; then
+      echo "agentvoice: no question $id is waiting" >&2
+      exit 1
+    fi
     if [[ $verdict == allow ]]; then
       printf '{"allow":true}' > "$D/$id.response"
     elif [[ $verdict == allow-session ]]; then
@@ -337,7 +348,7 @@ case "${1:-status}" in
     active && echo yes || echo no
     ;;
   *)
-    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|interrupt|monitor|calibrate|voice|permit|pending|history|chats|open-mic|wake-test|status|is-active]" >&2
+    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|interrupt|monitor|calibrate|voice|permit|pending|history|chats|endpoint|open-mic|wake-test|status|is-active]" >&2
     exit 2
     ;;
 esac
