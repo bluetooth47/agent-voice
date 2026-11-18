@@ -943,3 +943,36 @@ def test_the_room_is_learned_in_the_wake_phase_only(daemon, monkeypatch):
     learned = daemon.pipe.learned
     assert len(learned) == 1, f"learned {len(learned)} frames, capture included"
     assert learned[0] > -10, "the waking frame, before the capture opened"
+
+
+def test_a_stop_during_a_native_import_waits_until_it_is_done():
+    """A SIGTERM inside sounddevice's import left PortAudio's JACK thread
+    running into unloaded code: SIGSEGV and a core dump on a restart during
+    startup. The stop is held for the block and happens right after it."""
+    import os
+    import signal
+
+    import wake_listen
+
+    def stopped(*_):
+        raise SystemExit(0)
+    old = signal.signal(signal.SIGTERM, stopped)
+    try:
+        done = []
+        with pytest.raises(SystemExit):
+            with wake_listen.sigterm_deferred():
+                os.kill(os.getpid(), signal.SIGTERM)
+                done.append("the rest of the block ran")
+        assert done, "the stop cut the block short"
+        assert signal.getsignal(signal.SIGTERM) is stopped, "handler not put back"
+        with wake_listen.sigterm_deferred():
+            pass                                  # no stop: nothing raised
+    finally:
+        signal.signal(signal.SIGTERM, old)
+
+
+def test_main_imports_sounddevice_with_the_stop_held():
+    src = DAEMON[DAEMON.index("def main()"):]
+    held = src.index("with sigterm_deferred():")
+    assert src.index("import sounddevice", held) - held < 120
+    assert src.index("signal.signal(signal.SIGTERM, _stopped)") < held

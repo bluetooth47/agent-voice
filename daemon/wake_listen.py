@@ -3938,6 +3938,27 @@ def run_simulated(pipe: Pipeline, speaker: Speaker | None, wav: Path,
     return 0
 
 
+@contextlib.contextmanager
+def sigterm_deferred():
+    """Hold a SIGTERM until the block ends, then stop as it would have.
+
+    Python raises a signal handler's exception at whatever line the main
+    thread is on. Inside a native library's import, that can leave the
+    library half set up with its threads running; see main(). Masking the
+    signal does not help, because Python takes it on another thread and
+    still raises in the main one, so the handler itself is swapped for one
+    that only remembers.
+    """
+    held: list[int] = []
+    old = signal.signal(signal.SIGTERM, lambda signum, _frame: held.append(signum))
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, old)
+        if held:
+            raise SystemExit(0)
+
+
 def forget_chat_grants() -> int:
     """Drop every "allow everything in this chat" left from a previous run.
 
@@ -4024,6 +4045,19 @@ def main() -> int:
         raise SystemExit(0)
 
     signal.signal(signal.SIGTERM, _stopped)
+    # PortAudio starts when sounddevice is first imported (about 1.4s here),
+    # and opens a JACK client through PipeWire as it does. A stop landing in
+    # that import raised SystemExit inside it, after PortAudio was up and
+    # before sounddevice registered the exit handler that shuts it down; the
+    # JACK thread then ran into code unloaded at exit, and the daemon died
+    # with SIGSEGV and a core dump (seen once, live, on a restart during
+    # startup; reproduced 12 of 12 timed into the import, 0 of 12 with this).
+    # So the first import happens here, with a stop held until it is done.
+    with sigterm_deferred():
+        try:
+            import sounddevice  # noqa: F401
+        except Exception:
+            pass        # no audio stack: run() says so where it is needed
 
     state = StateFile()
     panel = None
