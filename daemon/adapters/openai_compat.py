@@ -21,9 +21,19 @@ from typing import Iterator
 
 from .base import Adapter, Chunk
 
+try:                                    # the daemon runs with daemon/ on the path
+    from endpoints import ThinkFilter, split_delta
+except ImportError:                     # pragma: no cover - imported as a package
+    from ..endpoints import ThinkFilter, split_delta
+
 #: How many prior turns to replay. Voice conversations are short, and every
 #: replayed turn is re-billed and re-read on the next request.
 DEFAULT_HISTORY_TURNS = 8
+
+#: The most turns a card may ask to replay, and the longest and shortest
+#: timeouts it may set. Bounds, because both come from synced settings.
+MAX_HISTORY_TURNS = 50
+MIN_TIMEOUT_S, MAX_TIMEOUT_S = 10, 600
 
 #: How many conversations to remember at once. Sessions are client-side, so
 #: nothing else ever frees them.
@@ -106,13 +116,15 @@ class OpenAICompatible(Adapter):
     levels = ("ask",)
     guards_permissions = False
     can_be_gated = False
+    #: It runs nothing on this machine, so this machine's commands are noise.
+    takes_skill_text = False
 
     def __init__(self, base_url: str, model: str,
                  api_key: str | None = None,
                  spoken: bool = True,
                  is_agent: bool = False,
                  history_turns: int = DEFAULT_HISTORY_TURNS,
-                 timeout: float = 120.0):
+                 timeout: float | None = None):
         self.is_agent = is_agent
         self.has_tools = is_agent
         if is_agent:
@@ -124,8 +136,10 @@ class OpenAICompatible(Adapter):
         self.model = model
         self.api_key = api_key
         self.spoken = spoken
-        self.history_turns = history_turns
-        self.timeout = timeout
+        self.history_turns = max(0, min(MAX_HISTORY_TURNS, int(history_turns)))
+        #: Whether the timeout was chosen rather than defaulted.
+        self.timeout_set = timeout is not None
+        self.timeout = float(timeout) if timeout is not None else 120.0
         # session id -> message list. Client-side, because this API has no
         # notion of a resumable conversation.
         self._sessions: dict[str, list[dict]] = {}
@@ -196,9 +210,13 @@ class OpenAICompatible(Adapter):
             history = [{"role": "system", "content": head}] + history
         history = history + [{"role": "user", "content": text}]
         # Keep the system message and the tail; the middle is what ages out.
-        if len(history) > self.history_turns * 2 + 1:
+        if len(history) > self.history_turns * 2 + 1 or (
+                not self.history_turns and len(history) > 2):
             head = history[:1] if history[0]["role"] == "system" else []
-            tail = history[-(self.history_turns * 2):]
+            # [-0:] is the whole list, so no history is its own case: the
+            # request alone.
+            tail = (history[-(self.history_turns * 2):] if self.history_turns
+                    else history[-1:])
             # A tail that begins with an assistant message is a transcript
             # that opens with an answer to a question that is no longer in
             # it. Drop it rather than send that.
@@ -264,6 +282,8 @@ class OpenAICompatible(Adapter):
             f"{self.base_url}/chat/completions", data=body, headers=headers)
 
         reply = ""
+        think = ThinkFilter()
+        thinking_chars = 0
         # urlopen's timeout is the *socket* timeout, applied to each blocking
         # read rather than to the request as a whole -- so it is already an
         # idle timeout, and a reliable one. A watchdog thread was tried first
@@ -280,6 +300,11 @@ class OpenAICompatible(Adapter):
         # anything and the comment above __init__'s 300.0 was fiction.
         idle = max(self.timeout, self.idle_timeout_s) if self.is_agent \
             else min(self.timeout, self.idle_timeout_s)
+        if self.timeout_set:
+            # Chosen on the agent's card (plan 7b): a slow local model on a
+            # laptop may need longer than the chat default, and somebody who
+            # set a number meant it.
+            idle = self.timeout
         try:
             with _OPENER.open(request, timeout=idle) as response:
                 self._response = response
@@ -313,13 +338,26 @@ class OpenAICompatible(Adapter):
                         event = json.loads(payload)
                     except json.JSONDecodeError:
                         continue
-                    choices = event.get("choices") or [{}]
-                    delta = (choices[0].get("delta") or {}).get("content")
+                    # A reasoning model's thinking is taken out here, before
+                    # anything can speak it: inline <think> tags (split
+                    # across pieces or not) and the separate reasoning
+                    # fields some servers send instead.
+                    delta, thought = split_delta(event, think)
+                    if thought:
+                        thinking_chars += len(thought)
+                        if thinking_chars <= MAX_REPLY_CHARS:
+                            yield Chunk(thinking=thought)
                     if delta:
                         reply += delta
                         yield Chunk(text=delta)
                         if len(reply) > MAX_REPLY_CHARS:
                             break
+                tail, thought = think.flush()
+                if thought:
+                    yield Chunk(thinking=thought)
+                if tail:
+                    reply += tail
+                    yield Chunk(text=tail)
         except urllib.error.HTTPError as e:
             try:
                 # Bounded before decoding, not after: the slice to 200 was

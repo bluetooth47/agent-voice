@@ -50,7 +50,7 @@ class TestConfigAgents:
         assert cfg.agents() == [{
             "name": "jarvis", "id": "jarvis", "label": "Jarvis", "agent": "claude", "model": "sonnet",
             "effort": "high", "voice": "amy-medium", "speed": 0, "narration": "", "instructions": "", "level": "edits",
-            "projectDir": "~/code"}]
+            "projectDir": "~/code", "endpoint": None}]
 
     def test_the_program_defaults_to_claude(self, cfg_factory):
         assert cfg_factory(voiceAgents=[{"name": "friday"}]).agents()[0]["agent"] == "claude"
@@ -805,6 +805,28 @@ class TestReconcile:
         fields = {c["name"]: c for c in recon.crew_fields()["crew"]}
         assert fields["omarchy"]["problem"] == "unknown word"
         assert fields["jarvis"]["problem"] == ""
+
+    def test_an_agent_on_its_own_endpoint_gets_one(self, recon, monkeypatch):
+        import wake_listen
+        monkeypatch.setattr(wake_listen, "endpoint_key", lambda host: "k-" + host)
+        recon.cfg._values["voiceAgents"] = [
+            {"name": "jarvis", "agent": "endpoint", "endpointUrl": "localhost:11434",
+             "endpointModel": "qwen3:4b", "instructions": "be brief"}]
+        recon.reconcile_crew()
+        program, kw = recon.built[0]
+        assert program is None
+        assert kw["endpoint"] == {"url": "http://localhost:11434/v1", "model": "qwen3:4b",
+                                  "is_agent": False, "timeout_s": 0, "history_turns": 8,
+                                  "key": "k-localhost:11434"}
+        assert kw["instructions"] == "be brief"
+        assert recon.crew["jarvis"].problem == ""
+
+    def test_an_endpoint_with_no_model_says_so(self, recon):
+        recon.cfg._values["voiceAgents"] = [
+            {"name": "jarvis", "agent": "endpoint", "endpointUrl": "localhost:11434"}]
+        recon.reconcile_crew()
+        assert recon.built == []
+        assert "address and a model" in recon.crew["jarvis"].problem
 
     def test_an_effort_change_keeps_the_conversation(self, recon):
         recon.cfg._values["voiceAgents"] = [{"name": "jarvis"}]

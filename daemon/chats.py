@@ -194,6 +194,10 @@ class ChatStore:
                 "reply": str(exchange.get("reply", "")),
                 "error": str(exchange.get("error", "")),
                 "stopped": bool(exchange.get("stopped")),
+                # A reasoning model's thinking, shown greyed; only when there
+                # was some, so chats from other backends are unchanged.
+                **({"thinking": str(exchange["thinking"])[:8000]}
+                   if exchange.get("thinking") else {}),
             }]
             self._write_json(self._path(chat["id"]), chat)
             index = self._read_index()

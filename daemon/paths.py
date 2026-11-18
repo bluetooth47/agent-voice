@@ -233,8 +233,10 @@ def endpoint_key(host: str = "") -> str:
       1. the environment, for a key that should never touch disk at all
       2. the login keyring, keyed by endpoint host, so an OpenAI key and an
          xAI key can be stored side by side rather than swapped in a file
-      3. the keyring under a generic name, for a single endpoint
-      4. ~/.config/agentvoice/endpoint.key, for machines with no keyring
+      3. ~/.config/agentvoice/endpoint-keys.json, keyed by host, which the
+         settings page writes (owner-only; endpoints.save_key)
+      4. the keyring under a generic name, for a single endpoint
+      5. ~/.config/agentvoice/endpoint.key, for machines with no keyring
 
     A local endpoint such as Ollama needs no key at all, so absence is
     normal rather than an error.
@@ -256,6 +258,15 @@ def endpoint_key(host: str = "") -> str:
         found = _keyring(service="agentvoice", endpoint=host)
         if found:
             return found
+        # The settings page's own store: owner-only, keyed by host, for a
+        # machine with no keyring or somebody who would rather paste a key
+        # into a password box than run secret-tool.
+        from endpoints import _read_keys
+        filed = _read_keys()
+        if filed.get(host.lower()):
+            return filed[host.lower()]
+        if filed:
+            return ""
         # Once any key is filed under a host, the absence of one for *this*
         # host means there is no key for it -- not that some other endpoint's
         # key will do. Falling through here would hand an OpenAI credential

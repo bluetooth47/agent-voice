@@ -228,6 +228,9 @@ class Chunk:
     #: subagent ran. Arrives after `tool`, which carries only the name.
     activity: dict | None = None
     tool_done: str | None = None     # the id of a tool that has returned
+    #: A reasoning model's thinking, never spoken: shown greyed in the
+    #: conversation view and nowhere else (plan 7b).
+    thinking: str = ""
     done: bool = False
     error: str | None = None
     cost_usd: float | None = None
@@ -291,13 +294,24 @@ class Adapter(ABC):
     #: and the conversation carries on under the new instructions.
     instructions: str = ""
 
+    #: The Omarchy commands this machine has, as instructions (plan 12b), for
+    #: a backend that runs commands here but loads no skill. Set by the
+    #: daemon when the Omarchy skill is on.
+    skill_text: str = ""
+    #: Whether skill_text means anything to this backend. Claude Code loads
+    #: the skill itself (--plugin-dir); an endpoint runs nothing here.
+    takes_skill_text: bool = True
+
     def preamble(self) -> str:
-        """What goes ahead of the conversation: the spoken style, then the
-        user's own instructions. Empty when there is neither."""
+        """What goes ahead of the conversation: the spoken style, the user's
+        own instructions, then the Omarchy commands for a backend that takes
+        them. Empty when there is none of these."""
         parts = [SPOKEN_STYLE] if self.spoken else []
         own = (self.instructions or "").strip()
         if own:
             parts.append(INSTRUCTIONS_HEAD + own)
+        if self.skill_text and self.takes_skill_text and self.has_tools:
+            parts.append(self.skill_text)
         return "\n\n".join(parts)
 
     def with_preamble(self, text: str) -> str:

@@ -65,6 +65,7 @@ from speech_text import (  # noqa: E402
 )
 from chats import RETENTIONS, ChatStore, replay_context  # noqa: E402
 import narration  # noqa: E402
+import omarchy_skill  # noqa: E402
 from runtime import (  # noqa: E402
     REPLY_MAX, RUNTIME_DIR, Config, History, Speaker, StateFile, instructions_text, speed_pct,
 )
@@ -81,6 +82,9 @@ from paths import (  # noqa: E402
 #: cannot be written down by hand and be wrong.
 RATE, CHUNK = 16_000, 3200
 CHUNK_MS = 1000 * CHUNK // RATE     # 200
+
+#: How much of a reasoning model's thinking is kept for the conversation view.
+THINKING_MAX = 8000
 
 
 def _host(url: str) -> str:
@@ -1545,6 +1549,9 @@ class Daemon:
         self.yielded = False
         self._yielded_to = ""
         self._last_session_poll = 0.0
+        #: Whether the Omarchy skill has been checked against the installed
+        #: Omarchy since this daemon started (reconcile_extras).
+        self._skill_checked = False
         #: How long an explicitly announced lock outranks the poll, for the
         #: moment between the lock key being pressed and the compositor
         #: admitting to a lock.
@@ -1987,7 +1994,12 @@ class Daemon:
                              and getattr(self.agent, "model", None)
                              == endpoint["model"]
                              and getattr(self.agent, "is_agent", False)
-                             == endpoint["is_agent"]))
+                             == endpoint["is_agent"]
+                             and getattr(self.agent, "history_turns", None)
+                             == endpoint["history_turns"]
+                             and (getattr(self.agent, "timeout", None)
+                                  if getattr(self.agent, "timeout_set", False)
+                                  else 0) == endpoint["timeout_s"]))
         if (self.agent is not None
                 and getattr(self.agent, "name", None) == want_name
                 and same_endpoint
@@ -2088,15 +2100,11 @@ class Daemon:
         its own file at the moment it is needed, so it cannot end up in
         shell.json, in the state file, or in anything published to the panel.
         """
-        url = self.cfg.get_str("endpointUrl").strip()
-        model = self.cfg.get_str("endpointModel").strip()
-        if not url or not model:
-            return None
         # No key here: this runs on the idle poll, every couple of seconds,
         # and reading the keyring means spawning secret-tool. The key is
         # fetched once, where the adapter is actually built.
-        return {"url": url, "model": model,
-                "is_agent": self.cfg.get_bool("endpointIsAgent")}
+        main = getattr(self.cfg, "main_endpoint", None)
+        return main() if callable(main) else None
 
     def level(self) -> str:
         return self.cfg.level_for(getattr(self.agent, "name", None))
@@ -2311,6 +2319,7 @@ class Daemon:
         # poll in run(), which is above it.
         self.reconcile_agent()
         self.reconcile_crew()
+        self.reconcile_extras()
         # Outside the guard for the same reason: a voice arrives on disk when
         # the installer fetches it, and a file appearing changes no setting.
         # Behind the guard, a substitution outlived its own download until
@@ -2335,6 +2344,60 @@ class Daemon:
         # The names the wake engine can hear may have changed with it.
         self.reconcile_crew()
         print(f"  {CYA}knobs updated{OFF}")
+
+    def reconcile_extras(self) -> None:
+        """Desktop tools and the Omarchy skill, on every idle agent (plan 12a,
+        12b). Outside the reload guard: the skill is a file, rebuilt when
+        Omarchy updates, and a file changes with no setting change at all."""
+        if self.cfg.get_bool("omarchySkill") and not getattr(self, "_skill_checked", True):
+            # Once per daemon: built at install, rebuilt here only when the
+            # Omarchy version moved underneath it. On a thread, because
+            # asking omarchy for its command list takes about a second.
+            self._skill_checked = True
+            threading.Thread(target=self._rebuild_skill, daemon=True).start()
+        agents = [self._main] + list(getattr(self, "crew", {}).values())
+        for p in agents:
+            agent = self.agent if p.main else p.agent
+            if agent is not None and not p.busy:
+                self.apply_extras(agent)
+
+    def _rebuild_skill(self) -> None:
+        try:
+            if omarchy_skill.stale():
+                result = omarchy_skill.build()
+                if not result.get("skipped"):
+                    print(f"  {CYA}omarchy skill rebuilt: {result['commands']} "
+                          f"commands, {result['keybindings']} keybindings{OFF}",
+                          flush=True)
+        except Exception as e:              # a skill is never worth a turn
+            print(f"  {YEL}omarchy skill not rebuilt: {type(e).__name__}{OFF}",
+                  flush=True)
+
+    def apply_extras(self, agent) -> bool:
+        """Give `agent` the desktop tools and the Omarchy skill the settings
+        ask for. Both are read when its process starts, so a change lets the
+        idle process go -- the conversation is kept, as for instructions.
+        True when anything changed."""
+        changed = False
+        skill_on = self.cfg.get_bool("omarchySkill")
+        if hasattr(agent, "desktop_tools"):
+            want = self.cfg.get_bool("desktopTools")
+            if agent.desktop_tools != want:
+                agent.desktop_tools, changed = want, True
+        if hasattr(agent, "skill_dir"):
+            want = omarchy_skill.plugin_dir() if skill_on else None
+            if agent.skill_dir != want:
+                agent.skill_dir, changed = want, True
+        if getattr(agent, "takes_skill_text", False) and getattr(agent, "has_tools", False):
+            want = omarchy_skill.instructions() if skill_on else ""
+            if getattr(agent, "skill_text", "") != want:
+                agent.skill_text, changed = want, True
+        if changed:
+            try:
+                agent.cancel()
+            except Exception:
+                pass
+        return changed
 
     def reconcile_voice(self) -> None:
         """Load the voice the settings ask for, if that is not what is loaded.
@@ -2980,6 +3043,7 @@ class Daemon:
             prompt = OPEN_MIC_PREAMBLE + prompt
         persona.replay = ""
         reply_parts: list[str] = []
+        thinking_parts: list[str] = []
         ttft = None
         error = None
         kind = ""
@@ -3012,6 +3076,10 @@ class Daemon:
                     print(f"  {DIM}[{chunk.tool}]{OFF}", flush=True)
                 if chunk.error:
                     error = chunk.error
+                if chunk.thinking:
+                    # Kept for the conversation view, greyed; never spoken,
+                    # and never part of the reply the panel or a chat holds.
+                    thinking_parts.append(chunk.thinking)
                 yield chunk
 
         try:
@@ -3140,10 +3208,11 @@ class Daemon:
         if "first_audio" in clock or not self._interrupt.is_set():
             self.report_latency(clock, last)
         self.remember(text, reply, last, kind=kind,
-                      stopped=self._interrupt.is_set(), new=new_conversation)
+                      stopped=self._interrupt.is_set(), new=new_conversation,
+                      thinking="".join(thinking_parts).strip()[:THINKING_MAX])
 
     def remember(self, heard: str, reply: str, last: dict, *, kind: str,
-                 stopped: bool, new: bool) -> None:
+                 stopped: bool, new: bool, thinking: str = "") -> None:
         """Add the exchange to the session's conversation -- runtime.History.
 
         What was said aloud, not everything the agent wrote: a reply stopped
@@ -3153,7 +3222,8 @@ class Daemon:
         Saved chats are their own switch: keeping this session's view is not
         a promise to keep anything on disk, and the reverse holds too.
         """
-        self.save_chat(heard, reply, kind=kind, stopped=stopped, new=new)
+        self.save_chat(heard, reply, kind=kind, stopped=stopped, new=new,
+                       thinking=thinking)
         if not self.cfg.get_bool("keepHistory"):
             return
         who = getattr(self.agent, "name", "") or ""
@@ -3171,12 +3241,13 @@ class Daemon:
             "stopped": bool(stopped),
             "new": bool(new),
             "latency_ms": int(last.get("latency_ms") or 0),
+            **({"thinking": thinking} if thinking else {}),
         })
 
     # --- saved chats -----------------------------------------------------------
 
     def save_chat(self, heard: str, reply: str, *, kind: str, stopped: bool,
-                  new: bool) -> None:
+                  new: bool, thinking: str = "") -> None:
         """Add the exchange to the agent's saved chat, when chats are saved.
 
         A turn that started a new session starts a new chat, unless Continue
@@ -3194,7 +3265,8 @@ class Daemon:
                 session_id=self.session_id,
                 project_dir=str(getattr(self.agent, "cwd", "") or ""),
                 exchange={"transcript": heard, "reply": reply, "error": kind,
-                          "stopped": stopped})
+                          "stopped": stopped,
+                          **({"thinking": thinking} if thinking else {})})
             p.chat_continued = False
             if p.chat_id != chat_id:
                 retention = self.cfg.get_str("chatRetention")
@@ -3540,6 +3612,18 @@ class Daemon:
         program = spec["agent"]
         if not program:
             p.agent, p.problem = None, "no agent program is chosen for it"
+        elif program == "endpoint":
+            # Its own URL, model and key (plan 7b). The key is read here,
+            # once, as for the main agent's endpoint, never from settings.
+            endpoint = spec.get("endpoint")
+            if not endpoint:
+                p.agent, p.problem = None, "its endpoint needs an address and a model"
+            else:
+                p.agent = load_adapter(
+                    None,
+                    endpoint={**endpoint, "key": endpoint_key(_host(endpoint["url"]))},
+                    instructions=spec.get("instructions", ""))
+                p.problem = "" if p.agent is not None else "its endpoint is not usable"
         else:
             level = spec["level"]
             p.agent = load_adapter(
@@ -3550,6 +3634,8 @@ class Daemon:
             p.problem = "" if p.agent is not None else (
                 explain_agent(program) or f"{program} is not available")
         p.session_id = None
+        if program == "endpoint" and spec.get("endpoint"):
+            spec = {**spec, "model": spec["endpoint"]["model"]}
         where = (f"{program}{' · ' + spec['model'] if spec['model'] else ''}"
                  f"{' · ' + spec['effort'] + ' effort' if spec['effort'] else ''}"
                  f" · {spec['level']}")

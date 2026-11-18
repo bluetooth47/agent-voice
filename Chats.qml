@@ -168,6 +168,7 @@ Item {
           at: Number(e.at) || 0,
           transcript: String(e.transcript || ""),
           reply: String(e.reply || ""),
+          thought: String(e.thinking || ""),
           failed: String(e.error || ""),
           stopped: e.stopped === true
         })
@@ -383,6 +384,7 @@ Item {
         required property string agent
         required property string transcript
         required property string reply
+        required property string thought
         required property string failed
         required property bool stopped
         required property bool fresh
@@ -393,6 +395,7 @@ Item {
         latencyMs: latency
         heard: transcript
         answer: reply
+        thinking: thought
         failure: failed
         wasStopped: stopped
         startsNew: fresh && index > 0
@@ -576,12 +579,14 @@ Item {
         required property real at
         required property string transcript
         required property string reply
+        required property string thought
         required property string failed
         required property bool stopped
         width: ListView.view ? ListView.view.width - Style.space(10) : 0
         when: view.whenOf(at)
         heard: transcript
         answer: reply
+        thinking: thought
         failure: failed
         wasStopped: stopped
         foreground: view.s.foreground

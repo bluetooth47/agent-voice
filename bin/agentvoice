@@ -23,6 +23,7 @@
 #   agentvoice voice fetch|sample|remove <voice>   the Voice page's library
 #   agentvoice permit <id> allow|allow-session|deny   answer a pending permission request
 #   agentvoice pending             the request waiting for an answer, as JSON
+#   agentvoice endpoint ...        clean, models, test, key: the endpoint editor
 set -euo pipefail
 
 UNIT=agentvoice.service
@@ -296,6 +297,20 @@ case "${1:-status}" in
         exec "$PY" "$REPO/daemon/chats.py" "$@"
         ;;
     esac
+    ;;
+  endpoint)
+    # The settings page's endpoint helpers (plan 7b). A key goes in on
+    # stdin, never as an argument: argv is readable by every account.
+    #   agentvoice endpoint clean URL          the URL that will be used
+    #   agentvoice endpoint models URL         JSON list of model names
+    #   agentvoice endpoint test URL MODEL     JSON: reachable, first word, error
+    #   agentvoice endpoint key set|show|clear URL
+    #   agentvoice endpoint presets
+    shift
+    REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+    PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+    [[ -x $PY ]] || PY=python3
+    exec "$PY" "$REPO/daemon/endpoints.py" "$@"
     ;;
   history)
     # This session's conversation, which the daemon keeps beside the state

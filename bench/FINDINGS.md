@@ -1062,3 +1062,61 @@ Nothing else in Phase E was measured. The open microphone and the handoff
 are tested for what they decide (`tests/test_open_mic.py`, 68 tests), not
 yet in a room.
 
+
+## 31. Desktop tools, the Omarchy skill, and endpoints per agent
+
+i7-1185G7, Omarchy 4.5.0-3, Claude Code with `--model haiku` for every
+turn below (the cheapest model that runs tools), 2026-11-18.
+
+**Desktop tools (`daemon/desktop_mcp.py`).** Starting the server, the MCP
+handshake and the tool list take a median of **94ms** (max 96ms, 10 runs):
+the price added to a cold agent start when `desktopTools` is on. A real
+`list_windows` against the live Hyprland took 116ms.
+
+Two real Claude turns through `--mcp-config`:
+
+| turn | asked | what happened |
+|---|---|---|
+| no hook, `--allowedTools list_windows` | count the windows | answered "1", 5.4s, 3 turns |
+| hook as Sora (level "ask"), timeout 4s | `list_windows`, then `notify` | list allowed with no card; `notify` asked, nobody answered, denied twice; 28.7s |
+
+The second turn also showed Claude's `ToolSearch` being asked about,
+because every MCP tool is deferred and loaded through it first. It only loads
+a schema; the tool it loads is judged when called. Now in `NO_EFFECT`.
+
+Also found in that turn, by accident: a hook command with its spaces
+stripped (a mistake in the test harness, not the adapter) let `notify`
+through, with no card at all. It is the fail-open
+CLAUDE.md describes: a hook that cannot start is a non-blocking error.
+The adapter quotes the command, and `test_permission_hook` holds that.
+
+**The Omarchy skill (`daemon/omarchy_skill.py`).** Built from
+`omarchy commands --json` (425 commands, 145 kept from everyday groups) and
+`hyprctl binds -j` (162 described bindings without the media keys): a
+27KB SKILL.md, plus a 5.9KB list for backends that load no skill. Building
+it takes about 1s, mostly `omarchy commands --json`.
+
+The same question with and without `--plugin-dir`, Skill tool only:
+"the exact command to silence notifications, to copy text out of a screen
+region by OCR, and to show the weather as a notification".
+
+| | silence | OCR | weather | time |
+|---|---|---|---|---|
+| with the skill | `omarchy toggle notification silencing` | `omarchy capture text` | `omarchy notification weather` | 6.1s, 3 turns |
+| without | `omarchy-toggle-notification-silencing` | `omarchy-cmd-ocr` (does not exist) | `notify-send … wttr.in` | 8.1s, 1 turn |
+
+3 of 3 exact with it, 1 of 3 without. With `--tools ""` both runs gave
+identical, generic answers (makoctl, tesseract, curl). That is no evidence
+either way: without the Skill tool a skill cannot load, so that comparison
+says nothing about the skill. A voice session has its tools, so it is the
+first table that applies. A question about something common (the
+scratchpad) was answered correctly with and without, so the gain is in
+the commands an agent would otherwise have to guess.
+
+**Endpoints.** Not measured with a real turn this time: no endpoint key is
+on this machine and no local server is running. Running llama.cpp's server
+from its release build was attempted and refused by the session's
+permission rules. The presets offered are the four from §14, which did
+answer real turns. The thinking filter, the URL clean-up, the connection test
+and the model list are tested against a real HTTP server on localhost
+(`tests/test_endpoints.py`).

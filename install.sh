@@ -303,8 +303,8 @@ if [[ $UNINSTALL == 1 ]]; then
     printf "%b\n" "$FOREIGN" >&2
   fi
 
-  rm -rf "$VENV" "$MODELS"
-  ok "Removed the environment and the models"
+  rm -rf "$VENV" "$MODELS" "$DATA/omarchy-skill"
+  ok "Removed the environment, the models and the Omarchy skill"
 
   # Last, because this script is usually running from inside it. That is
   # safe: bash holds the script's fd open, so the unlinked inode lives
@@ -770,6 +770,16 @@ for cmd in agentvoice agentvoice-train-verifier; do
   ln -sf "$APP/bin/$cmd" "$BINDIR/$cmd"
 done
 ok "Installed agentvoice and agentvoice-train-verifier into $BINDIR"
+
+# --- the Omarchy skill (plan 12b) -------------------------------------------
+# Built from the omarchy commands installed here, so it matches this
+# Omarchy. Never fatal: a machine without omarchy keeps whatever it had, and
+# the daemon rebuilds it when the Omarchy version changes.
+if skill_line="$("$VENV/bin/python" "$APP/daemon/omarchy_skill.py" build 2>/dev/null)"; then
+  ok "${skill_line/#omarchy skill: /Omarchy skill: }"
+else
+  warn "Could not build the Omarchy skill; agents will search for commands instead"
+fi
 
 # --- service ---------------------------------------------------------------
 # Written rather than copied, so the unit carries this checkout's real path.

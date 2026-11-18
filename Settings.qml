@@ -521,7 +521,8 @@ Item {
     { label: "Codex", value: "codex" },
     { label: "Gemini", value: "gemini" },
     { label: "Antigravity", value: "agy" },
-    { label: "Copilot", value: "copilot" }
+    { label: "Copilot", value: "copilot" },
+    { label: "Endpoint", value: "endpoint" }
   ]
   function programLabel(value) {
     for (var i = 0; i < programOptions.length; i++)
@@ -793,6 +794,7 @@ Item {
       agent: String(e.agent || ""),
       transcript: String(e.transcript || ""),
       reply: String(e.reply || ""),
+      thought: String(e.thinking || ""),
       failed: String(e.error || ""),
       stopped: e.stopped === true,
       fresh: e["new"] === true,
@@ -1577,6 +1579,7 @@ Item {
               required property string agent
               required property string transcript
               required property string reply
+              required property string thought
               required property string failed
               required property bool stopped
               required property bool fresh
@@ -1588,6 +1591,7 @@ Item {
               latencyMs: latency
               heard: transcript
               answer: reply
+              thinking: thought
               failure: failed
               wasStopped: stopped
               startsNew: fresh && index > 0

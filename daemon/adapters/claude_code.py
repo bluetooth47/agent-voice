@@ -192,6 +192,8 @@ def parse_line(msg: dict) -> list[Chunk]:
 
 
 class ClaudeCode(Adapter):
+    #: It loads the Omarchy skill itself, from --plugin-dir.
+    takes_skill_text = False
     name = "claude"
     guards_permissions = True
     remembers = True          # one process per conversation, --resume after
@@ -217,6 +219,10 @@ class ClaudeCode(Adapter):
         #: main one. Handed to the permission hook, which reads that agent's
         #: own level and folder rather than the main agent's.
         self.named = named
+        #: Plan 12a and 12b, set by the daemon from desktopTools and
+        #: omarchySkill. Both are read when the process starts.
+        self.desktop_tools = False
+        self.skill_dir: str | None = None
         #: Applied only when the model takes it: see efforts().
         self.effort = effort
         self.spoken = spoken
@@ -313,6 +319,16 @@ class ClaudeCode(Adapter):
             argv += ["--append-system-prompt-file", prompt_file(head)]
         if self.ask_permission:
             argv += ["--settings", self._hook_settings(self.named)]
+        if self.desktop_tools:
+            # Agent Voice's desktop tools (plan 12a), as this agent: the
+            # server files a screenshot question under the same id the hook
+            # uses. Added to the user's own MCP servers, not instead of them.
+            from desktop_mcp import mcp_config
+            argv += ["--mcp-config", mcp_config(self.name, self.named)]
+        if self.skill_dir:
+            # The Omarchy skill (plan 12b), loaded as a plugin for this
+            # process only: nothing is written into ~/.claude.
+            argv += ["--plugin-dir", self.skill_dir]
         if session_id:
             argv += ["--resume", session_id]
         if self.model:

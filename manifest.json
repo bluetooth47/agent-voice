@@ -80,6 +80,10 @@
       "endpointUrl": "",
       "endpointModel": "",
       "endpointIsAgent": false,
+      "endpointTimeoutS": 0,
+      "endpointHistoryTurns": 8,
+      "desktopTools": false,
+      "omarchySkill": true,
       "bargeIn": false,
       "bargeOnHeadset": true,
       "bargeFactor": 150,
@@ -554,6 +558,40 @@
         "label": "This endpoint is an agent",
         "defaultValue": false,
         "description": "Tick when the endpoint can run commands or change files on its host, as Hermes can. agentvoice cannot tell from the URL, so it says nothing about the far end unless you do. Also gives it longer to answer, because an agent goes quiet while it runs tools."
+      },
+      {
+        "key": "endpointTimeoutS",
+        "type": "integer",
+        "label": "Endpoint timeout (s)",
+        "min": 0,
+        "max": 600,
+        "step": 5,
+        "defaultValue": 0,
+        "description": "How long a quiet endpoint is waited for before the turn is given up. 0 is the default: 120s, or 300s for an agent."
+      },
+      {
+        "key": "endpointHistoryTurns",
+        "type": "integer",
+        "label": "Endpoint turns remembered",
+        "min": 0,
+        "max": 50,
+        "step": 1,
+        "defaultValue": 8,
+        "description": "How many earlier turns are sent again with each request. Every one is re-read and re-billed."
+      },
+      {
+        "key": "desktopTools",
+        "type": "bool",
+        "label": "Desktop tools",
+        "defaultValue": false,
+        "description": "Give Claude Code agents tools for the desktop: open apps, move and close windows, workspaces, media and volume, notifications, the clipboard, a screenshot, lock and suspend. Each goes through the agent's permission level; a screenshot is asked about every time."
+      },
+      {
+        "key": "omarchySkill",
+        "type": "bool",
+        "label": "Omarchy skill",
+        "defaultValue": true,
+        "description": "Tell agents the exact omarchy commands this machine has (scratchpads, menus, screenshots, recording, themes, keybindings), built from what is installed."
       },
       {
         "key": "bargeOnHeadset",

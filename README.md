@@ -415,6 +415,55 @@ saved before names existed gets its old wake word as its id, which is what
 everything already called it, so nothing moves. Two agents may share a
 name, but never a wake phrase.
 
+### Endpoints for any agent
+
+An extra agent can run on an OpenAI-compatible endpoint of its own: choose
+**Endpoint** as its program. The main agent's **Runs on** has the same
+editor. Each endpoint has its own address, model, key, timeout and number
+of turns remembered.
+
+- **Presets** fill in the address for Ollama, OpenAI, Groq and xAI, the four
+  that have answered a real turn here (FINDINGS §14). LM Studio, llama.cpp's
+  server, vLLM, OpenRouter and Hermes work too, by typing their address.
+- **The address is forgiving.** `localhost:11434` becomes
+  `http://localhost:11434/v1`, a pasted `/chat/completions` is cut back,
+  and a public host without a scheme gets `https://`. The page shows the
+  address that will actually be used.
+- **List models** asks the endpoint (`/v1/models`, or Ollama's own list).
+  **Test connection** sends one tiny request and says how long the first
+  word took, or what is wrong in plain words: "Ollama isn't running", "it
+  wants an API key", "model not pulled: run ollama pull qwen3:4b".
+- **Keys** are saved per host in `~/.config/agentvoice/endpoint-keys.json`
+  (yours alone to read), never in the settings, and shown masked. A key in
+  the login keyring for that host still wins.
+- **Thinking is never spoken.** A reasoning model's `<think>…</think>`, or
+  the separate reasoning field some servers send, is taken out before
+  anything is said and shown greyed, folded, in the conversation view.
+
+### On the desktop
+
+Settings → **Agents** → **On the desktop**.
+
+**Desktop tools** (off by default) gives Claude Code agents an MCP server
+of Agent Voice's own (`daemon/desktop_mcp.py`). With it they can open an
+app by its launcher name, focus, move and close windows, switch workspace,
+open a project (a terminal and the editor in its folder, and the browser),
+control media and volume, notify, and read and write the clipboard. They
+can also take a screenshot, lock the screen, or suspend. Each tool goes
+through the agent's permission level: listing windows is free; a change,
+or reading the clipboard, is asked about below Trusted; a screenshot is
+asked about every time, at every level. Locking and suspending work only
+when the request you just made says so.
+
+**Omarchy skill** (on) tells agents the exact `omarchy` commands this
+machine has, and what each keybinding does. It is built at install from
+`omarchy commands --json` and `hyprctl binds -j`, and built again when
+Omarchy updates. Claude Code loads it as a skill for the voice session
+only, and nothing is written into `~/.claude`. Codex, Gemini, Antigravity
+and Copilot get a shorter list in their instructions. With it, Claude
+named three version-specific commands exactly; without it, one
+(FINDINGS §31).
+
 ### In Omarchy's Agents panel
 
 Each voice agent also gets a section in Omarchy's own Agents panel, the one

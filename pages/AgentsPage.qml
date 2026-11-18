@@ -324,67 +324,26 @@ Column {
       visible: page.endpointChosen
       spacing: Style.space(10)
 
-      SettingRow {
+      EndpointEditor {
         width: parent.width
-        stacked: true
-        label: "Address"
+        url: String(page.s.setting("endpointUrl", ""))
+        model: String(page.s.setting("endpointModel", ""))
+        isAgent: page.s.setting("endpointIsAgent", false) === true
+        timeoutS: Number(page.s.setting("endpointTimeoutS", 0))
+        historyTurns: Number(page.s.setting("endpointHistoryTurns", 8))
         foreground: page.s.foreground
+        urgent: page.s.urgent
         fontFamily: page.s.fontFamily
-        TextField {
-          text: page.s.setting("endpointUrl", "")
-          placeholderText: "http://your-machine:11434/v1"
-          foreground: page.s.foreground
-          font.family: page.s.fontFamily
-          onEditingFinished: {
-            if (text !== page.s.setting("endpointUrl", "")) page.s.put("endpointUrl", text.trim())
+        // Each key named, so the page that writes it says so in its source.
+        onEdited: function(key, value) {
+          switch (key) {
+          case "endpointUrl": page.s.put("endpointUrl", value); break
+          case "endpointModel": page.s.put("endpointModel", value); break
+          case "endpointIsAgent": page.s.put("endpointIsAgent", value); break
+          case "endpointTimeoutS": page.s.put("endpointTimeoutS", value); break
+          case "endpointHistoryTurns": page.s.put("endpointHistoryTurns", value); break
           }
         }
-      }
-      SettingRow {
-        width: parent.width
-        stacked: true
-        label: "Model"
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        TextField {
-          text: page.s.setting("endpointModel", "")
-          placeholderText: "model name, e.g. llama3.2"
-          foreground: page.s.foreground
-          font.family: page.s.fontFamily
-          onEditingFinished: {
-            if (text !== page.s.setting("endpointModel", "")) page.s.put("endpointModel", text.trim())
-          }
-        }
-      }
-      ToggleRow {
-        width: parent.width
-        label: "This endpoint is an agent"
-        hint: "It can run commands or change files on its own machine, as Hermes can."
-        help: "agentvoice cannot tell from the URL, so it claims nothing about the far " +
-              "end unless you say — and gives it longer to answer, because an agent " +
-              "goes quiet while it runs tools.\n\nagentvoice offers an endpoint no " +
-              "tools and gates nothing, so the permission level does not reach it. " +
-              "What the endpoint itself can do is not visible from here: Ollama cannot " +
-              "touch anything, while Hermes has a terminal and a filesystem on its host."
-        checked: page.s.setting("endpointIsAgent", false) === true
-        changed: page.s.changed("endpointIsAgent")
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        onToggled: page.s.put("endpointIsAgent", !checked)
-        onReset: page.s.resetKey("endpointIsAgent")
-      }
-      SettingRow {
-        width: parent.width
-        label: "API key"
-        hint: "Ollama and LM Studio need none. For one that does, use the login keyring."
-        help: "The login keyring unlocks when you log in and only this session can read it:\n" +
-              "  secret-tool store --label=agentvoice \\\n" +
-              "      service agentvoice endpoint api.openai.com\n" +
-              "Keyed by host and port, so two services on one machine do not share a key. " +
-              "Failing that, ~/.config/agentvoice/endpoint.key. Never in this settings " +
-              "file — it is the desktop's config and gets copied around."
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
       }
       Text {
         width: parent.width
@@ -703,7 +662,10 @@ Column {
       width: page.width
       name: card.label || "New agent"
       wakeName: card.agentName
-      summary: page.summary(card.program, card.model, card.effort, card.level, card.levels)
+      summary: card.program === "endpoint"
+               ? "Endpoint · " + String(card.modelData.endpointModel || "no model yet") + " · " +
+                 String(card.modelData.endpointUrl || "no address yet")
+               : page.summary(card.program, card.model, card.effort, card.level, card.levels)
       status: card.on ? card.st : "switched off"
       tone: card.on ? page.s.statusTone(card.st) : "idle"
       switchedOff: !card.on
@@ -785,10 +747,29 @@ Column {
         }
       }
 
+
+      // Its own OpenAI-compatible endpoint (plan 7b). The model, effort,
+      // permission and folder rows above do not apply to one: agentvoice
+      // offers an endpoint no tools.
+      EndpointEditor {
+        width: parent.width
+        visible: card.program === "endpoint"
+        url: String(card.modelData.endpointUrl || "")
+        model: String(card.modelData.endpointModel || "")
+        isAgent: card.modelData.endpointIsAgent === true
+        timeoutS: Number(card.modelData.endpointTimeoutS || 0)
+        historyTurns: card.modelData.endpointHistoryTurns === undefined ? 8
+                      : Number(card.modelData.endpointHistoryTurns)
+        foreground: page.s.foreground
+        urgent: page.s.urgent
+        fontFamily: page.s.fontFamily
+        onEdited: function(key, value) { page.updateAgent(card.index, key, value) }
+      }
       SettingRow {
         width: parent.width
         stacked: true
         label: "Model"
+        visible: card.program !== "endpoint"
         disabledReason: card.info.takes_model === false
                         ? page.s.programLabel(card.program) + " does not take a model from here." : ""
         changed: card.model !== ""
@@ -828,6 +809,7 @@ Column {
         width: parent.width
         stacked: true
         label: "Effort"
+        visible: card.program !== "endpoint"
         hint: "How hard it thinks before answering. Changing it keeps the conversation."
         disabledReason: card.efforts.length > 0 ? ""
                         : page.s.serviceActive ? "This model takes no effort level."
@@ -849,6 +831,7 @@ Column {
         width: parent.width
         stacked: true
         label: "Permission"
+        visible: card.program !== "endpoint"
         hint: card.level === "trusted"
               ? "Nothing is asked. A sentence starting with “" + card.agentName +
                 "” can edit files and run commands in its folder."
@@ -904,6 +887,7 @@ Column {
         width: parent.width
         stacked: true
         label: "Project folder"
+        visible: card.program !== "endpoint"
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
         TextField {
@@ -1065,6 +1049,54 @@ Column {
       color: page.s.dim
       font.family: page.s.fontFamily
       font.pixelSize: Style.font.caption
+    }
+  }
+
+  // What every agent gets on the desktop (plan 12a, 12b), whichever program
+  // runs it. Here rather than on each card, because these are about the
+  // machine, not about one agent.
+  SettingsGroup {
+    width: parent.width
+    title: "ON THE DESKTOP"
+    foreground: page.s.foreground
+    fontFamily: page.s.fontFamily
+
+    ToggleRow {
+      width: parent.width
+      label: "Desktop tools"
+      hint: "Claude Code agents can open apps, move and close windows, switch workspaces, " +
+            "play and pause, change the volume, notify, use the clipboard and see the screen."
+      help: "Each tool goes through the agent's own permission level, like anything " +
+            "else it does: listing windows is free, a change is asked about below " +
+            "Trusted, reading the clipboard is asked about below Trusted, and a " +
+            "screenshot is asked about every time, at every level. Locking the screen " +
+            "or suspending works only when you said so in that request.
+
+" +
+            "Apps are opened by the name the launcher shows, never as a command."
+      checked: page.s.setting("desktopTools", false) === true
+      changed: page.s.changed("desktopTools")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onToggled: page.s.put("desktopTools", !checked)
+      onReset: page.s.resetKey("desktopTools")
+    }
+
+    ToggleRow {
+      width: parent.width
+      label: "Omarchy skill"
+      hint: "Agents know this machine's omarchy commands and keybindings, so “open a " +
+            "scratchpad” or “next background” is one command, not a search."
+      help: "Built from the commands installed here at install time, and again when " +
+            "Omarchy updates. Claude Code loads it as a skill for the voice session only; " +
+            "Codex, Gemini, Antigravity and Copilot get a shorter list in their " +
+            "instructions. Endpoints get nothing: they run nothing on this machine."
+      checked: page.s.setting("omarchySkill", true) === true
+      changed: page.s.changed("omarchySkill")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onToggled: page.s.put("omarchySkill", !checked)
+      onReset: page.s.resetKey("omarchySkill")
     }
   }
 }

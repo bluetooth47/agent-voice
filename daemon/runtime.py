@@ -193,6 +193,13 @@ DEFAULTS = {
     "endpointUrl": "",
     "endpointModel": "",
     "endpointIsAgent": False,
+    # 0 is the adapter's own default (120s, 300s for an agent).
+    "endpointTimeoutS": 0,
+    "endpointHistoryTurns": 8,
+    # Plan 12a and 12b. Desktop tools are opt-in: they reach outside the
+    # project, and at "trusted" they act without asking.
+    "desktopTools": False,
+    "omarchySkill": True,
     "conversationMode": True,
     "yieldToRecorders": True,
     "logSpeech": False,
@@ -264,6 +271,10 @@ TOML_ALIASES = {
     "endpointUrl": ("agent", "endpoint_url"),
     "endpointModel": ("agent", "endpoint_model"),
     "endpointIsAgent": ("agent", "endpoint_is_agent"),
+    "endpointTimeoutS": ("agent", "endpoint_timeout_s"),
+    "endpointHistoryTurns": ("agent", "endpoint_history_turns"),
+    "desktopTools": ("agent", "desktop_tools"),
+    "omarchySkill": ("agent", "omarchy_skill"),
     "conversationMode": ("wake", "conversation_mode"),
     "yieldToRecorders": ("wake", "yield_to_recorders"),
     "logSpeech": ("ui", "log_speech"),
@@ -582,8 +593,23 @@ class Config:
                 "instructions": instructions_text(entry.get("instructions")),
                 "level": level if level in ("ask", "edits", "trusted") else "ask",
                 "projectDir": folder.strip() if isinstance(folder, str) else "",
+                # Its own OpenAI-compatible endpoint, when its program is
+                # "endpoint" (plan 7b); None otherwise.
+                "endpoint": (endpoint_entry(entry.get("endpointUrl"),
+                                            entry.get("endpointModel"),
+                                            entry.get("endpointIsAgent"),
+                                            entry.get("endpointTimeoutS"),
+                                            entry.get("endpointHistoryTurns"))
+                             if program == "endpoint" else None),
             })
         return out, off
+
+    def main_endpoint(self) -> dict | None:
+        """The main agent's endpoint, cleaned like an extra agent's, or None
+        when the URL or the model is missing."""
+        return endpoint_entry(self["endpointUrl"], self["endpointModel"],
+                              self["endpointIsAgent"], self["endpointTimeoutS"],
+                              self["endpointHistoryTurns"])
 
     def agent_named(self, name: str | None) -> dict | None:
         """The extra agent whose wake phrase is `name`, or None."""
@@ -620,6 +646,35 @@ class Config:
     def main_label(self, phrase: str = "") -> str:
         """The main agent's display name: `mainName`, else its wake phrase."""
         return display_name(self["mainName"], phrase or self.get_str("phrase"))
+
+
+def endpoint_entry(url, model, is_agent=False, timeout_s=0,
+                   history_turns=8) -> dict | None:
+    """An endpoint as the adapter takes it, from hand-editable settings.
+
+    The URL goes through endpoints.clean_url, so what is used is what the
+    page showed; a model that is not plainly a model name reads as unset,
+    as it does for a CLI. None when either is missing: a half-filled
+    endpoint is not in use. No key here, ever -- see paths.endpoint_key.
+    """
+    from endpoints import clean_url
+    url = clean_url(url if isinstance(url, str) else "")
+    model = model.strip() if isinstance(model, str) else ""
+    if not url or not _MODEL_NAME.fullmatch(model):
+        return None
+
+    def number(value, default, lo, hi):
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return default
+        return max(lo, min(hi, value))
+
+    timeout = number(timeout_s, 0, 0, 600)
+    return {"url": url, "model": model, "is_agent": is_agent is True,
+            # 0 is the adapter's default; anything set is at least 10s.
+            "timeout_s": max(10, timeout) if timeout else 0,
+            "history_turns": number(history_turns, 8, 0, 50)}
 
 
 #: How much progress talk: nothing, the stage, or files and searches too.

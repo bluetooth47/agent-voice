@@ -485,7 +485,8 @@ Panel {
   // As the settings name them; the same list as Settings.programOptions.
   function programLabel(value) {
     var names = { claude: "Claude Code", codex: "Codex", gemini: "Gemini",
-                  agy: "Antigravity", copilot: "Copilot" }
+                  agy: "Antigravity", copilot: "Copilot",
+                  endpoint: "Endpoint" }
     return names[value] || value
   }
   readonly property bool usingEndpoint: String(pref("endpointUrl", "")) !== ""

@@ -22,6 +22,9 @@ Column {
   property string answer: ""
   property string failure: ""
   property bool wasStopped: false
+  // A reasoning model's thinking: never spoken, shown greyed and folded.
+  property string thinking: ""
+  property bool thinkingOpen: false
   // Draws the "new conversation" rule above it.
   property bool startsNew: false
 
@@ -89,6 +92,28 @@ Column {
     selectedTextColor: turn.foreground
     font.family: turn.fontFamily
     font.pixelSize: Style.font.body
+  }
+
+  // Folded by default: it is often longer than the answer and was never
+  // said out loud. Plain text, like the rest -- a model wrote it.
+  Text {
+    visible: turn.thinking !== ""
+    width: parent.width
+    wrapMode: Text.Wrap
+    maximumLineCount: turn.thinkingOpen ? 400 : 1
+    elide: Text.ElideRight
+    textFormat: Text.PlainText
+    text: (turn.thinkingOpen ? "▾ thought (not spoken): " : "▸ thought (not spoken): ")
+          + turn.thinking
+    color: Qt.rgba(turn.foreground.r, turn.foreground.g, turn.foreground.b, 0.4)
+    font.family: turn.fontFamily
+    font.pixelSize: Style.font.caption
+    font.italic: true
+    MouseArea {
+      anchors.fill: parent
+      cursorShape: Qt.PointingHandCursor
+      onClicked: turn.thinkingOpen = !turn.thinkingOpen
+    }
   }
 
   Item {

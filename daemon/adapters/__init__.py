@@ -18,6 +18,11 @@ from .codex import Codex
 from .gemini import Gemini
 from .openai_compat import OpenAICompatible
 
+try:
+    from endpoints import clean_url
+except ImportError:                     # pragma: no cover - imported as a package
+    from ..endpoints import clean_url
+
 DEFAULT_AGENT_FILE = Path.home() / ".config/omarchy/defaults/agent"
 
 # Omarchy's spelling -> our adapter, for the four that have a module of their
@@ -61,11 +66,19 @@ def load(name: str | None = None, level: str | None = None,
     # one is a deliberate act and there is nowhere else to express it: Omarchy
     # has no entry for "the model on my other machine".
     if endpoint and endpoint.get("url") and endpoint.get("model"):
+        extra = {}
+        if endpoint.get("history_turns") is not None:
+            extra["history_turns"] = endpoint["history_turns"]
+        if endpoint.get("timeout_s"):
+            extra["timeout"] = endpoint["timeout_s"]
         adapter = OpenAICompatible(
-            base_url=endpoint["url"], model=endpoint["model"],
+            # Tidied here as well as on the page, so a URL typed into
+            # `omarchy bar set` gets the same forgiveness.
+            base_url=clean_url(endpoint["url"]) or endpoint["url"],
+            model=endpoint["model"],
             api_key=endpoint.get("key") or None,
             is_agent=bool(endpoint.get("is_agent")),
-            spoken=kwargs.get("spoken", True))
+            spoken=kwargs.get("spoken", True), **extra)
         adapter.instructions = instructions or ""
         return adapter if adapter.available() else None
 

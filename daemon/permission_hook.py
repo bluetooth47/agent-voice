@@ -64,13 +64,31 @@ TIMEOUT = _timeout()
 
 #: Tools with no effect outside the conversation. Asking about these would
 #: train you to say yes, which is the failure mode a prompt has.
-NO_EFFECT = {"TodoWrite", "BashOutput", "ExitPlanMode"}
+#: ToolSearch only loads the schema of a tool Claude Code deferred -- every
+#: MCP tool is deferred -- and the tool it loads is still judged here when it
+#: is called. Asking about it put a card on screen before every desktop tool
+#: (seen in the first real turn through desktop_mcp.py).
+NO_EFFECT = {"TodoWrite", "BashOutput", "ExitPlanMode", "ToolSearch"}
 
 #: Tools that only read. Allowed, but against SECRETS below rather than
 #: unconditionally: the attack is not "the agent read a file", it is "a
 #: sentence from a podcast told it to read ~/.ssh/id_ed25519 and put it
 #: somewhere". A read it cannot act on is still a read it can quote.
 READ_ONLY = {"Read", "NotebookRead", "Glob", "Grep"}
+
+#: Agent Voice's own desktop tools (desktop_mcp.py, plan 12a), by the name
+#: Claude Code gives them. Kept in step with desktop_mcp's sets by a test.
+#: Matched on the whole prefix, so a server of the user's own is never
+#: mistaken for this one by a tool name alone.
+DESKTOP_PREFIX = "mcp__agentvoice-desktop__"
+#: Window lists and workspaces: reads with no effect, allowed at every level.
+DESKTOP_READ_ONLY = {"list_windows", "active_window", "list_workspaces"}
+#: The clipboard often holds a password: asked below "trusted".
+DESKTOP_SENSITIVE_READ = {"clipboard_read"}
+#: Asked by the server itself every time, at every level and whatever a chat
+#: grant says -- so the hook passing it is not a silent yes, and a trusted
+#: agent, which has no hook at all, is still asked.
+DESKTOP_SELF_ASKED = {"screenshot"}
 
 #: Everything else is asked about, including every `mcp__*` tool the user has
 #: configured, WebSearch, WebFetch, Task and Skill. That is the point of the
@@ -449,6 +467,15 @@ def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, st
     """Return (decision, reason). decision is 'allow' or 'deny'."""
     if tool_name in NO_EFFECT:
         return "allow", ""
+
+    desktop = tool_name[len(DESKTOP_PREFIX):] if tool_name.startswith(DESKTOP_PREFIX) else ""
+    if desktop in DESKTOP_READ_ONLY or desktop in DESKTOP_SELF_ASKED:
+        return "allow", ""
+    if desktop in DESKTOP_SENSITIVE_READ:
+        if granted(session) or _settings()[0] == "trusted":
+            return "allow", ""
+        return _ask(tool_name, tool_input, note="this reads the clipboard",
+                    session=session)
 
     # Allowed wholesale for this conversation, from the prompt. Like
     # "trusted", it covers everything, credentials included -- that is what
