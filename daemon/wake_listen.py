@@ -1459,21 +1459,57 @@ class Ticker:
 
     _END = object()
 
-    def __init__(self, stream, every: float = 0.25, on_abandon=None) -> None:
+    def __init__(self, stream, every: float = 0.25, on_abandon=None,
+                 on_sentence=None) -> None:
         self._queue: queue.Queue = queue.Queue()
         self._stop = threading.Event()
         self._every = every
         self._on_abandon = on_abandon
+        #: Called on the pump thread with each sentence as soon as it is
+        #: complete -- split by the same rules the reply loop uses, so it sees
+        #: the same sentences -- which is how the voice renders sentence two
+        #: while sentence one plays. Errors in it are ignored: it is a head
+        #: start, and the reply loop renders anything it missed.
+        self._on_sentence = on_sentence
         self._thread = threading.Thread(target=self._pump, args=(stream,),
                                         daemon=True)
         self._thread.start()
 
     def _pump(self, stream) -> None:
-        try:
-            for chunk in stream:
-                self._queue.put(chunk)
+        source = iter(stream)
+        held: list = []
+
+        def forward():
+            # Each chunk goes to the splitter *before* the reader: a sentence
+            # it completes is handed to on_sentence first, so the reply loop
+            # never reaches a sentence that is not yet rendering.
+            for chunk in source:
+                held.append(chunk)
+                yield chunk
+                self._queue.put(held.pop())
                 if self._stop.is_set():
-                    break
+                    return
+
+        try:
+            if self._on_sentence is not None:
+                first = True
+                for sentence in sentences(forward()):
+                    try:
+                        self._on_sentence(sentence, first)
+                    except Exception:
+                        pass
+                    first = False
+                # The splitter stops at an error chunk without asking for
+                # another, which leaves that chunk here.
+                while held:
+                    self._queue.put(held.pop())
+            if not self._stop.is_set():
+                # The rest: everything, when nobody wants sentences, or what
+                # follows an error, which ends the sentence split.
+                for chunk in source:
+                    self._queue.put(chunk)
+                    if self._stop.is_set():
+                        break
         except BaseException as e:      # handed to the reader, raised there
             self._queue.put(e)
         finally:
@@ -2553,7 +2589,7 @@ class Daemon:
                    cut=ticker.words_waiting if ticker is not None else None)
         narr.spoke(time.time())
 
-    def speak(self, text: str, tail_ms: int, cut=None) -> None:
+    def speak(self, text: str, tail_ms: int, cut=None, on_start=None) -> None:
         """Say something, then make sure we did not hear ourselves say it.
 
         The watch is unconditional, which is the whole point of it. Barge-in
@@ -2598,7 +2634,8 @@ class Daemon:
             if self.chimes is not None:
                 self.chimes.settle()    # never a chime under the first word
             with self._watching_session():
-                self.speaker.say(speech_safe(text), watch=self._watch(barge, cut))
+                self.speaker.say(speech_safe(text),
+                                 watch=self._watch(barge, cut, on_start))
         finally:
             self.deafen(tail_ms)
             with self._mic_lock:
@@ -2631,7 +2668,7 @@ class Daemon:
                 self._hold_speech = hold
                 self._floor.notify_all()
 
-    def _watch(self, barge, cut=None):
+    def _watch(self, barge, cut=None, on_start=None):
         """What `Speaker.say()` checks between audio chunks.
 
         In-memory only. `reconcile_lock()` spawns
@@ -2642,7 +2679,18 @@ class Daemon:
         The spawning happens on the thread `speak()` starts; this only reads
         the flags it sets.
         """
+        started = on_start is None
+
         def watch() -> bool:
+            nonlocal started
+            if not started and getattr(self.speaker, "first_audio_at", None):
+                # The first sound is out: now its words go on screen, so the
+                # text never runs ahead of the voice.
+                started = True
+                try:
+                    on_start()
+                except Exception:
+                    pass
             if self._interrupt.is_set() or not self.listening:
                 return True
             # Progress talk gives way to the agent's own words, at the next
@@ -3022,6 +3070,10 @@ class Daemon:
                             ("voice", "first_sentence", "first_audio")):
             if a in clock and b in clock:
                 spans.append(f"{label} {clock[b] - clock[a]:.1f}s")
+        if clock.get("gaps"):
+            # Not part of the wait to the first word, so outside the total:
+            # silence between sentences after speaking began.
+            spans.append(f"between sentences {clock['gaps']:.1f}s")
         verb = "spoke" if "first_audio" in clock else "showed"
         total = reached - end
         print(f"  {DIM}heard → {verb} in {total:.1f}s  "
@@ -3133,11 +3185,26 @@ class Daemon:
                     thinking_parts.append(chunk.thinking)
                 yield chunk
 
+        # Rendering ahead: each sentence goes to Piper as soon as the agent
+        # has finished writing it, while the one before is still playing.
+        speaker = self.speaker if self.listening else None
+        prefetch = getattr(speaker, "prefetch", None)
+        if speaker is not None and hasattr(speaker, "forget"):
+            speaker.forget()
+
+        def ahead(sentence: str, first: bool) -> None:
+            prefetch(speech_safe(sentence), first=first)
+
+        holding = getattr(speaker, "holding", None)
+        gaps = 0.0
+        said_until = None
         try:
-            with self._watching_session(), self._hearing_wake():
+            with self._watching_session(), self._hearing_wake(), \
+                    (holding() if holding else contextlib.nullcontext()):
                 stream = self.agent.send(prompt, self.session_id)
-                if narr is not None or announcing:
-                    ticker = Ticker(stream, on_abandon=getattr(self.agent, "cancel", None))
+                if narr is not None or announcing or prefetch is not None:
+                    ticker = Ticker(stream, on_abandon=getattr(self.agent, "cancel", None),
+                                    on_sentence=ahead if prefetch is not None else None)
                     stream = ticker
                 for sentence in sentences(tap(stream)):
                     # Checked before the sentence is recorded, so the transcript
@@ -3165,12 +3232,21 @@ class Daemon:
                     # used to reach the state file only after the last word was
                     # spoken, which is the moment the readout starts counting down
                     # to close -- so it was on screen for the linger and nothing
-                    # more. Publishing here puts the text up as that sentence
-                    # begins, because speak() below blocks until it has been said.
+                    # more. And published when the sentence's first sound goes
+                    # out, not before: put up first, the text sat on screen for
+                    # as long as Piper took to render it, one to three seconds
+                    # with a high voice, and read as the voice lagging behind.
                     last["reply"] = " ".join(reply_parts)[:REPLY_MAX]
                     if self.speaker and self.listening:
-                        out.publish("speaking", **last)
-                        self.speak(sentence, tail_ms)
+                        shown = []
+
+                        def show():
+                            shown.append(True)
+                            out.publish("speaking", **last)
+
+                        self.speak(sentence, tail_ms, on_start=show)
+                        if not shown and not self._interrupt.is_set():
+                            out.publish("speaking", **last)
                         if narr is not None:
                             narr.agent_said(sentence, time.time())
                         # When the first sound actually went out, which the
@@ -3181,6 +3257,12 @@ class Daemon:
                         if (heard_at and heard_at >= t0
                                 and "first_audio" not in clock):
                             clock["first_audio"] = heard_at
+                        # Silence between sentences, once speaking has begun:
+                        # rendering that fell behind, or the agent still
+                        # writing.
+                        if heard_at and said_until and heard_at > said_until:
+                            gaps += heard_at - said_until
+                        said_until = time.time()
                     else:
                         # No voice: the text is the entire answer, so it matters
                         # more here, not less. Keep whatever state we are in.
@@ -3256,6 +3338,8 @@ class Daemon:
               f"{f', first token {ttft:.0f}ms' if ttft else ''}{OFF}")
         # A stopped turn still counts if it got as far as making a sound --
         # that wait was real. One stopped before it spoke has nothing to say.
+        if gaps:
+            clock["gaps"] = gaps
         if "first_audio" in clock or not self._interrupt.is_set():
             self.report_latency(clock, last)
         self.remember(text, reply, last, kind=kind,

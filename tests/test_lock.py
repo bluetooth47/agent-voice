@@ -340,7 +340,7 @@ class TestALockReachesAReplyInProgress:
             def cancel(self):
                 pass
 
-        def speak(sentence, tail_ms=0):
+        def speak(sentence, tail_ms=0, **kw):
             said.append(sentence)
             if len(said) == 2:               # the screen locks mid-reply
                 daemon.locked = True

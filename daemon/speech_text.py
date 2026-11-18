@@ -166,6 +166,74 @@ def _next_boundary(buffer: str):
         pos = closes_at + len(_FENCE)
 
 
+#: Where a sentence may be cut for synthesis without cutting a phrase: after
+#: a comma, semicolon or colon, or around a spaced dash.
+_CLAUSE = re.compile(r"[,;:](?=\s)|\s[-\u2013\u2014](?=\s)")
+
+#: A head shorter than this is a word or two ("Sure,") and renders in a
+#: tenth of a second anyway; cutting there only adds a join.
+HEAD_MIN_CHARS = 12
+#: What has to be left after a cut, so the second piece is a phrase too.
+TAIL_MIN_CHARS = 20
+#: Sentences shorter than this are not worth splitting: even the slowest
+#: voice measured (ryan-high, about 2x realtime) renders them in well under
+#: a second.
+SPLIT_FROM_CHARS = 50
+#: A head is looked for this far in, no further. Past it the "head" is most
+#: of the sentence and saves nothing.
+HEAD_MAX_CHARS = 80
+#: Later sentences longer than this are cut so rendering stays ahead.
+LONG_CHARS = 160
+
+
+def _clause_cuts(sentence: str) -> list[int]:
+    """Offsets just past each clause break, outside code."""
+    if _FENCE in sentence or "`" in sentence:
+        return []
+    return [m.end() for m in _CLAUSE.finditer(sentence)]
+
+
+def split_head(sentence: str) -> list[str]:
+    """Cut a short opening off a long sentence, for a faster first sound.
+
+    Piper renders an entire utterance before it gives back any audio, so the
+    first sound of a reply waits for the whole first sentence: 3.6 seconds
+    for 158 characters on ryan-high, measured on this machine. Rendered on
+    its own, a clause of twenty characters takes 0.3 to 0.5, and the rest is
+    rendered while it plays. Cut only at a clause break, where a speaker
+    would pause anyway.
+    """
+    sentence = sentence.strip()
+    if len(sentence) < SPLIT_FROM_CHARS:
+        return [sentence] if sentence else []
+    for at in _clause_cuts(sentence):
+        if at > HEAD_MAX_CHARS:
+            break
+        head, rest = sentence[:at].strip(), sentence[at:].strip()
+        if len(head) >= HEAD_MIN_CHARS and len(rest) >= TAIL_MIN_CHARS:
+            return [head, rest]
+    return [sentence]
+
+
+def split_long(sentence: str, limit: int = LONG_CHARS) -> list[str]:
+    """Cut a very long sentence at clause breaks into pieces under `limit`,
+    where it can be: a piece with no break in it stays whole."""
+    sentence = sentence.strip()
+    pieces: list[str] = []
+    while len(sentence) > limit:
+        cuts = [at for at in _clause_cuts(sentence)
+                if at >= HEAD_MIN_CHARS and len(sentence) - at >= TAIL_MIN_CHARS]
+        under = [at for at in cuts if at <= limit]
+        if not cuts:
+            break
+        at = under[-1] if under else cuts[0]
+        pieces.append(sentence[:at].strip())
+        sentence = sentence[at:].strip()
+    if sentence:
+        pieces.append(sentence)
+    return pieces
+
+
 #: Put in the delta stream to mean "nothing more is coming for a while": the
 #: agent has gone off to run a tool. Whatever is waiting is spoken now.
 #:

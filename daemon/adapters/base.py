@@ -387,8 +387,13 @@ SPOKEN_STYLE = (
     "or emoji. No URLs. Mention file paths and commands only when they are "
     "the point, and say them in words a listener can follow. Use short plain "
     "sentences. Keep the whole answer to two or three sentences unless asked "
-    "for detail, and lead with the answer rather than the reasoning. If you "
-    "must list things, say them in a sentence joined by 'and'. "
+    "for detail, and lead with the answer rather than the reasoning. "
+    # The voice cannot start until a sentence is complete and rendered, and
+    # rendering takes time in proportion to its length -- over three seconds
+    # for a long sentence in a high quality voice. A short opening is heard
+    # while the rest is still being written.
+    "Make the first sentence short, a few words, then give the detail. "
+    "If you must list things, say them in a sentence joined by 'and'. "
     # A voice cannot show a spinner. A task that runs tools for a minute is a
     # minute of silence unless the agent says what it is doing -- and the
     # loop now speaks that sentence the moment the tool starts, rather than

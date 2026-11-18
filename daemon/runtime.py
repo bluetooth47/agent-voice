@@ -9,6 +9,7 @@ Three small concerns that the wake loop should not have to know about:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -861,6 +862,29 @@ class StateFile:
 #: using the CPU.
 SLICE_MS = 50
 
+#: A stream held for a reply is reopened after this long without a sentence.
+HOLD_IDLE_S = 5.0
+
+
+#: Piper's phonemizer is espeak-ng, which keeps global state. Every voice
+#: renders under this, so two agents' workers never phonemize at once.
+_SYNTH_LOCK = threading.Lock()
+
+
+class _Render:
+    """One piece of text on its way through Piper, and the audio so far."""
+
+    __slots__ = ("text", "opts", "chunks", "done", "dropped", "urgent", "error")
+
+    def __init__(self, text: str, opts: dict) -> None:
+        self.text = text
+        self.opts = opts
+        self.chunks: list = []
+        self.done = False
+        self.dropped = False
+        self.urgent = False
+        self.error: BaseException | None = None
+
 
 class Speaker:
     """Piper, loaded once and reused. 22ms to first audio, 22x realtime.
@@ -961,6 +985,202 @@ class Speaker:
 
     def cancel(self) -> None:
         self._stop.set()
+        # Only flags: cancel() is reached from signal handlers, which must
+        # not wait on a lock the interrupted thread may hold. The queue is
+        # emptied by whichever side takes the lock next.
+        self._flush = True
+
+    # --- rendering ahead ------------------------------------------------------
+    #
+    # Piper renders and PortAudio plays, and they used to take turns: sentence
+    # two was not started until sentence one had finished playing. With
+    # ryan-high, about twice realtime, that was a silence of one to three and
+    # a half seconds between every sentence, and the first sound of a reply
+    # waited for its whole first sentence to render. Rendering now happens on
+    # a worker thread, ahead of playback: `prefetch()` queues a sentence the
+    # moment it exists, and `say()` takes whatever is ready.
+    #
+    # The worker only runs Piper. PortAudio is still driven by the one thread
+    # that calls say(), which is the rule above.
+
+    def _ahead(self) -> threading.Condition:
+        """The render queue's lock, made on first use. Lazily, because tests
+        build a Speaker without running __init__."""
+        cond = self.__dict__.get("_cond")
+        if cond is None:
+            cond = self.__dict__.setdefault("_cond", threading.Condition())
+            self._jobs: list[_Render] = []
+            self._ready: dict[str, _Render] = {}
+            self._plans: dict[str, list[str]] = {}
+            #: Texts say() has already taken, so a prefetch that loses the
+            #: race to its own say() does not render the sentence twice.
+            self._taken: dict[str, None] = {}
+            self._worker: threading.Thread | None = None
+        return cond
+
+    def _flush_if_asked(self) -> None:
+        """Drop everything queued or rendered, if cancel() asked. Lock held."""
+        if self.__dict__.get("_flush"):
+            self._flush = False
+            self._drop_all()
+
+    def _drop_all(self) -> None:
+        for job in self._jobs:
+            job.dropped = job.done = True
+        for job in self._ready.values():
+            job.dropped = True
+        self._jobs.clear()
+        self._ready.clear()
+        self._plans.clear()
+        self._taken.clear()
+        self._cond.notify_all()
+
+    def forget(self) -> None:
+        """Drop sentences rendered for a reply that is no longer coming."""
+        with self._ahead():
+            self._flush = False
+            self._drop_all()
+
+    def pieces(self, text: str, first: bool = True) -> list[str]:
+        """How `text` goes to Piper: by sentence, a long first sentence with
+        its opening clause on its own, and very long ones cut at clauses."""
+        from speech_text import split_head, split_long
+        out: list[str] = []
+        for i, sentence in enumerate(self.sentences(text)):
+            parts = split_head(sentence) if first and i == 0 else [sentence]
+            for part in parts:
+                out.extend(split_long(part))
+        return out
+
+    def _submit(self, piece: str, urgent: bool) -> "_Render":
+        """The render of `piece`: one already queued or done, or a new one.
+        Lock held."""
+        opts = self._opts()
+        job = self._ready.get(piece)
+        if job is not None and (job.dropped or job.opts != opts):
+            job = None
+        if job is None:
+            job = _Render(piece, opts)
+            self._ready[piece] = job
+            self._jobs.append(job)
+            # Bounded: a reply that was never spoken must not keep its audio.
+            while len(self._ready) > 64:
+                old = next(iter(self._ready))
+                self._ready.pop(old).dropped = True
+            self._cond.notify_all()
+        if urgent:
+            job.urgent = True
+        if self._worker is None or not self._worker.is_alive():
+            self._worker = threading.Thread(target=self._work, daemon=True,
+                                            name="piper-render")
+            self._worker.start()
+        return job
+
+    def prefetch(self, text: str, first: bool = False) -> None:
+        """Start rendering `text` now, for a say() that will come later.
+
+        Called from the thread that reads the agent's stream, as each
+        sentence is complete -- usually while the one before it is playing.
+        """
+        plan = self.pieces(text, first=first)
+        with self._ahead():
+            self._flush_if_asked()
+            if self._taken.pop(text, False) is None:
+                return                  # already being said
+            self._plans[text] = plan
+            for piece in plan:
+                self._submit(piece, urgent=False)
+
+    def _opts(self) -> dict:
+        syn = self.synthesis_config()
+        # Only handed over when it says something, so normal speed calls
+        # Piper exactly as it always has.
+        return {"syn_config": syn} if syn is not None else {}
+
+    def _work(self) -> None:
+        """Render queued pieces in order, the urgent ones first. Leaves after
+        half a minute with nothing to do; the next submit starts another."""
+        cond = self._ahead()
+        while True:
+            with cond:
+                self._flush_if_asked()
+                idle_until = time.time() + 30
+                while not self._jobs:
+                    left = idle_until - time.time()
+                    if left <= 0:
+                        self._worker = None
+                        return
+                    cond.wait(left)
+                    self._flush_if_asked()
+                job = next((j for j in self._jobs if j.urgent), self._jobs[0])
+                self._jobs.remove(job)
+            self._render(job)
+
+    def _render(self, job: "_Render") -> None:
+        import numpy as np
+        try:
+            # One at a time across every voice: espeak-ng, under Piper's
+            # phonemizer, keeps global state.
+            with _SYNTH_LOCK:
+                for chunk in self._voice.synthesize(job.text, **job.opts):
+                    if job.dropped:
+                        break
+                    pcm = np.frombuffer(chunk.audio_int16_bytes, dtype=np.int16)
+                    with self._cond:
+                        job.chunks.append(pcm)
+                        self._cond.notify_all()
+        except Exception as e:          # raised again by the say() that waits
+            job.error = e
+        finally:
+            with self._cond:
+                job.done = True
+                self._cond.notify_all()
+
+    # --- one stream for a whole reply -----------------------------------------
+
+    @contextlib.contextmanager
+    def holding(self):
+        """Keep one output stream open across every say() on this thread.
+
+        Opening a stream per sentence cost 27 to 48ms, and closing one drained
+        it -- both a silence between sentences. Inside this, say() writes to
+        the same stream until the block ends. Only the thread that entered
+        it shares the stream; any other thread's say() opens its own.
+        """
+        self._held_by = threading.get_ident()
+        self._held = None
+        try:
+            yield
+        finally:
+            out, self._held, self._held_by = self._held, None, None
+            if out is not None:
+                try:
+                    out.stop()      # lets the last word finish
+                    out.close()
+                except Exception:
+                    pass
+
+    def _stream(self):
+        """(stream, held): the held stream if this thread holds one."""
+        import sounddevice as sd
+        held = self.__dict__.get("_held_by") == threading.get_ident()
+        if held and self.__dict__.get("_held") is not None:
+            if time.time() - self.__dict__.get("_held_at", 0.0) < HOLD_IDLE_S:
+                return self._held, True
+            # Quiet for a while -- a tool running, the agent thinking. A
+            # fresh stream rather than one that has been underrunning.
+            old, self._held = self._held, None
+            try:
+                old.stop()
+                old.close()
+            except Exception:
+                pass
+        out = sd.OutputStream(samplerate=self._rate, channels=1, dtype="int16")
+        if held:
+            out.start()
+            self._held = out
+            return out, True
+        return out, False
 
     def say(self, text: str, watch=None) -> float:
         """Speak, sentence by sentence. Returns seconds of audio produced.
@@ -971,44 +1191,89 @@ class Speaker:
         PortAudio output stream while an input stream is already running, and
         driving two of those from two threads is what crashed every benchmark
         script that tried it (libasound, use-after-free, SEGV). One thread,
-        one interleaved loop, no shared PCM handles.
+        one interleaved loop, no shared PCM handles. Piper runs on the render
+        worker; only playback is here.
         """
-        import numpy as np
-        import sounddevice as sd
-
         self._stop.clear()
         self.first_audio_at = None
         total = 0.0
         slice_n = max(1, int(self._rate * SLICE_MS / 1000))
-        syn = self.synthesis_config()
-        # Only handed over when it says something, so normal speed calls
-        # Piper exactly as it always has.
-        opts = {"syn_config": syn} if syn is not None else {}
-        with sd.OutputStream(samplerate=self._rate, channels=1,
-                             dtype="int16") as out:
-            for sentence in self.sentences(text):
+        cond = self._ahead()
+        with cond:
+            self._flush_if_asked()
+            plan = self._plans.pop(text, None)
+            if plan is None:
+                plan = self.pieces(text, first=True)
+                self._taken[text] = None
+                while len(self._taken) > 64:
+                    del self._taken[next(iter(self._taken))]
+            jobs = [self._submit(piece, urgent=True) for piece in plan]
+            for job in jobs:
+                # Taken: what is played once is not kept.
+                if self._ready.get(job.text) is job:
+                    del self._ready[job.text]
+        out, held = self._stream()
+        if not held:
+            out.__enter__()
+        try:
+            for job in jobs:
                 if self._stop.is_set():
                     break
-                for chunk in self._voice.synthesize(sentence, **opts):
-                    if self._stop.is_set():
-                        break
-                    pcm = np.frombuffer(chunk.audio_int16_bytes, dtype=np.int16)
-                    # Sliced, because Piper hands back a whole sentence as one
-                    # chunk and a blocking write of that cannot be interrupted.
-                    for at in range(0, len(pcm), slice_n):
-                        if self._stop.is_set():
+                taken = 0
+                while not self._stop.is_set():
+                    with cond:
+                        if taken >= len(job.chunks) and not job.done:
+                            cond.wait(SLICE_MS / 1000)
+                        ready = job.chunks[taken:]
+                        finished = job.done
+                    if job.error is not None:
+                        raise job.error
+                    if not ready:
+                        if finished:
                             break
-                        out.write(pcm[at:at + slice_n])
-                        if self.first_audio_at is None:
-                            self.first_audio_at = time.time()
-                        total += len(pcm[at:at + slice_n]) / self._rate
+                        # Still rendering: nothing is playing, but a lock or
+                        # a barge must still be noticed.
                         if watch is not None and watch():
                             self._stop.set()
+                        continue
+                    taken += len(ready)
+                    for pcm in ready:
+                        # Sliced, because Piper hands back a whole sentence as
+                        # one chunk and a blocking write of that cannot be
+                        # interrupted.
+                        for at in range(0, len(pcm), slice_n):
+                            if self._stop.is_set():
+                                break
+                            out.write(pcm[at:at + slice_n])
+                            if self.first_audio_at is None:
+                                self.first_audio_at = time.time()
+                            total += len(pcm[at:at + slice_n]) / self._rate
+                            if watch is not None and watch():
+                                self._stop.set()
+                                break
+                        if self._stop.is_set():
                             break
-            if self._stop.is_set():
+        finally:
+            stopped = self._stop.is_set()
+            if stopped:
+                with cond:
+                    for job in jobs:
+                        job.dropped = True
+                    self._jobs[:] = [j for j in self._jobs if j not in jobs]
                 # What has been written is already inside PortAudio's buffer
-                # and would go on playing after this returns. abort() drops it;
-                # stop() and close() drain it, which is the wrong direction for
-                # every caller that asked us to be quiet.
+                # and would go on playing after this returns. abort() drops
+                # it; stop() and close() drain it, which is the wrong
+                # direction for every caller that asked us to be quiet.
                 out.abort()
+            if held:
+                self._held_at = time.time()
+                if stopped:
+                    # A held stream that was aborted is reopened next time.
+                    self._held = None
+                    try:
+                        out.close()
+                    except Exception:
+                        pass
+            else:
+                out.__exit__(None, None, None)
         return total

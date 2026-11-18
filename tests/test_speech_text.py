@@ -266,3 +266,10 @@ def test_the_agent_is_asked_to_say_what_it_is_about_to_do():
     # Once. Asked for a sentence before each tool, Haiku obliged, and a
     # desktop-control loop makes a hundred tool calls.
     assert "without narrating each step" in SPOKEN_STYLE
+
+
+def test_the_agent_is_asked_for_a_short_first_sentence():
+    """The voice starts once the first sentence is written and rendered, so a
+    short one is heard sooner."""
+    from adapters.base import SPOKEN_STYLE
+    assert "first sentence short" in SPOKEN_STYLE
