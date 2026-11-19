@@ -1303,7 +1303,7 @@ day, not the code's:
 - Two agents answering at once on the same adapter can still be confused:
   the journal has no turn id to join on.
 - **20 controlled voice turns per agent were not run.** That needs someone
-  talking. S covers the part these phases change, and these journal figures
+  talking, and the user chose not to (2026-11-19). S covers the part these phases change, and these journal figures
   are the real-use check (J in the plan's acceptance table), never the gate.
 
 ### What each backend can take (the Phase 8 matrix)

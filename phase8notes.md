@@ -29,9 +29,9 @@ matrix from source and reviewed the phase; what its review changed is below.
   `shared_with` or anything is sent, and an endpoint target is named by
   host. Question 1 ("announce by default, with ask and silent as options")
   is the four-level setting the plan already had.
-- **One plan decision the user has not answered:** at `allow`, a delegation
-  or pass to an **endpoint** is still announced naming the host, because it
-  sends the transcript off this machine. Marked as such in Phase 16.
+- **One plan decision added in Phase 8, then confirmed by the user:** at
+  `allow`, a delegation or pass to an **endpoint** is still announced naming
+  the host, because it sends the transcript off this machine (Phase 16).
 - **Section 2 corrected** from a second read of the code (by Codex, each
   item checked against the file): the browser hook and Codex `--guard` are
   both conditional; the main agent's MCP server gets no id argument; the
@@ -39,7 +39,7 @@ matrix from source and reviewed the phase; what its review changed is below.
   build check is for extra agents only; what `install.sh` copies; what the
   one-page test counts.
 - **Acceptance checks for Phases 9 to 16** (`merged-plan.md`, after
-  Phase 8): 41 checks, each with what it must prove and the evidence that
+  Phase 8): 42 checks (A9-0 was added when the user moved the Codex fix to Phase 9), each with what it must prove and the evidence that
   counts, and two fixed latency instruments: **S** (controlled, the gate)
   and **J** (journal, real use), with how the gate is judged given the
   measured noise.
@@ -184,7 +184,8 @@ Codex. End of speech to first word, journal: Theo 5.9s / 11.5s (30 turns on
 ## Not verified (what was skipped, and why)
 
 - 20 voice turns per agent by voice, under controlled prompts: needs the
-  user talking.
+  user talking, and the user decided on 2026-11-19 not to run them; S and J
+  stand as the baseline.
 - Whether Codex, Gemini, Antigravity or Copilot load `SKILL.md` natively:
   needs a real turn each; Codex's is check A13-3.
 - Every "from source, not run" cell of the matrix, and the whole cancel
@@ -204,10 +205,9 @@ daemon turn does.
 
 ## Open issues, for the next phase
 
-- Fix the Codex main-agent session reset, with a refresh test, before or in
-  Phase 9.
+- Fix the Codex main-agent session reset, with a refresh test, first thing
+  in Phase 9 (the user's choice; check A9-0).
 - Phase 11 decides how the Omarchy skill text is budgeted.
-- Answer, or accept, the endpoint-at-`allow` exception in Phase 16.
 - Phase 9 starts from the fixtures and checks A9-1 to A9-6.
 
 ## Live checklist: what was said, what happened

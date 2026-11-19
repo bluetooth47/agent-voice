@@ -482,6 +482,7 @@ the gate.
 
 | ID | Phase | Must prove | Evidence |
 |---|---|---|---|
+| A9-0 | 9 | A Codex or Gemini main agent keeps its adapter and session across a refresh with no setting change | Test, and a mutation that removes `ask_permission` going red |
 | A9-1 | 9 | No id or file name can address a path outside the data folder | Tests over `../x`, absolute paths, `main`, uppercase, 49 characters, and every `mangled-id` entry; all refused or mapped to the derived id |
 | A9-2 | 9 | Reading never fails a turn: oversize, binary, broken UTF-8, a symlink out (dangling included) | Tests; each yields the last good text or empty plus a published problem, and never an exception |
 | A9-3 | 9 | Two writers never lose a write; a stale `base_stamp` is refused, not applied | A concurrent-writer test (8 processes) and a stale-stamp test |
@@ -531,7 +532,16 @@ the gate.
 **Files:** new `daemon/agentfs.py`, `daemon/templates/agent/*`,
 `daemon/templates/communal/*`, `tests/test_agentfs.py`; hooks in
 `daemon/paths.py`, `daemon/permission_hook.py`, `daemon/wake_listen.py`
-(`refresh()`), `bin/agentvoice`.
+(`refresh()`), `bin/agentvoice`; `daemon/adapters/codex.py` and
+`gemini.py` for the fix below.
+
+**First, a fix carried over from Phase 8** (the user moved it here): a Codex
+main agent loses its session on every idle refresh, because
+`reconcile_agent` keeps the adapter only when its `ask_permission` matches
+(`wake_listen.py:2070`) and `Codex` and `Gemini` never set that attribute.
+Give both adapters `self.ask_permission`, and add a test that a refresh with
+no setting change keeps a Codex and a Gemini main agent and its
+`session_id`, plus a mutation (drop the attribute, watch it go red).
 
 **Build:**
 
@@ -578,7 +588,7 @@ the gate.
     malformed input all still deny, plus a mutation (remove the entry, watch
     the test go red).
 
-**Tests:** malformed, oversize, binary and symlinked files (a link out of the
+**Tests:** the refresh test above; malformed, oversize, binary and symlinked files (a link out of the
 folder is refused, dangling included); last-good behaviour; concurrent
 writers; a stale `base_stamp`; ids as paths; trash and restore with the
 settings entry; the outside-change notice, `ack` and `revert`; the hook on
@@ -1043,8 +1053,9 @@ asked; Sora can't ask others").
   from a table, like progress talk, and is never model-written. Questions
   and messages run quietly and show in the HUD.
 - **allow**: everything runs quietly. It is still in the HUD ("Sora joined
-  this chat"), the audit log and the chat. One exception, a Phase 8 plan
-  decision rather than a user answer: when the target is an **endpoint**,
+  this chat"), the audit log and the chat. One exception, proposed in
+  Phase 8 and confirmed by the user on 2026-11-19: when the target is an
+  **endpoint**,
   a delegation or pass is announced naming the host even at `allow`,
   because it sends the transcript off this machine.
 
