@@ -1,0 +1,16 @@
+{
+  "about": "Only the main agent, no instructions (the main agent on the real machine has none).",
+  "settings": {
+    "agentInstructions": "",
+    "voiceAgents": []
+  },
+  "expect": {
+    "live": [],
+    "disabled": [],
+    "folders": {
+      "main": {
+        "instructions_chars": 0
+      }
+    }
+  }
+}

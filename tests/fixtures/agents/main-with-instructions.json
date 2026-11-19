@@ -1,0 +1,16 @@
+{
+  "about": "Only the main agent, with standing instructions.",
+  "settings": {
+    "agentInstructions": "Call me captain. Answer in one sentence when you can.",
+    "voiceAgents": []
+  },
+  "expect": {
+    "live": [],
+    "disabled": [],
+    "folders": {
+      "main": {
+        "instructions_chars": 53
+      }
+    }
+  }
+}

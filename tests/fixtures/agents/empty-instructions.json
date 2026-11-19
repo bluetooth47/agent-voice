@@ -1,0 +1,53 @@
+{
+  "about": "Instructions that are empty or only whitespace read as none.",
+  "settings": {
+    "agentInstructions": "   \n\t  ",
+    "voiceAgents": [
+      {
+        "id": "nova",
+        "name": "nova",
+        "agent": "claude",
+        "model": "haiku",
+        "effort": "low",
+        "voice": "amy-medium",
+        "level": "ask",
+        "projectDir": "",
+        "speed": 150,
+        "instructions": "",
+        "enabled": true
+      },
+      {
+        "id": "kestrel-x7q",
+        "name": "wren",
+        "label": "",
+        "agent": "codex",
+        "model": "gpt-test",
+        "effort": "medium",
+        "voice": "en_GB-cori-high",
+        "speed": 120,
+        "narration": "",
+        "instructions": null,
+        "level": "trusted",
+        "projectDir": ""
+      }
+    ]
+  },
+  "expect": {
+    "live": [
+      "nova",
+      "kestrel-x7q"
+    ],
+    "disabled": [],
+    "folders": {
+      "main": {
+        "instructions_chars": 0
+      },
+      "nova": {
+        "instructions_chars": 0
+      },
+      "kestrel-x7q": {
+        "instructions_chars": 0
+      }
+    }
+  }
+}

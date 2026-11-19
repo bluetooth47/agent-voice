@@ -1,0 +1,46 @@
+{
+  "about": "Hand-edited ids that must never become a path: each falls back to the id derived from the name. 'main' as a name becomes 'agent-main'.",
+  "settings": {
+    "agentInstructions": "",
+    "voiceAgents": [
+      {
+        "id": "../../etc",
+        "name": "otto",
+        "agent": "claude"
+      },
+      {
+        "id": "Upper Case!",
+        "name": "iris",
+        "agent": "claude"
+      },
+      {
+        "id": "main",
+        "name": "main",
+        "agent": "claude"
+      },
+      {
+        "id": "",
+        "name": "lark",
+        "agent": "claude"
+      }
+    ]
+  },
+  "expect": {
+    "live": [
+      "otto",
+      "iris",
+      "agent-main",
+      "lark"
+    ],
+    "disabled": [],
+    "folders": {
+      "main": {
+        "instructions_chars": 0
+      },
+      "otto": {},
+      "iris": {},
+      "agent-main": {},
+      "lark": {}
+    }
+  }
+}

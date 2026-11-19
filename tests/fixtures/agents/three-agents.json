@@ -1,0 +1,58 @@
+{
+  "about": "Shaped like the real machine: main with no instructions, an Ask-level Claude agent with short instructions, and a Trusted Codex agent whose id differs from its name and that has no 'enabled' key.",
+  "settings": {
+    "agentInstructions": "",
+    "voiceAgents": [
+      {
+        "id": "nova",
+        "name": "nova",
+        "agent": "claude",
+        "model": "haiku",
+        "effort": "low",
+        "voice": "amy-medium",
+        "level": "ask",
+        "projectDir": "",
+        "speed": 150,
+        "instructions": "Keep answers under two sentences. Prefer metric units.",
+        "enabled": true
+      },
+      {
+        "id": "kestrel-x7q",
+        "name": "wren",
+        "label": "",
+        "agent": "codex",
+        "model": "gpt-test",
+        "effort": "medium",
+        "voice": "en_GB-cori-high",
+        "speed": 120,
+        "narration": "",
+        "instructions": "",
+        "level": "trusted",
+        "projectDir": ""
+      }
+    ]
+  },
+  "expect": {
+    "live": [
+      "nova",
+      "kestrel-x7q"
+    ],
+    "disabled": [],
+    "folders": {
+      "main": {
+        "instructions_chars": 0
+      },
+      "nova": {
+        "instructions_chars": 54,
+        "level": "ask",
+        "program": "claude"
+      },
+      "kestrel-x7q": {
+        "instructions_chars": 0,
+        "level": "trusted",
+        "program": "codex",
+        "name": "wren"
+      }
+    }
+  }
+}

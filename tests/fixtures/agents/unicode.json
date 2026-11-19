@@ -1,0 +1,39 @@
+{
+  "about": "Unicode in instructions and the display name (wake names are plain lowercase words by rule). CRLF and a tab and a control character are cleaned the way instructions_text cleans them.",
+  "settings": {
+    "agentInstructions": "Réponds en français 🇫🇷 si on te parle français. 日本語も少し。 Ñandú — “quotes”.\r\nSecond line.\tTabbed.\u0007",
+    "voiceAgents": [
+      {
+        "id": "nova",
+        "name": "nova",
+        "agent": "claude",
+        "model": "haiku",
+        "effort": "low",
+        "voice": "amy-medium",
+        "level": "ask",
+        "projectDir": "",
+        "speed": 150,
+        "instructions": "Réponds en français 🇫🇷 si on te parle français. 日本語も少し。 Ñandú — “quotes”.",
+        "enabled": true,
+        "label": "Nóva ✨"
+      }
+    ]
+  },
+  "expect": {
+    "live": [
+      "nova"
+    ],
+    "disabled": [],
+    "folders": {
+      "main": {
+        "instructions_chars": 94,
+        "instructions": "Réponds en français 🇫🇷 si on te parle français. 日本語も少し。 Ñandú — “quotes”.\nSecond line. Tabbed."
+      },
+      "nova": {
+        "instructions_chars": 73,
+        "label": "Nóva ✨",
+        "instructions": "Réponds en français 🇫🇷 si on te parle français. 日本語も少し。 Ñandú — “quotes”."
+      }
+    }
+  }
+}

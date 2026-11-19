@@ -1182,3 +1182,162 @@ is never moved, and `ydotool` is never used for the agent. The overlay is
 the next thing to build. It needs a source of "where": a window's centre
 for the desktop tools, and the click coordinates of a browser action,
 which arrive in the tool input the hook already sees.
+
+
+## 33. Phase 8 baselines: preamble, latency, start cost, and what each backend can take
+
+i7-1185G7 (8 threads), 2026-11-19, the installed `dev` build `2eeb919`,
+`claude` 2.1.328, `codex-cli` 0.170.0, Whisper `base.en`, trailing pause
+1600ms, sound on a Shokz OpenRun Pro 2 (Bluetooth headset). These are the
+numbers the agent-folder phases (merged plan, Phases 9 to 16) must not make
+worse. Raw runs and summaries: `bench/baselines/phase8.json`.
+
+**Tests.** `./bin/agentvoice-check` green, **1763 passed** before Phase 8
+added any (Plan B's figure, confirmed).
+
+### What each backend is handed today
+
+`bench/preamble_size.py`, the real settings (Omarchy skill on, no main
+instructions). Tokens are characters / 4 and only for comparison.
+
+| backend | preamble chars | ~tokens |
+|---|---|---|
+| claude | 856 | 214 |
+| codex, gemini, agy, copilot | 6,837 | 1,709 |
+| endpoint (chat or agent) | 856 | 214 |
+
+| agent | program | instructions | preamble chars |
+|---|---|---|---|
+| main (Theo) | claude | 0 | 856 |
+| sora | claude | 24 | 957 |
+| jarvis-ajc (Hazel) | codex | 0 | 6,837 |
+
+The parts: spoken style 856, the instructions header 75, and for the four
+CLIs other than Claude the Omarchy skill's short form (`omarchy_skill.
+instructions()`, the command list filtered for a backend with no skill
+loader) at **5,979**. Endpoints get none of it. That short form is the
+finding: it reaches Codex, Gemini, Antigravity and Copilot on every turn and
+is four times the plan's 1,500-character budget for a skills index and three
+times the 2,000 allowed for instructions. Claude gets the skill as a plugin
+instead: 319 characters of front matter always, the 27,122-character file
+only when it decides to read it. Phase 11 should give the others the same
+progressive-disclosure shape (name, one line, path) or a budget of its own,
+and say which.
+
+### Latency, controlled: send to first text (`bench/start_bench.py`)
+
+Each agent built as the daemon builds it: its program, model, effort,
+permission level (Sora at Ask keeps her hook; Theo and Hazel are Trusted),
+id, standing instructions, desktop tools, Chrome and the Omarchy skill. In
+an empty scratch folder rather than the agent's project, prompt "Reply with
+the single word OK", 20 runs each. Every run produced text and no warm run
+fell back to cold. Sora's set ran in the final harness, which also counts a
+turn that errors after text as failed (none did). Theo's and Hazel's ran in
+the first one: same level (both are Trusted) but Hazel's desktop server was
+not given her id, and an error after text would not have been noticed.
+Timed from `send()` to the first chunk with text: the part a bigger preamble
+can slow, and the instrument the Phase 11 gate is judged on.
+
+| agent | start | median | p95 | min | max |
+|---|---|---|---|---|---|
+| main (Claude Opus, medium, trusted) | cold | 3.36s | 4.68s | 2.83s | 5.81s |
+| main | warm | **2.21s** | **3.37s** | 1.64s | 4.81s |
+| sora (Claude Haiku, low, ask) | cold | 1.76s | 2.19s | 1.60s | 2.43s |
+| sora | warm | **0.73s** | **1.08s** | 0.64s | 1.19s |
+| jarvis-ajc (Codex gpt-6.2-sol, medium, trusted) | fresh | **3.33s** | **4.22s** | 2.90s | 5.10s |
+| jarvis-ajc | resume | 3.37s | 4.13s | 2.71s | 5.08s |
+
+- **A cold start costs about 1.1s on both Claude models** (Haiku 1.76
+  against 0.73, Opus 3.36 against 2.21). That is the price a Phase 15 task
+  turn or a Phase 16 side question pays when it cannot use a warm process,
+  and it matches §19's "about a second" for the CLI coming up and
+  connecting MCP.
+- **Codex has no warm path here**: every turn is a new `codex exec`, and
+  resuming the session costs the same as starting one (3.37 against 3.33).
+- **What 20 runs can resolve.** Bootstrapping each set against itself, the
+  median of 20 runs moves by ±60ms for Sora, ±480ms for Opus and ±355ms for
+  Codex, at 95%. Forty runs give ±39, ±395 and ±235ms; eighty, ±27, ±320 and
+  ±170ms. A 150ms gate on the median can be judged on Haiku and on nothing
+  else measured here. Most of Opus's spread is the model, not the CLI, so
+  more runs barely help. The p95 gate is no better: an unchanged build
+  trips it in about a third of 20-run Opus pairs and a fifth of Codex
+  pairs. The plan's acceptance table now judges both gates on Sora,
+  interleaving old and new builds, and holds the other two to their noise
+  range.
+- Sora was first run at Trusted by mistake (the bench forced
+  `ask_permission=False`; Codex's review caught it). At Trusted: warm 0.71s
+  median, 0.87s p95; cold 1.83s and 2.26s. At her real Ask level the median
+  is the same and the tail longer. Theo and Hazel are Trusted, so their runs
+  were already at their own level.
+- Five-run smoke versions before `--agent` existed (default models,
+  Trusted: Haiku cold 1.79s, warm 0.57s; Opus 4.16s, 2.30s; Codex 3.82s
+  fresh, 3.14s resume) are summaries only, kept in the JSON.
+
+### Latency, real use: end of speech to first word (`bench/turn_latency.py`)
+
+From the journal's own `heard → spoke` line (a reply only shown, `heard →
+showed`, is left out), attributed by the follow-up line printed after the
+reply, else by the line that started the capture. Names are taken only from
+the daemon's own start-up lines, so nothing said can be echoed. These turns
+were whatever was asked, tool runs included, so the spread is the user's
+day, not the code's:
+
+| window | agent | turns | median | p95 | wake turns | wake → word median | p95 |
+|---|---|---|---|---|---|---|---|
+| build `2eeb919` | Theo | 30 | 5.9s | 11.5s | 5 | 11.7s | 14.8s |
+| build `2eeb919` | Hazel | 16 | 11.6s | 31.0s | 4 | 15.6s | 22.8s |
+| build `87ce8e7` | Sora | 26 | 5.2s | 17.6s | 10 | 10.6s | 156.9s |
+| Nov 15 to 19, all builds | Theo | 264 | 8.6s | 25.1s | 39 | 14.8s | 36.8s |
+| Nov 15 to 19, all builds | Sora | 53 | 4.9s | 25.6s | 21 | 10.7s | 37.5s |
+| Nov 15 to 19, all builds | Hazel | 26 | 8.4s | 13.4s | 6 | 14.6s | 22.8s |
+
+- No turns on `2eeb919` were attributed to Sora; `87ce8e7` is her most
+  recent build with 20 or more. Hazel has 16 on `2eeb919`, fewer than 20.
+- 35 turns over the whole window could not be attributed (`?`), mostly
+  nameless wakes while other agents were configured.
+- **Wake to first word includes the request itself**, because the user is
+  talking between the two. It is derived (the `audio` line's time plus the
+  printed spans after transcription), to the journal's resolution. The 157s
+  p95 is one real turn whose printed end-to-word was itself 144.4s (journal,
+  2026-11-16 20:07:34, build `87ce8e7`).
+- Two agents answering at once on the same adapter can still be confused:
+  the journal has no turn id to join on.
+- **20 controlled voice turns per agent were not run.** That needs someone
+  talking. S covers the part these phases change, and these journal figures
+  are the real-use check (J in the plan's acceptance table), never the gate.
+
+### What each backend can take (the Phase 8 matrix)
+
+Read from source by Codex (`file:line` for every cell) and spot-checked
+here; "turn" marks what a real turn has shown (this file, a phase note, or a
+replayed recording), everything else is from source and not run.
+
+| backend | working folder | instructions reach it by | resumes | Agent Voice MCP / plugin dir | restrained at ask · edits · trusted by | cancel | native `SKILL.md` |
+|---|---|---|---|---|---|---|---|
+| Claude Code | process cwd (turn) | `--append-system-prompt-file`, or the constant style inline (turn) | warm process, else `--resume` (turn) | both (turn) | hook · hook (in-project edits silent) · browser hook only, and only with `browserTools` on | SIGTERM to the process group | yes, via the generated plugin (turn) |
+| Codex | process cwd | `with_preamble` on stdin | `exec … resume <thread_id>` (turn) | MCP via `-c mcp_servers`, no plugin dir | Codex defaults, observed read-only (turn), plus `--guard` **only if desktop tools are on** · no separate edits · `--approve-for-me`, no guard | SIGTERM to the process group | unknown; Phase 13 needs one real turn |
+| Gemini | process cwd; folder trust checked there (turn) | `with_preamble` on stdin, `-p ""` | no, one-shot (turn) | neither | `--approval-mode plan` · none · `yolo` | SIGTERM to the process group | unknown |
+| Antigravity | process cwd, `--add-dir` (turn) | `with_preamble` in one stream-json message | `--conversation <id>` (id from a recorded turn) | neither | `--mode plan` · withdrawn, falls back to ask · `--dangerously-skip-permissions` | SIGTERM to the process group | unknown |
+| Copilot | process cwd | `with_preamble` on stdin (stdin from a turn) | no | neither | CLI defaults (`--allow-all` stripped) · none · `--allow-all` | SIGTERM to the process group | unknown |
+| endpoint | none (HTTP) | a `system` message | client-side replay of in-memory history | neither | nothing here can restrain it | close the response; the server may keep going | no |
+
+So only Claude Code and Codex can **start** collaboration (they take the
+MCP server); every reachable agent can **receive** it. No backend was
+cancelled for this matrix; that column is from source.
+
+**Found by reading for the matrix** (not fixed in Phase 8, which writes no
+product code):
+
+- **A Codex main agent would lose its conversation on every idle poll.**
+  `reconcile_agent` keeps the adapter only when
+  `getattr(agent, "ask_permission", None) == want_ask`
+  (`daemon/wake_listen.py:2070`), and `Codex` and `Gemini` never set
+  `ask_permission` (Codex keeps `full_auto`), so the check is always false:
+  the adapter is rebuilt and `session_id` set to `None` every refresh.
+  Nobody here runs Codex as the main agent (Theo is Claude; Hazel is an
+  extra agent, rebuilt by `reconcile_crew` only when her whole spec dict
+  changes), so it has not been seen. The fix is one attribute on each
+  adapter and a test that a refresh keeps the session.
+- Codex below Trusted with desktop tools **off** has no Agent Voice
+  restraint at all beyond Codex's own defaults; the `--guard` comes with the
+  desktop server. `crew_mcp.py` must carry its own.

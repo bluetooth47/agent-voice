@@ -1,0 +1,28 @@
+{
+  "about": "An entry saved before ids existed: its folder is the derived id.",
+  "settings": {
+    "agentInstructions": "",
+    "voiceAgents": [
+      {
+        "name": "hey pip",
+        "agent": "claude",
+        "level": "ask",
+        "instructions": "Be brief."
+      }
+    ]
+  },
+  "expect": {
+    "live": [
+      "hey-pip"
+    ],
+    "disabled": [],
+    "folders": {
+      "main": {
+        "instructions_chars": 0
+      },
+      "hey-pip": {
+        "instructions_chars": 9
+      }
+    }
+  }
+}

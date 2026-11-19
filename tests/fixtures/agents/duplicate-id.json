@@ -1,0 +1,35 @@
+{
+  "about": "Two entries claiming one id (only a hand edit does this): the second is dropped, so migration must make one folder, not two.",
+  "settings": {
+    "agentInstructions": "",
+    "voiceAgents": [
+      {
+        "id": "twin",
+        "name": "castor",
+        "agent": "claude",
+        "instructions": "First."
+      },
+      {
+        "id": "twin",
+        "name": "pollux",
+        "agent": "claude",
+        "instructions": "Second."
+      }
+    ]
+  },
+  "expect": {
+    "live": [
+      "twin"
+    ],
+    "disabled": [],
+    "folders": {
+      "main": {
+        "instructions_chars": 0
+      },
+      "twin": {
+        "instructions_chars": 6,
+        "name": "castor"
+      }
+    }
+  }
+}

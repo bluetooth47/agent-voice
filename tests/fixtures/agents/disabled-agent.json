@@ -1,0 +1,56 @@
+{
+  "about": "An agent switched off. It still gets a folder, and keeps its id taken.",
+  "settings": {
+    "agentInstructions": "",
+    "voiceAgents": [
+      {
+        "id": "nova",
+        "name": "nova",
+        "agent": "claude",
+        "model": "haiku",
+        "effort": "low",
+        "voice": "amy-medium",
+        "level": "ask",
+        "projectDir": "",
+        "speed": 150,
+        "instructions": "Keep answers under two sentences. Prefer metric units.",
+        "enabled": true
+      },
+      {
+        "id": "kestrel-x7q",
+        "name": "wren",
+        "label": "",
+        "agent": "codex",
+        "model": "gpt-test",
+        "effort": "medium",
+        "voice": "en_GB-cori-high",
+        "speed": 120,
+        "narration": "",
+        "instructions": "Only on Fridays.",
+        "level": "trusted",
+        "projectDir": "",
+        "enabled": false
+      }
+    ]
+  },
+  "expect": {
+    "live": [
+      "nova"
+    ],
+    "disabled": [
+      "kestrel-x7q"
+    ],
+    "folders": {
+      "main": {
+        "instructions_chars": 0
+      },
+      "nova": {
+        "instructions_chars": 54
+      },
+      "kestrel-x7q": {
+        "instructions_chars": 16,
+        "enabled": false
+      }
+    }
+  }
+}

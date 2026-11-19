@@ -1,0 +1,96 @@
+{
+  "about": "Saved chats as today's chats.py writes them: the main agent's under agent_id \"\" (never \"main\"), an extra agent's under its id.",
+  "settings": {
+    "agentInstructions": "",
+    "saveChats": true,
+    "voiceAgents": [
+      {
+        "id": "nova",
+        "name": "nova",
+        "agent": "claude",
+        "model": "haiku",
+        "effort": "low",
+        "voice": "amy-medium",
+        "level": "ask",
+        "projectDir": "",
+        "speed": 150,
+        "instructions": "Keep answers under two sentences. Prefer metric units.",
+        "enabled": true
+      },
+      {
+        "id": "kestrel-x7q",
+        "name": "wren",
+        "label": "",
+        "agent": "codex",
+        "model": "gpt-test",
+        "effort": "medium",
+        "voice": "en_GB-cori-high",
+        "speed": 120,
+        "narration": "",
+        "instructions": "",
+        "level": "trusted",
+        "projectDir": ""
+      }
+    ]
+  },
+  "chats": [
+    {
+      "id": "0123456789abcdef",
+      "agent_id": "",
+      "agent_label": "Main",
+      "backend": "claude",
+      "session_id": "sess-main-1",
+      "project_dir": "",
+      "title": "Synthetic test chat",
+      "started": 1763500000.0,
+      "updated": 1763500000.0,
+      "pinned": false,
+      "exchanges": [
+        {
+          "at": 1763500000.0,
+          "transcript": "what time is it",
+          "reply": "It is noon.",
+          "error": "",
+          "stopped": false
+        }
+      ]
+    },
+    {
+      "id": "fedcba9876543210",
+      "agent_id": "kestrel-x7q",
+      "agent_label": "Wren",
+      "backend": "codex",
+      "session_id": "sess-codex-1",
+      "project_dir": "",
+      "title": "Synthetic test chat",
+      "started": 1763503600.0,
+      "updated": 1763503600.0,
+      "pinned": false,
+      "exchanges": [
+        {
+          "at": 1763503600.0,
+          "transcript": "what time is it",
+          "reply": "It is noon.",
+          "error": "",
+          "stopped": false
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "live": [
+      "nova",
+      "kestrel-x7q"
+    ],
+    "disabled": [],
+    "folders": {
+      "main": {},
+      "nova": {},
+      "kestrel-x7q": {}
+    },
+    "chat_folders": {
+      "0123456789abcdef": "main",
+      "fedcba9876543210": "kestrel-x7q"
+    }
+  }
+}

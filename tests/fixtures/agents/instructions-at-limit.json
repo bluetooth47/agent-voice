@@ -1,0 +1,37 @@
+{
+  "about": "Instructions at exactly 2000 characters, and one over the limit (cut to 2000 today; Phase 9 publishes the problem rather than cutting silently).",
+  "settings": {
+    "agentInstructions": "Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confir",
+    "voiceAgents": [
+      {
+        "id": "nova",
+        "name": "nova",
+        "agent": "claude",
+        "model": "haiku",
+        "effort": "low",
+        "voice": "amy-medium",
+        "level": "ask",
+        "projectDir": "",
+        "speed": 150,
+        "instructions": "Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confirm before deleting anything. Speak plainly and confEND",
+        "enabled": true
+      }
+    ]
+  },
+  "expect": {
+    "live": [
+      "nova"
+    ],
+    "disabled": [],
+    "folders": {
+      "main": {
+        "instructions_chars": 2000,
+        "raw_chars": 2000
+      },
+      "nova": {
+        "instructions_chars": 2000,
+        "oversize": true
+      }
+    }
+  }
+}
