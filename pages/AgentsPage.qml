@@ -709,8 +709,10 @@ Column {
         stacked: true
         label: "Name"
         hint: "What it is called on screen, in saved chats and in the Agents panel. Any text. Empty uses the wake phrase."
+        changed: page.s.cleanLabel(card.modelData.label) !== ""
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
+        onReset: page.updateAgent(card.index, "label", "")
         TextField {
           text: page.s.cleanLabel(card.modelData.label)
           placeholderText: page.s.capitalised(card.agentName) || "a name to show"
@@ -742,47 +744,77 @@ Column {
         }
       }
 
+      // The same dropdown as the main card's "Runs on", less Omarchy's
+      // default: an extra agent always names its program.
       SettingRow {
         width: parent.width
         stacked: true
-        label: "Program"
+        label: "Runs on"
+        hint: card.program === "endpoint"
+              ? "Any OpenAI-compatible endpoint: Ollama, LM Studio, vLLM, OpenAI, xAI, Hermes."
+              : "Its own program, whatever Omarchy's default agent is."
+        changed: card.program !== "claude"
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
-        SegmentedChoice {
-          options: page.s.programOptions
+        onReset: { card.customModel = false; page.updateAgent(card.index, "agent", "claude") }
+        Dropdown {
+          width: parent.width
+          showLabel: false
+          options: page.s.programOptions.map(function(o) {
+            return o.value === "endpoint" ? { value: "endpoint", label: "OpenAI-compatible endpoint" } : o })
           value: card.program
           foreground: page.s.foreground
           fontFamily: page.s.fontFamily
-          onCommitted: function(v) {
+          onChanged: function(v) {
+            if (v === card.program) return
             card.customModel = false
             page.updateAgent(card.index, "agent", v)
           }
         }
       }
 
-
       // Its own OpenAI-compatible endpoint (plan 7b). The model, effort,
-      // permission and folder rows above do not apply to one: agentvoice
+      // permission and folder rows below do not apply to one: agentvoice
       // offers an endpoint no tools.
-      EndpointEditor {
+      Column {
         width: parent.width
         visible: card.program === "endpoint"
-        url: String(card.modelData.endpointUrl || "")
-        model: String(card.modelData.endpointModel || "")
-        isAgent: card.modelData.endpointIsAgent === true
-        timeoutS: Number(card.modelData.endpointTimeoutS || 0)
-        historyTurns: card.modelData.endpointHistoryTurns === undefined ? 8
-                      : Number(card.modelData.endpointHistoryTurns)
-        foreground: page.s.foreground
-        urgent: page.s.urgent
-        fontFamily: page.s.fontFamily
-        onEdited: function(key, value) { page.updateAgent(card.index, key, value) }
+        spacing: Style.space(10)
+
+        EndpointEditor {
+          width: parent.width
+          url: String(card.modelData.endpointUrl || "")
+          model: String(card.modelData.endpointModel || "")
+          isAgent: card.modelData.endpointIsAgent === true
+          timeoutS: Number(card.modelData.endpointTimeoutS || 0)
+          historyTurns: card.modelData.endpointHistoryTurns === undefined ? 8
+                        : Number(card.modelData.endpointHistoryTurns)
+          foreground: page.s.foreground
+          urgent: page.s.urgent
+          fontFamily: page.s.fontFamily
+          onEdited: function(key, value) { page.updateAgent(card.index, key, value) }
+        }
+        // An endpoint has no folder of ours (the daemon reports it as not
+        // governed), so this always applies, unlike on the main card.
+        Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          text: "⚠  It works on its own machine, in a directory it chooses: the project " +
+                "folder and permission level here reach nothing over there. Restrain " +
+                "it where it runs."
+          textFormat: Text.PlainText
+          color: page.s.urgent
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
       }
+
       SettingRow {
         width: parent.width
         stacked: true
         label: "Model"
         visible: card.program !== "endpoint"
+        hint: "Only for voice; your other sessions keep their own. Changing it starts a new conversation."
         disabledReason: card.info.takes_model === false
                         ? page.s.programLabel(card.program) + " does not take a model from here." : ""
         changed: card.model !== ""
@@ -815,6 +847,16 @@ Column {
               if (text.trim() !== card.model) page.updateAgent(card.index, "model", text.trim())
             }
           }
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            visible: card.model !== ""
+                     && !/^[A-Za-z0-9][A-Za-z0-9._:\/@\[\]-]{0,127}$/.test(card.model)
+            text: "⚠  Not accepted as a model name, so the default is in use."
+            color: page.s.urgent
+            font.family: page.s.fontFamily
+            font.pixelSize: Style.font.caption
+          }
         }
       }
 
@@ -823,7 +865,9 @@ Column {
         stacked: true
         label: "Effort"
         visible: card.program !== "endpoint"
-        hint: "How hard it thinks before answering. Changing it keeps the conversation."
+        hint: card.effort !== "" && card.efforts.length > 0 && card.efforts.indexOf(card.effort) < 0
+              ? "⚠  The level saved is not one this model takes, so the default is in use."
+              : "How hard it thinks before answering. Changing it keeps the conversation."
         disabledReason: card.efforts.length > 0 ? ""
                         : page.s.serviceActive ? "This model takes no effort level."
                         : "Shown once the service is running, for a model that takes one."
@@ -848,8 +892,16 @@ Column {
         hint: card.level === "trusted"
               ? "Nothing is asked. A sentence starting with “" + card.agentName +
                 "” can edit files and run commands in its folder."
-              : "Its own level and folder: what you allow the main agent does not carry over."
-        help: String(card.info.posture || "") !== "" ? "In force: " + card.info.posture + "." : ""
+              : card.level === "edits"
+                ? "Source files in its folder are edited without asking. Commands, the network and anything outside still ask."
+                : card.levels.indexOf("edits") < 0 && page.s.serviceActive
+                  ? page.s.programLabel(card.program) + " cannot put a question on screen, so it is held read-only and may refuse work rather than ask."
+                  : "Every change is asked about on screen. An unanswered question is denied. Its own level: what you allow the main agent does not carry over."
+        help: (String(card.info.posture || "") !== "" ? "In force: " + card.info.posture + ".\n\n" : "") +
+              "Reading is free except for keys, credentials and shell history. Under " +
+              "“edits”, files that make something else run — .git/hooks, .envrc, " +
+              ".claude/settings.json — still ask. Your home directory is not accepted " +
+              "as a project: it holds the file this level is stored in."
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
         Column {
@@ -901,8 +953,11 @@ Column {
         stacked: true
         label: "Project folder"
         visible: card.program !== "endpoint"
+        hint: "Where it works. Changing it starts a new conversation, because history is kept per project."
+        changed: String(card.modelData.projectDir || "") !== ""
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
+        onReset: page.updateAgent(card.index, "projectDir", "")
         TextField {
           text: String(card.modelData.projectDir || "")
           placeholderText: "its folder  (empty: your home directory)"
@@ -920,8 +975,13 @@ Column {
         stacked: true
         label: "Custom instructions"
         hint: "Its own, separate from the main agent's. Changing them keeps the conversation."
+        help: "How to address you, what to keep in mind, how long to talk. They sit after the " +
+              "rule that replies are spoken, so asking for lists or code blocks will still be read out " +
+              "as speech. Up to 2000 characters."
+        changed: String(card.modelData.instructions || "") !== ""
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
+        onReset: page.updateAgent(card.index, "instructions", "")
         InstructionsBox {
           value: String(card.modelData.instructions || "")
           placeholder: "What " + (card.label || "this agent") + " should always keep in mind"
@@ -936,9 +996,13 @@ Column {
         stacked: true
         label: "Voice"
         hint: page.s.voiceMissing(String(card.modelData.voice || ""))
-              ? "Not downloaded yet — choosing it starts the download." : ""
+              ? "Not on this machine yet — choosing a voice downloads it (about 60MB)."
+              : "Which Piper voice this agent speaks in."
+        disabledReason: page.mainSpeaks ? "" : "Replies are not spoken."
+        changed: String(card.modelData.voice || "") !== ""
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
+        onReset: page.updateAgent(card.index, "voice", "")
         Dropdown {
           showLabel: false
           fontFamily: page.s.fontFamily
@@ -950,6 +1014,32 @@ Column {
             page.updateAgent(card.index, "voice", v)
             page.s.chooseVoice(v)
           }
+        }
+      }
+
+      // As on the main card: a way back after a declined or failed download.
+      Column {
+        width: parent.width
+        spacing: Style.space(6)
+        visible: String(card.modelData.voice || "") !== ""
+                 && page.s.voiceMissing(String(card.modelData.voice || ""))
+
+        Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          text: "“" + page.s.voiceName(String(card.modelData.voice || "")) + "” is not on this machine, so it is " +
+                "speaking in one that is."
+          textFormat: Text.PlainText
+          color: page.s.urgent
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Button {
+          text: "Try the download again…"
+          bordered: true
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          onClicked: page.s.fetchVoice(String(card.modelData.voice || ""))
         }
       }
 
