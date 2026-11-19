@@ -170,6 +170,8 @@ class Gemini(Adapter):
         # read-only mode. `yolo` is the unattended one and is only used when
         # the user has explicitly turned the guard off.
         self.approval_mode = approval_mode or ("plan" if ask_permission else "yolo")
+        #: Compared by the daemon's reconcile_agent; see Codex for why.
+        self.ask_permission = ask_permission
         self._proc: subprocess.Popen | None = None
         self._lock = threading.Lock()
 

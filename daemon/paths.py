@@ -38,6 +38,11 @@ DATA_DIR = _XDG_DATA / "agentvoice"
 CONFIG_DIR = _XDG_CONFIG / "agentvoice"
 RUNTIME_DIR = _XDG_RUNTIME / "agentvoice"
 
+#: Agent folders and the communal folder (merged plan, Phases 9 to 16):
+#: what each agent is told, and what they all share. agentfs.py owns them.
+AGENTS_DIR = DATA_DIR / "agents"
+COMMUNAL_DIR = DATA_DIR / "communal"
+
 VENV = DATA_DIR / "venv"
 MODELS = DATA_DIR / "models"
 VERIFIERS = DATA_DIR / "verifiers"

@@ -2470,6 +2470,9 @@ class Daemon:
         # left from earlier in the session when the daemon starts.
         if not self.cfg.get_bool("keepHistory"):
             self.history.clear()
+        # Outside the guard: the agent folders are files, and a hand edit
+        # changes no setting (merged plan, Phase 9).
+        self.reconcile_agent_files()
         if not self.cfg.reload():
             return
         self.pipe.apply(self.cfg)
@@ -2477,6 +2480,58 @@ class Daemon:
         # The names the wake engine can hear may have changed with it.
         self.reconcile_crew()
         print(f"  {CYA}knobs updated{OFF}")
+
+    def reconcile_agent_files(self) -> None:
+        """Notice a change to the agent and communal folders (Phase 9).
+
+        Compares file stamps only, so an idle poll with nothing changed reads
+        no text. On a change it re-reads every folder through agentfs, which
+        keeps each file's last good text in this process, publishes the
+        problems and the files changed outside Settings, and logs one
+        structural line of sizes -- never the text. Phase 11 hands what it
+        read to the agents; until then this is what proves a hand edit is
+        seen within one poll.
+        """
+        try:
+            import agentfs
+            now = agentfs.stamp()
+            if now == getattr(self, "_agentfs_stamp", None):
+                return
+            summary = agentfs.summary()
+            # Only once it was read: a failed read is tried again next poll.
+            self._agentfs_stamp = now
+        except Exception as e:  # the idle poll must never stop on this
+            summary = {"error": f"{type(e).__name__}"}
+            # Forget the last good stamp too, so recovering to it publishes
+            # the recovery instead of leaving the error on screen.
+            self._agentfs_stamp = None
+        # Starts as {} so a machine with no folders yet logs and publishes
+        # nothing at all: until Phase 10 creates them, that is every machine.
+        if summary == getattr(self, "_agent_files", {}):
+            return
+        self._agent_files = summary
+        parts = []
+        for target, v in summary.items():
+            if not isinstance(v, dict):
+                parts.append(f"{target} {v}")
+                continue
+            sizes = " ".join(f"{n.removesuffix('.md')} {f['chars']}"
+                             for n, f in v["files"].items() if f["exists"])
+            flags = ""
+            if v["changed_outside"]:
+                flags += f" · {len(v['changed_outside'])} changed outside"
+            if v["problems"]:
+                flags += f" · {len(v['problems'])} problem(s)"
+            parts.append(f"{target}: {sizes or 'empty'}{flags}")
+        print(f"  {DIM}agent files: {' | '.join(parts) or 'none'}{OFF}",
+              flush=True)
+        try:
+            self.publish_agent()
+        except Exception as e:
+            # Published again on the next change, or by whatever publishes
+            # next; the poll goes on.
+            print(f"  {YEL}agent files: could not publish ({type(e).__name__}){OFF}",
+                  flush=True)
 
     def announce_permission(self, p: Persona, tail_ms: int) -> bool:
         """Say a pending question out loud, once, if the hook marked it to be
@@ -3972,7 +4027,10 @@ class Daemon:
                            or (p.problem if p is not None else ""),
                 "voice": getattr(p.speaker, "name", "") if p and p.speaker else "",
             })
-        return {"crew": out, "open_mic": self.open_mic_field()}
+        return {"crew": out, "open_mic": self.open_mic_field(),
+                # Per folder: sizes, problems, files changed outside Settings
+                # (Phase 9). The pages draw it from Phase 12.
+                "agent_files": getattr(self, "_agent_files", None) or {}}
 
     def panel_agents(self, payload: dict) -> list[dict]:
         """Every agent as agents_panel.py draws it, from the payload just

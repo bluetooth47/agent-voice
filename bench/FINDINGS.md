@@ -1341,3 +1341,15 @@ product code):
 - Codex below Trusted with desktop tools **off** has no Agent Voice
   restraint at all beyond Codex's own defaults; the `--guard` comes with the
   desktop server. `crew_mcp.py` must carry its own.
+
+
+## 34. What watching the agent folders costs the idle poll
+
+i7-1185G7, 2026-11-19, Phase 9. The daemon now checks the agent and
+communal folders on every idle poll (`agentfs.stamp()`: an `lstat` of each
+tracked file and its history folder, no reads), and re-reads them only when
+a stamp changed (`agentfs.summary()`). With eight agents, the communal
+folder and one skill each, 200 runs: `stamp()` **median 1.48ms, max
+2.15ms**; `summary()` median 10.0ms, max 16.9ms over 50 runs. With no
+folders at all, which is every machine until Phase 10 creates them, the
+check finds nothing, logs nothing and publishes nothing.

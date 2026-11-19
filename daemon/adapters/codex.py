@@ -177,6 +177,11 @@ class Codex(Adapter):
         # not a contract -- unlike the event envelope below, which was
         # recorded from a real turn.
         self.full_auto = (not ask_permission) if full_auto is None else full_auto
+        #: What it was asked for, kept as given: the daemon's reconcile_agent
+        #: compares this to decide whether a refresh may keep the adapter.
+        #: Without it every idle refresh rebuilt a Codex main agent and threw
+        #: away its conversation (found in Phase 8, fixed in Phase 9).
+        self.ask_permission = ask_permission
         self._proc: subprocess.Popen | None = None
         self._lock = threading.Lock()
 

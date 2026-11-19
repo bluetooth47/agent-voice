@@ -259,6 +259,13 @@ Consequences the plan accepts and states on screen:
 - A shell-capable Trusted agent can already send another agent a typed turn
   with `agentvoice type`. The collaboration tools add a labelled, limited,
   audited path. They do not close the raw one.
+- "Allow everything in this chat" covers the folder rules too, below
+  Trusted, as it covers credentials: that is what the button says, for one
+  agent and one conversation (Phase 9).
+- The folder checks look at each directory before using it; a process that
+  swaps a directory for a link in between is not stopped. Only something
+  already running as the user can do that, and below Trusted an agent is
+  asked before it writes there (Phase 9).
 
 ### 3.6 Prompt assembly
 
@@ -598,6 +605,11 @@ relative to the module, so an installed copy has them.
 **Done when:** the check is green, and a hand edit is picked up within one
 turn on the real daemon. `install.sh` did not change, so the box is not
 required; run it anyway if anything in the copy list moved.
+
+**Done (2026-11-19)**, on branch `phase-9`; see `phase9notes.md`. One change
+from the above: an extra agent whose id is `communal` (the settings allow
+it) keeps its id and is refused a folder with a reason, rather than being
+re-keyed; Phase 10's migration reports it.
 
 ---
 

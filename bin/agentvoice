@@ -334,6 +334,21 @@ case "${1:-status}" in
         ;;
     esac
     ;;
+  agents)
+    # Agent folders and the communal folder (merged plan, Phase 9). Text
+    # arrives on stdin, never as an argument: argv is readable by every
+    # account, and these files are what the agents are told.
+    #   agentvoice agents list [--json] | show TARGET [--json]
+    #   agentvoice agents create ID | trash ID < settings.json
+    #   agentvoice agents restore NAME | trash-list [--json]
+    #   agentvoice agents write TARGET FILE [--base STAMP] < text
+    #   agentvoice agents history TARGET FILE [--json]
+    #   agentvoice agents revert TARGET FILE [VERSION] | ack TARGET FILE
+    REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+    PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+    shift
+    exec "$PY" "$REPO/daemon/agentfs.py" "$@"
+    ;;
   endpoint)
     # The settings page's endpoint helpers (plan 7b). A key goes in on
     # stdin, never as an argument: argv is readable by every account.
@@ -373,7 +388,7 @@ case "${1:-status}" in
     active && echo yes || echo no
     ;;
   *)
-    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|interrupt|monitor|calibrate|voice|permit|pending|history|chats|endpoint|open-mic|wake-test|status|is-active]" >&2
+    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|interrupt|monitor|calibrate|voice|permit|pending|history|chats|agents|endpoint|open-mic|wake-test|status|is-active]" >&2
     exit 2
     ;;
 esac

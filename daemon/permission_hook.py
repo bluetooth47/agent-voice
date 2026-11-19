@@ -29,7 +29,7 @@ import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from paths import CONFIG_DIR, RUNTIME_DIR, scope_root  # noqa: E402
+from paths import AGENTS_DIR, COMMUNAL_DIR, CONFIG_DIR, RUNTIME_DIR, scope_root  # noqa: E402
 
 PENDING = RUNTIME_DIR / "permissions"
 
@@ -226,8 +226,46 @@ def _sensitive(p: Path) -> bool:
     if p.suffix in NEVER_SILENT_SUFFIX:
         return True
     try:
-        return p == CONFIG_DIR or CONFIG_DIR in p.parents
-    except (OSError, ValueError):
+        if p == CONFIG_DIR or CONFIG_DIR in p.parents:
+            return True
+        # What every agent is told on every turn (merged plan, Phase 9): its
+        # instructions, the communal rules. An agent that could rewrite them
+        # unasked could rewrite its own orders. By resolved location, not by
+        # fragment, because these sit under the data folder wherever XDG puts
+        # it -- and only a project that contains that folder can reach them
+        # here at all, so this is defence in depth below Trusted. At Trusted
+        # there is no hook; the saved versions in agentfs make it visible.
+        return _under(p, AGENTS_DIR) or _under(p, COMMUNAL_DIR)
+    except (OSError, ValueError, RuntimeError):
+        return True
+
+
+def _under(p: Path, base: Path) -> bool:
+    """True when the resolved `p` is `base` or inside it, `base` resolved
+    too, since the data folder may itself sit behind a link."""
+    root = base.resolve()
+    return p == root or root in p.parents
+
+
+def _foreign(path: str) -> bool:
+    """True when `path` is in another agent's folder (merged plan, Phase 9).
+
+    An agent may read its own folder and the communal one; another agent's
+    instructions, notes and skills are asked about below Trusted, the way a
+    credential is. Its own folder is told apart by the id this hook was
+    started with (argv[2]; the main agent's is "", its folder `main`).
+    Anything directly in agents/ that is not its own -- the trash, another
+    id, the folder itself -- counts as another's. Unsure means foreign.
+    """
+    try:
+        p = _resolved(path)
+        root = AGENTS_DIR.resolve()
+        if p == root:
+            return True
+        if root not in p.parents:
+            return False
+        return p.relative_to(root).parts[0] != (_named() or "main")
+    except (OSError, ValueError, RuntimeError):
         return True
 
 
@@ -320,6 +358,26 @@ def _resolved(path: str) -> Path:
         return Path("/.ssh/unparseable")
 
 
+def _edit_target(tool_name: str, tool_input: dict) -> str:
+    """The one file an edit tool will write, or "" when that is not plain.
+
+    The tool's own field: `notebook_path` for NotebookEdit, `file_path` for
+    the rest. A value that is not a string, or a second path field naming a
+    different file, is not plain, and "" sends it to the question -- a
+    harmless `file_path` beside the real `notebook_path` used to be the one
+    judged, and an integer became a relative name inside the project.
+    """
+    own = "notebook_path" if tool_name == "NotebookEdit" else "file_path"
+    other = "file_path" if own == "notebook_path" else "notebook_path"
+    target = tool_input.get(own)
+    if not isinstance(target, str) or not target:
+        return ""
+    second = tool_input.get(other)
+    if second is not None and second != target:
+        return ""
+    return target
+
+
 def _paths_in(tool_input: dict) -> list[str]:
     """Every value in a tool's input that names a place on disk."""
     keys = ("file_path", "notebook_path", "path", "pattern", "glob")
@@ -353,7 +411,7 @@ SEARCH_FILE_CAP = 20_000
 SEARCH_BUDGET_S = 2.0
 
 
-def _searchable(root: str) -> list[str] | None:
+def _searchable(root: str, glob: str | None = None) -> list[str] | None:
     """Every file a content search under `root` would actually read.
 
     `rg --files` rather than a walk, because it applies the same ignore
@@ -364,6 +422,12 @@ def _searchable(root: str) -> list[str] | None:
 
     None when the question cannot be answered inside the caps. The caller
     asks in that case; "could not tell" is not "nothing there".
+
+    With the search's own `glob`, the listing ignores the ignore files and
+    applies that glob instead: a glob that names a file can outrank the
+    .gitignore that hides it, so the ignored `.env` the plain listing leaves
+    out is exactly what `glob: ".env"` searches. Over-asking there is the
+    safe side. git cannot answer that question, so it is skipped for it.
     """
     deadline = time.time() + SEARCH_BUDGET_S
 
@@ -375,15 +439,20 @@ def _searchable(root: str) -> list[str] | None:
         # on the protected list is one: .ssh, .aws, .gnupg, .env. Without it
         # this looked like it worked and saw none of them. Ignore rules still
         # apply with it, so an ignored .env is still not a prompt.
-        proc = subprocess.run(
-            ["rg", "--files", "--hidden", "--no-messages", root],
-            capture_output=True, text=True, timeout=max(left(), 0.1))
+        argv = ["rg", "--files", "--hidden", "--no-messages"]
+        if glob:
+            argv += ["--no-ignore", "-g", glob]
+        proc = subprocess.run(argv + ["--", root],
+                              capture_output=True, text=True, timeout=max(left(), 0.1))
         # rg exits 1 for "no files", a real answer, and 2 for trouble.
         if proc.returncode in (0, 1):
             files = proc.stdout.splitlines()
             return None if len(files) > SEARCH_FILE_CAP else files
     except (OSError, subprocess.SubprocessError):
         pass
+
+    if glob:
+        return _walk(root, deadline)
 
     # Second choice, and it answers the same question: tracked files plus
     # untracked ones git is not ignoring, which is the set rg would have
@@ -467,10 +536,28 @@ def _search_would_read(tool_input: dict) -> list[str] | None:
     """
     root = tool_input.get("path")
     root = str(root) if isinstance(root, str) and root else os.getcwd()
-    files = _searchable(root)
+    # Spelled as the tool will read it. Handed over verbatim, "~/x" was a
+    # directory that does not exist to rg and to the walk, so the pre-search
+    # found nothing and the search was allowed -- while the tool itself
+    # expanded the tilde and searched the real tree.
+    root = str(_resolved(root))
+    glob = tool_input.get("glob")
+    glob = glob if isinstance(glob, str) and glob else None
+    # A search rooted at the agent folders or anything above them can
+    # return another agent's files whatever its filters say (a glob can
+    # outrank an ignore rule), so it is asked about without enumerating.
+    # Searches that wide -- home, / -- were past the file cap and asked
+    # already; the new case is the data folder itself.
+    files = _searchable(root, glob) if glob else _searchable(root)
     if files is None:
         return None
-    return [f for f in files if _is_secret(f)]
+    try:
+        agents = AGENTS_DIR.resolve()
+        if Path(root) == agents or Path(root) in agents.parents:
+            return [str(agents)]
+    except (OSError, RuntimeError, ValueError):
+        return [root]
+    return [f for f in files if _is_secret(f) or _foreign(f)]
 
 
 def _grant_file(session: str) -> Path:
@@ -559,6 +646,10 @@ def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, st
     if tool_name in READ_ONLY:
         secrets = [p for p in _paths_in(tool_input) if _is_secret(p)]
         note = f"this reads {secrets[0]}" if secrets else ""
+        if not secrets:
+            secrets = [p for p in _paths_in(tool_input) if _foreign(p)]
+            note = (f"this reads another agent's folder ({secrets[0]})"
+                    if secrets else "")
 
         # The level is consulted *before* the pre-search, not after. At
         # "trusted" the answer is allow whatever the tree holds, and paying
@@ -588,8 +679,8 @@ def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, st
     if level == "trusted":
         return "allow", ""
     if level == "edits" and tool_name in PATH_SCOPED:
-        target = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
-        if _inside(target, root) and not _sensitive(_resolved(target)):
+        target = _edit_target(tool_name, tool_input)
+        if target and _inside(target, root) and not _sensitive(_resolved(target)):
             return "allow", ""
 
     return _ask(tool_name, tool_input, session=session)
@@ -618,7 +709,15 @@ def _ask(tool_name: str, tool_input: dict, note: str = "",
 
     # One line the overlay can show without wrapping. The full input goes
     # along too, for anything that wants the detail.
+    # A notebook edit writes its notebook_path; with a different file_path
+    # beside it, showing that one would be a prompt that lies about its
+    # target, so both are shown.
+    nb = tool_input.get("notebook_path") if tool_name == "NotebookEdit" else None
+    if isinstance(nb, str) and nb:
+        other = tool_input.get("file_path")
+        nb = nb if other in (None, nb) else f"{nb} (and file_path {other})"
     summary = str(tool_input.get("command")
+                  or nb
                   or tool_input.get("file_path")
                   or tool_input.get("path")
                   or tool_input.get("url")
