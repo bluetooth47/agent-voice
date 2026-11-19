@@ -304,10 +304,33 @@ def ask_at_the_desktop(tool: str, args: dict) -> bool:
 
 # --- the tools -------------------------------------------------------------
 
+#: Set by `--guard`: this server asks before a change itself, because the
+#: program running it has no hook to ask through (Codex). Claude never sets
+#: it -- its PreToolUse hook already asks, and asking twice is two cards.
+GUARD = False
+
+
+def guarded(name: str, args: dict) -> None:
+    """Under --guard, put the same decision the hook would reach on screen.
+    Raises ToolError on anything but an allow, so it fails closed."""
+    if not GUARD:
+        return
+    import permission_hook
+    try:
+        decision, reason = permission_hook.decide(f"mcp__{SERVER}__{name}", args)
+    except Exception as e:              # noqa: BLE001 -- a guard fails closed
+        raise ToolError(f"not allowed: the permission check failed ({type(e).__name__})")
+    if decision != "allow":
+        raise ToolError(reason or "Denied at the desktop.")
+
+
 def call(name: str, args: dict):
     """Run one tool. Returns text, or ("image", png bytes). Raises ToolError."""
     if not isinstance(args, dict):
         raise ToolError("arguments must be an object")
+    if name not in {t["name"] for t in TOOLS}:
+        raise ToolError(f"no tool called {name!r}")
+    guarded(name, args)
     if name == "list_windows":
         focused = (_hypr_json("activewindow") or {}).get("address", "")
         return json.dumps([_window(c, focused) for c in _hypr_json("clients") or []
@@ -680,5 +703,39 @@ def mcp_config(program: str, named: str = "") -> str:
         "type": "stdio", "command": sys.executable, "args": args}}})
 
 
+#: What Codex strips from an MCP server's environment and the tools need:
+#: hyprctl finds Hyprland by the signature, notify-send by the session bus,
+#: and the clipboard and screenshots by the Wayland display. Without them
+#: list_workspaces answered "HYPRLAND_INSTANCE_SIGNATURE not set".
+CODEX_ENV = ("HYPRLAND_INSTANCE_SIGNATURE", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR",
+             "DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "XDG_CURRENT_DESKTOP")
+
+
+def codex_config(program: str, named: str = "", guard: bool = True) -> list[str]:
+    """The `-c` options that start this server inside one `codex exec`.
+
+    Codex's own approval is set to "approve" for this server only: in exec it
+    has no way to ask, so it refused every change ("requires approval, but
+    approval policy is never"). Below trusted, --guard moves the asking here.
+    """
+    args = [str(Path(__file__).resolve()), program] + ([named] if named else [])
+    if guard:
+        args.append("--guard")
+    key = f"mcp_servers.{SERVER}"
+    return ["-c", f"{key}.command={json.dumps(sys.executable)}",
+            "-c", f"{key}.args={json.dumps(args)}",
+            "-c", f"{key}.env_vars={json.dumps(list(CODEX_ENV))}",
+            "-c", f'{key}.default_tools_approval_mode="approve"',
+            # Longer than a question waits on screen (45s by default), so a
+            # slow answer reaches the hook's own deny rather than Codex's
+            # 60-second tool timeout racing it.
+            "-c", f"{key}.tool_timeout_sec=120"]
+
+
 if __name__ == "__main__":
+    if "--guard" in sys.argv:
+        # Removed before anything reads argv: permission_hook takes the
+        # program and agent id from positions 1 and 2.
+        sys.argv.remove("--guard")
+        GUARD = True
     serve()

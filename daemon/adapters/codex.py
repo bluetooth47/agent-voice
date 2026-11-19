@@ -157,8 +157,15 @@ class Codex(Adapter):
     # Codex's own spelling of "do not stop to ask", as used by omarchy-agent.
     def __init__(self, model: str | None = None, spoken: bool = True,
                  cwd: str | None = None, full_auto: bool | None = None,
-                 ask_permission: bool = True, effort: str | None = None):
+                 ask_permission: bool = True, effort: str | None = None,
+                 named: str = ""):
         self.model = model
+        #: Which extra agent this is, so a question the desktop tools put on
+        #: screen is filed as that agent's. Empty for the main agent.
+        self.named = named
+        #: Agent Voice's desktop tools (plan 12a), set by the daemon from
+        #: desktopTools exactly as for Claude.
+        self.desktop_tools = False
         self.effort = effort
         self.spoken = spoken
         self.cwd = cwd
@@ -188,14 +195,24 @@ class Codex(Adapter):
 
     def _argv(self, text: str, session_id: str | None) -> list[str]:
         argv = ["codex", "exec", "--json", "--skip-git-repo-check"]
-        if session_id:
-            argv += ["resume", session_id]
         if self.model:
             argv += ["-m", self.model]
         if self.effort and self.effort in self.efforts():
             argv += ["-c", f'model_reasoning_effort="{self.effort}"']
         if self.full_auto:
             argv.append("--approve-for-me")
+        if self.desktop_tools:
+            # Codex has no hook to ask through, so below "trusted" the server
+            # asks itself (--guard); Codex's own approval is turned off for it
+            # because in `exec` it cannot ask and refuses every change.
+            from desktop_mcp import codex_config
+            argv += codex_config(self.name, self.named, guard=not self.full_auto)
+        # Every option goes BEFORE `resume`: the resume subcommand rejects
+        # --approve-for-me ("unexpected argument"), which failed every turn
+        # after the first for a trusted Codex agent. Checked against
+        # codex-cli 0.170.0 on 2026-11-18, with -m and -c alike.
+        if session_id:
+            argv += ["resume", session_id]
         # The prompt is NOT appended: it goes to stdin, because argv is world
         # readable through /proc/<pid>/cmdline. `codex exec` with no trailing
         # prompt reads one from stdin -- verified against the real CLI.
