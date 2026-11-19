@@ -569,9 +569,10 @@ class TestStopMeansStopListeningToo:
         assert daemon.arm_follow_up() is False, \
             "a stop left it listening for the next sentence"
 
-    def test_a_lock_a_mute_and_a_yield_close_it_as_well(self, daemon):
-        """All three go through `silence()`, which sets the same flag -- and
-        all three mean "stop paying attention" just as much as the button."""
+    def test_a_lock_and_a_yield_close_it_as_well(self, daemon):
+        """Both go through `silence()`, which sets the same flag -- and
+        both mean "stop paying attention" just as much as the button. A mute
+        no longer does: it closes the microphone, not the turn."""
         daemon.pipe = type("P", (), {"conversation": True})()
         daemon.speaker = None
         daemon.agent = None

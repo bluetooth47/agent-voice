@@ -1753,9 +1753,14 @@ class Daemon:
         return True
 
     def _on_toggle(self, *_):
+        # A mute closes the microphone and nothing else. It used to call
+        # silence(), which cancelled every agent's turn and voice: muting so
+        # you could cough or take a call ended the chat you were in. What was
+        # captured is still dropped -- the run loop abandons a capture the
+        # moment `listening` goes false -- and replies keep playing.
         self.enabled = not self.enabled
         if not self.enabled:
-            self.silence()
+            self.deafen(0)
         print(f"\n  {CYA}mic {'engaged' if self.enabled else 'released'}{OFF}")
         self._publish()
 
@@ -1777,6 +1782,13 @@ class Daemon:
         # room or over somebody's call.
         typed = getattr(self._here, "typed", False)
         return (self.enabled or typed) and not self.locked and not self.yielded
+
+    @property
+    def may_speak(self) -> bool:
+        """Whether a reply may be heard. A lock (nobody at the desk) and a
+        lent microphone (somebody is on a call) stop speech; a mute does not:
+        it is about what we hear, not what we say."""
+        return not self.locked and not self.yielded
 
     def silence(self) -> None:
         """Stop talking, stop thinking, and forget what is already captured.
@@ -2657,7 +2669,7 @@ class Daemon:
         """Say a progress line if one is due. Lowest priority of anything
         said: never over a permission prompt, the answer or another agent,
         and cut short the moment the agent's own words arrive."""
-        if (not self.speaker or not self.listening or self._interrupt.is_set()
+        if (not self.speaker or not self.may_speak or self._interrupt.is_set()
                 or self._floor_busy()):
             return
         line = narr.due(time.time())
@@ -2702,7 +2714,7 @@ class Daemon:
         # point: nothing is playing yet, so a 9ms spawn cannot underrun
         # anything, and poll_session() rate limits itself to once a second.
         self.poll_session()
-        if not self.listening:
+        if not self.may_speak:
             self.silence()
             return
         if self._in_turn():
@@ -2735,7 +2747,7 @@ class Daemon:
         """Wait for a turn to speak. False if `p` was stopped meanwhile."""
         with self._floor:
             while True:
-                if p.interrupt.is_set() or not self.listening:
+                if p.interrupt.is_set() or not self.may_speak:
                     return False
                 owner = self._floor_owner
                 held = (owner is not None and owner is not p and owner.busy
@@ -2776,7 +2788,7 @@ class Daemon:
                     on_start()
                 except Exception:
                     pass
-            if self._interrupt.is_set() or not self.listening:
+            if self._interrupt.is_set() or not self.may_speak:
                 return True
             # Progress talk gives way to the agent's own words, at the next
             # chunk of audio rather than at the end of the sentence.
@@ -3272,7 +3284,7 @@ class Daemon:
 
         # Rendering ahead: each sentence goes to Piper as soon as the agent
         # has finished writing it, while the one before is still playing.
-        speaker = self.speaker if self.listening else None
+        speaker = self.speaker if self.may_speak else None
         prefetch = getattr(speaker, "prefetch", None)
         if speaker is not None and hasattr(speaker, "forget"):
             speaker.forget()
@@ -3301,7 +3313,7 @@ class Daemon:
                     # thread this block runs under notices a lock during the
                     # agent's own turn, before any sentence exists.
                     self.poll_session()
-                    if self._interrupt.is_set() or not self.listening:
+                    if self._interrupt.is_set() or not self.may_speak:
                         self.silence()
                         break
                     if open_turn and not reply_parts and \
@@ -4211,7 +4223,12 @@ class Daemon:
         if om is None:
             return False
         if not self.listening:
-            self.end_open_mic("the microphone is off")
+            if self.enabled or self.locked or self.yielded:
+                self.end_open_mic("the microphone is off")
+            # Muted: held, not ended. It picks up again on unmute, and the
+            # idle timeout below still closes it if the mute lasts.
+            elif self.open_mic_until <= time.time():
+                self.end_open_mic(f"nothing said for {self.open_mic_idle_s() / 60:.0f} min")
             return False
         if self.open_mic_until <= time.time():
             self.end_open_mic(f"nothing said for {self.open_mic_idle_s() / 60:.0f} min")

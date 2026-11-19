@@ -130,11 +130,38 @@ class TestOpenMic:
         assert not daemon.open_mic_due(crew=False)
         assert daemon.open_mic is None
 
-    def test_a_mute_or_a_lock_closes_it(self, daemon):
+    def test_a_lock_closes_it(self, daemon):
         daemon.start_open_mic(daemon._main, say=False)
         daemon.locked = True
         assert not daemon.open_mic_due(crew=False)
         assert daemon.open_mic is None
+
+    def test_a_mute_holds_it_rather_than_ending_it(self, daemon):
+        daemon.start_open_mic(daemon._main, say=False)
+        daemon.enabled = False
+        assert not daemon.open_mic_due(crew=False)
+        assert daemon.open_mic is daemon._main, "a mute ended the open mic"
+        daemon.enabled = True
+        assert daemon.open_mic_due(crew=False)
+
+    def test_a_long_mute_still_times_it_out(self, daemon):
+        daemon.start_open_mic(daemon._main, say=False)
+        daemon.enabled = False
+        daemon.open_mic_until = time.time() - 1
+        assert not daemon.open_mic_due(crew=False)
+        assert daemon.open_mic is None
+
+    def test_a_mute_does_not_stop_the_reply(self, daemon):
+        """Muting closes the microphone, not the chat: the reply keeps
+        playing and the agent keeps working. A lock still stops speech."""
+        cancelled = []
+        daemon.silence = lambda: cancelled.append(True)
+        daemon._on_toggle()
+        assert daemon.enabled is False
+        assert cancelled == [], "a mute cancelled the agent's turn"
+        assert daemon.may_speak
+        daemon.locked = True
+        assert not daemon.may_speak
 
     def test_the_popup_toggle(self, daemon):
         assert daemon.apply_open_mic_command("open-mic on main")
