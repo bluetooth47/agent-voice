@@ -14,7 +14,10 @@
 #     None, so a preview never takes the keyboard from whoever is typing;
 #   - settings: `omarchy` on PATH is a stub that logs `omarchy bar set ...` to
 #     <out>.writes instead of writing shell.json, so clicking around a preview
-#     changes nothing real. Everything else passes through to the real one.
+#     changes nothing real. Everything else passes through to the real one;
+#   - agent folders: `agentvoice agents ...` runs this checkout's agentfs.py
+#     with XDG_DATA_HOME in the scratch directory, so an instructions box
+#     saved in a preview writes nothing any real agent reads.
 #
 # Options:
 #   --theme NAME   a theme from /usr/share/omarchy/themes (default: current)
@@ -143,13 +146,33 @@ if [ -n "$state" ]; then
   cp "$state" "$tmp/run/agentvoice/state"
   # Quickshell then cannot find Hyprland's socket and says so once; the
   # surfaces previewed here do not use it.
-  printf '#!/usr/bin/env bash\n[ "${1:-}" = is-active ] && echo yes\nexit 0\n' > "$tmp/bin/agentvoice"
-  chmod +x "$tmp/bin/agentvoice"
+  printf '#!/usr/bin/env bash\n[ "${1:-}" = is-active ] && echo yes\nexit 0\n' > "$tmp/bin/agentvoice.rest"
+  chmod +x "$tmp/bin/agentvoice.rest"
   # The Wayland socket lives in the real runtime directory, so it is named
   # by its full path once XDG_RUNTIME_DIR points elsewhere.
   runtime_env=(XDG_RUNTIME_DIR="$tmp/run"
                WAYLAND_DISPLAY="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/${WAYLAND_DISPLAY:-wayland-0}")
 fi
+
+# `agentvoice agents ...` writes the agent folders, which hold what every
+# agent is told (merged plan, Phase 10). In a preview it always runs this
+# checkout's agentfs.py against a scratch data folder, whatever the mode, so
+# saving an instructions box in a preview never reaches a real agent. The
+# rest goes to the stub above (--state) or to the real command.
+mkdir -p "$tmp/data"
+real_agentvoice=$(command -v agentvoice || true)
+if [ ! -x "$tmp/bin/agentvoice.rest" ]; then
+  printf '#!/usr/bin/env bash\nexec %q "$@"\n' "${real_agentvoice:-false}" > "$tmp/bin/agentvoice.rest"
+  chmod +x "$tmp/bin/agentvoice.rest"
+fi
+cat > "$tmp/bin/agentvoice" <<STUB
+#!/usr/bin/env bash
+if [ "\${1:-}" = agents ]; then
+  XDG_DATA_HOME='$tmp/data' exec '$repo/bin/agentvoice' "\$@"
+fi
+exec '$tmp/bin/agentvoice.rest' "\$@"
+STUB
+chmod +x "$tmp/bin/agentvoice"
 
 env "${runtime_env[@]}" "${config_env[@]}" \
 PATH="$tmp/bin:$PATH" PREVIEW_ARG="$arg" PREVIEW_WRITES="$out.writes" \

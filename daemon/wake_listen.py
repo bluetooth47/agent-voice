@@ -2045,7 +2045,9 @@ class Daemon:
         want_ask = want_level != "trusted"
         want_model = None if endpoint else self.cfg.model_for(want_name)
         want_effort = None if endpoint else self.cfg.effort_for(want_name)
-        want_instructions = instructions_text(self.cfg["agentInstructions"])
+        # From agents/main/instructions.md, the setting only while that file
+        # is missing (merged plan, Phase 10).
+        want_instructions = self.instructions_for("", self.cfg["agentInstructions"])
         # The endpoint's identity is its URL and model, not just its name:
         # switching which machine answers must rebuild, and they all report
         # the same name.
@@ -2110,6 +2112,20 @@ class Daemon:
                           f"  {YEL}conversation is on, but {self.agent.name} starts "
                           f"fresh every turn — it saves you the wake word and "
                           f"nothing more{OFF}")
+
+    def instructions_for(self, persona_id: str, legacy) -> str:
+        """An agent's standing instructions: its folder's instructions.md
+        when that exists (even empty), else the old setting `legacy`.
+
+        From what reconcile_agent_files last read, so an idle poll reads no
+        text; it runs first in refresh(), so a hand edit reaches the agent on
+        the same poll. Before the first read, straight from the file."""
+        said = getattr(self, "_instructions", None)
+        if said is None:
+            import agentfs
+            return agentfs.instructions_for(persona_id, legacy)
+        got = said.get(persona_id or "main")
+        return got if got is not None else instructions_text(legacy)
 
     def apply_instructions(self, want: str) -> None:
         """Change the standing instructions, keeping the conversation.
@@ -2343,6 +2359,15 @@ class Daemon:
             print(f"  {DIM}(typed message dropped: the microphone is "
                   f"{'locked' if self.locked else 'lent out'}){OFF}", flush=True)
             return
+        # Caught up first, so a typed turn is told what the settings and the
+        # agent folders say now -- an instruction saved on the Agents page a
+        # moment ago, a hand edit -- not what the last idle poll read. That
+        # poll runs only while the microphone listens, and even then is up to
+        # 2s old; a typed message arrives muted or not, often straight after
+        # the save. Both were seen live (Phase 10). Typed turns are rare, and
+        # a refresh with nothing changed reads no text.
+        if self.pipe is not None:
+            self.refresh()
         p = self._persona_by_id("" if agent_id in ("", "main") else agent_id)
         if p is None:
             print(f"  {YEL}typed message for an agent that is not here{OFF}",
@@ -2450,6 +2475,11 @@ class Daemon:
         # below the gate in the run loop, so a lock check here would stop
         # being called the moment it closed the gate -- see the dedicated
         # poll in run(), which is above it.
+        # Outside the guard: the agent folders are files, and a hand edit
+        # changes no setting (merged plan, Phase 9). First, because the
+        # instructions the two calls after it hand their agents come from
+        # what this read (Phase 10).
+        self.reconcile_agent_files()
         self.reconcile_agent()
         self.reconcile_crew()
         self.reconcile_extras()
@@ -2470,9 +2500,6 @@ class Daemon:
         # left from earlier in the session when the daemon starts.
         if not self.cfg.get_bool("keepHistory"):
             self.history.clear()
-        # Outside the guard: the agent folders are files, and a hand edit
-        # changes no setting (merged plan, Phase 9).
-        self.reconcile_agent_files()
         if not self.cfg.reload():
             return
         self.pipe.apply(self.cfg)
@@ -2488,16 +2515,20 @@ class Daemon:
         no text. On a change it re-reads every folder through agentfs, which
         keeps each file's last good text in this process, publishes the
         problems and the files changed outside Settings, and logs one
-        structural line of sizes -- never the text. Phase 11 hands what it
-        read to the agents; until then this is what proves a hand edit is
-        seen within one poll.
+        structural line of sizes -- never the text. It keeps each agent's
+        instructions for instructions_for (Phase 10); Phase 11 hands the
+        rest of what it read to the agents. A failed read keeps the
+        instructions it had.
         """
         try:
             import agentfs
             now = agentfs.stamp()
             if now == getattr(self, "_agentfs_stamp", None):
                 return
-            summary = agentfs.summary()
+            summary, said = agentfs.snapshot()
+            # Before the comparison below: an edit that keeps every size
+            # still changes what the agent is told.
+            self._instructions = said
             # Only once it was read: a failed read is tried again next poll.
             self._agentfs_stamp = now
         except Exception as e:  # the idle poll must never stop on this
@@ -3848,7 +3879,11 @@ class Daemon:
         agents = getattr(self.cfg, "agents", None)
         # By id, so a new wake phrase or display name is a change to the same
         # agent -- same conversation, same grants -- not a new one.
-        specs = {spec["id"]: spec for spec in agents()} if callable(agents) else {}
+        # Each with the instructions its folder holds (Phase 10), so a change
+        # to the file is a change to the spec, caught up like one.
+        specs = ({spec["id"]: {**spec, "instructions": self.instructions_for(
+                      spec["id"], spec.get("instructions", ""))}
+                  for spec in agents()} if callable(agents) else {})
         disabled = getattr(self.cfg, "disabled_agents", None)
         off = disabled() if callable(disabled) else set()
         heard = set(getattr(self.pipe, "names", ()) or ())
@@ -5113,6 +5148,21 @@ def main() -> int:
         except Exception as e:
             print(f"  {YEL}tts unavailable: {e}{OFF}")
 
+    # The agent folders, made and filled from the old instructions settings
+    # before any agent is built (merged plan, Phase 10). Idempotent, never
+    # writes shell.json, and never stops the daemon: an agent with no folder
+    # is told the old setting, as before.
+    import agentfs
+    try:
+        report = agentfs.migrate(cfg, settings_read=agentfs.settings_were_read(cfg))
+        # Only what changed or went wrong: on every start after the first,
+        # nothing.
+        for line in agentfs.migration_lines(report, changes_only=True):
+            print(f"  {DIM}agent folders: {line}{OFF}")
+    except Exception as e:
+        print(f"  {YEL}agent folders: not migrated ({type(e).__name__}: {e}); "
+              f"agents are told the old instructions settings{OFF}")
+
     agent = None
     if not args.no_agent:
         # Deliberately the same resolution the run loop uses, which is why
@@ -5133,7 +5183,8 @@ def main() -> int:
                              name=None if spec else which,
                              model=None if spec else cfg.model_for(which),
                              effort=None if spec else cfg.effort_for(which),
-                             instructions=instructions_text(cfg["agentInstructions"]))
+                             instructions=agentfs.instructions_for(
+                                 "", cfg["agentInstructions"]))
         if agent is None:
             print(f"  {YEL}no agent: {explain_agent(which)}"
                   f"; echoing instead{OFF}")

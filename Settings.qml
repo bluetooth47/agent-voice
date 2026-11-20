@@ -305,6 +305,9 @@ Item {
   // name -> what that agent is doing ("idle", "thinking", "speaking"), with
   // more than one agent.
   property var vLive: ({})
+  // Per agent folder: sizes, problems, files changed outside Settings
+  // (merged plan, Phases 9 and 10). Never the text.
+  property var vAgentFiles: ({})
 
   // Omarchy's default agent, read from the file `omarchy default agent`
   // writes, so the main agent has a name while the service is stopped.
@@ -1217,6 +1220,7 @@ Item {
         root.vEfforts = Array.isArray(d.efforts) ? d.efforts : []
         root.vCrew = Array.isArray(d.crew) ? d.crew : []
         root.vLive = (d.live && typeof d.live === "object") ? d.live : ({})
+        root.vAgentFiles = (d.agent_files && typeof d.agent_files === "object") ? d.agent_files : ({})
       } catch (e) {}
     }
   }

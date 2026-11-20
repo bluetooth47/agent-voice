@@ -6,8 +6,9 @@ build the agent folders and the migration against them, and each file's
 `expect` block says which folders a migration must make and what each must
 hold. This suite checks those expectations against the *current* reader,
 `runtime.Config`, so a fixture cannot quietly describe an id resolution or an
-instruction clean-up the code does not perform. When Phase 10 lands, the
-same expectations become the migration's acceptance checks.
+instruction clean-up the code does not perform. Since Phase 10 the
+same expectations are the migration's acceptance checks, in
+test_agentfs_migrate.py.
 """
 from __future__ import annotations
 

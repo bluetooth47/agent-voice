@@ -164,8 +164,14 @@ ShellRoot {
           if (box) box.committed("Call me Sam. Keep it short.")
           break
         case 114:
-          overlay.check(String(overlay.setting("agentInstructions", "")) === "Call me Sam. Keep it short.",
-                        "the main instructions were saved and read back")
+          // Saved to agents/main/instructions.md through `agentvoice agents`
+          // (Phase 10), in the preview's scratch data folder, and read back
+          // as the stamp the CLI returned; never to shell.json any more.
+          var fold = overlay.find(overlay.content(), function(i) { return i.target === "main" && i.saved !== undefined })
+          overlay.check(fold !== null && fold.saved === "Call me Sam. Keep it short." && fold.exists,
+                        "the main instructions were saved to its folder and read back")
+          overlay.check(String(overlay.setting("agentInstructions", "")) !== "Call me Sam. Keep it short.",
+                        "nothing was written to the retired agentInstructions setting")
           var all = overlay.findAll(overlay.content(), function(i) { return i.committed !== undefined && i.maxLength !== undefined })
           overlay.check(all.length >= 1, "instructions boxes drawn: " + all.length)
           console.warn("PREVIEW DONE " + overlay.passed + " passed, " + overlay.failed + " failed")

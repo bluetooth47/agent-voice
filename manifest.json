@@ -73,7 +73,6 @@
       "projectDir": "",
       "mainName": "",
       "mainProgram": "",
-      "agentInstructions": "",
       "permissions": {},
       "agentModels": {},
       "agentEfforts": {},
@@ -539,13 +538,6 @@
         "label": "Project directory",
         "defaultValue": "",
         "description": "Where the agent works. Empty means your home directory. Everything it reads, writes or runs happens here, and the permission level below applies to this directory."
-      },
-      {
-        "key": "agentInstructions",
-        "type": "string",
-        "label": "Custom instructions",
-        "defaultValue": "",
-        "description": "Standing instructions for the main agent, added to its system prompt on every turn: how to address you, what to keep in mind, how much to say. Extra agents each have their own. Up to 2000 characters; changing them keeps the conversation."
       },
       {
         "key": "endpointUrl",

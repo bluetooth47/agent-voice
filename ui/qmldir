@@ -1,6 +1,7 @@
 AgentCard 1.0 AgentCard.qml
 EndpointEditor 1.0 EndpointEditor.qml
 ExchangeItem 1.0 ExchangeItem.qml
+FolderInstructionsBox 1.0 FolderInstructionsBox.qml
 InstructionsBox 1.0 InstructionsBox.qml
 LevelMeter 1.0 LevelMeter.qml
 PageHeader 1.0 PageHeader.qml

@@ -666,6 +666,15 @@ checked by asking Sora out loud something her instructions decide. Theo and
 Hazel have no instructions today, so for them the check is that the folders
 exist and their replies are unchanged.
 
+**Done (2026-11-19)**, on branch `phase-10`; see `phase10notes.md`. The
+real machine migrated (three folders, Sora's 24 characters, shell.json
+untouched) and `dev` ran over the result. Changes from the above: migration
+runs on every start and makes no agent folder when shell.json could not be
+read; a typed turn now refreshes first, because the idle poll that applies a
+changed file does not run while the microphone is muted (found live).
+Sora's check was typed, not spoken, and Codex's review is still owed (its
+usage limit was reached).
+
 ---
 
 ## Phase 11: Prompt assembly

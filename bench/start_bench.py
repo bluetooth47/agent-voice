@@ -47,6 +47,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "daemon"))
 
 import adapters  # noqa: E402
+import agentfs  # noqa: E402
 import omarchy_skill  # noqa: E402
 import runtime  # noqa: E402
 from adapters.claude_code import ClaudeCode  # noqa: E402
@@ -150,13 +151,14 @@ def agent_spec(cfg, agent):
         return {"program": program, "model": cfg.model_for(program),
                 "effort": cfg.effort_for(program),
                 "level": cfg.level_for(program), "named": "",
-                "instructions": runtime.instructions_text(cfg["agentInstructions"])}
+                "instructions": agentfs.instructions_for("", cfg["agentInstructions"])}
     entry = next((e for e in cfg.agents() if e["id"] == agent), None)
     if entry is None:
         raise SystemExit(f"no enabled agent with id {agent!r}")
     return {"program": entry["agent"], "model": entry["model"] or None,
             "effort": entry["effort"] or None, "level": entry["level"],
-            "named": entry["id"], "instructions": entry["instructions"]}
+            "named": entry["id"],
+            "instructions": agentfs.instructions_for(entry["id"], entry["instructions"])}
 
 
 def main(argv=None) -> int:

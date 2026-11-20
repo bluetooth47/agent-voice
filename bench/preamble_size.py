@@ -26,6 +26,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "daemon"))
 
 import adapters  # noqa: E402
+import agentfs  # noqa: E402
 import omarchy_skill  # noqa: E402
 import runtime  # noqa: E402
 from adapters.base import Adapter, INSTRUCTIONS_HEAD, SPOKEN_STYLE  # noqa: E402
@@ -99,7 +100,9 @@ def main(argv=None) -> int:
     cfg = runtime.Config()
     skill_on = cfg.get_bool("omarchySkill")
     skill_text = omarchy_skill.instructions() if skill_on else ""
-    main_instr = runtime.instructions_text(cfg["agentInstructions"])
+    # Where the daemon reads them from (Phase 10): the folder's file, the old
+    # setting only while that is missing.
+    main_instr = agentfs.instructions_for("", cfg["agentInstructions"])
 
     parts = {"spoken_style": len(SPOKEN_STYLE),
              "instructions_head": len(INSTRUCTIONS_HEAD),
@@ -119,7 +122,8 @@ def main(argv=None) -> int:
     for entry in cfg.agents():
         agents.append({"label": entry["id"], "program": entry["agent"],
                        "endpoint": entry.get("endpoint"),
-                       "instructions": entry.get("instructions", "")})
+                       "instructions": agentfs.instructions_for(
+                           entry["id"], entry.get("instructions", ""))})
     for ag in agents:
         adapter = offline(ag["program"], ag["endpoint"])
         row = {"program": ag["program"],

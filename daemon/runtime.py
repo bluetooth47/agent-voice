@@ -215,6 +215,11 @@ DEFAULTS = {
     "openMicAuto": False,
     "voice": "lessac-medium",
     "voiceSpeed": 100,
+    # Retired (merged plan, Phase 10): the main agent's instructions live in
+    # agents/main/instructions.md, and no page writes this any more, so it is
+    # gone from manifest.json. Kept here for one release as the legacy read:
+    # migration copies it into the file, and agentfs.instructions_for falls
+    # back to it only while that file is missing.
     "agentInstructions": "",
     "agentsPanel": True,
     # The main agent's display name: shown in the readout, the popup, saved
@@ -545,12 +550,24 @@ class Config:
         """The ids of agents that are configured but switched off."""
         return self._agents()[1]
 
-    def _agents(self) -> tuple[list[dict], set[str]]:
+    def all_agents(self) -> list[dict]:
+        """Every extra agent the settings accept, switched off ones included,
+        cleaned exactly as agents() cleans them, each with `enabled`. In the
+        order they were added. For the agent folders (merged plan, Phase 10):
+        an agent switched off keeps its folder, and gets one on the upgrade.
+
+        An entry agents() would drop for good -- a name that cannot be
+        heard, a second claim on a name or an id, past MAX_AGENTS -- is not
+        here either."""
+        return self._agents()[2]
+
+    def _agents(self) -> tuple[list[dict], set[str], list[dict]]:
         raw = self["voiceAgents"]
         if not isinstance(raw, list):
-            return [], set()
+            return [], set(), []
         out: list[dict] = []
         off: set[str] = set()
+        every: list[dict] = []
         seen: set[str] = set()
         seen_ids: set[str] = set()
         for entry in raw:
@@ -573,9 +590,9 @@ class Config:
                 # settings page never writes a duplicate.
                 continue
             seen_ids.add(agent_id)
-            if entry.get("enabled") is False:
+            enabled = entry.get("enabled") is not False
+            if not enabled:
                 off.add(agent_id)
-                continue
             program = str(entry.get("agent") or "claude").strip().lower()
             model = entry.get("model")
             model = model.strip() if isinstance(model, str) else ""
@@ -587,7 +604,7 @@ class Config:
             # 0 is "same as the main agent"; anything unreadable reads as that.
             speed = speed_pct(entry.get("speed"), 0)
             talk = entry.get("narration")
-            out.append({
+            spec = {
                 "name": name,
                 "id": agent_id,
                 "label": display_name(entry.get("label"), name),
@@ -609,8 +626,11 @@ class Config:
                                             entry.get("endpointTimeoutS"),
                                             entry.get("endpointHistoryTurns"))
                              if program == "endpoint" else None),
-            })
-        return out, off
+            }
+            every.append({**spec, "enabled": enabled})
+            if enabled:
+                out.append(spec)
+        return out, off, every
 
     def main_endpoint(self) -> dict | None:
         """The main agent's endpoint, cleaned like an extra agent's, or None

@@ -38,7 +38,8 @@ Trusted Codex) this visibility is the only thing standing in for
 enforcement; see merged-plan.md section 3.5.
 
     python agentfs.py list|show|create|trash|restore|trash-list|write|
-                      history|revert|ack|stamp ...   (see --help)
+                      history|revert|ack|ensure-communal|migrate ...
+                      (see --help)
 """
 from __future__ import annotations
 
@@ -59,7 +60,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import paths  # noqa: E402
-from runtime import _AGENT_ID  # noqa: E402
+from runtime import _AGENT_ID, instructions_text  # noqa: E402
 
 TEMPLATES = Path(__file__).resolve().parent / "templates"
 
@@ -359,7 +360,18 @@ def summary() -> dict:
     """What the daemon publishes and logs: sizes, problems and notices per
     folder. Sizes only, never the text. One folder that cannot be read is
     reported as its problem; it does not take the others with it."""
-    out = {}
+    return snapshot()[0]
+
+
+def snapshot() -> tuple[dict, dict[str, str]]:
+    """summary(), and each agent folder's instructions as its agent is to be
+    told them, from one read of every folder. The daemon takes both when a
+    stamp moves: the sizes to publish, the text to hand its agents.
+
+    The instructions map holds only folders whose `instructions.md` exists
+    (a broken one included, as its last good text or empty), so a missing
+    file is a missing key and instructions_for falls back to the setting."""
+    out, said = {}, {}
     for t in targets():
         try:
             r = read(t)
@@ -373,7 +385,32 @@ def summary() -> dict:
             "problems": r["problems"],
             "changed_outside": r["changed_outside"],
         }
-    return out
+        own = r["files"].get("instructions.md")
+        if t != COMMUNAL and own is not None and own["exists"]:
+            said[t] = own["text"]
+    return out, said
+
+
+def instructions_for(persona_id: str, legacy) -> str:
+    """The standing instructions of the agent known inside the daemon by
+    `persona_id` ("" for the main agent).
+
+    Its folder's `instructions.md` is the truth whenever it exists, **even
+    when it is empty**: an instruction cleared on purpose stays cleared, and
+    never comes back from the old setting. Only when the file is missing is
+    `legacy` -- `agentInstructions`, or the entry's `instructions` -- read,
+    cleaned as it always was. That fallback is for one release (merged plan,
+    Phase 10): migration copies the setting into the file, and an older build
+    going back still finds the setting where it was."""
+    target = folder_id(persona_id)
+    try:
+        if _valid_agent(target):
+            got = read_file(target, "instructions.md")
+            if got["exists"]:
+                return got["text"]
+    except (OSError, AgentFsError):
+        pass
+    return instructions_text(legacy)
 
 
 def stamp() -> tuple:
@@ -764,6 +801,172 @@ def trash_list() -> list[dict]:
     return sorted(out, key=lambda t: t["at"], reverse=True)
 
 
+# --- migration (Phase 10) ----------------------------------------------------
+
+#: Bumped when a later release has more to move. Recorded in .state.json
+#: only after a whole pass succeeded, so a pass cut short is done again.
+MIGRATION_VERSION = 1
+
+
+def _state_path() -> Path:
+    return paths.AGENTS_DIR / ".state.json"
+
+
+def migration_state() -> dict:
+    """What .state.json says, or {} when it is missing or unreadable."""
+    try:
+        _no_link(paths.AGENTS_DIR)
+        got = json.loads(_decode(*_read_bytes(_state_path())))
+    except (OSError, ValueError, AgentFsError):
+        return {}
+    return got if isinstance(got, dict) else {}
+
+
+def _plan(cfg) -> tuple[list[dict], list[dict]]:
+    """Which folders the settings call for, each with its old instructions,
+    and which agents get none and why. Reads `cfg`; never writes it."""
+    want = [{"id": MAIN, "label": "main agent",
+             "legacy": instructions_text(cfg["agentInstructions"])}]
+    skipped = []
+    accepted = cfg.all_agents()
+    for spec in accepted:
+        if spec["id"] == COMMUNAL:
+            skipped.append({"id": spec["id"], "label": spec["label"],
+                            "reason": "its id is 'communal', the shared folder's name; "
+                                      "it gets a folder once its id is changed"})
+            continue
+        want.append({"id": spec["id"], "label": spec["label"],
+                     "legacy": spec.get("instructions", ""),
+                     "enabled": spec.get("enabled", True)})
+    raw = cfg["voiceAgents"]
+    dropped = (sum(1 for e in raw if isinstance(e, dict)) - len(accepted)
+               if isinstance(raw, list) else 0)
+    if dropped > 0:
+        skipped.append({"id": "", "label": "",
+                        "reason": f"{dropped} entr{'y' if dropped == 1 else 'ies'} in "
+                                  f"voiceAgents the settings do not accept (a name that "
+                                  f"cannot be heard, or a second claim on a name or id)"})
+    return want, skipped
+
+
+def settings_were_read(cfg) -> bool:
+    """Whether `cfg` holds this widget's entry from shell.json, rather than
+    the defaults it falls back to when the file is missing, mid-write or
+    broken. Migration copies settings into files that then win over them,
+    so it must never copy the defaults' empty instructions over real ones."""
+    return str(getattr(cfg, "source", "")).startswith("shell.json[")
+
+
+def migrate(cfg, dry_run: bool = False, settings_read: bool = True) -> dict:
+    """Make every agent's folder and the communal folder, and copy the old
+    instructions settings into them. Safe to run on every start.
+
+    - `communal/` from its template; `agents/main/` and one folder per
+      agent the settings accept, switched off ones included;
+    - each file is written **only when it does not exist yet**: never
+      overwritten, so a second run, or a run after the person has edited or
+      emptied a file, changes nothing;
+    - `instructions.md` gets the old setting when it has text, else the
+      template, and every write is a saved version (who: `migration`), so a
+      migrated file never reads as changed outside Settings;
+    - **shell.json is never written.** The old values stay where they are,
+      for an older build to find;
+    - `.state.json` records the version last, and only when every folder
+      was done, so a pass cut short by a kill is finished on the next start.
+
+    With `dry_run` nothing is made or written; the report says what would
+    be. A folder that cannot be made (a symlink in the way, a full disk) is
+    reported and the others go on.
+
+    `settings_read` False (see settings_were_read) makes the communal folder
+    only: with no settings read there is nothing to copy, and an empty
+    `instructions.md` made now would hide the real setting for good. It is
+    reported as a problem, so nothing is recorded and the next start tries
+    again."""
+    want, skipped = _plan(cfg) if settings_read else ([], [])
+    report = {"dry_run": dry_run, "version": MIGRATION_VERSION,
+              "was": migration_state().get("migrated", 0),
+              "communal": [], "folders": [], "skipped": skipped,
+              "problems": [], "recorded": False}
+    templates = _templates("agent")
+
+    def one(target: str, files: dict[str, str]) -> list[str]:
+        made = []
+        for name, text in files.items():
+            path, _ = _resolve(target, name)
+            if os.path.lexists(path):
+                continue
+            if not dry_run:
+                try:
+                    _write_locked(target, name, text, "missing", "migration")
+                except Conflict:
+                    continue            # appeared meanwhile: it is the truth
+            made.append(name)
+        return made
+
+    with (contextlib.nullcontext() if dry_run else _locked()):
+        try:
+            report["communal"] = one(COMMUNAL, _templates("communal"))
+        except (OSError, AgentFsError) as e:
+            report["problems"].append(f"communal: {e}")
+        if not settings_read:
+            report["problems"].append(
+                "the settings in shell.json could not be read, so no agent folder "
+                "was made; agents are told the old settings until the next start")
+        for w in want:
+            files = dict(templates)
+            legacy = w["legacy"]
+            if legacy:
+                files["instructions.md"] = legacy
+            entry = {"id": w["id"], "label": w["label"], "made": [],
+                     "instructions": ""}
+            try:
+                had = os.path.lexists(_resolve(w["id"], "instructions.md")[0])
+                entry["made"] = one(w["id"], files)
+            except (OSError, AgentFsError) as e:
+                report["problems"].append(f"{w['id']}: {e}")
+                entry["instructions"] = "not migrated"
+                report["folders"].append(entry)
+                continue
+            if had:
+                entry["instructions"] = "kept the existing file"
+            elif legacy:
+                entry["instructions"] = f"copied {len(legacy)} characters"
+            else:
+                entry["instructions"] = "none set"
+            report["folders"].append(entry)
+        if not dry_run and not report["problems"]:
+            try:
+                paths.private_dir(paths.AGENTS_DIR)
+                _no_link(_state_path())
+                state = {"migrated": MIGRATION_VERSION,
+                         "at": int(time.time())}
+                _atomic_write(_state_path(), json.dumps(state).encode("utf-8"))
+                report["recorded"] = True
+            except (OSError, AgentFsError) as e:
+                report["problems"].append(f"the migration state: {e}")
+    return report
+
+
+def migration_lines(report: dict, changes_only: bool = False) -> list[str]:
+    """The report in a few lines, for the journal and the CLI. Names, ids,
+    file names and sizes: never instruction text. `changes_only` leaves out
+    the folders that were already complete."""
+    lines = []
+    verb = "would make" if report["dry_run"] else "made"
+    if report["communal"]:
+        lines.append(f"communal: {verb} {', '.join(report['communal'])}")
+    for f in report["folders"]:
+        if changes_only and not f["made"] and f["instructions"] != "not migrated":
+            continue
+        did = f"{verb} {', '.join(f['made'])}" if f["made"] else "up to date"
+        lines.append(f"{f['id']} ({f['label']}): {did}; instructions: {f['instructions']}")
+    lines += [f"skipped {s['id'] or ''}{' ' if s['id'] else ''}{s['reason']}".strip()
+              for s in report["skipped"]]
+    lines += [f"problem: {p}" for p in report["problems"]]
+    return lines
+
+
 # --- CLI ---------------------------------------------------------------------
 
 def _print(obj, as_json: bool, text: str) -> None:
@@ -783,6 +986,8 @@ def main(argv=None) -> int:
     p.add_argument("id")
     p = sub.add_parser("trash", help="move to the trash; settings entry on stdin")
     p.add_argument("id")
+    p.add_argument("--line", action="store_true",
+                   help="the entry is one line of JSON (the page writes it so)")
     p = sub.add_parser("restore", help="put back from the trash; prints its settings entry")
     p.add_argument("name")
     p = sub.add_parser("trash-list")
@@ -791,6 +996,9 @@ def main(argv=None) -> int:
     p.add_argument("target")
     p.add_argument("file")
     p.add_argument("--base", help="only if the file still has this stamp")
+    p.add_argument("--line", action="store_true",
+                   help="the text is one line holding a JSON string, so a "
+                        "caller that cannot close stdin can still end it")
     p = sub.add_parser("history")
     p.add_argument("target")
     p.add_argument("file")
@@ -805,6 +1013,9 @@ def main(argv=None) -> int:
     p.add_argument("file")
     p.add_argument("--base", help="only if the file still has this stamp")
     sub.add_parser("ensure-communal")
+    p = sub.add_parser("migrate", help="make the folders, copy the old instructions in")
+    p.add_argument("--dry-run", action="store_true", help="say what it would do; change nothing")
+    p.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     try:
         if a.cmd == "list":
@@ -826,7 +1037,9 @@ def main(argv=None) -> int:
         elif a.cmd == "create":
             print("\n".join(create(a.id)))
         elif a.cmd == "trash":
-            print(trash(a.id, sys.stdin.read(SETTINGS_CAP + 1)))
+            raw = (sys.stdin.readline(SETTINGS_CAP + 1) if a.line
+                   else sys.stdin.read(SETTINGS_CAP + 1))
+            print(trash(a.id, raw))
         elif a.cmd == "restore":
             print(json.dumps(restore(a.name), ensure_ascii=False))
         elif a.cmd == "trash-list":
@@ -834,13 +1047,23 @@ def main(argv=None) -> int:
             _print(t, a.json, "\n".join(f"{e['name']}  {e['label']}" for e in t)
                    or "the trash is empty")
         elif a.cmd == "write":
-            data = sys.stdin.buffer.read(WRITE_CAP + 1)
-            if len(data) > WRITE_CAP:
+            # A JSON line may spell each character as six; the cap is on
+            # what is written, checked by write() after decoding.
+            data = (sys.stdin.buffer.readline(6 * WRITE_CAP + 2) if a.line
+                    else sys.stdin.buffer.read(WRITE_CAP + 1))
+            if not a.line and len(data) > WRITE_CAP:
                 raise AgentFsError(f"{a.file} is larger than {WRITE_CAP // 1024} KB")
             try:
                 text = data.decode("utf-8")
             except UnicodeDecodeError:
                 raise AgentFsError("the text is not UTF-8") from None
+            if a.line:
+                try:
+                    text = json.loads(text)
+                except ValueError:
+                    raise AgentFsError("the text is not one line of JSON") from None
+                if not isinstance(text, str):
+                    raise AgentFsError("the JSON line must hold a string")
             print(write(a.target, a.file, text, base=a.base))
         elif a.cmd == "history":
             h = history(a.target, a.file)
@@ -853,6 +1076,13 @@ def main(argv=None) -> int:
             ack(a.target, a.file, base=a.base)
         elif a.cmd == "ensure-communal":
             print("\n".join(ensure_communal()))
+        elif a.cmd == "migrate":
+            from runtime import Config
+            cfg = Config()
+            r = migrate(cfg, dry_run=a.dry_run, settings_read=settings_were_read(cfg))
+            _print(r, a.json, "\n".join(migration_lines(r)) or "nothing to do")
+            if r["problems"]:
+                return 1
     except Conflict as e:
         print(f"conflict: {a.file} changed since it was read; current stamp {e.current}",
               file=sys.stderr)

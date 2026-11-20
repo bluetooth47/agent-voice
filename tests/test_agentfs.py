@@ -737,14 +737,14 @@ def test_the_daemon_retries_a_read_that_failed(daemon, monkeypatch):
     daemon.agent = None
     put("sora", "role.md", "x")
     calls = []
-    real = agentfs.summary
+    real = agentfs.snapshot
 
     def flaky():
         calls.append(1)
         if len(calls) == 1:
             raise RuntimeError("boom")
         return real()
-    monkeypatch.setattr(agentfs, "summary", flaky)
+    monkeypatch.setattr(agentfs, "snapshot", flaky)
     daemon.reconcile_agent_files()
     daemon.reconcile_agent_files()
     assert len(calls) == 2 and "sora" in daemon._agent_files
