@@ -194,6 +194,9 @@ Rectangle {
       sheet.sent = true
       sheet.note = "Handed to the service…"
       ackTimeout.restart()
+      // The daemon may have answered before the CLI exited: read it now,
+      // since the change that announced it has already gone by.
+      sheet.readAck()
     }
   }
   // The daemon's answer, from the state file: the task filed under this
@@ -204,7 +207,8 @@ Rectangle {
       if (tasks[i] && tasks[i].id === sheet.taskId) return tasks[i]
     return null
   }
-  onAckChanged: {
+  onAckChanged: sheet.readAck()
+  function readAck() {
     if (!sheet.sent || sheet.ack === null) return
     ackTimeout.stop()
     var st = String(sheet.ack.state || "")

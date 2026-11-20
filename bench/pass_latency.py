@@ -42,13 +42,24 @@ def state() -> dict:
 
 
 def wait_reply(target: str, timeout: float) -> float | None:
+    """From now to the target's first reply text: its turn must have
+    started (its `live` entry leaves idle) before a reply counts, so the
+    last turn's answer still in the file is never taken for this one's."""
     start = time.monotonic()
     want = "" if target == "main" else target
+    started = False
     while time.monotonic() - start < timeout:
         s = state()
-        if s.get("who") == want and s.get("reply"):
+        live = (s.get("live") or {}).get(want, "idle")
+        if not started:
+            started = live != "idle"
+            if started and s.get("who") == want:
+                s = {**s, "reply": ""}      # a reply seen now is the old one
+        if started and s.get("who") == want and s.get("reply") and live != "idle":
             return time.monotonic() - start
-        time.sleep(0.05)
+        if started and live == "idle":
+            return None                     # ended with no text seen
+        time.sleep(0.03)
     return None
 
 
@@ -78,7 +89,9 @@ def main() -> int:
     for i in range(a.rounds):
         for kind in (("direct", "pass") if i % 2 == 0 else ("pass", "direct")):
             wait_idle()
-            time.sleep(1.0)
+            # Past the follow-up window a passed turn opens (7s here): a
+            # typed message waits for it, which is not what is measured.
+            time.sleep(8.5)
             if kind == "direct":
                 run(["agentvoice", "type", a.target], q)
             else:

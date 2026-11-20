@@ -1478,3 +1478,40 @@ waits for its MCP servers; a warm process has paid it before the turn.
 Main (Opus) and jarvis-ajc (Codex) were **not run**: Codex's usage limit
 was spent by the review, and an Opus median's ±0.48s noise (§33) cannot
 show a cost Haiku's cannot.
+
+## 38. Phase 15: what a pass costs over a direct turn (A15-6)
+
+Measured 2026-11-20 on the i7-1185G7 against the installed build (1cf6825),
+with `bench/pass_latency.py`: each round sends one synthetic question to
+the target as a direct typed turn (`agentvoice type`) and as a pass from the
+main agent (`agentvoice pass TARGET --from main`), interleaved, and times
+from the command returning to the target's first reply text in the state
+file. Both include the daemon's poll and the target's own start. 8.5s pass
+between turns so a passed turn's 7s follow-up window has lapsed (a typed
+message waits for one, which is not what is measured).
+
+| Target | direct, median (min–max) | pass, median (min–max) | pass − direct |
+|---|---|---|---|
+| Sora (Claude Haiku, Ask), n=5 | 0.70s (0.61–0.73) | 0.61s (0.58–0.64) | −0.09s |
+| Hazel (Codex, Trusted), n=3 | 5.99s (5.38–6.14) | 5.72s (4.76–5.80) | −0.27s |
+
+**A pass from the CLI or the sheet costs nothing measurable over a direct
+turn**: the task turn runs on the target's own adapter, and the warm Claude
+process is kept (both resumed the same shared-chat session here, which is
+where a passed agent stays). No separate adapter instance for task turns is
+needed (the plan's fallback above 5s).
+
+**A spoken pass adds what it is designed to add**, from the live check:
+the confirmation line ("Passing this chat to Sora.", about 1.8s here) and
+the 3s window in which "stop" cancels -- about 4.8s before the target's turn
+starts (10:05:47.45 typed, 10:05:49.25 said, 10:05:52.26 dispatched). That
+is inside A15-6's 5s, just; a longer spoken line (an endpoint's host named)
+would pass it, and is what the disclosure costs.
+
+**Not measured**: voiced passes against voiced direct turns in one session
+with J-style lines (the plan's form of A15-6), which needs someone talking;
+and the first pass to a target with no session in the chat (the "replayed"
+case: a new session, a cold CLI for Codex). §33's cold rows are that floor.
+The wrong first versions of the bench read the previous turn's reply still in
+the state file (0.00s rows) and then timed the follow-up window; both are
+fixed in the script and none of their numbers are used here.
