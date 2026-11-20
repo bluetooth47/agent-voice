@@ -113,7 +113,8 @@ Column {
     // Unsaved text goes first; the click that would have moved away is
     // then repeated by the person once it has saved.
     if (box.dirty) { box.commit(); return }
-    if (holding) { noteNote = "Save or reload this note first; what you typed is not saved."; return }
+    if (holding) { noteNote = writer.running ? "Still saving; try again in a moment."
+                                             : "Save or reload this note first; what you typed is not saved."; return }
     clearEditor()
     creating = false
     openName = name
@@ -121,7 +122,8 @@ Column {
   }
   function startNew() {
     if (box.dirty) { box.commit(); return }
-    if (holding) { noteNote = "Save or reload this note first; what you typed is not saved."; return }
+    if (holding) { noteNote = writer.running ? "Still saving; try again in a moment."
+                                             : "Save or reload this note first; what you typed is not saved."; return }
     clearEditor()
     openName = ""
     creating = true

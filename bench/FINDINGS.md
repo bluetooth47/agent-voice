@@ -1447,3 +1447,34 @@ Main (Opus, trusted), 20 runs: cold 3.27 → 3.49s median (p95 5.92 →
 ±0.48s noise of an Opus median (§33). jarvis-ajc (Codex) was **not run**:
 Codex's usage limit was spent by the review, and with no skill on this
 machine its prompt is byte for byte what it was.
+
+## 37. Phase 14: what the notes server costs a turn
+
+Since Phase 14 every Claude Code and Codex agent is started with one more
+MCP server, `crew_mcp.py` (the notes tools), whatever `desktopTools` says.
+Measured 2026-11-20 on the i7-1185G7, quiet machine, with
+`bench/start_bench.py --agent sora --variants nocrew,folders`: `nocrew` is
+the Phase 13 argv (the real folders, no notes server), `folders` is what the
+daemon now starts; interleaved run by run. Sora is Claude Haiku at Ask, the
+gate's agent (§35).
+
+| Sora | nocrew | with notes server | change |
+|---|---|---|---|
+| round 1 cold, 20 runs | 1.86 / 2.39s | 1.98 / 2.47s | +0.12 / +0.08s |
+| round 1 warm | 0.86 / 1.04s | 0.89 / 1.34s | +0.03 / +0.30s |
+| round 2 cold, 30 runs | 1.82 / 2.49s | 1.83 / 2.33s | +0.01 / −0.16s |
+| round 2 warm | 0.77 / 0.92s | 0.76 / 0.93s | −0.01 / +0.01s |
+| pooled cold, 50 | 1.83 / 2.40s | 1.88 / 2.47s | +0.05 / +0.07s |
+| pooled warm, 50 | 0.78 / 1.01s | 0.79 / 1.13s | +0.01 / +0.12s |
+
+(median / p95.) **The gate holds** on the pooled runs: +0.05s cold and
++0.01s warm on the median (gate +0.15s), p95 +0.07s and +0.12s (gate 10% or
+0.30s, whichever is larger). Round 1's warm p95 sat exactly on the 0.30s
+line on its own; round 2 shows +0.01s. The server itself answers
+`initialize` about 75ms after it is started (25ms of that is the
+interpreter), so a cold start can pay up to that much while Claude Code
+waits for its MCP servers; a warm process has paid it before the turn.
+
+Main (Opus) and jarvis-ajc (Codex) were **not run**: Codex's usage limit
+was spent by the review, and an Opus median's ±0.48s noise (§33) cannot
+show a cost Haiku's cannot.
