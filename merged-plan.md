@@ -1078,7 +1078,8 @@ tab. A pass from the sheet or CLI costs nothing over a direct turn (Sora
 −0.09s, Hazel −0.27s); a spoken one adds its line and the 3s window
 (≈4.8s). A voiced pass that could not be heard in full is refused. Live
 (typed turns): every checklist item; the stop used the keybind. Codex
-reviewed it (10 high, 11 medium, 2 low; fixed but six, with reasons).
+reviewed it twice (10 high, 11 medium, 2 low; then 11 more; fixed but
+the items listed in the notes, with reasons).
 **Still open:** spoken passes and a spoken stop, Send clicked in the real
 shell, an endpoint target, passing back to the owner's own session.
 
