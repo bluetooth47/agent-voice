@@ -4596,6 +4596,7 @@ class Daemon:
             print(f"  {YEL}{p.label or 'agent'}: turn failed: "
                   f"{type(e).__name__}: {e}{OFF}", flush=True)
             p.follow_up = False
+            p.turn_error = p.turn_error or type(e).__name__    # collab: not "completed"
         finally:
             p.state = "idle"
             p.finished_at = time.time()
@@ -5235,7 +5236,6 @@ class Daemon:
                     elif text and is_goodbye(text):
                         print(f"  {DIM}(goodbye — waiting for the wake word){OFF}")
                         self.end_open_mic("goodbye")
-                        self.collab.stop_from(capture_for or self._main)    # collab
                         follow_up = False
                     elif text and is_stop_command(text):
                         print(f"  {DIM}(stopping){OFF}")

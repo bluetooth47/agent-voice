@@ -65,6 +65,11 @@ Item {
 
   // Some agent's current chat: a shared chat can be Sora's while its
   // owner has moved on. For the label; Continue asks about the owner alone.
+  function currentOf(agent) {
+    var cur = view.index.current || {}
+    var id = cur[agent === "main" ? "" : agent]
+    return view.validId(id) ? id : ""
+  }
   function inUseByAnyone(c) {
     var cur = view.index.current || {}
     for (var k in cur) if (cur[k] === c.id) return true
@@ -531,7 +536,9 @@ Item {
         }
         SendButton {
           visible: view.s.historyRows.count > 0
-          onClicked: view.s.openSendSheet(view.sessionSpeaker(), "")
+          // The chat the daemon would pass (the source's current one), so
+          // the sheet previews what goes, not this session's memory.
+          onClicked: view.s.openSendSheet(view.sessionSpeaker(), view.currentOf(view.sessionSpeaker()))
         }
       }
     }

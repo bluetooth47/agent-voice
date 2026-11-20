@@ -955,18 +955,37 @@ def test_nothing_new_starts_behind_a_lock(crew):
     assert len(crew.crew["sora"].agent.sent) == 1
 
 
-def test_a_stop_from_the_signal_handler_publishes_nothing_there(crew, monkeypatch):
-    """Review: the handler runs between two bytecodes of the run loop, which
-    may hold the locks publishing takes."""
+def test_a_stop_from_the_signal_handler_only_records_it(crew, monkeypatch):
+    """Review (two passes): the handler runs between two bytecodes of the
+    run loop, which may hold the locks publishing takes and the flock an
+    audit line takes. It records the stop; the next poll carries it out,
+    and nothing starts in between."""
+    import audit
     _theo_chat(crew)
     crew.pass_command(crew._main, "pass this to sora")
-    published = []
+    published, audited = [], []
     monkeypatch.setattr(crew.collab, "publish", lambda: published.append(1))
+    monkeypatch.setattr(audit, "record", lambda *a, **k: audited.append(1))
     crew._on_interrupt()
-    assert published == [] and crew.collab._dirty
+    assert published == [] and audited == [] and crew.collab._stop_requested
+    assert crew.collab.board.public()[-1]["state"] == "pending"
+    _release(crew)
     assert crew.collab.board.public()[-1]["state"] == "cancelled"
-    crew.collab.tick()
-    assert published and not crew.collab._dirty
+    assert crew.crew["sora"].agent.sent == [] and published and audited == [1]
+
+
+def test_a_stop_requested_while_a_turn_starts_stops_it_before_sending(crew, monkeypatch):
+    cid = _theo_chat(crew)
+    crew.pass_command(crew._main, "pass this to sora")
+    real = crew.collab._prepare
+
+    def prepare(task, target, source):
+        crew.collab.stop_all(from_signal=True)  # the signal lands here
+        return real(task, target, source)
+    monkeypatch.setattr(crew.collab, "_prepare", prepare)
+    _release(crew)
+    assert crew.crew["sora"].agent.sent == []
+    assert chat_schema.shared_with(crew.chats.load(cid)) == []
 
 
 def test_a_stop_between_going_active_and_sending_sends_nothing(crew, monkeypatch):
@@ -977,10 +996,20 @@ def test_a_stop_between_going_active_and_sending_sends_nothing(crew, monkeypatch
     def prepare(task, target, source):
         crew.collab.stop_all()                  # lands while it starts
         return real(task, target, source)
+    sora = crew.crew["sora"]
+    sora.session_id, sora.chat_id, sora.replay = "sora-own", None, ""
     monkeypatch.setattr(crew.collab, "_prepare", prepare)
     _release(crew)
-    assert crew.crew["sora"].agent.sent == []
-    assert crew.crew["sora"].task is None
+    assert sora.agent.sent == []
+    assert sora.task is None
+    # Rolled back (second pass): her own conversation, no replay waiting
+    # for her next direct turn, and the chat not shared by a pass that never
+    # happened.
+    assert (sora.session_id, sora.chat_id, sora.replay) == ("sora-own", None, "")
+    assert chat_schema.shared_with(crew.chats.load(cid)) == []
+    crew.dispatch(sora, "her own thing", {})
+    _idle(crew)
+    assert "We are continuing" not in sora.agent.sent[-1][0]
 
 
 def test_cancelled_tasks_are_audited_once(crew):
@@ -1056,7 +1085,8 @@ def test_saving_off_binds_the_transcript_at_the_confirmation(crew):
     crew.history.path = Path(os.environ["XDG_RUNTIME_DIR"]) / "agentvoice" / "h2.jsonl"
     crew.history.append({"agent_id": "", "transcript": "first topic", "reply": "a",
                          "new": True})
-    crew._main.last = {"transcript": "first topic", "reply": "a"}
+    # A brief that does not hold the marker, so only the replay can.
+    crew._main.last = {"transcript": "brief only", "reply": "a"}
     gate = threading.Event()
     sora = crew.crew["sora"]
     sora.agent.wait = gate
@@ -1219,3 +1249,66 @@ def test_speaking_behind_a_lock_does_not_stop_a_task_turn(crew):
             crew._here.turn = False
     assert not sora.interrupt.is_set() and sora.agent.cancelled == 0
     sora.task = None
+
+
+def test_goodbye_does_not_cancel_queued_passes(crew, monkeypatch):
+    """Second pass: a goodbye ends the open microphone, not other work."""
+    src = (Path(__file__).resolve().parent.parent / "daemon" / "wake_listen.py").read_text()
+    branch = src[src.index("elif text and is_goodbye(text):"):src.index("elif text and is_stop_command(text):")]
+    assert "collab" not in branch
+
+
+def test_a_turn_that_finished_before_dispatch_returned_is_not_stopped(crew, monkeypatch):
+    _theo_chat(crew)
+    sora = crew.crew["sora"]
+    real = crew.dispatch
+
+    def dispatch(p, text, last, clock=None, typed=False):
+        ok = real(p, text, last, clock, typed)
+        _idle(crew)                             # done before this returns
+        return ok
+    monkeypatch.setattr(crew, "dispatch", dispatch)
+    cancelled = sora.agent.cancelled
+    crew.pass_command(crew._main, "pass this to sora")
+    _release(crew)
+    assert crew.collab.board.public()[-1]["state"] == "completed"
+    assert sora.agent.cancelled == cancelled and not sora.interrupt.is_set()
+
+
+def test_a_turn_that_crashes_is_failed_not_completed(crew, monkeypatch):
+    _theo_chat(crew)
+
+    def boom(*a, **k):
+        raise RuntimeError("synthetic")
+    monkeypatch.setattr(crew, "answer", boom)
+    crew.pass_command(crew._main, "pass this to sora")
+    _release(crew)
+    _idle(crew)
+    assert crew.collab.board.public()[-1]["state"] == "failed"
+
+
+def test_a_resumed_session_is_not_told_what_it_may_no_longer_see(crew, monkeypatch):
+    cid = _theo_chat(crew, text="opening")
+    crew.chats.record(chat_id=cid, agent_id="sora", agent_label="Sora", backend="claude",
+                      session_id="sora-in-chat", project_dir="/p",
+                      exchange={"transcript": "x", "reply": "y"})
+    crew.chats.record(chat_id=cid, agent_id="", agent_label="Theo", backend="claude",
+                      session_id="theo-1", project_dir="/p",
+                      exchange={"transcript": "later", "reply": "secret-later-answer"})
+    real_share = crew.chats.share
+
+    def share(chat_id, agent):
+        real_share(chat_id, agent)
+        crew.chats.unshare(chat_id, agent)      # revoked in between
+    crew.chats.share = share
+    crew.pass_command(crew._main, "pass this to sora")
+    _release(crew)
+    _idle(crew)
+    prompt, session = crew.crew["sora"].agent.sent[0]
+    assert session == "sora-in-chat" and "secret-later-answer" not in prompt
+
+
+@pytest.mark.parametrize("shown, real", [("localhost:11434", "localhost"),
+                                         ("[::1]", "::1"), ("API.Example.com", "api.example.com")])
+def test_host_forms_compare_equal(shown, real):
+    assert collab.host_key(shown) == collab.host_key(real)

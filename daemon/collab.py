@@ -90,8 +90,14 @@ ENTRIES = ("voice", "sheet", "cli")
 
 
 def host_key(host) -> str:
-    """A host as compared: lower case, without IPv6 brackets."""
-    return str(host or "").strip().strip("[]").lower()
+    """A host as compared: lower case, without a port or IPv6 brackets, so
+    `localhost:11434` (as the settings may hold it) is `localhost`."""
+    h = str(host or "").strip().lower()
+    if h.startswith("["):
+        return h[1:h.find("]")] if "]" in h else h[1:]
+    if h.count(":") == 1:
+        h = h.split(":", 1)[0]
+    return h
 
 
 def new_id() -> str:
@@ -502,6 +508,12 @@ class Runtime:
         self._flash = ("", 0.0)
         #: A stop from the signal handler left the readout to redraw.
         self._dirty = False
+        self._shared_now = False
+        #: The global stop arrived as a signal: the run loop carries it out
+        #: on its next poll, so the handler takes no lock and no file lock
+        #: (an audit line's flock, held by the very thread it interrupted,
+        #: would never be released).
+        self._stop_requested = False
         # Re-entrant: the interrupt handler runs on the run loop's thread
         # between two bytecodes, and publishing from it reads line(), which
         # takes this lock -- possibly while that same thread holds it.
@@ -604,6 +616,7 @@ class Runtime:
         if entry == "voice":
             for t in self.board.open():
                 if (t.state == "pending" and t.entry == "voice"
+                        and time.time() < t.not_before
                         and (t.frm, t.to, t.chat_id, t.request)
                         == (frm, target, task.chat_id, task.request)):
                     print(f"  pass {t.id}: asked for again; still the one task", flush=True)
@@ -683,9 +696,12 @@ class Runtime:
         """From the run loop: take requests filed by the CLI and the sheet,
         and start every task that is due."""
         d = self.d
+        if self._stop_requested:
+            self._stop_requested = False
+            self.stop_all()             # the interrupt, carried out here
         if self._dirty:
             self._dirty = False
-            self.publish()              # after a stop from the signal handler
+            self.publish()
         hearable = getattr(d, "may_speak", True) and getattr(d, "listening", True)
         # What a task said behind a lock, once it can be heard again.
         if self.held and hearable:
@@ -753,15 +769,17 @@ class Runtime:
             return False
         if not self.board.move(task.id, "active"):
             return False
-        heard = (task.request if task.entry == "voice" else "") \
-            or f"(passed from {task.frm_label})"
+        heard = f"(passed from {task.frm_label})" if task.entry != "voice" \
+            else (task.request or f"(passed from {task.frm_label})")
         # Bound before anything else happens: the turn reads both, and a stop
         # from here on finds the turn through `target.task`.
         target.task, target.task_heard = task, heard[:REQUEST_MAX]
-        if task.state != "active":
+        if task.state != "active" or self._stop_requested:
             return self._unbind(target, task)
+        prior = (target.session_id, target.chat_id, target.chat_continued, target.replay)
         how = self._prepare(task, target, source)
-        if task.state != "active":
+        if task.state != "active" or self._stop_requested:
+            self._roll_back(task, target, prior)
             return self._unbind(target, task)
         write_origin(task.to, task, {a: self.label(a) for a in task.chain}, self.root)
         last = {"transcript": target.task_heard, "reply": ""}
@@ -774,13 +792,29 @@ class Runtime:
                                    f"have it.")
             self.publish()
             return False
-        if task.state != "active":
+        if task.state == "cancelled" and getattr(target, "task", None) is task:
             # Cancelled while the turn was being started: dispatch() cleared
-            # the interrupt, so it is stopped again now.
+            # the interrupt, so it is stopped again now. Not a turn that has
+            # already finished on its own.
             target.stop()
         print(f"  pass {task.id}: {task.to_label} has the floor ({how})", flush=True)
         self.publish()
         return True
+
+    def _roll_back(self, task: Task, target, prior) -> None:
+        """Undo _prepare for a task stopped before its turn was sent: the
+        target's own conversation back, and the chat not shared with it if
+        this task is what shared it."""
+        (target.session_id, target.chat_id, target.chat_continued, target.replay) = prior
+        if self._shared_now:
+            try:
+                self.d.chats.unshare(task.chat_id, task.to)
+            except (OSError, ValueError):
+                pass
+        try:
+            self.d.chats.set_current(target.id, prior[1])
+        except (OSError, ValueError):
+            pass
 
     def _unbind(self, target, task: Task) -> bool:
         if getattr(target, "task", None) is task:
@@ -796,8 +830,12 @@ class Runtime:
         saving = d.cfg.get_bool("saveChats")
         replay, how = "", "new session"
         chat = None
+        self._shared_now = False
         if saving and task.chat_id:
             try:
+                import chats as chat_store
+                before = d.chats.load(task.chat_id)
+                self._shared_now = before is not None and not chat_store.may_replay(before, task.to)
                 # Only now, after the person was told: the target joins.
                 d.chats.share(task.chat_id, task.to)
                 chat = d.chats.load(task.chat_id)
@@ -822,7 +860,7 @@ class Runtime:
                 ex = chat.get("exchanges") or []
                 last = max((i for i, e in enumerate(ex)
                             if e.get("agent_id") == task.to), default=-1)
-                if last + 1 < len(ex):
+                if last + 1 < len(ex) and chat_store.may_replay(chat, task.to):
                     replay = chat_store.replay_context(
                         {**chat, "exchanges": ex[last + 1:]}, tail="")
             else:
@@ -942,11 +980,15 @@ class Runtime:
     def stop_all(self, from_signal: bool = False) -> None:
         """The global stop and `agentvoice interrupt`: everything, the
         queue and anything waiting to be said cleared. From the signal
-        handler nothing is published there -- the run loop does it on its
-        next poll -- so the handler takes no lock a turn could hold."""
+        handler it only records the request: the handler has already stopped
+        every busy turn itself, and the run loop cancels, audits and
+        publishes on its next poll, holding nothing the handler interrupted."""
+        if from_signal:
+            self._stop_requested = True
+            return
         with self._lock:
             self.held = []
-        self._stopped(self.board.cancel(lambda t: True), publish=not from_signal)
+        self._stopped(self.board.cancel(lambda t: True))
 
     def cancel(self, task_id: str) -> bool:
         done = self.board.cancel(lambda t: t.id == task_id)

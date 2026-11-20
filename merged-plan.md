@@ -1069,6 +1069,19 @@ target; stop during the announcement; the screen locked mid-pass; **Continue
 in terminal** still works; Share chat with… then continue with the other
 agent.
 
+**Built (2026-11-20)**, record `phase15notes.md`, FINDINGS §38:
+`collab.py` (tasks, checks, origin files, the one pass entry point), the
+shared-chat schema in `chats.py`, "pass this to Sora" / "Sora, take over",
+the Send to another agent sheet, `agentvoice pass|tasks|chats share`, the
+HUD line, "Working for …", the Collaboration list and the Communal Chats
+tab. A pass from the sheet or CLI costs nothing over a direct turn (Sora
+−0.09s, Hazel −0.27s); a spoken one adds its line and the 3s window
+(≈4.8s). A voiced pass that could not be heard in full is refused. Live
+(typed turns): every checklist item; the stop used the keybind. Codex
+reviewed it (10 high, 11 medium, 2 low; fixed but six, with reasons).
+**Still open:** spoken passes and a spoken stop, Send clicked in the real
+shell, an endpoint target, passing back to the owner's own session.
+
 ---
 
 ## Phase 16: Collaboration started by agents

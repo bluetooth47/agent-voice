@@ -56,6 +56,7 @@ Rectangle {
     sheet.note = ""
     sheet.sending = false
     sheet.sent = false
+    sheet.answeredFor = false
     closeLater.stop()
     ackTimeout.stop()
     sheet.taskId = sheet.hex(16)
@@ -103,7 +104,8 @@ Rectangle {
     return out
   }
   function hostOf(url) {
-    var m = String(url || "").match(/^[a-z][a-z0-9+.-]*:\/\/(?:[^@\/]*@)?(\[[^\]]*\]|[^:\/?#]+)/i)
+    // The scheme is optional: the settings may hold `localhost:11434`.
+    var m = String(url || "").match(/^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@\/]*@)?(\[[^\]]*\]|[^:\/?#]+)/i)
     return m ? m[1] : String(url || "")
   }
   // The host an endpoint target sends to; "" for any other program.
@@ -208,17 +210,26 @@ Rectangle {
     return null
   }
   onAckChanged: sheet.readAck()
+  // Set once the daemon has answered this press, so a state file re-read
+  // with the same task does not restart the close timer over and over.
+  property bool answeredFor: false
   function readAck() {
-    if (!sheet.sent || sheet.ack === null) return
-    ackTimeout.stop()
+    if (!sheet.sent || sheet.answeredFor || sheet.ack === null) return
+    // Read before anything below changes taskId, which changes `ack`.
     var st = String(sheet.ack.state || "")
+    var reason = String(sheet.ack.reason || st)
+    var queued = st === "pending" && Number(sheet.ack.position || 0) > 0
+    ackTimeout.stop()
+    sheet.answeredFor = true
     if (st === "refused" || st === "failed" || st === "cancelled") {
+      closeLater.stop()
       sheet.sent = false
+      sheet.answeredFor = false
       sheet.taskId = sheet.hex(16)        // a fresh press is a fresh task
-      sheet.note = "Not passed: " + String(sheet.ack.reason || st)
+      sheet.note = "Not passed: " + reason
       return
     }
-    sheet.note = st === "pending" && Number(sheet.ack.position || 0) > 0
+    sheet.note = queued
                  ? "Sent. " + sheet.nameOf(sheet.toId) + " is busy; it goes to them when they've finished."
                  : "Sent. " + sheet.nameOf(sheet.toId) + " has it; the reply shows in the conversation."
     closeLater.restart()
@@ -226,8 +237,12 @@ Rectangle {
   Timer {
     id: ackTimeout
     interval: 6000
-    onTriggered: if (sheet.sent && sheet.ack === null)
-                   sheet.note = "The service has not picked it up. Is it running?"
+    // Send comes back, with the same id: pressing it again cannot make a
+    // second task if the first does arrive.
+    onTriggered: if (sheet.sent && sheet.ack === null) {
+                   sheet.sent = false
+                   sheet.note = "The service has not picked it up yet. Is it running? Send tries again."
+                 }
   }
   Timer { id: closeLater; interval: 2500; onTriggered: sheet.close() }
   function send() {
