@@ -20,6 +20,11 @@ Item {
   property string value: ""
   property string placeholder: ""
   property int maxLength: 2000
+  // The smallest the box is drawn: a one-line role needs less than a page
+  // of instructions.
+  property real minHeight: Style.space(84)
+  // What the counter says while the box is being typed in.
+  property string editingHint: "saved when you click away"
   property color foreground: Commons.Color.foreground
   property color accent: Commons.Color.accent
   property string fontFamily: Style.font.family
@@ -28,9 +33,12 @@ Item {
 
   readonly property alias editing: area.activeFocus
   readonly property alias text: area.text
+  // Typed in and not committed yet.
+  readonly property bool dirty: area.activeFocus && area.text.trim() !== value.trim()
 
   width: parent ? parent.width : 300
-  implicitHeight: frame.height + counter.height + Style.space(4)
+  // No room kept for the counter while it has nothing to say.
+  implicitHeight: frame.height + (counter.text !== "" ? counter.height + Style.space(4) : 0)
 
   onValueChanged: if (!area.activeFocus) area.text = value
   Component.onCompleted: area.text = value
@@ -48,7 +56,7 @@ Item {
   BorderSurface {
     id: frame
     width: parent.width
-    height: Math.max(Style.space(84), Math.min(Style.space(200), area.implicitHeight + Style.space(4)))
+    height: Math.max(box.minHeight, Math.min(Style.space(200), area.implicitHeight + Style.space(4)))
     color: Style.controlFill(area.activeFocus, hover.hovered, box.foreground, box.accent)
     borderSpec: box._spec
     radius: Style.cornerRadius
@@ -82,6 +90,19 @@ Item {
         background: null
         onEditingFinished: box.commit()
         onActiveFocusChanged: if (!activeFocus) box.commit()
+        // Ctrl+S saves without leaving the box (merged plan, Phase 12).
+        Keys.onPressed: function(e) {
+          if (e.key === Qt.Key_S && (e.modifiers & Qt.ControlModifier)) {
+            box.commit()
+            e.accepted = true
+          } else if (e.key === Qt.Key_Tab || e.key === Qt.Key_Backtab) {
+            // Tab moves on rather than typing a tab, so the page can be
+            // walked by keyboard alone; nothing here needs a tab character.
+            var to = area.nextItemInFocusChain(e.key === Qt.Key_Tab)
+            if (to) to.forceActiveFocus(Qt.TabFocusReason)
+            e.accepted = true
+          }
+        }
       }
     }
   }
@@ -93,7 +114,7 @@ Item {
     anchors.right: parent.right
     text: area.text.length > box.maxLength
           ? (area.text.length + " / " + box.maxLength + " — the rest is cut off")
-          : (area.activeFocus ? (area.text.length + " / " + box.maxLength + "  ·  saved when you click away")
+          : (area.activeFocus ? (area.text.length + " / " + box.maxLength + "  ·  " + box.editingHint)
                               : (area.text.trim() === "" ? "" : area.text.trim().length + " characters"))
     color: area.text.length > box.maxLength ? Commons.Color.urgent : box.foreground
     opacity: area.text.length > box.maxLength ? 1 : 0.55

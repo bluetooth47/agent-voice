@@ -503,6 +503,8 @@ def test_migrate_dry_run_on_the_cli_changes_nothing(tmp_path):
 # --- the page and the retired setting -----------------------------------------
 
 PAGE = (ROOT / "pages" / "AgentsPage.qml").read_text()
+FOLDERS = (ROOT / "AgentFolders.qml").read_text()
+DETAILS = (ROOT / "pages" / "AgentDetailsPage.qml").read_text()
 
 
 def test_the_retired_setting_left_the_manifest_but_not_the_daemons_defaults():
@@ -519,33 +521,37 @@ def test_no_page_writes_instructions_into_the_settings_any_more():
         assert 'put("agentInstructions"' not in text, page.name
         assert '"instructions", ' not in text, page.name
     assert "instructions:" not in PAGE[PAGE.index("function addAgent("):
-                                      PAGE.index("function folderOp(")]
+                                      PAGE.index("// --- agent folders")]
 
 
 def test_the_page_edits_the_folder_files_through_the_cli():
-    box = (ROOT / "ui" / "FolderInstructionsBox.qml").read_text()
-    assert '["agentvoice", "agents", "write", target, "instructions.md", "--line"]' in box
-    assert '"--base", fib.stamp' in box
+    box = (ROOT / "ui" / "FileEditor.qml").read_text()
+    assert '["agentvoice", "agents", "write", target, fe.file, "--line"]' in box
+    assert '"--base", fe.stamp' in box
     # The text goes over stdin, as JSON, never into the command.
     assert "JSON.stringify(t)" in box and "writer.pending" in box
-    assert 'target: "main"' in PAGE and "target: page.s.agentId(card.modelData)" in PAGE
-    assert PAGE.count("FolderInstructionsBox {") == 2
-    assert "InstructionsBox {" not in PAGE.replace("FolderInstructionsBox {", "")
+    assert "target: page.target" in DETAILS
+    # The Agents page edits no file any more: its cards link to Agent details.
+    assert "FileEditor {" not in PAGE and "InstructionsBox {" not in PAGE
+    assert 'page.s.goTo("agentdetails", "main")' in PAGE
+    assert 'page.s.goTo("agentdetails", card.agentId)' in PAGE
 
 
 def test_adding_and_removing_an_agent_go_through_its_folder():
     add = PAGE[PAGE.index("function addAgent("):PAGE.index("// --- agent folders")]
-    assert 'folderOp(["create", id]' in add
-    remove = PAGE[PAGE.index("function removeAgent("):PAGE.index("function undoRemove(")]
+    assert "s.folders.create(id)" in add
+    assert "function removeAgent(index) { s.folders.remove(index) }" in PAGE
+    assert "function undoRemove() { s.folders.undo() }" in PAGE
+    remove = FOLDERS[FOLDERS.index("function remove("):FOLDERS.index("function undo(")]
     assert '["trash", entry.id, "--line"]' in remove
     assert "JSON.stringify(entry)" in remove
     # The agent leaves the list only once its folder is in the trash; the
     # one save here is the duplicate-row branch, which returns before it.
-    dup, rest = remove.split('folderOp(["trash"', 1)
+    dup, rest = remove.split('op(["trash"', 1)
     assert dup.count("saveAgents(") == 1 and "return" in dup
     assert "saveAgents" not in rest
-    undo = PAGE[PAGE.index("function undoRemove("):]
-    assert '["restore", page.trashed.name]' in undo[:600]
+    undo = FOLDERS[FOLDERS.index("function undo("):]
+    assert "restore(af.trashed.name, af.trashed.index)" in undo[:300]
 
 
 # --- Codex's review of Phases 10 and 11 ----------------------------------------

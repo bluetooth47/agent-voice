@@ -17,7 +17,9 @@
 #     changes nothing real. Everything else passes through to the real one;
 #   - agent folders: `agentvoice agents ...` runs this checkout's agentfs.py
 #     with XDG_DATA_HOME in the scratch directory, so an instructions box
-#     saved in a preview writes nothing any real agent reads.
+#     saved in a preview writes nothing any real agent reads. A target finds
+#     that folder in PREVIEW_DATA, and an export lands in the scratch
+#     directory, never in ~/Downloads.
 #
 # Options:
 #   --theme NAME   a theme from /usr/share/omarchy/themes (default: current)
@@ -172,7 +174,14 @@ fi
 cat > "$tmp/bin/agentvoice" <<STUB
 #!/usr/bin/env bash
 case "\${1:-}" in
-  agents) XDG_DATA_HOME='$tmp/data' exec '$repo/bin/agentvoice' "\$@" ;;
+  agents)
+    # PREVIEW_AGENTS_DELAY: seconds each call takes, to draw "Reading…".
+    sleep "\${PREVIEW_AGENTS_DELAY:-0}"
+    # An export with no folder named would land in the real ~/Downloads.
+    if [ "\${2:-}" = export ] && [ \$# -eq 3 ]; then
+      mkdir -p '$tmp/exports'; set -- "\$@" '$tmp/exports'
+    fi
+    XDG_DATA_HOME='$tmp/data' exec '$repo/bin/agentvoice' "\$@" ;;
   start|stop|restart|toggle|enable|disable|mic|open-mic|interrupt|lock|unlock|type|talk|talk-end|permit|wake-test|calibrate)
     printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0 ;;
 esac
@@ -182,6 +191,7 @@ chmod +x "$tmp/bin/agentvoice"
 
 env "${runtime_env[@]}" "${config_env[@]}" \
 PATH="$tmp/bin:$PATH" PREVIEW_ARG="$arg" PREVIEW_WRITES="$out.writes" \
+  PREVIEW_DATA="$tmp/data/agentvoice" PREVIEW_AGENTS_DELAY="${PREVIEW_AGENTS_DELAY:-0}" \
   PREVIEW_WAIT="$wait" PREVIEW_GAP="$gap" \
   qs -p "$tmp" > "$out.log" 2>&1 &
 pid=$!

@@ -23,6 +23,9 @@ import "pages"
 //
 //   Overview      what is happening, and anything that needs fixing
 //   Agents        every agent as the same card, main one included
+//   Agent details one agent's folder: role, personality, instructions,
+//                 what it is told, its chats
+//   Communal      the rules and defaults every agent is told
 //   Listening     wake word, engine, microphone gate, verifier
 //   Conversation  follow-ups, timings, talking over it
 //   Voice         speech out, transcription
@@ -51,6 +54,10 @@ Item {
   // Which settings page, and which agent's card to open on the Agents page.
   property string page: "overview"
   property string focusAgent: ""
+  // The agent and tab Agent details shows, kept for the session so leaving
+  // the page and coming back finds them where they were.
+  property string detailsAgent: "main"
+  property string detailsTab: "prompt"
   property var request: ({})
   property int secondsLeft: 0
   // True once a verdict has been written for the request on screen, so
@@ -75,6 +82,8 @@ Item {
   readonly property var pages: [
     { id: "overview",     label: "Overview",     icon: "\u{f0570}", badge: problems.length > 0 ? String(problems.length) : "" },
     { id: "agents",       label: "Agents",       icon: "\u{f06a9}", badge: agentProblems > 0 ? "!" : "" },
+    { id: "agentdetails", label: "Agent details", icon: "\u{f0219}", badge: changedOutside("agents") > 0 ? "!" : "" },
+    { id: "communal",     label: "Communal",     icon: "\u{f0849}", badge: changedOutside("communal") > 0 ? "!" : "" },
     { id: "listening",    label: "Listening",    icon: "\u{f036c}" },
     { id: "conversation", label: "Conversation", icon: "\u{f0b79}" },
     { id: "voice",        label: "Voice",        icon: "\u{f057e}" },
@@ -91,6 +100,14 @@ Item {
     defaults: root.defaults
   }
   readonly property alias store: store
+
+  // Adding, removing and restoring agent folders, for every page that does
+  // it; here so an operation and its Undo outlive the page that started it.
+  AgentFolders {
+    id: folders
+    s: root
+  }
+  readonly property alias folders: folders
   readonly property var cfg: store.view
 
   // The manifest's defaults, for the "reset" links. Read from the file rather
@@ -695,6 +712,17 @@ Item {
   // One list, drawn on the Overview with a link to the page that fixes each.
   // Every entry here is something that makes a control silently not do what
   // it says; each used to be a red paragraph somewhere down the old page.
+  // Files in agent or communal folders changed outside Settings, which
+  // Agent details and Communal offer to keep or revert.
+  // `which` is "communal" or "agents" (every agent folder).
+  function changedOutside(which) {
+    var n = 0
+    var all = root.serviceActive ? root.vAgentFiles : folders.folders
+    for (var t in all)
+      if ((t === "communal") === (which === "communal"))
+        n += (((all[t] || {}).changed_outside) || []).length
+    return n
+  }
   readonly property int agentProblems: {
     var n = 0
     for (var i = 0; i < problems.length; i++) if (problems[i].page === "agents") n++
@@ -729,6 +757,18 @@ Item {
       out.push({ text: (mainAgent || "This agent") + " starts fresh every turn, so follow-ups have no memory.",
                  page: "conversation" })
     return out
+  }
+
+  // While the service is off nobody publishes the folders' sizes, so a hand
+  // edit would go unseen on the pages that show them until they were opened
+  // again: read them here instead, every few seconds, only while one is on
+  // screen.
+  Timer {
+    interval: 3000
+    repeat: true
+    running: root.opened && root.mode === "settings" && !root.serviceActive
+             && ["agents", "agentdetails", "communal"].indexOf(root.page) >= 0
+    onTriggered: folders.refresh()
   }
 
   // --- opening, and moving between pages ---------------------------------------
@@ -772,7 +812,13 @@ Item {
     var known = false
     for (var i = 0; i < pages.length; i++) if (pages[i].id === pageId) known = true
     page = known ? pageId : "overview"
-    focusAgent = agent || ""
+    // {"page": "agentdetails", "agent": "sora"} opens that agent's details.
+    if (page === "agentdetails") {
+      if (agent) { detailsAgent = agent; detailsTab = "prompt" }
+      focusAgent = ""
+    } else {
+      focusAgent = agent || ""
+    }
     mode = "settings"
     Qt.callLater(function() { if (pageScroll) pageScroll.contentY = 0 })
   }
@@ -789,6 +835,7 @@ Item {
       historyList.following = true
       Qt.callLater(historyList.positionViewAtEnd)
     } else {
+      folders.refresh()
       scanCustom.running = true
       scanVoices.running = true
       scanOww.running = true
@@ -1253,6 +1300,8 @@ Item {
     // way every shipped overlay uses it.
     BorderSurface {
       id: card
+      // Found by name by bench/preview targets that draw it narrow.
+      objectName: "settingsCard"
       anchors.centerIn: parent
       // The settings get a sidebar and room beside it; the conversation is
       // text to read; the prompt is one question.
@@ -1272,7 +1321,8 @@ Item {
       MouseArea { anchors.fill: parent }
 
       Keys.onEscapePressed: root.dismiss()
-      // Ctrl+1..7 jump to a page, from anywhere in the settings.
+      // Ctrl+1..9 jump to a page, from anywhere in the settings. Nine
+      // pages fill them; a tenth would need another way in.
       Keys.onPressed: function(e) {
         if (root.mode !== "settings" || !(e.modifiers & Qt.ControlModifier)) return
         var n = e.key - Qt.Key_1
@@ -1524,7 +1574,7 @@ Item {
             Text {
               width: parent.width
               wrapMode: Text.WordWrap
-              text: "ctrl+1–7 to switch pages"
+              text: "ctrl+1–9 to switch pages"
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -1567,10 +1617,12 @@ Item {
             Loader {
               id: pageLoader
               width: formScroll.width - Style.space(14)
-              // Built when shown and dropped when left: seven pages of
+              // Built when shown and dropped when left: nine pages of
               // controls bound to live state, of which one is ever on screen.
               active: root.opened && root.mode === "settings"
               sourceComponent: root.page === "agents" ? agentsPage
+                             : root.page === "agentdetails" ? agentDetailsPage
+                             : root.page === "communal" ? communalPage
                              : root.page === "listening" ? listeningPage
                              : root.page === "conversation" ? conversationPage
                              : root.page === "voice" ? voicePage
@@ -1582,6 +1634,8 @@ Item {
 
           Component { id: overviewPage;     OverviewPage { s: root } }
           Component { id: agentsPage;       AgentsPage { s: root } }
+          Component { id: agentDetailsPage; AgentDetailsPage { s: root } }
+          Component { id: communalPage;     CommunalPage { s: root } }
           Component { id: listeningPage;    ListeningPage { s: root } }
           Component { id: conversationPage; ConversationPage { s: root } }
           Component { id: voicePage;        VoicePage { s: root } }

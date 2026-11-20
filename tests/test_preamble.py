@@ -400,9 +400,33 @@ def test_the_cli_preview_names_each_piece_and_its_source(cfg_factory, monkeypatc
     agentfs.write("sora", "instructions.md", "Be brief.")
     got = agentfs.preview("sora", cfg)
     assert [x["label"] for x in got] == ["Spoken style", "Rules for every agent",
-                                          "Standing instructions", "Other agents here"]
+                                          "Standing instructions",
+                                          "Omarchy commands and keybindings",
+                                          "Other agents here"]
     assert got[-1]["text"] == R("Theo", "theo")
     assert got[2]["source"] == "agents/sora/instructions.md"
+    # Given in full: it is what most often explains how an agent answered.
+    from adapters.base import SPOKEN_STYLE
+    assert got[0]["text"] == SPOKEN_STYLE
+
+
+def test_the_preview_names_the_commands_only_where_they_are_told(cfg_factory):
+    """An endpoint runs nothing here and is told no commands (has_tools is
+    off unless it is an agent, and it never takes skill text); with the
+    Omarchy skill off nobody is."""
+    cfg = cfg_factory(phrase="theo", voiceAgents=[
+        {"id": "sora", "name": "sora"},
+        {"id": "ep", "name": "echo", "agent": "endpoint",
+         "endpointUrl": "http://127.0.0.1:9/v1", "endpointModel": "m"}])
+    labels = lambda who, c: [x["label"] for x in agentfs.preview(who, c)]
+    assert "Omarchy commands and keybindings" in labels("sora", cfg)
+    assert "Omarchy commands and keybindings" in labels("main", cfg)
+    assert "Omarchy commands and keybindings" not in labels("ep", cfg)
+    cfg_off = cfg_factory(phrase="theo", omarchySkill=False,
+                          voiceAgents=[{"id": "sora", "name": "sora"}])
+    assert "Omarchy commands and keybindings" not in labels("sora", cfg_off)
+    ep_main = cfg_factory(phrase="theo", endpointUrl="http://127.0.0.1:9/v1", endpointModel="m")
+    assert "Omarchy commands and keybindings" not in labels("main", ep_main)
 
 
 # --- Codex's review of Phase 11 ------------------------------------------------
@@ -440,33 +464,33 @@ def test_the_daemons_state_names_who_it_can_reach(monkeypatch, tmp_path):
 
 # --- the QML guards the review asked for (read, not run: CLAUDE.md) -------------
 
-BOX = (ROOT / "ui" / "FolderInstructionsBox.qml").read_text()
-PAGE = (ROOT / "pages" / "AgentsPage.qml").read_text()
+BOX = (ROOT / "ui" / "FileEditor.qml").read_text()
+FOLDERS = (ROOT / "AgentFolders.qml").read_text()
 
 
 def test_the_box_never_reloads_under_an_edit_and_never_saves_unread():
     reload = BOX[BOX.index("function reload()"):BOX.index("function save(")]
     assert "if (box.editing) { reloadWanted = true; return }" in reload
     save = BOX[BOX.index("function save("):BOX.index("function keepMine(")]
-    assert "if (!fib.loaded)" in save and save.index("if (!fib.loaded)") < save.index("writer.running = true")
-    assert "onEditingChanged: if (!editing && fib.reloadWanted)" in BOX
+    assert "if (!fe.loaded)" in save and save.index("if (!fe.loaded)") < save.index("writer.running = true")
+    assert "if (fe.reloadWanted)" in BOX[BOX.index("onEditingChanged:"):]
 
 
 def test_the_box_ignores_results_meant_for_another_agent():
-    assert BOX.count("forTarget !== fib.target") == 3
-    assert "reader.forTarget === fib.target" in BOX
+    assert BOX.count("forTarget !== fe.target") == 4   # read, write (2), keep/revert
+    assert "reader.forTarget === fe.target" in BOX
     on_target = BOX[BOX.index("onTargetChanged:"):]
     assert "saveGen++" in on_target[:300]
 
 
 def test_folder_operations_are_one_at_a_time_until_handled():
-    assert "if (!folderBusy) nextFolderOp()" in PAGE
-    done = PAGE[PAGE.index("id: folderDone"):]
-    assert done.index("page.folderFinished(") < done.index("page.folderBusy = false")
+    assert "if (!busy) next()" in FOLDERS
+    done = FOLDERS[FOLDERS.index("id: finished"):]
+    assert done.index("af.handle(") < done.index("af.busy = false")
 
 
 def test_a_list_that_could_not_be_saved_moves_the_folder_back():
-    conn = PAGE[PAGE.index("property var rollback: null"):]
-    assert 'function onSaved(key) { if (key === "voiceAgents") page.rollback = null }' in conn
-    assert 'page.folderOp(["restore", r.name]' in conn
-    assert 'page.folderOp(["trash", r.id, "--line"]' in conn
+    conn = FOLDERS[FOLDERS.index("property var rollback: null"):]
+    assert 'function onSaved(key) { if (key === "voiceAgents") af.rollback = null }' in conn
+    assert 'af.op(["restore", r.name]' in conn
+    assert 'af.op(["trash", r.id, "--line"]' in conn

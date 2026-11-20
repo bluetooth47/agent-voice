@@ -1,5 +1,4 @@
 import QtQuick
-import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
@@ -145,193 +144,36 @@ Column {
                 speed: 0, narration: "", level: "ask", projectDir: "" })
     s.focusAgent = id
     saveAgents(list)
-    folderOp(["create", id], "", { verb: "create", id: id })
+    s.folders.create(id)
   }
 
-  // --- agent folders (merged plan, Phase 10) ------------------------------------
+  // --- agent folders (merged plan, Phases 10 and 12) ----------------------------
   // Adding an agent makes its folder; removing one moves the folder to the
   // trash with its settings entry beside it, so Undo gives the agent back
-  // whole. Before this, removing an agent lost its instructions for good.
-  // Each goes through `agentvoice agents`, one at a time.
-  property string folderNote: ""
-  // Bumped when a folder operation finishes, so an instructions box drawn
-  // before its folder existed (a card appears the moment it is added, before
-  // `agents create` has run) reads it again rather than saving against a
-  // folder it thinks is missing.
-  property int folderEpoch: 0
-  // The last agent moved to the trash: { name, label, index }, or null.
-  property var trashed: null
-  property var folderQueue: []
-  // From launch until its result has been handled, so a second operation
-  // cannot start in the moment between the process ending and its result
-  // being read, and take that result's place (Phase 10 review).
-  property bool folderBusy: false
-  function folderOp(args, input, what) {
-    folderQueue = folderQueue.concat([{ args: args, input: input, what: what }])
-    if (!folderBusy) nextFolderOp()
-  }
-  function nextFolderOp() {
-    if (folderQueue.length === 0) return
-    folderBusy = true
-    var next = folderQueue[0]
-    folderQueue = folderQueue.slice(1)
-    folderProc.what = next.what
-    folderProc.pending = next.input
-    folderProc.out = ""
-    folderProc.err = ""
-    folderProc.command = ["agentvoice", "agents"].concat(next.args)
-    folderProc.running = true
-  }
-  Process {
-    id: folderProc
-    property var what: ({})
-    property string pending: ""
-    property string out: ""
-    property string err: ""
-    stdinEnabled: true
-    onStarted: if (folderProc.pending !== "") { write(folderProc.pending); folderProc.pending = "" }
-    stdout: StdioCollector { onStreamFinished: folderProc.out = String(text).trim() }
-    stderr: StdioCollector { onStreamFinished: folderProc.err = String(text).trim() }
-    // `running` going false, not onExited, which a spawn that never started
-    // does not emit. The streams are read a moment later, once both closed.
-    onRunningChanged: if (!running) folderDone.restart()
-  }
-  Timer {
-    id: folderDone
-    interval: 200
-    onTriggered: {
-      page.folderFinished(folderProc.what, folderProc.out, folderProc.err)
-      page.folderEpoch++
-      page.folderBusy = false
-      page.nextFolderOp()
-    }
-  }
-  // The agent list is saved after its folder moved, through `omarchy bar
-  // set`, which can fail. Then the folder is moved back, so the folders and
-  // the list never disagree (Phase 10 review): a removal whose list was not
-  // saved restores the folder; an undo whose list was not saved trashes it
-  // again, settings entry and all.
-  property var rollback: null
-  Connections {
-    target: page.s.store
-    function onSaved(key) { if (key === "voiceAgents") page.rollback = null }
-    function onFailed(key, message) {
-      if (key !== "voiceAgents" || page.rollback === null) return
-      var r = page.rollback
-      page.rollback = null
-      if (r.verb === "trash") {
-        page.trashed = null
-        page.folderOp(["restore", r.name], "", { verb: "rolledback" })
-        page.folderNote = "The agent list could not be saved (" + message + "), so " +
-                          r.label + " was not removed; its folder was put back."
-      } else {
-        page.folderOp(["trash", r.id, "--line"], JSON.stringify(r.entry) + "\n",
-                      { verb: "rolledback" })
-        page.folderNote = "The agent list could not be saved (" + message + "), so " +
-                          r.label + " was not put back; it is still in the trash."
-      }
-    }
-  }
-  function folderFinished(what, out, err) {
-    var why = err.replace(/^agentvoice agents: /, "") || "the agentvoice command could not be run"
-    if (what.verb === "create") {
-      // The agent works without it (it is told nothing extra), and the
-      // daemon makes any missing folder on its next start.
-      // On success it prints the files it made, so empty output is failure.
-      page.folderNote = out !== "" ? ""
-                      : "Its folder was not made: " + why + ". It is made when the service next starts."
-    } else if (what.verb === "trash") {
-      if (!/^[a-z0-9][a-z0-9-]{0,47}-[0-9]{19}$/.test(out)) {
-        page.folderNote = "Nothing was removed: " + what.label + "'s folder could not be moved to the trash (" + why + ")."
-        return
-      }
-      // The one entry that was removed: where it was, if it is still
-      // there, else the first with its id. Never every entry with that id --
-      // a hand edit can give two entries one id, and the other is not gone.
-      var at = -1
-      var here = s.voiceAgents[what.index] || {}
-      if (s.agentId(here) === what.id) at = what.index
-      for (var j = 0; at < 0 && j < s.voiceAgents.length; j++)
-        if (s.agentId(s.voiceAgents[j] || {}) === what.id) at = j
-      var list = []
-      for (var i = 0; i < s.voiceAgents.length; i++) {
-        var a = s.voiceAgents[i] || {}
-        if (i === at) continue
-        var copy = {}
-        for (var k in a) copy[k] = a[k]
-        copy.id = s.agentId(a)
-        list.push(copy)
-      }
-      page.trashed = { name: out, label: what.label, index: at < 0 ? list.length : at }
-      page.folderNote = ""
-      page.rollback = { verb: "trash", name: out, label: what.label }
-      saveAgents(list)
-    } else if (what.verb === "rolledback") {
-      if (err !== "")
-        page.folderNote += " Moving the folder back failed too (" + why + "); " +
-                           "`agentvoice agents trash-list` shows what the trash holds."
-    } else if (what.verb === "restore") {
-      var entry = null
-      try { entry = JSON.parse(out) } catch (e) { entry = null }
-      if (!entry || typeof entry !== "object") {
-        page.folderNote = "Could not undo: " + why + "."
-        return
-      }
-      var back = []
-      for (var n = 0; n < s.voiceAgents.length; n++) {
-        var b = s.voiceAgents[n] || {}
-        var c = {}
-        for (var m in b) c[m] = b[m]
-        c.id = s.agentId(b)
-        back.push(c)
-      }
-      back.splice(Math.min(what.index, back.length), 0, entry)
-      page.trashed = null
-      page.folderNote = ""
-      page.rollback = { verb: "restore", id: s.agentId(entry), entry: entry,
-                        label: s.agentLabel(entry) || "the agent" }
-      s.focusAgent = s.agentId(entry)
-      saveAgents(back)
-    }
-  }
+  // whole. The work is the overlay's AgentFolders, shared with Agent
+  // details, so an operation and its Undo outlive this page.
+  function removeAgent(index) { s.folders.remove(index) }
+  function undoRemove() { s.folders.undo() }
 
-  function removeAgent(index) {
-    var a = s.voiceAgents[index] || {}
-    var entry = {}
-    for (var k in a) entry[k] = a[k]
-    entry.id = s.agentId(a)
-    // A second entry claiming an id another entry has (only a hand edit can
-    // make one) is not that agent: the settings drop it, and the folder is
-    // the first entry's. Removed from the list alone, its folder untouched.
-    for (var d = 0; d < index; d++) {
-      if (s.agentId(s.voiceAgents[d] || {}) === entry.id) {
-        var keep = []
-        for (var i = 0; i < s.voiceAgents.length; i++) {
-          if (i === index) continue
-          var c = {}
-          var b = s.voiceAgents[i] || {}
-          for (var m in b) c[m] = b[m]
-          c.id = s.agentId(b)
-          keep.push(c)
-        }
-        page.folderNote = ""
-        saveAgents(keep)
-        return
-      }
+  // What is in an agent's folder, in one line, for the card: the files are
+  // edited on Agent details, never here (one editor per file). Sizes only,
+  // from the daemon while it runs, else from the overlay's own read.
+  function folderSummary(id, legacy) {
+    var mine = s.serviceActive ? s.vAgentFiles[id] : undefined
+    var f = mine || s.folders.folders[id]
+    if (!f) return s.folders.foldersRead ? "No folder yet." : ""
+    var files = f.files || {}
+    function size(name, word) {
+      var x = files[name] || {}
+      if (name === "instructions.md" && x.exists !== true && String(legacy || "").trim() !== "")
+        return word + ": the old setting, " + String(legacy).trim().length + " characters"
+      return word + ": " + ((x.chars || 0) > 0 ? x.chars + " characters" : "none")
     }
-    // The settings entry goes over stdin as one JSON line. The agent stays
-    // in the list until its folder is in the trash, so a failure loses
-    // nothing.
-    folderOp(["trash", entry.id, "--line"], JSON.stringify(entry) + "\n",
-             { verb: "trash", id: entry.id, index: index, label: s.agentLabel(a) || "this agent" })
-  }
-  function undoRemove() {
-    if (page.trashed === null) return
-    if (s.voiceAgents.length >= s.maxAgents) {
-      page.folderNote = "There are already " + s.maxAgents + " agents; remove one first."
-      return
-    }
-    folderOp(["restore", page.trashed.name], "", { verb: "restore", index: page.trashed.index })
+    var out = [size("role.md", "Role"), size("personality.md", "personality"),
+               size("instructions.md", "instructions")].join(" · ")
+    if ((f.changed_outside || []).length > 0) out += " · changed outside Settings"
+    if ((f.problems || []).length > 0) out += " · " + f.problems[0]
+    return out
   }
 
   // `named` leaves the program out, for the main card, whose title is it.
@@ -726,28 +568,21 @@ Column {
       }
     }
 
+    // In agents/main/ (merged plan, Phases 10 and 12), edited on Agent
+    // details: one editor per file.
     SettingRow {
       width: parent.width
-      stacked: true
-      label: "Custom instructions"
-      hint: "Added to what this agent is told on every turn. Changing them keeps the conversation."
-      help: "How to address you, what to keep in mind, how long to talk. They sit after the " +
-            "rule that replies are spoken, so asking for lists or code blocks will still be read out " +
-            "as speech. Up to 2000 characters."
-      changed: mainInstructions.shown !== ""
+      label: "Role, personality and instructions"
+      hint: page.folderSummary("main", page.s.setting("agentInstructions", ""))
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      onReset: mainInstructions.save("")
-      // In agents/main/instructions.md (merged plan, Phase 10). The old
-      // `agentInstructions` setting is shown only until that file exists.
-      FolderInstructionsBox {
-        id: mainInstructions
-        target: "main"
-        fallback: String(page.s.setting("agentInstructions", ""))
-        watch: JSON.stringify(page.s.vAgentFiles["main"] || {}) + page.folderEpoch
-        placeholder: "e.g. Call me Sam. Keep answers to one sentence unless I ask for more."
+      Button {
+        text: "Edit in Agent details →"
+        bordered: true
+        focusable: true
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
+        onClicked: page.s.goTo("agentdetails", "main")
       }
     }
 
@@ -1157,28 +992,20 @@ Column {
         }
       }
 
+      // In agents/<id>/, edited on Agent details (Phase 12).
       SettingRow {
         width: parent.width
-        stacked: true
-        label: "Custom instructions"
-        hint: "Its own, separate from the main agent's. Changing them keeps the conversation."
-        help: "How to address you, what to keep in mind, how long to talk. They sit after the " +
-              "rule that replies are spoken, so asking for lists or code blocks will still be read out " +
-              "as speech. Up to 2000 characters."
-        changed: cardInstructions.shown !== ""
+        label: "Role, personality and instructions"
+        hint: page.folderSummary(card.agentId, card.modelData.instructions)
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
-        onReset: cardInstructions.save("")
-        // In agents/<id>/instructions.md (Phase 10); the entry's old
-        // `instructions` only until that file exists.
-        FolderInstructionsBox {
-          id: cardInstructions
-          target: page.s.agentId(card.modelData)
-          fallback: String(card.modelData.instructions || "")
-          watch: JSON.stringify(page.s.vAgentFiles[page.s.agentId(card.modelData)] || {}) + page.folderEpoch
-          placeholder: "What " + (card.label || "this agent") + " should always keep in mind"
+        Button {
+          text: "Edit in Agent details →"
+          bordered: true
+          focusable: true
           foreground: page.s.foreground
           fontFamily: page.s.fontFamily
+          onClicked: page.s.goTo("agentdetails", card.agentId)
         }
       }
 
@@ -1349,12 +1176,16 @@ Column {
   // A removed agent, with the way back (Phase 10). Stays until the next
   // removal or an undo: the trash keeps it either way (`agentvoice agents
   // trash-list`).
-  Row {
-    visible: page.trashed !== null
+  // A Flow, so a long name wraps the button under the words rather than
+  // pushing it past the page's edge, where it could not be clicked.
+  Flow {
+    width: parent.width
+    visible: page.s.folders.trashed !== null
     spacing: Style.space(12)
     Text {
-      anchors.verticalCenter: parent.verticalCenter
-      text: page.trashed ? "Moved " + page.trashed.label + " to the trash, with its folder and settings." : ""
+      width: Math.min(implicitWidth, parent.width)
+      wrapMode: Text.WordWrap
+      text: page.s.folders.trashed ? "Moved " + page.s.folders.trashed.label + " to the trash, with its folder and settings." : ""
       textFormat: Text.PlainText
       color: page.s.foreground
       font.family: page.s.fontFamily
@@ -1363,7 +1194,7 @@ Column {
       text: "Undo"
       iconText: "\u{f054c}"
       bordered: true
-      enabled: !page.folderBusy
+      enabled: !page.s.folders.busy
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
       onClicked: page.undoRemove()
@@ -1371,10 +1202,10 @@ Column {
   }
   Text {
     width: parent.width
-    visible: page.folderNote !== ""
+    visible: page.s.folders.note !== ""
     wrapMode: Text.WordWrap
     textFormat: Text.PlainText
-    text: page.folderNote
+    text: page.s.folders.note
     color: page.s.urgent
     font.family: page.s.fontFamily
   }

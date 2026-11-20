@@ -38,7 +38,7 @@ Trusted Codex) this visibility is the only thing standing in for
 enforcement; see merged-plan.md section 3.5.
 
     python agentfs.py list|show|create|trash|restore|trash-list|write|
-                      history|revert|ack|ensure-communal|migrate ...
+                      history|revert|ack|preview|export|ensure-communal|migrate ...
                       (see --help)
 """
 from __future__ import annotations
@@ -809,17 +809,56 @@ def trash_list() -> list[dict]:
         m = _TRASHED.fullmatch(e.name)
         if not m:
             continue
-        label, problem = "", ""
+        label, problem, orphan = "", "", False
         try:
             entry = json.loads(_decode(*_read_bytes(_sidecar(d, e.name))))
             if isinstance(entry, dict):
                 label = str(entry.get("label") or entry.get("name") or "")[:64]
+                # A folder no agent used, trashed from Agent details: it
+                # has no settings to put back (Phase 12).
+                orphan = entry.get("orphan") is True
         except (OSError, ValueError, AgentFsError):
             problem = "its settings cannot be read"
         out.append({"name": e.name, "id": m.group(1),
                     "at": int(m.group(2)) / 1e9, "label": label,
-                    "problem": problem})
+                    "problem": problem, "orphan": orphan})
     return sorted(out, key=lambda t: t["at"], reverse=True)
+
+
+def export(target: str, dest: str | None = None) -> str:
+    """Copy one folder's files (role, personality, instructions and skills,
+    or the communal rules, defaults and skills) into a new folder under
+    `dest`, ~/Downloads by default, else home. Saved versions are left
+    behind. The copy is private (0700, 0600): it is what an agent is told.
+    Returns the new folder's path."""
+    base = _base(target)        # refuses anything that is not an id
+    _no_link(base)
+    if not os.path.isdir(base):
+        raise AgentFsError(f"{target} has no folder")
+    if dest is None:
+        home = Path.home()
+        dest = str(home / "Downloads") if (home / "Downloads").is_dir() else str(home)
+    root = Path(dest).expanduser()
+    if not root.is_dir():
+        raise AgentFsError(f"{dest} is not a folder")
+    out = root / f"agentvoice-{target}-{time.strftime('%Y%m%d-%H%M%S')}"
+    try:
+        os.mkdir(out, 0o700)
+    except FileExistsError:
+        raise AgentFsError(f"{out} exists already; try again") from None
+    fixed = COMMUNAL_FILES if target == COMMUNAL else AGENT_FILES
+    for name in [*fixed, *_skill_files(target)]:
+        path, _ = _resolve(target, name)
+        raw = _raw_text(path)
+        if raw is None:
+            continue
+        where = out / name
+        if "/" in name:
+            os.makedirs(where.parent, 0o700, exist_ok=True)
+        fd = os.open(where, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(raw)
+    return str(out)
 
 
 # --- prompt parts (Phase 11) --------------------------------------------------
@@ -937,14 +976,22 @@ def parts(agent_id: str, cfg, live_ids=None) -> dict:
 
 
 def preview(agent_id: str, cfg, live_ids=None) -> list[dict]:
-    """What the agent is told, piece by piece: label, where it comes from,
-    and the text. For the Agent details page (Phase 12) and `agents preview`.
-    The spoken style and the Omarchy commands are named, not repeated."""
+    """What the agent is told, piece by piece, in the order it is told it:
+    label, where it comes from, and the text. For the Agent details page
+    (Phase 12) and `agents preview`.
+
+    The spoken style is given in full, since it is what most often explains
+    how an agent answered. The Omarchy commands are named with no text: a
+    Claude agent loads them as a skill, and the list the others get runs to
+    thousands of characters of command names."""
+    from adapters.base import SPOKEN_STYLE
     me = folder_id(agent_id)
     p = parts(agent_id, cfg, live_ids)
-    legacy = (cfg["agentInstructions"] if me == MAIN
-              else (cfg.agent_by_id(me) or {}).get("instructions", ""))
-    out = [{"label": "Spoken style", "source": "built in", "text": ""}]
+    spec = None if me == MAIN else cfg.agent_by_id(me)
+    legacy = (cfg["agentInstructions"] if me == MAIN else (spec or {}).get("instructions", ""))
+    endpoint = (cfg.main_endpoint() is not None if me == MAIN
+                else (spec or {}).get("agent") == "endpoint")
+    out = [{"label": "Spoken style", "source": "built in", "text": SPOKEN_STYLE}]
     if p["rules"]:
         out.append({"label": "Rules for every agent", "source": "communal/rules.md",
                     "text": p["rules"]})
@@ -958,6 +1005,11 @@ def preview(agent_id: str, cfg, live_ids=None) -> list[dict]:
     if own:
         out.append({"label": "Standing instructions",
                     "source": f"agents/{me}/instructions.md", "text": own})
+    # An endpoint runs nothing here, so it is told no commands (Settings,
+    # "Omarchy skill").
+    if cfg.get_bool("omarchySkill") and not endpoint:
+        out.append({"label": "Omarchy commands and keybindings", "source": "built in",
+                    "text": ""})
     if p["roster"]:
         out.append({"label": "Other agents here", "source": "each agent's role.md",
                     "text": "\n".join(p["roster"])})
@@ -1175,6 +1227,9 @@ def main(argv=None) -> int:
     p.add_argument("target")
     p.add_argument("file")
     p.add_argument("--base", help="only if the file still has this stamp")
+    p = sub.add_parser("export", help="copy a folder's files out, to ~/Downloads or DIR")
+    p.add_argument("target")
+    p.add_argument("dir", nargs="?")
     p = sub.add_parser("preview", help="what an agent is told, piece by piece")
     p.add_argument("id")
     p.add_argument("--json", action="store_true")
@@ -1240,6 +1295,8 @@ def main(argv=None) -> int:
             print(revert(a.target, a.file, a.version, base=a.base))
         elif a.cmd == "ack":
             ack(a.target, a.file, base=a.base)
+        elif a.cmd == "export":
+            print(export(a.target, a.dir))
         elif a.cmd == "ensure-communal":
             print("\n".join(ensure_communal()))
         elif a.cmd == "preview":

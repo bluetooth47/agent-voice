@@ -1,4 +1,4 @@
-// End to end on the Voice page's library and the instructions boxes, through
+// End to end on the Voice page's library and the main instructions, through
 // real saves and the real `agentvoice voice` command. Run with --live-config:
 //
 //   preview.sh --live-config --wait 90 --out /tmp/v voices
@@ -155,25 +155,31 @@ ShellRoot {
           break
         case 109:
           overlay.check(overlay.voicesOnDisk.indexOf(overlay.target) < 0, "Alba was removed")
-          // The instructions box on the main card, through a real save.
+          // The main card's instructions: a summary there, edited on Agent
+          // details (Phase 12), through a real save.
           overlay.goTo("agents", "main")
           break
         case 111:
-          var box = overlay.find(overlay.content(), function(i) { return i.committed !== undefined && i.maxLength !== undefined })
-          overlay.check(box !== null, "the main card has an instructions box")
+          var boxes = overlay.findAll(overlay.content(), function(i) { return i.committed !== undefined && i.maxLength !== undefined })
+          overlay.check(boxes.length === 0, "the Agents page edits no file (boxes: " + boxes.length + ")")
+          overlay.click(overlay.find(overlay.content(), function(i) { return i.text === "Edit in Agent details →" && i.clicked !== undefined }),
+                        "Edit in Agent details")
+          break
+        case 112:
+          overlay.check(overlay.page === "agentdetails" && overlay.detailsAgent === "main", "the link opens the main agent's details")
+          var box = overlay.find(overlay.content(), function(i) { return i.committed !== undefined && i.maxLength === 2000 })
+          overlay.check(box !== null, "with its instructions editor")
           if (box) box.committed("Call me Sam. Keep it short.")
           break
         case 114:
           // Saved to agents/main/instructions.md through `agentvoice agents`
           // (Phase 10), in the preview's scratch data folder, and read back
           // as the stamp the CLI returned; never to shell.json any more.
-          var fold = overlay.find(overlay.content(), function(i) { return i.target === "main" && i.saved !== undefined })
+          var fold = overlay.find(overlay.content(), function(i) { return i.target === "main" && i.file === "instructions.md" && i.saved !== undefined })
           overlay.check(fold !== null && fold.saved === "Call me Sam. Keep it short." && fold.exists,
                         "the main instructions were saved to its folder and read back")
           overlay.check(String(overlay.setting("agentInstructions", "")) !== "Call me Sam. Keep it short.",
                         "nothing was written to the retired agentInstructions setting")
-          var all = overlay.findAll(overlay.content(), function(i) { return i.committed !== undefined && i.maxLength !== undefined })
-          overlay.check(all.length >= 1, "instructions boxes drawn: " + all.length)
           console.warn("PREVIEW DONE " + overlay.passed + " passed, " + overlay.failed + " failed")
           break
         }
