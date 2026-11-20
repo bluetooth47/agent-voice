@@ -680,7 +680,10 @@ def _error(mid, code, message):
     return {"jsonrpc": "2.0", "id": mid, "error": {"code": code, "message": message}}
 
 
-def serve(stdin=sys.stdin, stdout=sys.stdout) -> None:
+def serve(stdin=sys.stdin, stdout=sys.stdout, handler=None) -> None:
+    """Read JSON-RPC lines, answer each. `handler` is this server's
+    `handle` unless another server shares the loop (crew_mcp.py does)."""
+    handler = handler or handle
     for line in stdin:
         line = line.strip()
         if not line:
@@ -690,17 +693,21 @@ def serve(stdin=sys.stdin, stdout=sys.stdout) -> None:
         except ValueError:
             reply = _error(None, -32700, "parse error")
         else:
-            reply = handle(message)
+            reply = handler(message)
         if reply is not None:
             stdout.write(json.dumps(reply) + "\n")
             stdout.flush()
 
 
+def servers(program: str, named: str = "") -> dict:
+    """This server's entry under `mcpServers`, for one agent."""
+    args = [str(Path(__file__).resolve()), program] + ([named] if named else [])
+    return {SERVER: {"type": "stdio", "command": sys.executable, "args": args}}
+
+
 def mcp_config(program: str, named: str = "") -> str:
     """The `--mcp-config` JSON that starts this server for one agent."""
-    args = [str(Path(__file__).resolve()), program] + ([named] if named else [])
-    return json.dumps({"mcpServers": {SERVER: {
-        "type": "stdio", "command": sys.executable, "args": args}}})
+    return json.dumps({"mcpServers": servers(program, named)})
 
 
 #: What Codex strips from an MCP server's environment and the tools need:

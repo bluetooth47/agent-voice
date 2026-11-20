@@ -344,6 +344,8 @@ case "${1:-status}" in
     #   agentvoice agents write TARGET FILE [--base STAMP] < text
     #   agentvoice agents history TARGET FILE [--json]
     #   agentvoice agents revert TARGET FILE [VERSION] | ack TARGET FILE
+    #   agentvoice agents notes TARGET list|show|write|lock|unlock|history|
+    #                              version|restore|folder [NAME [VERSION]]
     REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
     PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
     shift

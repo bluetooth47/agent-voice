@@ -222,6 +222,10 @@ class ClaudeCode(Adapter):
         #: Plan 12a and 12b, set by the daemon from desktopTools and
         #: omarchySkill. Both are read when the process starts.
         self.desktop_tools = False
+        #: Agent Voice's own tools for agents (crew_mcp.py: notes, from
+        #: Phase 14), attached whenever this program can take them, whatever
+        #: desktopTools says (merged plan, section 3.7).
+        self.crew_tools = True
         self.skill_dir: str | None = None
         #: Claude in Chrome (plan 12d), from browserTools.
         self.browser_tools = False
@@ -294,7 +298,15 @@ class ClaudeCode(Adapter):
             # The agent's own name travels with the hook: permission levels
             # are per agent now, and the hook is a separate process that
             # cannot otherwise know which one spawned it.
-            "hooks": [{"type": "command", "command": command}],
+            #
+            # onFailure "block": a hook that cannot start, crashes or runs out
+            # of time was otherwise read by Claude Code as a non-blocking
+            # error, and the tool went ahead under Claude's own permission
+            # flow (the Phase 13 open issue, raised again by Codex's review
+            # of Phase 14 for the notes tools). Checked against 2.1.329 with
+            # a real turn: a missing hook script let Bash run without it and
+            # blocked it with it, and a hook answering allow still allowed.
+            "hooks": [{"type": "command", "command": command, "onFailure": "block"}],
         }]}})
 
     def available(self) -> bool:
@@ -331,12 +343,20 @@ class ClaudeCode(Adapter):
             # browser's tools alone, so nothing else is slowed.
             from permission_hook import BROWSER_MATCHER
             argv += ["--settings", self._hook_settings(self.named, BROWSER_MATCHER)]
+        servers: dict = {}
         if self.desktop_tools:
             # Agent Voice's desktop tools (plan 12a), as this agent: the
             # server files a screenshot question under the same id the hook
             # uses. Added to the user's own MCP servers, not instead of them.
-            from desktop_mcp import mcp_config
-            argv += ["--mcp-config", mcp_config(self.name, self.named)]
+            import desktop_mcp
+            servers.update(desktop_mcp.servers(self.name, self.named))
+        if self.crew_tools:
+            # The notes tools (Phase 14), as this agent, on its own
+            # condition: never the desktop tools'. One config for both.
+            import crew_mcp
+            servers.update(crew_mcp.servers(self.name, self.named, browser=self.browser_tools))
+        if servers:
+            argv += ["--mcp-config", json.dumps({"mcpServers": servers})]
         if self.skill_dir:
             # The Omarchy skill (plan 12b), loaded as a plugin for this
             # process only: nothing is written into ~/.claude.

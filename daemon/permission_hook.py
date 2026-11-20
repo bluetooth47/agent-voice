@@ -98,6 +98,18 @@ DESKTOP_SENSITIVE_READ = {"clipboard_read"}
 #: agent, which has no hook at all, is still asked.
 DESKTOP_SELF_ASKED = {"screenshot"}
 
+#: Agent Voice's notes tools (crew_mcp.py, merged plan Phase 14), by the
+#: name Claude Code gives them. Kept in step with crew_mcp's sets by a test.
+CREW_PREFIX = "mcp__agentvoice-crew__"
+#: Listing and reading notes: allowed at every level, like Read.
+CREW_READ_ONLY = {"notes_list", "notes_read"}
+#: Writing a note: asked at "ask", silent at "edits" and "trusted". Without
+#: this rule "edits" would ask too (only the four file-edit tools are silent
+#: there). Deny and a locked note are the notes store's to refuse, at every
+#: level; a denied agent is refused here too, so nobody is asked about a
+#: write that cannot happen.
+CREW_WRITES = {"notes_write", "notes_append"}
+
 #: Claude in Chrome (plan 12d). Its tools act in the person's real browser,
 #: signed in as them, so a click can send, buy or post. Those are asked
 #: about at every level -- Trusted and "allow all in this chat" included --
@@ -326,6 +338,61 @@ def _settings() -> tuple[str, Path | None]:
         return cfg.level_for(agent), scope_root(cfg.get_str("projectDir"))
     except Exception:
         return "ask", None
+
+
+NOTES_DENIED = "You aren't allowed to write notes here. You can still read them."
+
+
+def _may_write_notes() -> bool:
+    """The agent's `notesWrite`, read fresh (merged plan, Phase 14). Any
+    failure to read it is a no: a deny here only spares a question about a
+    write the notes store would refuse anyway."""
+    try:
+        from runtime import Config
+        cfg = Config()
+        named = _named()
+        if named:
+            spec = cfg.agent_by_id(named)
+            agent = sys.argv[1] if len(sys.argv) > 1 else ""
+            if spec is None or spec.get("agent") != agent:
+                return False
+        return cfg.notes_write_for(named)
+    except Exception:
+        return False
+
+
+def _notes_question(crew: str, tool_input) -> tuple[dict, str, str]:
+    """For a notes write about to be asked about: the input as the card
+    shows it (only the fields the tool declares, so an extra `command`
+    cannot put words on the card that are not what runs), one line saying
+    what it writes where, and the refusal when the note is locked (nobody
+    is asked about a write the store would refuse). Unsure of the lock is
+    not a refusal here: the store checks it again, inside its own lock."""
+    raw = tool_input if isinstance(tool_input, dict) else {}
+    keep = ("scope", "name", "text") + (("base",) if crew == "notes_write" else ())
+    clean = {k: raw[k] for k in keep if k in raw}
+    name = raw.get("name")
+    name = name if isinstance(name, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,47}", name) else ""
+    scope = raw.get("scope")
+    where = ("its own notes" if scope == "mine" else
+             "the communal notes" if scope == "communal" else "")
+    text = raw.get("text")
+    size = f"{len(text)} characters" if isinstance(text, str) else "no text"
+    verb = "adds to" if crew == "notes_append" else "writes"
+    note = (f"this {verb} the note “{name or '?'}” in {where or 'an unknown place'} "
+            f"({size})")
+    locked = ""
+    if name and where:
+        try:
+            import notes
+            import agentfs
+            target = "communal" if scope == "communal" else agentfs.folder_id(_named())
+            if notes.is_locked(target, name):
+                locked = (f"The note {name} is locked by the person: it is read-only for "
+                          f"every agent.")
+        except Exception:
+            pass
+    return clean, note, locked
 
 
 def _named() -> str:
@@ -658,11 +725,30 @@ def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, st
         return _ask(tool_name, tool_input, note="this reads the clipboard",
                     session=session)
 
+    crew = tool_name[len(CREW_PREFIX):] if tool_name.startswith(CREW_PREFIX) else ""
+    if crew in CREW_READ_ONLY:
+        return "allow", ""
+
     # Allowed wholesale for this conversation, from the prompt. Like
     # "trusted", it covers everything, credentials included -- that is what
     # the button says -- but only this agent, only this conversation.
     if granted(session):
+        if crew in CREW_WRITES and not _may_write_notes():
+            return "deny", NOTES_DENIED
         return "allow", ""
+
+    if crew in CREW_WRITES:
+        # After the grant, so "allow all in this chat" covers it as it
+        # covers other tools (merged plan, Phase 8 corrections).
+        if not _may_write_notes():
+            return "deny", NOTES_DENIED
+        clean, note, locked = _notes_question(crew, tool_input)
+        if locked:
+            return "deny", locked
+        level, _ = _settings()
+        if level in ("edits", "trusted"):
+            return "allow", ""
+        return _ask(tool_name, clean, note=note, session=session)
 
     if (tool_name == "Skill" and isinstance(tool_input, dict)
             and isinstance(tool_input.get("skill"), str)

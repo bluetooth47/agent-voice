@@ -86,6 +86,7 @@
       "browserTools": false,
       "omarchySkill": true,
       "mainTools": {},
+      "mainNotesWrite": "allow",
       "bargeIn": false,
       "bargeOnHeadset": true,
       "bargeFactor": 150,
@@ -601,6 +602,17 @@
         "label": "Omarchy skill",
         "defaultValue": true,
         "description": "Tell agents the exact omarchy commands this machine has (scratchpads, menus, screenshots, recording, themes, keybindings), built from what is installed."
+      },
+      {
+        "key": "mainNotesWrite",
+        "type": "enum",
+        "label": "Main agent may write notes",
+        "options": [
+          "allow",
+          "deny"
+        ],
+        "defaultValue": "allow",
+        "description": "Whether the main agent may write its own and the communal notes through Agent Voice's notes tools. Denied, it can still read them. Set on the main agent's card, under Tools & collaboration."
       },
       {
         "key": "bargeOnHeadset",

@@ -166,6 +166,9 @@ class Codex(Adapter):
         #: Agent Voice's desktop tools (plan 12a), set by the daemon from
         #: desktopTools exactly as for Claude.
         self.desktop_tools = False
+        #: The notes tools (crew_mcp.py, Phase 14): always, since Codex can
+        #: take an MCP server; guarded on this agent's own level.
+        self.crew_tools = True
         self.effort = effort
         self.spoken = spoken
         self.cwd = cwd
@@ -212,6 +215,13 @@ class Codex(Adapter):
             # because in `exec` it cannot ask and refuses every change.
             from desktop_mcp import codex_config
             argv += codex_config(self.name, self.named, guard=not self.full_auto)
+        if self.crew_tools:
+            # Below Trusted the notes server asks for itself (--guard), on
+            # Codex's own level, not on the desktop server's condition: with
+            # desktopTools off a Codex agent below Trusted still gets it
+            # (merged plan, Phase 8 corrections; A14-3).
+            import crew_mcp
+            argv += crew_mcp.codex_config(self.name, self.named, guard=not self.full_auto)
         # Every option goes BEFORE `resume`: the resume subcommand rejects
         # --approve-for-me ("unexpected argument"), which failed every turn
         # after the first for a trusted Codex agent. Checked against

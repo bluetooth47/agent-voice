@@ -102,6 +102,7 @@ Column {
   readonly property var tabs: [
     { id: "prompt", label: "Personality & instructions" },
     { id: "tools", label: "Tools & skills" },
+    { id: "notes", label: "Notes" },
     { id: "chats", label: "Chats" },
     { id: "advanced", label: "Advanced" }
   ]
@@ -728,6 +729,43 @@ Column {
         onClicked: page.s.goTo("communal", "", "skills")
       }
     }
+  }
+
+  // --- Notes (Phase 14) -------------------------------------------------------------
+  // Its own notes. Whether it may write them is on its Agents card; the
+  // catalog says whether its program takes the notes tools at all.
+  NotesPanel {
+    width: parent.width
+    visible: page.tab === "notes" && !page.reserved
+    target: page.target
+    owner: page.name
+    whyNot: page.catalog && page.catalog.agent === page.target && page.catalog.notes
+            ? page.catalog.notes.why_not : ""
+    foreground: page.s.foreground
+    fontFamily: page.s.fontFamily
+  }
+  Text {
+    width: parent.width
+    visible: page.tab === "notes" && page.catalog && page.catalog.agent === page.target &&
+             page.catalog.notes && page.catalog.notes.can
+    wrapMode: Text.WordWrap
+    textFormat: Text.PlainText
+    text: page.catalog && page.catalog.notes
+          ? (page.catalog.notes.write === "allow" ? page.name + " may write notes. " : page.name + " may only read notes. ") +
+            page.catalog.notes.asks
+          : ""
+    color: page.s.dim
+    font.family: page.s.fontFamily
+    font.pixelSize: Style.font.caption
+  }
+  Button {
+    visible: page.tab === "notes" && !page.reserved
+    text: "Change on " + page.name + "'s Agents card →"
+    bordered: true
+    focusable: true
+    foreground: page.s.foreground
+    fontFamily: page.s.fontFamily
+    onClicked: page.s.goTo("agents", page.target, "tools")
   }
 
   // --- Chats ------------------------------------------------------------------------

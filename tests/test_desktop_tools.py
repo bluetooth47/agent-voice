@@ -367,7 +367,10 @@ def test_claude_gets_the_server_and_the_skill_only_when_on():
     from adapters.claude_code import ClaudeCode
     a = ClaudeCode(named="nova-k3f")
     argv = a._argv("", None)
-    assert "--mcp-config" not in argv and "--plugin-dir" not in argv
+    assert "--plugin-dir" not in argv
+    # Only the notes server (Phase 14), which does not wait for desktopTools.
+    config = json.loads(argv[argv.index("--mcp-config") + 1])
+    assert list(config["mcpServers"]) == ["agentvoice-crew"]
     a.desktop_tools, a.skill_dir = True, "/skills/here"
     argv = a._argv("", None)
     config = json.loads(argv[argv.index("--mcp-config") + 1])

@@ -44,7 +44,7 @@ def test_every_option_comes_before_resume(trusted):
 
 def test_no_desktop_tools_unless_switched_on():
     argv = Codex()._argv("hi", None)
-    assert not any(k.startswith("mcp_servers.") for k in _configs(argv))
+    assert not any(k.startswith("mcp_servers.agentvoice-desktop") for k in _configs(argv))
 
 
 def test_desktop_tools_start_our_server_as_this_agent():

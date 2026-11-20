@@ -60,7 +60,7 @@ Item {
   // the page and coming back finds them where they were.
   property string detailsAgent: "main"
   property string detailsTab: "prompt"
-  // Communal's tab (Phase 13): "rules" or "skills".
+  // Communal's tab (Phases 13, 14): "rules", "skills" or "notes".
   property string communalTab: "rules"
   property var request: ({})
   property int secondsLeft: 0
@@ -820,12 +820,12 @@ Item {
     // {"page": "agentdetails", "agent": "sora"} opens that agent's details,
     // on its first tab unless "tab" names another.
     if (page === "agentdetails") {
-      var validTab = /^(prompt|tools|chats|advanced)$/.test(String(tab || ""))
+      var validTab = /^(prompt|tools|notes|chats|advanced)$/.test(String(tab || ""))
       if (agent) { detailsAgent = agent; detailsTab = validTab ? tab : "prompt" }
       else if (validTab) detailsTab = tab
       focusAgent = ""
     } else {
-      if (page === "communal" && (tab === "rules" || tab === "skills")) communalTab = tab
+      if (page === "communal" && (tab === "rules" || tab === "skills" || tab === "notes")) communalTab = tab
       focusTools = page === "agents" && tab === "tools"
       focusAgent = ""
       focusAgent = agent || ""

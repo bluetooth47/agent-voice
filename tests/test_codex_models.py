@@ -59,4 +59,6 @@ def test_an_effort_is_passed_only_when_the_model_takes_it(tmp_path, monkeypatch)
     _home(tmp_path, monkeypatch)
     argv = Codex(model="gpt-b", effort="high")._argv("", None)
     assert argv[argv.index("-c") + 1] == 'model_reasoning_effort="high"'
-    assert "-c" not in Codex(model="gpt-a", effort="high")._argv("", None)
+    # The notes server (Phase 14) adds -c options of its own.
+    assert not any(a.startswith("model_reasoning_effort")
+                   for a in Codex(model="gpt-a", effort="high")._argv("", None))

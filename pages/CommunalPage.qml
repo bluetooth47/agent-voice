@@ -7,8 +7,8 @@ import ".."
 import "../ui"
 
 // What every agent shares: the communal rules and defaults (merged plan,
-// Phase 12) and the shared skills (Phase 13), one tab each. Notes and
-// shared chats join as tabs when they are built (Phases 14 and 15).
+// Phase 12), the shared skills (Phase 13) and the shared notes (Phase 14),
+// one tab each. Shared chats join as a tab when they are built (Phase 15).
 //
 // The wording follows section 3.5 of the plan: a rule is text every agent
 // is told, not a limit the app enforces, and an agent that runs at "Trust
@@ -41,10 +41,11 @@ Column {
     fontFamily: page.s.fontFamily
   }
 
-  readonly property string tab: s.communalTab === "skills" ? "skills" : "rules"
+  readonly property string tab: s.communalTab === "skills" || s.communalTab === "notes" ? s.communalTab : "rules"
   TabStrip {
     width: parent.width
-    options: [{ id: "rules", label: "Rules & defaults" }, { id: "skills", label: "Skills" }]
+    options: [{ id: "rules", label: "Rules & defaults" }, { id: "skills", label: "Skills" },
+              { id: "notes", label: "Notes" }]
     current: page.tab
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
@@ -364,5 +365,14 @@ Column {
       fontFamily: page.s.fontFamily
       onClicked: skillsFolder.running = true
     }
+  }
+
+  // --- Notes (Phase 14) -----------------------------------------------------------
+  NotesPanel {
+    width: parent.width
+    visible: page.tab === "notes"
+    target: "communal"
+    foreground: page.s.foreground
+    fontFamily: page.s.fontFamily
   }
 }

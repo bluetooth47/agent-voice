@@ -1452,6 +1452,9 @@ TOOL_ROWS = {"desktop": "Desktop tools", "browser": "Browser (Claude in Chrome)"
 DESKTOP_PROGRAMS = ("claude", "codex")
 BROWSER_PROGRAMS = ("claude",)
 PLUGIN_PROGRAMS = ("claude",)
+#: The programs that take the notes tools (crew_mcp.py, Phase 14): the two
+#: that take Agent Voice's MCP server. ui/ToolSwitches.qml holds a copy.
+NOTES_PROGRAMS = ("claude", "codex")
 PROGRAM_LABELS = {"claude": "Claude Code", "codex": "Codex", "gemini": "Gemini",
                   "agy": "Antigravity", "antigravity": "Antigravity",
                   "antigravity-cli": "Antigravity", "copilot": "Copilot",
@@ -1572,12 +1575,25 @@ def catalog(agent_id: str, cfg) -> dict:
     else:
         delivery, how = "index", (f"{_label(program)} loads no skills itself, so it is told a "
                                   "list of them and reads a skill's file when it needs it.")
+    if program == "endpoint" or not program or not _runnable(program):
+        notes_why = _why_not("notes", program)
+    elif program not in NOTES_PROGRAMS:
+        notes_why = "Notes need Claude Code or Codex."
+    else:
+        notes_why = ""
+    may = cfg.notes_write_for(me if me != MAIN else "")
+    notes_row = {"can": not notes_why, "why_not": notes_why,
+                 "write": "allow" if may else "deny",
+                 "asks": ("" if notes_why else
+                          "Reads without asking; may not write." if not may else
+                          "Reads and writes without asking." if level in ("edits", "trusted") else
+                          "Reads without asking; asks before each write.")}
     own = skills(me) if me != COMMUNAL else []
     entries = skill_set(own, skills(COMMUNAL))
     if delivery == "none":
         entries = [{**s, "delivered": False} for s in entries]
     return {"agent": me, "program": program, "program_label": _label(program),
-            "level": level, "tools": tools, "skills": entries,
+            "level": level, "tools": tools, "notes": notes_row, "skills": entries,
             "delivery": delivery, "delivery_how": how,
             "skills_asks": _commands_ask(program, level) if delivery != "none" else ""}
 
@@ -1823,6 +1839,85 @@ def _print(obj, as_json: bool, text: str) -> None:
     print(json.dumps(obj, ensure_ascii=False, indent=1) if as_json else text)
 
 
+def _notes_cli(a) -> int:
+    """`agentvoice agents notes TARGET ACTION …`: the Notes tabs' way in
+    (merged plan, Phase 14). Every write here is the person's own: author
+    "you", not subject to a deny or a lock, and logged to audit.log."""
+    import notes
+    from runtime import Config
+    from speech_text import safe_for_terminal
+
+    def need_name():
+        if not a.name:
+            raise AgentFsError(f"notes {a.action} needs a note's name")
+        return a.name
+    try:
+        if a.action == "list":
+            v = notes.list_notes(a.target)
+            labels = notes.labels(Config())
+            for n in v["notes"]:
+                n["author_label"] = labels.get(n["author"], n["author"])
+            _print(v, a.json, "\n".join(
+                [v["problem"]] * bool(v["problem"])
+                + [f"{n['name']}  rev {n['rev']}  {n['author_label']}  {n['chars']} chars"
+                   + ("  locked" if n["locked"] else "") + ("  web" if n["tainted"] else "")
+                   for n in v["notes"]]
+                + [f"{f['name']}  ({f['kind']})" for f in v["files"]]) or "no notes")
+        elif a.action == "show":
+            v = notes.read_note(a.target, need_name())
+            v["author_label"] = notes.labels(Config()).get(v["author"], v["author"])
+            # An agent wrote it: shown on a terminal, its escape sequences
+            # could retitle the window or set the clipboard. --json is exact.
+            _print(v, a.json, safe_for_terminal(v["text"]))
+        elif a.action == "write":
+            name = need_name()
+            data = (sys.stdin.buffer.readline(6 * WRITE_CAP + 2) if a.line
+                    else sys.stdin.buffer.read(WRITE_CAP + 1))
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                raise AgentFsError("the text is not UTF-8") from None
+            if a.line:
+                try:
+                    text = json.loads(text)
+                except ValueError:
+                    raise AgentFsError("the text is not one line of JSON") from None
+                if not isinstance(text, str):
+                    raise AgentFsError("the JSON line must hold a string")
+            v = notes.write(a.target, name, text, a.base)
+            _print(v, a.json, str(v["rev"]))
+        elif a.action in ("lock", "unlock"):
+            v = notes.set_locked(a.target, need_name(), a.action == "lock")
+            _print(v, a.json, "locked" if v["locked"] else "unlocked")
+        elif a.action == "history":
+            v = notes.history(a.target, need_name())
+            _print(v, a.json, "\n".join(f"{x['version']}  {x['who']}  {x['chars']} chars"
+                                         for x in v) or "no saved versions")
+        elif a.action == "version":
+            if not a.version:
+                raise AgentFsError("notes version needs a note's name and a version")
+            text = notes.version_text(a.target, need_name(), a.version)
+            _print({"text": text}, a.json, safe_for_terminal(text))
+        elif a.action == "restore":
+            if not a.version:
+                raise AgentFsError("notes restore needs a note's name and a version")
+            v = notes.restore(a.target, need_name(), a.version, a.base)
+            _print(v, a.json, str(v["rev"]))
+        elif a.action == "folder":
+            print(notes.folder(a.target))
+    except notes.Stale as e:
+        print(f"conflict: {a.name} changed since it was read; current rev {e.current}",
+              file=sys.stderr)
+        return 3
+    except notes.AgentFsError as e:
+        # Run as a script, this file is `__main__`, and notes imports it again
+        # as `agentfs`: the same error under a second class, which main()'s
+        # handler would not catch (Phase 14 review).
+        print(f"agentvoice agents: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="agentvoice agents",
                                  description="Agent folders and the communal folder.")
@@ -1875,6 +1970,16 @@ def main(argv=None) -> int:
     p.add_argument("target")
     p = sub.add_parser("catalog", help="the tools and skills an agent is given, and why")
     p.add_argument("id")
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("notes", help="a folder's notes (text on stdin, never as an argument)")
+    p.add_argument("target")
+    p.add_argument("action", choices=("list", "show", "write", "lock", "unlock", "history",
+                                      "version", "restore", "folder"))
+    p.add_argument("name", nargs="?")
+    p.add_argument("version", nargs="?")
+    p.add_argument("--base", type=int, help="only if the note is still at this rev")
+    p.add_argument("--line", action="store_true",
+                   help="the text is one line holding a JSON string")
     p.add_argument("--json", action="store_true")
     sub.add_parser("ensure-communal")
     p = sub.add_parser("migrate", help="make the folders, copy the old instructions in")
@@ -1965,6 +2070,8 @@ def main(argv=None) -> int:
                         else f"! {x['problem']}" if x["problem"] else "not given")
                 lines.append(f"  {x['name']} [{x['source']}] {mark}")
             _print(v, a.json, "\n".join(lines))
+        elif a.cmd == "notes":
+            return _notes_cli(a)
         elif a.cmd == "ensure-communal":
             print("\n".join(ensure_communal()))
         elif a.cmd == "preview":

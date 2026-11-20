@@ -208,6 +208,23 @@ Column {
   function putAgentTool(index, key, value) {
     updateAgent(index, "tools", toolMap((s.voiceAgents[index] || {}).tools, key, value))
   }
+  // Notes write (Phase 14): "allow" is written by leaving the key out, as a
+  // tool switch's inherit is, so an entry nobody changed stays as it was.
+  function putAgentNotes(index, value) {
+    var list = []
+    for (var i = 0; i < s.voiceAgents.length; i++) {
+      var copy = {}
+      var a = s.voiceAgents[i] || {}
+      for (var k in a) copy[k] = a[k]
+      copy.id = s.agentId(a)
+      if (i === index) {
+        if (value === "allow") delete copy.notesWrite
+        else copy.notesWrite = "deny"
+      }
+      list.push(copy)
+    }
+    saveAgents(list)
+  }
   // The Rule of Two (merged plan, Phase 13): reading web pages, acting
   // without asking, and being able to change what the other agents are
   // told, all in one agent. A warning, not a block. Denying notes writes
@@ -219,7 +236,7 @@ Column {
     var browser = c === "on" || (c !== "off" && toolGlobals.browser)
     if (!browser || program !== "claude" || level !== "trusted") return ""
     return "It reads web pages, acts without asking, and can change what the other agents are " +
-           "told (the communal rules and skills). A page could steer it into doing that. " +
+           "told (the communal rules, skills and notes). A page could steer it into doing that. " +
            "Turning its browser off, or asking first, takes the risk away."
   }
 
@@ -645,6 +662,8 @@ Column {
       fontFamily: page.s.fontFamily
       onToggled: function(open) { page.setOpen("tools:main", open) }
       onPicked: function(key, value) { page.putMainTool(key, value) }
+      notesWrite: String(page.s.setting("mainNotesWrite", "allow"))
+      onNotesPicked: function(value) { page.s.put("mainNotesWrite", value) }
     }
 
     SettingRow {
@@ -1081,6 +1100,11 @@ Column {
         fontFamily: page.s.fontFamily
         onToggled: function(open) { page.setOpen("tools:" + card.agentId, open) }
         onPicked: function(key, value) { page.putAgentTool(card.index, key, value) }
+        // A missing key is "allow"; anything else written there is "deny"
+        // (runtime.notes_choice), so the switch shows what the daemon reads.
+        notesWrite: card.modelData.notesWrite === undefined || card.modelData.notesWrite === "allow"
+                    ? "allow" : "deny"
+        onNotesPicked: function(value) { page.putAgentNotes(card.index, value) }
       }
 
       SettingRow {

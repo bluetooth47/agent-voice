@@ -4,6 +4,7 @@ ExchangeItem 1.0 ExchangeItem.qml
 FileEditor 1.0 FileEditor.qml
 InstructionsBox 1.0 InstructionsBox.qml
 LevelMeter 1.0 LevelMeter.qml
+NotesPanel 1.0 NotesPanel.qml
 PageHeader 1.0 PageHeader.qml
 PromptPreview 1.0 PromptPreview.qml
 SegmentedChoice 1.0 SegmentedChoice.qml

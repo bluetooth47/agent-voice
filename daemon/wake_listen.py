@@ -4141,13 +4141,14 @@ class Daemon:
         An effort, voice, speed or instructions keep the conversation, as
         they do for the main agent, and so do its display name and wake
         phrase: the permission hook knows it by id. So do its tool switches
-        (Phase 13), which apply_extras hands to the adapter between turns.
+        (Phase 13), which apply_extras hands to the adapter between turns,
+        and its notes write (Phase 14), which the notes server reads fresh.
         Anything else -- program, model, folder, level -- starts a new one,
         because a session is scoped to all of those.
         """
         old = p.spec or {}
         kept = ("effort", "voice", "speed", "instructions", "name", "label",
-                "narration", "tools")
+                "narration", "tools", "notesWrite")
         same = {k: v for k, v in spec.items() if k not in kept}
         was = {k: v for k, v in old.items() if k not in kept}
         if same == was and p.agent is not None:

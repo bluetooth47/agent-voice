@@ -72,6 +72,21 @@ TOOL_GLOBALS = {"desktop": "desktopTools", "browser": "browserTools",
 TOOL_CHOICES = ("inherit", "on", "off")
 
 
+#: Whether an agent may write notes (merged plan, Phase 14, section 3.4).
+NOTES_CHOICES = ("allow", "deny")
+
+
+def notes_choice(holder: dict, key: str) -> str:
+    """`notesWrite` as written: a missing key is "allow" (every agent may
+    write communal notes unless it is explicitly denied: the user's decision
+    2), and a value that is there but is neither word is "deny" -- somebody
+    meant to say something, and a guard that cannot read its setting closes."""
+    if not isinstance(holder, dict) or key not in holder:
+        return "allow"
+    value = holder.get(key)
+    return value if value in NOTES_CHOICES else "deny"
+
+
 def tool_choices(raw) -> dict[str, str]:
     """A tools map as written, cleaned: every switch present, each one of
     TOOL_CHOICES."""
@@ -228,6 +243,9 @@ DEFAULTS = {
     # desktop / browser / omarchySkill to inherit, on or off. Extra agents
     # keep theirs in their entry, as `tools`.
     "mainTools": {},
+    # Whether the main agent may write notes (merged plan, Phase 14): allow
+    # or deny. Extra agents keep theirs in their entry, as `notesWrite`.
+    "mainNotesWrite": "allow",
     "conversationMode": True,
     "yieldToRecorders": True,
     "logSpeech": False,
@@ -312,6 +330,7 @@ TOML_ALIASES = {
     "browserTools": ("agent", "browser_tools"),
     "omarchySkill": ("agent", "omarchy_skill"),
     "mainTools": ("agent", "main_tools"),
+    "mainNotesWrite": ("agent", "main_notes_write"),
     "conversationMode": ("wake", "conversation_mode"),
     "yieldToRecorders": ("wake", "yield_to_recorders"),
     "logSpeech": ("ui", "log_speech"),
@@ -344,6 +363,9 @@ class Config:
             return 0.0
 
     def _from_shell_json(self) -> dict:
+        # Whether this widget's entry was found at all, even with nothing in
+        # it: settings_readable() tells "read, all defaults" from "unread".
+        self._entry_found = False
         try:
             data = json.loads(SHELL_JSON.read_text())
         except Exception:
@@ -352,6 +374,7 @@ class Config:
         for entries in layout.values():
             for entry in entries or []:
                 if entry.get("id") == PLUGIN_ID:
+                    self._entry_found = True
                     return {k: v for k, v in entry.items() if k != "id"}
         return {}
 
@@ -644,6 +667,8 @@ class Config:
                 "level": level if level in ("ask", "edits", "trusted") else "ask",
                 # Its tool switches as written, each inherit / on / off.
                 "tools": tool_choices(entry.get("tools")),
+                # Whether it may write notes: allow or deny (Phase 14).
+                "notesWrite": notes_choice(entry, "notesWrite"),
                 "projectDir": folder.strip() if isinstance(folder, str) else "",
                 # Its own OpenAI-compatible endpoint, when its program is
                 # "endpoint" (plan 7b); None otherwise.
@@ -677,6 +702,35 @@ class Config:
             own = (spec or {}).get("tools") or tool_choices(None)
         return {k: (own[k] == "on" if own[k] != "inherit" else self.get_bool(g))
                 for k, g in TOOL_GLOBALS.items()}
+
+    def settings_readable(self) -> bool:
+        """False when shell.json exists and this widget's entry could not be
+        read from it, so the values in force are only the defaults. A guard
+        that reads a setting must then close, not take the default."""
+        if self.source == "test":
+            return True
+        try:
+            present = SHELL_JSON.exists()
+        except OSError:
+            return False
+        return not present or getattr(self, "_entry_found", False)
+
+    def notes_write_for(self, agent_id: str | None) -> bool:
+        """Whether this agent may write notes through the notes tools (merged
+        plan, Phase 14). `agent_id` is "" or "main" for the main agent, else
+        an extra agent's id. One the settings do not have -- removed, or a
+        hand-mangled id -- has nobody's decision behind it and may not.
+        Read fresh by the notes server on every write, so a deny reaches a
+        warm process at once."""
+        if not self.settings_readable():
+            # shell.json is there and its entry could not be read (mid-write,
+            # truncated, broken): the defaults would say allow, and a deny the
+            # person set would be lost for as long as the file stays broken.
+            return False
+        if not agent_id or agent_id == "main":
+            return notes_choice(self._values, "mainNotesWrite") == "allow"
+        spec = next((a for a in self.all_agents() if a["id"] == agent_id), None)
+        return bool(spec) and spec.get("notesWrite") == "allow"
 
     def main_endpoint(self) -> dict | None:
         """The main agent's endpoint, cleaned like an extra agent's, or None
