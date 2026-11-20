@@ -1353,3 +1353,48 @@ folder and one skill each, 200 runs: `stamp()` **median 1.48ms, max
 2.15ms**; `summary()` median 10.0ms, max 16.9ms over 50 runs. With no
 folders at all, which is every machine until Phase 10 creates them, the
 check finds nothing, logs nothing and publishes nothing.
+
+## 35. Phase 11: what the folder pieces cost a turn, and whether the roster earns its place
+
+i7-1185G7, 2026-11-19, Phase 11, `claude` 2.1.328. Each agent's preamble
+now carries, in this order, the communal rules and defaults, its
+personality, its instructions, the Omarchy commands and a roster of the
+other reachable agents (merged plan, 3.6). On this machine the folders are
+the empty templates, so only the roster is new: two lines, about 200
+characters. Preambles (`bench/preamble_size.py`, and the daemon's own log
+line, which agree): main 856 → **1057**, sora 957 → **1158**, jarvis-ajc
+6,837 → **7036**. With every folder empty and no other agent the preamble
+is byte for byte 2eeb919's, for all seven backends and 84 combinations
+(`tests/test_preamble.py` against `tests/fixtures/preamble/2eeb919.json`).
+
+**Send to first text** (`bench/start_bench.py --variants`, interleaved run
+by run in one session so drift hits each alike; 20 runs per variant, no
+failures). `none` is the Phase 10 preamble, `folders` what the daemon now
+assigns, `full` every budget filled with synthetic text (rules, defaults
+and personality 1500 each, instructions 2000, eight roster lines of 380):
+
+| | none | folders | full |
+|---|---|---|---|
+| sora (Haiku, ask) cold, median / p95 | 1.86 / 2.18s | 1.84 / 2.03s | 1.88 / 2.14s |
+| sora warm | 0.69 / 0.85s | 0.64 / 0.70s | 0.76 / 0.91s |
+| main (Opus, trusted) cold | 3.33 / 4.46s | 3.37 / 6.46s | — |
+| main warm | 2.20 / 3.45s | 2.15 / 3.08s | — |
+
+**The gate holds.** Judged on Sora, as §33 says it must be: median +0.02s
+cold and −0.05s warm with the real folders, +0.02s and +0.07s with every
+budget full (gate +0.15s); p95 at most +0.06s (gate 10% or 0.30s). On
+main both medians are inside the ±0.48s noise of an Opus median; its cold
+p95 moved 2s on one slow run, which is the noise §33 says an Opus p95 has
+(it trips on an unchanged build in a third of 20-run pairs). jarvis-ajc
+(Codex) could not be measured: every turn returned Codex's usage limit
+until 19:13; its preamble grew 3%.
+
+**The roster earns its place** (`bench/roster_check.py`, Theo, five
+questions with the roster and five without; the role lines were synthetic,
+given for the run only, since this machine's role files are empty). With
+it, all five answers named the right agent and its wake phrase ("Hazel
+handles coding and refactoring … say 'hazel'"; "Sora is built for quick,
+short answers"). Without it, Theo went looking with his own tools and
+found other things: another Claude session on the machine, Claude Code's
+subagent types, and once said the other agents "are for searching,
+planning or fetching pages". So the roster stays in the preamble.

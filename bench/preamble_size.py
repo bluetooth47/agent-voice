@@ -118,9 +118,9 @@ def main(argv=None) -> int:
                "program": "endpoint" if main_endpoint else
                (adapters.main_program(cfg.get_str("mainProgram")) or "claude"),
                "endpoint": main_endpoint,
-               "instructions": main_instr}]
+               "instructions": main_instr, "id": "main"}]
     for entry in cfg.agents():
-        agents.append({"label": entry["id"], "program": entry["agent"],
+        agents.append({"label": entry["id"], "id": entry["id"], "program": entry["agent"],
                        "endpoint": entry.get("endpoint"),
                        "instructions": agentfs.instructions_for(
                            entry["id"], entry.get("instructions", ""))})
@@ -131,6 +131,11 @@ def main(argv=None) -> int:
         if adapter is None:
             row["unavailable"] = "no adapter for this program"
         else:
+            # Without the folder pieces first (the Phase 10 preamble), then
+            # with them, assigned as the daemon's reconcile_parts does.
+            row["without_parts_chars"] = size(adapter, ag["instructions"], skill_text)["chars"]
+            adapter.parts = agentfs.parts(ag["id"], cfg)
+            row["roster_lines"] = len(adapter.parts["roster"])
             row.update(size(adapter, ag["instructions"], skill_text))
         per_agent[ag["label"]] = row
 
@@ -143,14 +148,16 @@ def main(argv=None) -> int:
     print(f"\n{'backend (main agent instructions)':34} {'chars':>6} {'~tokens':>8}")
     for name, v in per_backend.items():
         print(f"{name:34} {v['chars']:>6} {v['tokens_est']:>8}")
-    print(f"\n{'agent':14} {'program':8} {'instr':>6} {'chars':>6} {'~tokens':>8}")
+    print(f"\n{'agent':14} {'program':8} {'instr':>6} {'chars':>6} {'~tokens':>8} "
+          f"{'no parts':>9} {'roster':>7}")
     for name, v in per_agent.items():
         if "unavailable" in v:
             print(f"{name:14} {v['program']:8} {v['instructions_chars']:>6} "
                   f"  {v['unavailable']}")
             continue
         print(f"{name:14} {v['program']:8} {v['instructions_chars']:>6} "
-              f"{v['chars']:>6} {v['tokens_est']:>8}")
+              f"{v['chars']:>6} {v['tokens_est']:>8} {v['without_parts_chars']:>9} "
+              f"{v['roster_lines']:>7}")
     for skill, v in out["claude_plugin"].items():
         if "unreadable" in v:
             print(f"\nclaude plugin skill {skill}: unreadable ({v['unreadable']})")

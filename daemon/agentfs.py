@@ -363,14 +363,15 @@ def summary() -> dict:
     return snapshot()[0]
 
 
-def snapshot() -> tuple[dict, dict[str, str]]:
-    """summary(), and each agent folder's instructions as its agent is to be
-    told them, from one read of every folder. The daemon takes both when a
-    stamp moves: the sizes to publish, the text to hand its agents.
+def snapshot() -> tuple[dict, dict[str, dict[str, str]]]:
+    """summary(), and every folder's text as its agents are to be told it,
+    from one read of every folder. The daemon takes both when a stamp moves:
+    the sizes to publish, the text to build its agents' prompts from.
 
-    The instructions map holds only folders whose `instructions.md` exists
-    (a broken one included, as its last good text or empty), so a missing
-    file is a missing key and instructions_for falls back to the setting."""
+    The texts are {target: {file: text}} and hold only files that exist (a
+    broken one included, as its last good text or empty), so a missing file
+    is a missing key: instructions_for falls back to the old setting, and a
+    prompt part with no file is simply empty."""
     out, said = {}, {}
     for t in targets():
         try:
@@ -385,9 +386,7 @@ def snapshot() -> tuple[dict, dict[str, str]]:
             "problems": r["problems"],
             "changed_outside": r["changed_outside"],
         }
-        own = r["files"].get("instructions.md")
-        if t != COMMUNAL and own is not None and own["exists"]:
-            said[t] = own["text"]
+        said[t] = {n: f["text"] for n, f in r["files"].items() if f["exists"]}
     return out, said
 
 
@@ -801,6 +800,106 @@ def trash_list() -> list[dict]:
     return sorted(out, key=lambda t: t["at"], reverse=True)
 
 
+# --- prompt parts (Phase 11) --------------------------------------------------
+
+#: The roster: at most this many other agents, each line at most this long
+#: (a name of 40, a wake phrase of 32, a role of 300, and the words around
+#: them). Merged plan, section 3.6.
+ROSTER_MAX = 8
+ROSTER_LINE = 380
+
+
+def parts_from(texts: dict, me: str, name: str, live: list[dict]) -> dict:
+    """The folder pieces of one agent's prompt (merged plan, section 3.6),
+    each already within its budget, from folder texts as snapshot() gives
+    them. Pure: the daemon calls it with what it last read, the bench and
+    the CLI with what they read now, so all three build the same thing.
+
+    `me` is the agent's folder id and `name` its display name. `live` is
+    every reachable agent as {"id": folder id, "label", "phrase"}: the
+    roster lists each of them but `me`, with its role line. Instructions and
+    the Omarchy commands are not here; they reach the adapter as before.
+    Keys with nothing in them are empty, so the preamble leaves no header."""
+    comm = texts.get(COMMUNAL, {}) if isinstance(texts, dict) else {}
+    own = texts.get(me, {}) if isinstance(texts, dict) else {}
+    roster = []
+    for a in live:
+        if a.get("id") == me:
+            continue
+        # One line each: a role written over several lines is joined.
+        role = " ".join(texts.get(a.get("id"), {}).get("role.md", "").split())
+        line = f'{a.get("label") or a.get("phrase")} (wake phrase "{a.get("phrase")}")'
+        if role:
+            line += f": {role}"
+        roster.append(line[:ROSTER_LINE].rstrip())
+        if len(roster) == ROSTER_MAX:
+            break
+    return {"rules": comm.get("rules.md", ""),
+            "defaults": comm.get("defaults.md", ""),
+            "personality": own.get("personality.md", ""),
+            "name": name, "roster": roster}
+
+
+def _configured(cfg, live_ids=None) -> list[dict]:
+    """Every agent the settings have switched on, as parts_from's `live`,
+    main first; with `live_ids`, only those (folder ids). For the bench and
+    the CLI, which have no running crew to ask; the daemon passes its own."""
+    phrase = cfg.get_str("phrase").lower()
+    every = [{"id": MAIN, "label": cfg.main_label(phrase), "phrase": phrase}]
+    every += [{"id": a["id"], "label": a["label"], "phrase": a["name"]}
+              for a in cfg.agents()]
+    if live_ids is not None:
+        every = [a for a in every if a["id"] in set(live_ids)]
+    return every
+
+
+def roster(cfg, live_ids=None) -> list[dict]:
+    """Every agent with its role line, as the roster tells the others."""
+    texts = snapshot()[1]
+    return [{**a, "role": " ".join(texts.get(a["id"], {}).get("role.md", "").split())}
+            for a in _configured(cfg, live_ids)]
+
+
+def parts(agent_id: str, cfg, live_ids=None) -> dict:
+    """parts_from() for the agent known inside the daemon by `agent_id`
+    ("" or "main" for the main agent), read from the folders now."""
+    me = folder_id(agent_id)
+    live = _configured(cfg, live_ids)
+    name = next((a["label"] for a in live if a["id"] == me), me)
+    if me != MAIN and not any(a["id"] == me for a in live):
+        spec = cfg.agent_by_id(me)
+        name = spec["label"] if spec else me
+    return parts_from(snapshot()[1], me, name, live)
+
+
+def preview(agent_id: str, cfg, live_ids=None) -> list[dict]:
+    """What the agent is told, piece by piece: label, where it comes from,
+    and the text. For the Agent details page (Phase 12) and `agents preview`.
+    The spoken style and the Omarchy commands are named, not repeated."""
+    me = folder_id(agent_id)
+    p = parts(agent_id, cfg, live_ids)
+    legacy = (cfg["agentInstructions"] if me == MAIN
+              else (cfg.agent_by_id(me) or {}).get("instructions", ""))
+    out = [{"label": "Spoken style", "source": "built in", "text": ""}]
+    if p["rules"]:
+        out.append({"label": "Rules for every agent", "source": "communal/rules.md",
+                    "text": p["rules"]})
+    if p["defaults"]:
+        out.append({"label": "Defaults", "source": "communal/defaults.md",
+                    "text": p["defaults"]})
+    if p["personality"]:
+        out.append({"label": f"About you, {p['name']}",
+                    "source": f"agents/{me}/personality.md", "text": p["personality"]})
+    own = instructions_for(agent_id if agent_id != MAIN else "", legacy)
+    if own:
+        out.append({"label": "Standing instructions",
+                    "source": f"agents/{me}/instructions.md", "text": own})
+    if p["roster"]:
+        out.append({"label": "Other agents here", "source": "each agent's role.md",
+                    "text": "\n".join(p["roster"])})
+    return out
+
+
 # --- migration (Phase 10) ----------------------------------------------------
 
 #: Bumped when a later release has more to move. Recorded in .state.json
@@ -1012,6 +1111,9 @@ def main(argv=None) -> int:
     p.add_argument("target")
     p.add_argument("file")
     p.add_argument("--base", help="only if the file still has this stamp")
+    p = sub.add_parser("preview", help="what an agent is told, piece by piece")
+    p.add_argument("id")
+    p.add_argument("--json", action="store_true")
     sub.add_parser("ensure-communal")
     p = sub.add_parser("migrate", help="make the folders, copy the old instructions in")
     p.add_argument("--dry-run", action="store_true", help="say what it would do; change nothing")
@@ -1076,6 +1178,12 @@ def main(argv=None) -> int:
             ack(a.target, a.file, base=a.base)
         elif a.cmd == "ensure-communal":
             print("\n".join(ensure_communal()))
+        elif a.cmd == "preview":
+            from runtime import Config
+            v = preview(a.id, Config())
+            _print(v, a.json, "\n\n".join(
+                f"== {x['label']} ({x['source']})" + (f"\n{x['text']}" if x["text"] else "")
+                for x in v))
         elif a.cmd == "migrate":
             from runtime import Config
             cfg = Config()

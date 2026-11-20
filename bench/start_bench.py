@@ -12,6 +12,7 @@ tool:
     python bench/start_bench.py               # 5 of each
     python bench/start_bench.py --runs 3 --only claude
     python bench/start_bench.py --agent main --runs 20   # as an agent here
+    python bench/start_bench.py --agent sora --runs 20 --variants none,folders,full
 
 `--agent` builds the adapter as the daemon builds that agent (`main` or an
 extra agent's id): its program, model, effort and standing instructions, so
@@ -89,10 +90,43 @@ def extras(ad, cfg):
         ad.skill_text = omarchy_skill.instructions() if skill_on else ""
 
 
-def build(spec, cfg, cwd):
+#: The preamble variants --variants can interleave (Phase 11 gate):
+#: "none" is the Phase 10 preamble (no folder pieces), "folders" is what
+#: the daemon's reconcile_parts assigns from the agent folders now, and
+#: "full" fills every budget with synthetic text -- rules, defaults,
+#: personality and instructions to their limits, and eight roster lines of
+#: 380 characters -- the most the folders can ever add.
+VARIANTS = ("none", "folders", "full")
+
+
+def _filler(n: int, word: str) -> str:
+    """Exactly `n` characters of `word` repeated, ending in a full stop."""
+    return (f"{word} " * (n // (len(word) + 1) + 1))[:n - 1] + "."
+
+
+def full_parts(name: str) -> dict:
+    return {"rules": _filler(1500, "rule"), "defaults": _filler(1500, "default"),
+            "personality": _filler(1500, "calm"), "name": name,
+            "roster": [_filler(380, f"agent{i}") for i in range(agentfs.ROSTER_MAX)]}
+
+
+def assign_parts(ad, spec, cfg, variant):
+    """Give the adapter the folder pieces as the daemon would, or the
+    synthetic full set, or none."""
+    if variant == "folders":
+        ad.parts = agentfs.parts(spec["named"] or "main", cfg)
+    elif variant == "full":
+        ad.parts = full_parts(spec.get("label") or spec["named"] or "main")
+        ad.instructions = _filler(runtime.INSTRUCTIONS_MAX, "brief")
+    else:
+        ad.parts = None
+
+
+def build(spec, cfg, cwd, variant="folders"):
     """The adapter as the daemon builds this agent (wake_listen.py
     _build_persona / reconcile_agent): its own level, so an Ask agent keeps
-    its hook and Codex keeps --guard; its id for the hook; its instructions."""
+    its hook and Codex keeps --guard; its id for the hook; its instructions;
+    and, since Phase 11, its folder pieces (`variant`)."""
     level = spec["level"]
     cls = ClaudeCode if spec["program"] == "claude" else Codex
     kw = {"model": spec["model"], "effort": spec["effort"], "cwd": cwd,
@@ -102,11 +136,12 @@ def build(spec, cfg, cwd):
         ad.level = level
     ad.instructions = spec["instructions"]
     extras(ad, cfg)
+    assign_parts(ad, spec, cfg, variant)
     return ad
 
 
-def claude_turn(spec, cfg, cwd, warm):
-    ad = build(spec, cfg, cwd)
+def claude_turn(spec, cfg, cwd, warm, variant="folders"):
+    ad = build(spec, cfg, cwd, variant)
     try:
         if warm:
             ad.prepare()
@@ -120,8 +155,8 @@ def claude_turn(spec, cfg, cwd, warm):
         ad.cancel()
 
 
-def codex_turn(spec, cfg, cwd, session=None):
-    ad = build(spec, cfg, cwd)
+def codex_turn(spec, cfg, cwd, session=None, variant="folders"):
+    ad = build(spec, cfg, cwd, variant)
     try:
         return first_text(ad, session)
     finally:
@@ -151,13 +186,14 @@ def agent_spec(cfg, agent):
         return {"program": program, "model": cfg.model_for(program),
                 "effort": cfg.effort_for(program),
                 "level": cfg.level_for(program), "named": "",
+                "label": cfg.main_label(cfg.get_str("phrase").lower()),
                 "instructions": agentfs.instructions_for("", cfg["agentInstructions"])}
     entry = next((e for e in cfg.agents() if e["id"] == agent), None)
     if entry is None:
         raise SystemExit(f"no enabled agent with id {agent!r}")
     return {"program": entry["agent"], "model": entry["model"] or None,
             "effort": entry["effort"] or None, "level": entry["level"],
-            "named": entry["id"],
+            "named": entry["id"], "label": entry["label"],
             "instructions": agentfs.instructions_for(entry["id"], entry["instructions"])}
 
 
@@ -171,7 +207,18 @@ def main(argv=None) -> int:
     ap.add_argument("--level", default="ask", choices=("ask", "edits", "trusted"),
                     help="without --agent: the level to run at (default ask)")
     ap.add_argument("--agent", help="main, or an extra agent's id")
+    ap.add_argument("--variants", default="folders",
+                    help="comma-separated preamble variants, interleaved run "
+                         "by run so drift cancels: " + ", ".join(VARIANTS))
+    ap.add_argument("--kinds", default="cold,warm",
+                    help="Claude only: cold, warm or both (default both)")
     a = ap.parse_args(argv)
+    variants = [v.strip() for v in a.variants.split(",") if v.strip()]
+    if not variants or any(v not in VARIANTS for v in variants):
+        ap.error(f"--variants takes {', '.join(VARIANTS)}")
+    kinds = [k.strip() for k in a.kinds.split(",") if k.strip()]
+    if not kinds or any(k not in ("cold", "warm") for k in kinds):
+        ap.error("--kinds takes cold, warm")
     cfg = runtime.Config()
     # SIGTERM runs the finally blocks too, so no CLI is left behind.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
@@ -192,31 +239,39 @@ def main(argv=None) -> int:
     with tempfile.TemporaryDirectory(prefix="av-start-") as cwd:
         if "claude" in specs:
             spec = specs["claude"]
-            for kind in ("cold", "warm"):
-                xs, fallback = [], 0
+            for kind in kinds:
+                xs = {v: [] for v in variants}
+                fallback = {v: 0 for v in variants}
                 for _ in range(a.runs):
-                    secs, how = claude_turn(spec, cfg, cwd, kind == "warm")
-                    if kind == "warm" and how != "warm":
-                        fallback += 1  # reported, never pooled with warm
-                        continue
-                    xs.append(secs)
-                row = stats(xs)
-                row["attempts"] += fallback  # every turn sent, fallbacks too
-                out[f"claude {spec['model']} {spec['level']} {kind}"] = {
-                    **row, "fell_back_to_cold": fallback}
+                    for v in variants:      # interleaved: drift hits each alike
+                        secs, how = claude_turn(spec, cfg, cwd, kind == "warm", v)
+                        if kind == "warm" and how != "warm":
+                            fallback[v] += 1  # reported, never pooled with warm
+                            continue
+                        xs[v].append(secs)
+                for v in variants:
+                    row = stats(xs[v])
+                    row["attempts"] += fallback[v]  # every turn sent, fallbacks too
+                    tag = "" if variants == ["folders"] else f" [{v}]"
+                    out[f"claude {spec['model']} {spec['level']} {kind}{tag}"] = {
+                        **row, "fell_back_to_cold": fallback[v]}
         if "codex" in specs:
             spec = specs["codex"]
-            fresh, resumed = [], []
+            fresh = {v: [] for v in variants}
+            resumed = {v: [] for v in variants}
             for _ in range(a.runs):
-                secs, sid = codex_turn(spec, cfg, cwd)
-                fresh.append(secs)
-                if sid:
-                    r, _ = codex_turn(spec, cfg, cwd, sid)
-                    resumed.append(r)
+                for v in variants:
+                    secs, sid = codex_turn(spec, cfg, cwd, variant=v)
+                    fresh[v].append(secs)
+                    if sid:
+                        r, _ = codex_turn(spec, cfg, cwd, sid, variant=v)
+                        resumed[v].append(r)
             label = (f"codex {spec['model'] or 'default'} {spec['effort']} "
                      f"{spec['level']}")
-            out[f"{label} fresh"] = stats(fresh)
-            out[f"{label} resume"] = stats(resumed)
+            for v in variants:
+                tag = "" if variants == ["folders"] else f" [{v}]"
+                out[f"{label} fresh{tag}"] = stats(fresh[v])
+                out[f"{label} resume{tag}"] = stats(resumed[v])
     if a.agent:
         out = {f"{a.agent}: {k}": v for k, v in out.items()}
     print(json.dumps(out, indent=2))

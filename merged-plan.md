@@ -722,6 +722,13 @@ the roster excludes self, disabled and unreachable agents; the argv check
 still finds no user text; the warm-restart spec; byte-identity with the old
 preamble for an empty folder.
 
+**Done (2026-11-19)**, on branch `phase-11`; see `phase11notes.md` and
+FINDINGS §35. The gate holds on Sora with the real folders and with every
+budget full; the roster changed all five answers and stays. Instructions
+and the Omarchy commands stay on their own adapter attributes; `parts`
+holds rules, defaults, personality, name and roster. Hazel's S run and the
+Codex review are still owed (Codex usage limit).
+
 ---
 
 ## Phase 12: The Agent details and Communal pages

@@ -2120,12 +2120,66 @@ class Daemon:
         From what reconcile_agent_files last read, so an idle poll reads no
         text; it runs first in refresh(), so a hand edit reaches the agent on
         the same poll. Before the first read, straight from the file."""
-        said = getattr(self, "_instructions", None)
-        if said is None:
+        texts = getattr(self, "_folder_texts", None)
+        if texts is None:
             import agentfs
             return agentfs.instructions_for(persona_id, legacy)
-        got = said.get(persona_id or "main")
+        got = texts.get(persona_id or "main", {}).get("instructions.md")
+        if persona_id == "communal":
+            got = None              # that name is the shared folder's
         return got if got is not None else instructions_text(legacy)
+
+    def reconcile_parts(self) -> None:
+        """Hand every idle agent the folder pieces of its prompt (merged plan,
+        Phase 11): the communal rules and defaults, its personality, and the
+        roster of the other agents it could pass work to.
+
+        Built from what reconcile_agent_files last read, so an idle poll reads
+        no text, and only between turns: a busy agent keeps the prompt its
+        turn started with and is caught up on a later poll. A changed
+        preamble lets the idle process go and keeps the conversation, as a
+        changed instruction does. Logged as sizes per piece, never text.
+
+        The roster is who is reachable now -- the main agent, and each extra
+        agent that was built and has a program -- so switching Sora on
+        reaches Theo on his next turn, and an agent nobody can wake is never
+        offered."""
+        texts = getattr(self, "_folder_texts", None)
+        if texts is None:
+            return                  # nothing read yet: the old preamble
+        import agentfs
+        main = self._main
+        live = []
+        if main.agent is not None:
+            live.append({"id": "main", "label": main.label or main.name,
+                         "phrase": main.name})
+        for p in self.crew.values():
+            if p.agent is not None and p.id:
+                live.append({"id": p.id, "label": p.label, "phrase": p.name})
+        for p in [main, *self.crew.values()]:
+            agent = p.agent
+            if agent is None or p.busy or not hasattr(agent, "preamble"):
+                continue
+            fid = "main" if p is main else p.id
+            want = agentfs.parts_from(texts, fid, p.label or p.name, live)
+            if getattr(agent, "parts", None) == want:
+                continue
+            try:
+                before = agent.preamble()
+                agent.parts = want
+                after = agent.preamble()
+            except Exception as e:      # a prompt is never worth the poll
+                print(f"  {YEL}prompt for “{p.label}”: not built "
+                      f"({type(e).__name__}){OFF}", flush=True)
+                continue
+            if after != before:
+                agent.cancel()          # read when its process starts
+            sizes = " · ".join(f"{k} {len(want[k])}"
+                               for k in ("rules", "defaults", "personality"))
+            print(f"  {DIM}prompt for “{p.label or p.name or 'main'}”: {sizes} · "
+                  f"instructions {len((agent.instructions or '').strip())} · "
+                  f"roster {len(want['roster'])} = {len(after)} chars{OFF}",
+                  flush=True)
 
     def apply_instructions(self, want: str) -> None:
         """Change the standing instructions, keeping the conversation.
@@ -2483,6 +2537,10 @@ class Daemon:
         self.reconcile_agent()
         self.reconcile_crew()
         self.reconcile_extras()
+        # After the crew, so the roster in each agent's prompt is the crew
+        # just reconciled, and after the extras, so the size it logs is the
+        # whole preamble, Omarchy commands included (Phase 11).
+        self.reconcile_parts()
         # Outside the guard for the same reason: a voice arrives on disk when
         # the installer fetches it, and a file appearing changes no setting.
         # Behind the guard, a substitution outlived its own download until
@@ -2506,6 +2564,7 @@ class Daemon:
         self.reconcile_voice()
         # The names the wake engine can hear may have changed with it.
         self.reconcile_crew()
+        self.reconcile_parts()
         print(f"  {CYA}knobs updated{OFF}")
 
     def reconcile_agent_files(self) -> None:
@@ -2518,17 +2577,17 @@ class Daemon:
         structural line of sizes -- never the text. It keeps each agent's
         instructions for instructions_for (Phase 10); Phase 11 hands the
         rest of what it read to the agents. A failed read keeps the
-        instructions it had.
+        instructions it had, and the prompt parts it had (Phase 11).
         """
         try:
             import agentfs
             now = agentfs.stamp()
             if now == getattr(self, "_agentfs_stamp", None):
                 return
-            summary, said = agentfs.snapshot()
+            summary, texts = agentfs.snapshot()
             # Before the comparison below: an edit that keeps every size
             # still changes what the agent is told.
-            self._instructions = said
+            self._folder_texts = texts
             # Only once it was read: a failed read is tried again next poll.
             self._agentfs_stamp = now
         except Exception as e:  # the idle poll must never stop on this
