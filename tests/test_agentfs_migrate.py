@@ -530,7 +530,7 @@ def test_the_page_edits_the_folder_files_through_the_cli():
     assert '"--base", fe.stamp' in box
     # The text goes over stdin, as JSON, never into the command.
     assert "JSON.stringify(t)" in box and "writer.pending" in box
-    assert "target: page.target" in DETAILS
+    assert "target: page.folderTarget" in DETAILS
     # The Agents page edits no file any more: its cards link to Agent details.
     assert "FileEditor {" not in PAGE and "InstructionsBox {" not in PAGE
     assert 'page.s.goTo("agentdetails", "main")' in PAGE

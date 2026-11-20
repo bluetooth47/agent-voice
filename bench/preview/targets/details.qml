@@ -1,7 +1,7 @@
 // The Agent details and Communal pages (merged plan, Phase 12), driven end
 // to end through the real `agentvoice agents` command:
 //
-//   preview.sh --live-config --wait 60 --out /tmp/d details
+//   preview.sh --live-config --wait 100 --out /tmp/d details
 //   grep PREVIEW /tmp/d.log; cat /tmp/d.writes
 //
 // Saves each of an agent's three files and both communal files, and checks
@@ -137,11 +137,17 @@ ShellRoot {
           e = overlay.editor("instructions.md")
           overlay.check(e && e.saved === "Synthetic instruction, saved on leaving the box.", "leaving the box saved the instructions (" + (e ? e.status : "") + ")")
           overlay.check(overlay.told("saved on leaving the box") === "From " + overlay.mainLabel + "'s instructions", "the preview shows them")
-          // Someone else saves the personality behind the editor's back.
+          // Typing in the personality while someone else saves it: an idle
+          // editor would just reload, so the edit must be under way.
+          var parea = overlay.find(overlay.editor("personality.md"), function(i) { return i.placeholderText !== undefined && i.textFormat !== undefined })
+          parea.forceActiveFocus()
+          parea.text = "Mine, typed before the other save landed."
           overlay.sh('printf %s "\\"Written elsewhere.\\"" | agentvoice agents write main personality.md --line')
           break
         case 5:
-          overlay.editor("personality.md").save("Mine, typed before the other save landed.")
+          overlay.folders.refresh()
+          // Leaving the box saves it, on the stamp read before the other save.
+          Qt.callLater(function() { overlay.pageScroll.forceActiveFocus() })
           break
         case 6:
           e = overlay.editor("personality.md")
@@ -278,6 +284,37 @@ ShellRoot {
           overlay.check(overlay.folders.done.indexOf("Put the folder stray-preview back") === 0 &&
                         String(overlay.voiceAgents.length) === overlay.made,
                         "restoring it brings the folder back and adds no agent (" + overlay.folders.done + ")")
+          overlay.goTo("agentdetails", "main")
+          break
+        case 34:
+          // A second save while the first is still writing is saved next.
+          e = overlay.editor("role.md")
+          e.save("Queued, first.")
+          e.save("Queued, second.")
+          break
+        case 35:
+          e = overlay.editor("role.md")
+          overlay.check(e && e.saved === "Queued, second." && !e.holding,
+                        "a save made during another is saved after it (" + (e ? e.saved : "") + ")")
+          // Typing for one agent, then picking another before leaving the box.
+          e = overlay.editor("personality.md")
+          var area2 = overlay.find(e, function(i) { return i.placeholderText !== undefined && i.textFormat !== undefined })
+          area2.forceActiveFocus()
+          area2.text = "Typed for the main agent, then the agent changed."
+          overlay.goTo("agentdetails", overlay.agentId(overlay.voiceAgents[overlay.voiceAgents.length - 1] || {}))
+          break
+        case 36:
+          e = overlay.editor("personality.md")
+          var area3 = overlay.find(e, function(i) { return i.placeholderText !== undefined && i.textFormat !== undefined })
+          overlay.check(e && e.target !== "main" && area3.text.indexOf("Typed for the main agent") < 0,
+                        "the other agent's editor does not show the main agent's typing")
+          overlay.pageScroll.forceActiveFocus()
+          overlay.goTo("agentdetails", "main")
+          break
+        case 37:
+          e = overlay.editor("personality.md")
+          overlay.check(e && e.saved === "Typed for the main agent, then the agent changed." && overlay.folders.note === "",
+                        "and that typing was saved under the main agent (" + (e ? e.saved : "") + overlay.folders.note + ")")
           console.warn("PREVIEW DONE " + overlay.passed + " passed, " + overlay.failed + " failed")
           break
         }

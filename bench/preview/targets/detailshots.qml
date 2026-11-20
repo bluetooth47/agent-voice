@@ -48,7 +48,6 @@ ShellRoot {
       onRunningChanged: if (!running) {
         overlay.folders.refresh()
         overlay.open(Quickshell.env("PREVIEW_ARG") || "{}")
-        if (overlay.arg.tab) overlay.detailsTab = String(overlay.arg.tab)
         if (overlay.arg.failSave) failer.start()
         // "width": the card drawn that wide, to see the narrow layout.
         if (overlay.arg.width) narrow.start()

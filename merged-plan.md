@@ -791,6 +791,13 @@ instructions summary), `bench/preview/`.
 and the user has edited Theo's personality from the page and heard the
 difference.
 
+**Built (2026-11-19)**, record `phase12notes.md`: both pages, one editor per
+file, every control driven in preview (`details` target 39/39), qmllint
+clean, Codex's review fixed. Notes and Communal's extra tabs wait for the
+phases that build them. **Still open:** the keyboard walk in the real shell
+and the spoken personality check, which are the user's; a personality edit
+showed in a new conversation but not in one already under way.
+
 ---
 
 ## Phase 13: Tools and skills

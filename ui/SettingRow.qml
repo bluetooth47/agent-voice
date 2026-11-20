@@ -78,6 +78,9 @@ Item {
             id: title
             width: Math.min(implicitWidth, parent.width - extras.width - parent.spacing)
             text: row.label
+            // A label or hint may hold a name someone typed (Phase 12
+            // review: a display name in markup rendered as markup).
+            textFormat: Text.PlainText
             color: row.foreground
             font.family: row.fontFamily
             font.pixelSize: Style.font.body
@@ -128,6 +131,7 @@ Item {
           width: parent.width
           visible: text !== ""
           text: row.applies ? row.hint : row.disabledReason
+          textFormat: Text.PlainText
           wrapMode: Text.WordWrap
           color: row.dim
           font.family: row.fontFamily

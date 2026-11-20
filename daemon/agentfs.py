@@ -267,7 +267,10 @@ def _stamp_from(data: bytes, path: Path | None = None, size: int | None = None) 
 def read_file(target: str, file: str) -> dict:
     """One file as an agent would be told it. Never raises for a bad file:
     the problem is in `problem`, and `text` is what to use."""
-    out = {"name": file, "limit": 0, "text": "", "chars": 0, "exists": False,
+    # `full` is the file's own text, uncut by the budget: what an editor
+    # shows, so that saving it never drops the end of a file it did not
+    # display (Phase 12 review). `text` is what the agent is told.
+    out = {"name": file, "limit": 0, "text": "", "full": "", "chars": 0, "exists": False,
            "problem": "", "changed_outside": False, "stamp": "missing"}
     out["limit"] = _limit(target, file)
     key = _key(target, file)
@@ -281,7 +284,7 @@ def read_file(target: str, file: str) -> dict:
         raw = None if got is None else _decode(*got)
     except AgentFsError as e:
         good = _LAST_GOOD.get(key)
-        out.update(exists=True, text=good or "", chars=len(good or ""),
+        out.update(exists=True, text=good or "", full=good or "", chars=len(good or ""),
                    changed_outside=True,
                    problem=f"{file} could not be read: {e}; "
                            + ("using the last good copy" if good is not None
@@ -293,6 +296,7 @@ def read_file(target: str, file: str) -> dict:
         out["changed_outside"] = bool(newest)   # deleted by hand
         return out
     text = clean(raw)
+    out["full"] = text
     if len(text) > limit:
         out["problem"] = (f"{file} is longer than {limit} characters; "
                           f"the end is ignored")
@@ -387,8 +391,11 @@ def snapshot() -> tuple[dict, dict[str, dict[str, str]]]:
                       "changed_outside": []}
             continue
         out[t] = {
+            # The stamp too (a hash and a size, never text), so a second hand
+            # edit of the same length still changes what the pages watch.
             "files": {n: {"chars": f["chars"], "limit": f["limit"],
-                          "exists": f["exists"]} for n, f in r["files"].items()},
+                          "exists": f["exists"], "stamp": f["stamp"]}
+                      for n, f in r["files"].items()},
             "problems": r["problems"],
             "changed_outside": r["changed_outside"],
         }
@@ -798,6 +805,15 @@ def restore(name: str) -> dict:
     return entry
 
 
+def is_folder_only(entry: dict) -> bool:
+    """A trash entry with no agent to put back: a folder no agent used,
+    trashed from Agent details, or one trashed with an empty settings entry.
+    Restoring it brings the folder back and adds nothing to the agent list.
+    The one rule the trash list and the page both go by (Phase 12 review)."""
+    return entry.get("orphan") is True or not isinstance(entry.get("name"), str) \
+        or not entry.get("name", "").strip()
+
+
 def trash_list() -> list[dict]:
     out = []
     try:
@@ -809,19 +825,18 @@ def trash_list() -> list[dict]:
         m = _TRASHED.fullmatch(e.name)
         if not m:
             continue
-        label, problem, orphan = "", "", False
+        label, problem, orphan, phrase = "", "", False, ""
         try:
             entry = json.loads(_decode(*_read_bytes(_sidecar(d, e.name))))
             if isinstance(entry, dict):
                 label = str(entry.get("label") or entry.get("name") or "")[:64]
-                # A folder no agent used, trashed from Agent details: it
-                # has no settings to put back (Phase 12).
-                orphan = entry.get("orphan") is True
+                phrase = " ".join(str(entry.get("name") or "").lower().split())[:64]
+                orphan = is_folder_only(entry)
         except (OSError, ValueError, AgentFsError):
             problem = "its settings cannot be read"
         out.append({"name": e.name, "id": m.group(1),
                     "at": int(m.group(2)) / 1e9, "label": label,
-                    "problem": problem, "orphan": orphan})
+                    "problem": problem, "orphan": orphan, "phrase": phrase})
     return sorted(out, key=lambda t: t["at"], reverse=True)
 
 
@@ -830,7 +845,12 @@ def export(target: str, dest: str | None = None) -> str:
     or the communal rules, defaults and skills) into a new folder under
     `dest`, ~/Downloads by default, else home. Saved versions are left
     behind. The copy is private (0700, 0600): it is what an agent is told.
-    Returns the new folder's path."""
+    Returns the new folder's path.
+
+    Whole files, byte for byte, read without following links; a file that
+    cannot be copied fails the export rather than being skipped. The copy is
+    made in a hidden staging folder and renamed into place only once it is
+    complete, so a failed export leaves nothing behind."""
     base = _base(target)        # refuses anything that is not an id
     _no_link(base)
     if not os.path.isdir(base):
@@ -842,22 +862,37 @@ def export(target: str, dest: str | None = None) -> str:
     if not root.is_dir():
         raise AgentFsError(f"{dest} is not a folder")
     out = root / f"agentvoice-{target}-{time.strftime('%Y%m%d-%H%M%S')}"
+    if os.path.lexists(out):
+        raise AgentFsError(f"{out} exists already; try again")
+    import tempfile
+    stage = Path(tempfile.mkdtemp(prefix=".agentvoice-export-", dir=root))   # 0700
     try:
-        os.mkdir(out, 0o700)
-    except FileExistsError:
-        raise AgentFsError(f"{out} exists already; try again") from None
-    fixed = COMMUNAL_FILES if target == COMMUNAL else AGENT_FILES
-    for name in [*fixed, *_skill_files(target)]:
-        path, _ = _resolve(target, name)
-        raw = _raw_text(path)
-        if raw is None:
-            continue
-        where = out / name
-        if "/" in name:
-            os.makedirs(where.parent, 0o700, exist_ok=True)
-        fd = os.open(where, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(raw)
+        fixed = COMMUNAL_FILES if target == COMMUNAL else AGENT_FILES
+        for name in [*fixed, *_skill_files(target)]:
+            path, _ = _resolve(target, name)
+            try:
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            except FileNotFoundError:
+                continue
+            except OSError as e:
+                raise AgentFsError(f"{name} cannot be copied ({e.strerror})") from None
+            with os.fdopen(fd, "rb") as src:
+                if not stat.S_ISREG(os.fstat(src.fileno()).st_mode):
+                    raise AgentFsError(f"{name} is not a plain file")
+                data = src.read()
+            where = stage / name
+            for parent in reversed(where.relative_to(stage).parents[:-1]):
+                d = stage / parent
+                if not d.is_dir():
+                    os.mkdir(d, 0o700)
+                    os.chmod(d, 0o700)
+            wfd = os.open(where, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(wfd, "wb") as f:
+                f.write(data)
+        os.rename(stage, out)
+    except BaseException:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
     return str(out)
 
 
@@ -987,7 +1022,8 @@ def preview(agent_id: str, cfg, live_ids=None) -> list[dict]:
     from adapters.base import SPOKEN_STYLE
     me = folder_id(agent_id)
     p = parts(agent_id, cfg, live_ids)
-    spec = None if me == MAIN else cfg.agent_by_id(me)
+    # all_agents(): a switched off agent's page shows what it would be told.
+    spec = None if me == MAIN else next((a for a in cfg.all_agents() if a["id"] == me), None)
     legacy = (cfg["agentInstructions"] if me == MAIN else (spec or {}).get("instructions", ""))
     endpoint = (cfg.main_endpoint() is not None if me == MAIN
                 else (spec or {}).get("agent") == "endpoint")

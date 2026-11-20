@@ -167,3 +167,149 @@ def test_the_trash_list_says_which_entries_were_folders_with_no_agent():
     agentfs.trash("wren", '{"id": "wren", "name": "wren"}')
     got = {t["id"]: t["orphan"] for t in agentfs.trash_list()}
     assert got == {"stray": True, "wren": False}
+
+
+# --- Codex's review of Phase 12 -------------------------------------------------
+
+BOX = text("ui/FileEditor.qml")
+FOLDERS = text("AgentFolders.qml")
+DETAILS = text("pages/AgentDetailsPage.qml")
+
+
+def test_an_edit_made_during_a_save_is_saved_next_not_dropped():
+    save = BOX[BOX.index("function save("):BOX.index("function keepMine(")]
+    queue = save[:save.index("fe.saveGen++")]
+    assert "if (writer.running) {" in queue and "fe.hasQueued = true" in queue
+    done = BOX[BOX.index("id: writer"):]
+    assert "if (fe.hasQueued) {" in done and "fe.save(next)" in done
+
+
+def test_an_over_long_text_is_refused_whole_never_cut():
+    save = BOX[BOX.index("function save("):BOX.index("function keepMine(")]
+    assert save.index("fe.chars(t) > fe.limit") < save.index("writer.running = true")
+    assert "cutOff: false" in BOX
+    ibox = text("ui/InstructionsBox.qml")
+    commit = ibox[ibox.index("function commit()"):]
+    # Compared before anything is cut, and counted as the daemon counts.
+    assert commit.index("if (t === box.value.trim()) return") < commit.index("box.cutOff")
+    assert "Array.from(String(t)).length" in ibox
+
+
+def test_the_editor_shows_the_whole_file_not_the_cut_prompt_text():
+    assert "fe.saved = String(f.full !== undefined ? f.full : (f.text || \"\"))" in BOX
+
+
+def test_typed_text_is_handed_on_when_the_editor_goes_or_moves():
+    assert "Component.onDestruction: handOff(fe.boundTarget)" in BOX
+    on_target = BOX[BOX.index("onTargetChanged:"):]
+    assert on_target.index("handOff(boundTarget)") < on_target.index("boundTarget = target")
+    assert "box.reset(\"\")" in on_target[:800]
+    keep = FOLDERS[FOLDERS.index("function keep("):]
+    assert '"--base", base]' in keep[:400] and "JSON.stringify(text)" in keep[:400]
+
+
+def test_keep_mine_saves_what_is_in_the_box_now():
+    keep = BOX[BOX.index("function keepMine()"):BOX.index("function showTheirs()")]
+    assert "save(box.text.trim())" in keep
+
+
+def test_a_save_before_the_first_read_waits_for_it():
+    save = BOX[BOX.index("function save("):BOX.index("function keepMine(")]
+    assert "fe.retryAfterRead = true" in save
+    reader = BOX[BOX.index("id: reader"):BOX.index("id: writer")]
+    assert "if (fe.retryAfterRead) {" in reader and "fe.save(t)" in reader
+
+
+def test_the_queue_waits_for_the_agent_list_to_be_saved():
+    done = FOLDERS[FOLDERS.index("id: finished"):FOLDERS.index("function release()")]
+    assert done.index("if (af.awaitingSave)") < done.index("af.busy = false")
+    for branch in ('af.rollback = { verb: "trash"', 'af.rollback = { verb: "restore"'):
+        tail = FOLDERS[FOLDERS.index(branch):]
+        assert tail.index("af.awaitingSave = true") < tail.index("saveAgents(")
+
+
+def test_a_double_remove_trashes_once():
+    remove = FOLDERS[FOLDERS.index("function remove("):FOLDERS.index("function undo(")]
+    assert remove.index('if (pending("trash", entry.id)) return') < remove.index('op(["trash"')
+
+
+def test_a_restore_never_takes_a_wake_phrase_another_agent_has():
+    restore = FOLDERS[FOLDERS.index("function restore("):FOLDERS.index("function trashOrphan(")]
+    guard = 'if (!orphan && phrase !== "") {'
+    assert guard in restore and "now wakes" in restore
+    assert restore.index(guard) < restore.index("now wakes") < restore.index('op(["restore"')
+
+
+def test_a_restored_entry_takes_the_id_its_folder_came_back_under():
+    handled = FOLDERS[FOLDERS.index('what.verb === "restore"'):]
+    assert handled.index("entry.id = String(what.name)") < handled.index("saveAgents(back)")
+
+
+def test_the_picker_and_the_tab_stay_bound():
+    assert "agentPicker.value = Qt.binding(function() { return page.target })" in DETAILS
+    assert "readonly property string tab: s.detailsTab" in DETAILS
+    assert "function pickTab(id) { s.detailsTab = id }" in DETAILS
+
+
+def test_an_agent_with_the_reserved_id_reaches_no_folder():
+    assert 'readonly property string folderTarget: reserved ? "" : target' in DETAILS
+    assert DETAILS.count("target: page.folderTarget") == 3
+
+
+def test_hints_and_labels_are_plain_text():
+    row = text("ui/SettingRow.qml")
+    assert row.count("textFormat: Text.PlainText") >= 3
+
+
+def test_read_file_gives_the_whole_text_beside_what_is_told():
+    agentfs.write("main", "role.md", "x" * 320)
+    got = agentfs.read_file("main", "role.md")
+    assert len(got["text"]) == 300 and len(got["full"]) == 320 and got["problem"]
+
+
+def test_the_published_sizes_carry_each_files_stamp():
+    agentfs.write("main", "role.md", "One.")
+    first = agentfs.summary()["main"]["files"]["role.md"]["stamp"]
+    agentfs.write("main", "role.md", "Two.")       # same length
+    assert agentfs.summary()["main"]["files"]["role.md"]["stamp"] != first
+
+
+@pytest.mark.parametrize("entry,folder_only", [
+    ({"id": "a", "name": "alpha"}, False),
+    ({"id": "a", "orphan": True}, True),
+    ({}, True),
+    ({"id": "a", "name": "  "}, True),
+    ({"id": "a", "name": 3}, True),
+])
+def test_one_rule_says_what_is_a_folder_only_trash_entry(entry, folder_only):
+    assert agentfs.is_folder_only(entry) is folder_only
+
+
+def test_export_copies_whole_files_beyond_the_read_cap(tmp_path):
+    agentfs.create("big")
+    (paths.AGENTS_DIR / "big" / "personality.md").write_bytes(b"a" * (agentfs.READ_CAP + 1))
+    out = Path(agentfs.export("big", str(tmp_path)))
+    assert (out / "personality.md").stat().st_size == agentfs.READ_CAP + 1
+
+
+def test_a_failed_export_leaves_nothing_behind(tmp_path):
+    agentfs.create("bad")
+    target = paths.AGENTS_DIR / "bad" / "instructions.md"
+    target.unlink()
+    target.symlink_to("/etc/hostname")
+    out = tmp_path / "out"
+    out.mkdir()
+    with pytest.raises(agentfs.AgentFsError):
+        agentfs.export("bad", str(out))
+    assert list(out.iterdir()) == []
+
+
+def test_a_switched_off_endpoint_is_previewed_as_an_endpoint(cfg_factory):
+    cfg = cfg_factory(phrase="theo", voiceAgents=[
+        {"id": "ep", "name": "echo", "agent": "endpoint", "enabled": False,
+         "endpointUrl": "http://127.0.0.1:9/v1", "endpointModel": "m",
+         "instructions": "Old words."}])
+    got = agentfs.preview("ep", cfg)
+    labels = [x["label"] for x in got]
+    assert "Omarchy commands and keybindings" not in labels
+    assert any(x["text"] == "Old words." for x in got)

@@ -477,10 +477,12 @@ def test_the_box_never_reloads_under_an_edit_and_never_saves_unread():
 
 
 def test_the_box_ignores_results_meant_for_another_agent():
-    assert BOX.count("forTarget !== fe.target") == 4   # read, write (2), keep/revert
-    assert "reader.forTarget === fe.target" in BOX
+    # A write's answer counts only in the session it began in (a target
+    # change starts a new one), so A -> B -> A cannot take A's old result.
+    assert BOX.count("writer.session !== fe.session || writer.forTarget !== fe.target") == 2
+    assert "reader.forTarget !== fe.target" in BOX and "fixer.forTarget !== fe.target" in BOX
     on_target = BOX[BOX.index("onTargetChanged:"):]
-    assert "saveGen++" in on_target[:300]
+    assert "saveGen++; session++" in on_target[:400]
 
 
 def test_folder_operations_are_one_at_a_time_until_handled():
@@ -491,6 +493,7 @@ def test_folder_operations_are_one_at_a_time_until_handled():
 
 def test_a_list_that_could_not_be_saved_moves_the_folder_back():
     conn = FOLDERS[FOLDERS.index("property var rollback: null"):]
-    assert 'function onSaved(key) { if (key === "voiceAgents") af.rollback = null }' in conn
+    saved = conn[conn.index("function onSaved(key)"):conn.index("function onFailed(")]
+    assert "af.rollback = null" in saved and "af.release()" in saved
     assert 'af.op(["restore", r.name]' in conn
     assert 'af.op(["trash", r.id, "--line"]' in conn

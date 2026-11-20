@@ -38,6 +38,10 @@ Item {
   // being read, and take that result's place (Phase 10 review).
   property bool busy: false
   property var queue: []
+  // An operation whose second half is a save of the agent list holds the
+  // queue until the store says that save landed or failed, so a late
+  // failure can only ever roll back its own move (Phase 12 review).
+  property bool awaitingSave: false
 
   // `agentvoice agents list --json`: every folder present, with its sizes,
   // problems and files changed outside Settings, read here so the pages have
@@ -123,10 +127,27 @@ Item {
     onTriggered: {
       af.handle(proc.what, proc.out, proc.err)
       af.epoch++
-      af.busy = false
       af.refresh()
+      if (af.awaitingSave) { saveTimeout.restart(); return }
+      af.busy = false
       af.next()
     }
+  }
+  function release() {
+    if (!af.awaitingSave) return
+    af.awaitingSave = false
+    saveTimeout.stop()
+    af.busy = false
+    af.next()
+  }
+  // The store gives a write up after a few seconds and says so; this is
+  // only for a store that never answers at all.
+  Timer { id: saveTimeout; interval: 15000; onTriggered: af.release() }
+  function pending(verb, id) {
+    if (af.busy && proc.what.verb === verb && proc.what.id === id) return true
+    for (var i = 0; i < af.queue.length; i++)
+      if (af.queue[i].what.verb === verb && af.queue[i].what.id === id) return true
+    return false
   }
 
   // A new agent's folder, from the template. Its entry is saved by the
@@ -153,6 +174,9 @@ Item {
         return
       }
     }
+    // Twice in a row (a double click) would trash a second, empty entry
+    // over the Undo for the real one.
+    if (pending("trash", entry.id)) return
     // The settings entry goes over stdin as one JSON line.
     op(["trash", entry.id, "--line"], JSON.stringify(entry) + "\n",
        { verb: "trash", id: entry.id, index: index, label: s.agentLabel(a) || "this agent" })
@@ -174,6 +198,22 @@ Item {
       af.note = "There are already " + s.maxAgents + " agents; remove one first."
       return
     }
+    // Its wake phrase taken meanwhile (an agent added under the same name):
+    // putting it back would silently change which agent answers it.
+    var phrase = t !== null ? String(t.phrase || "") : ""
+    if (!orphan && phrase !== "") {
+      var holder = phrase === String(s.activePhrase).toLowerCase() ? s.mainLabel : ""
+      for (var j = 0; holder === "" && j < s.voiceAgents.length; j++) {
+        var a = s.voiceAgents[j] || {}
+        if (String(a.name || "").toLowerCase().split(/\s+/).join(" ").trim() === phrase)
+          holder = s.agentLabel(a) || phrase
+      }
+      if (holder !== "") {
+        af.note = "Not restored: “" + phrase + "” now wakes " + holder +
+                  ". Change one of their wake phrases first."
+        return
+      }
+    }
     op(["restore", name], "", { verb: "restore", name: name,
                                 index: index === undefined ? s.voiceAgents.length : index })
   }
@@ -183,6 +223,15 @@ Item {
     if (hasAgent(id)) return
     op(["trash", id, "--line"], JSON.stringify({ id: id, orphan: true }) + "\n",
        { verb: "orphan", id: id })
+  }
+
+  // Text an editor could no longer save itself (it was closed, or moved to
+  // another agent, mid-edit): saved on the stamp it was read at, so a newer
+  // file is never overwritten; if it cannot be, the note says so.
+  function keep(target, file, text, base) {
+    if (base === "") return
+    op(["write", target, file, "--line", "--base", base], JSON.stringify(text) + "\n",
+       { verb: "keep", id: target, file: file })
   }
 
   function exportFolder(target) {
@@ -197,9 +246,14 @@ Item {
   property var rollback: null
   Connections {
     target: af.s ? af.s.store : null
-    function onSaved(key) { if (key === "voiceAgents") af.rollback = null }
+    function onSaved(key) {
+      if (key !== "voiceAgents") return
+      af.rollback = null
+      af.release()
+    }
     function onFailed(key, message) {
-      if (key !== "voiceAgents" || af.rollback === null) return
+      if (key !== "voiceAgents") return
+      if (af.rollback === null) { af.release(); return }
       var r = af.rollback
       af.rollback = null
       if (r.verb === "trash") {
@@ -213,6 +267,7 @@ Item {
         af.note = "The agent list could not be saved (" + message + "), so " +
                   r.label + " was not put back; it is still in the trash."
       }
+      af.release()
     }
   }
 
@@ -240,6 +295,7 @@ Item {
       af.trashed = { name: out, label: what.label, index: at < 0 ? list.length : at }
       af.note = ""
       af.rollback = { verb: "trash", name: out, label: what.label }
+      af.awaitingSave = true
       saveAgents(list)
     } else if (what.verb === "rolledback") {
       if (err !== "")
@@ -254,7 +310,11 @@ Item {
       }
       if (af.trashed && af.trashed.name === what.name) af.trashed = null
       af.note = ""
-      if (entry.orphan === true || typeof entry.name !== "string") {
+      // The folder came back under the id in its trash name, whatever the
+      // saved entry says, so the entry is put back under that id too.
+      entry.id = String(what.name).replace(/-[0-9]{19}$/, "")
+      // The same rule as agentfs.is_folder_only.
+      if (entry.orphan === true || typeof entry.name !== "string" || entry.name.trim() === "") {
         af.done = "Put the folder " + String(entry.id || what.name) + " back. No agent uses it."
         return
       }
@@ -263,11 +323,17 @@ Item {
       af.rollback = { verb: "restore", id: s.agentId(entry), entry: entry,
                       label: s.agentLabel(entry) || "the agent" }
       s.focusAgent = s.agentId(entry)
+      af.awaitingSave = true
       saveAgents(back)
     } else if (what.verb === "orphan") {
       af.note = /^[a-z0-9][a-z0-9-]{0,47}-[0-9]{19}$/.test(out) ? ""
               : "The folder " + what.id + " was not moved to the trash (" + why + ")."
       if (af.note === "") af.done = "Moved the folder " + what.id + " to the trash."
+    } else if (what.verb === "keep") {
+      if (/^[0-9a-f]{16}-[0-9]+$/.test(out)) return
+      af.note = "An edit to " + what.id + "'s " + what.file + " was left unsaved when its editor closed, " +
+                "and could not be saved then: " +
+                (err.indexOf("conflict:") === 0 ? "the file had changed since it was opened." : why + ".")
     } else if (what.verb === "export") {
       if (out !== "" && err === "") {
         af.note = ""

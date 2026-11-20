@@ -46,7 +46,7 @@ Column {
     wrapMode: Text.WordWrap
     textFormat: Text.PlainText
     text: "Told to " + (page.told === 1 ? "your one agent" : "all " + page.told + " agents that are switched on") +
-          ", at the start of every conversation, before each one's own instructions."
+          ", with every request it is sent, before each one's own instructions."
     color: page.s.dim
     font.family: page.s.fontFamily
     font.pixelSize: Style.font.caption
@@ -67,6 +67,7 @@ Column {
     FileEditor {
       id: rulesEditor
       target: "communal"
+      keeper: page.s.folders
       file: "rules.md"
       limit: 1500
       watch: page.watch
@@ -89,6 +90,7 @@ Column {
     FileEditor {
       id: defaultsEditor
       target: "communal"
+      keeper: page.s.folders
       file: "defaults.md"
       limit: 1500
       watch: page.watch

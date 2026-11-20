@@ -40,6 +40,12 @@ Column {
     return "main"
   }
   readonly property bool isMain: target === "main"
+  // An agent whose id is `communal` (only a hand edit can make one): that
+  // name is the shared folder's, so it has no folder of its own, and every
+  // folder action here would reach the communal folder instead.
+  readonly property bool reserved: target === "communal"
+  // What the editors and folder actions work on: nothing, for that agent.
+  readonly property string folderTarget: reserved ? "" : target
   readonly property int index: {
     if (isMain) return -1
     for (var i = 0; i < s.voiceAgents.length; i++)
@@ -57,8 +63,8 @@ Column {
   readonly property string endpointHost: endpointUrl.replace(/^[a-z]+:\/\//i, "").split("/")[0]
   readonly property string folderPath: s.dataHome + "/agentvoice/agents/" + target
   // The folder as `agents list` saw it; undefined until read, or if absent.
-  readonly property var folder: s.folders.folders[target]
-  readonly property bool folderMissing: s.folders.foldersRead && folder === undefined
+  readonly property var folder: reserved ? undefined : s.folders.folders[target]
+  readonly property bool folderMissing: reserved || (s.folders.foldersRead && folder === undefined)
 
   // Changes when the folder changes on disk: the daemon's sizes while it
   // runs, the overlay's own read otherwise, and every folder operation.
@@ -90,14 +96,16 @@ Column {
     return parts.join(" · ")
   }
 
-  property string tab: s.detailsTab
+  // Bound, never assigned, so a deep link that resets the overlay's tab
+  // resets this page's too (Phase 12 review).
+  readonly property string tab: s.detailsTab
   readonly property var tabs: [
     { id: "prompt", label: "Personality & instructions" },
     { id: "tools", label: "Tools & skills" },
     { id: "chats", label: "Chats" },
     { id: "advanced", label: "Advanced" }
   ]
-  function pickTab(id) { s.detailsTab = id; page.tab = id }
+  function pickTab(id) { s.detailsTab = id }
 
   PageHeader {
     width: parent.width
@@ -109,13 +117,20 @@ Column {
   }
 
   Dropdown {
+    id: agentPicker
     width: parent.width
     showLabel: false
     options: page.choices
     value: page.target
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
-    onChanged: function(v) { page.s.detailsAgent = v }
+    // The Dropdown assigns its own value on a pick, which would cut it loose
+    // from the page: it then kept naming a removed agent while the editors
+    // showed the main one (Phase 12 review). Bound again at once.
+    onChanged: function(v) {
+      page.s.detailsAgent = v
+      agentPicker.value = Qt.binding(function() { return page.target })
+    }
   }
 
   // The knobs, summarised, with the way to change them.
@@ -170,10 +185,22 @@ Column {
     font.pixelSize: Style.font.caption
   }
 
+  Text {
+    width: parent.width
+    visible: page.reserved
+    wrapMode: Text.WordWrap
+    textFormat: Text.PlainText
+    text: "This agent's id is “communal”, which is the shared folder's name, so it has no folder " +
+          "of its own and nothing here can be edited. Give it another id in shell.json."
+    color: page.s.urgent
+    font.family: page.s.fontFamily
+    font.pixelSize: Style.font.caption
+  }
+
   // An agent with no folder: the files below cannot be saved until it has
   // one. The daemon makes any missing folder when it starts, too.
   Row {
-    visible: page.folderMissing
+    visible: page.folderMissing && !page.reserved
     spacing: Style.space(10)
     Text {
       anchors.verticalCenter: parent.verticalCenter
@@ -222,7 +249,8 @@ Column {
       fontFamily: page.s.fontFamily
       FileEditor {
         id: roleEditor
-        target: page.target
+        target: page.folderTarget
+        keeper: page.s.folders
         file: "role.md"
         limit: 300
         minHeight: Style.space(48)
@@ -247,7 +275,8 @@ Column {
       fontFamily: page.s.fontFamily
       FileEditor {
         id: personalityEditor
-        target: page.target
+        target: page.folderTarget
+        keeper: page.s.folders
         file: "personality.md"
         limit: 1500
         watch: page.watch
@@ -271,7 +300,8 @@ Column {
       // only until instructions.md exists (Phase 10).
       FileEditor {
         id: instructionsEditor
-        target: page.target
+        target: page.folderTarget
+        keeper: page.s.folders
         file: "instructions.md"
         limit: 2000
         fallback: page.isMain ? String(page.s.setting("agentInstructions", ""))
@@ -318,7 +348,7 @@ Column {
       Text {
         width: parent.width
         wrapMode: Text.WordWrap
-        text: "In this order, at the start of every conversation. Its own request comes after."
+        text: "In this order, with every request it is sent; the request itself comes after."
         color: page.s.dim
         font.family: page.s.fontFamily
         font.pixelSize: Style.font.caption
@@ -344,10 +374,14 @@ Column {
 
   property var previewParts: []
   property string previewError: ""
+  // Everything the preview is built from: every folder (the other agents'
+  // roles are in the roster), the agent list (names, wake phrases, who is
+  // switched on) and who the daemon can reach.
   readonly property string previewWatch: page.watch + roleEditor.stamp + personalityEditor.stamp +
                                          instructionsEditor.stamp +
-                                         JSON.stringify(s.vAgentFiles["communal"] || {}) +
-                                         JSON.stringify(s.folders.folders["communal"] || {})
+                                         JSON.stringify(s.vAgentFiles) + JSON.stringify(s.folders.folders) +
+                                         JSON.stringify(s.voiceAgents) + JSON.stringify(s.vCrew) +
+                                         s.mainLabel + s.activePhrase
   onPreviewWatchChanged: previewDelay.restart()
   onTargetChanged: { previewParts = []; confirmRemove = false; loadPreview() }
   Component.onCompleted: loadPreview()
@@ -365,6 +399,7 @@ Column {
     return src
   }
   function loadPreview() {
+    if (page.reserved) { previewParts = []; return }
     if (previewer.running) { previewDelay.restart(); return }
     previewer.forTarget = page.target
     previewer.command = ["agentvoice", "agents", "preview", page.target, "--json"]

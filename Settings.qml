@@ -759,14 +759,14 @@ Item {
     return out
   }
 
-  // While the service is off nobody publishes the folders' sizes, so a hand
-  // edit would go unseen on the pages that show them until they were opened
-  // again: read them here instead, every few seconds, only while one is on
-  // screen.
+  // The folders and the trash as the pages show them, read every few
+  // seconds while one of those pages is on screen: with the service off
+  // nobody else publishes them, and the trash list, orphan folders and
+  // folder buttons read this copy even while it runs.
   Timer {
     interval: 3000
     repeat: true
-    running: root.opened && root.mode === "settings" && !root.serviceActive
+    running: root.opened && root.mode === "settings"
              && ["agents", "agentdetails", "communal"].indexOf(root.page) >= 0
     onTriggered: folders.refresh()
   }
@@ -803,18 +803,20 @@ Item {
       pendingProbe.running = true
     } else {
       // A deep link: {"page": "agents", "agent": "sarah"} opens that card.
-      if (mode === "settings") goTo(String(p.page || "overview"), String(p.agent || ""))
+      if (mode === "settings") goTo(String(p.page || "overview"), String(p.agent || ""),
+                                    /^(prompt|tools|chats|advanced)$/.test(String(p.tab || "")) ? String(p.tab) : "")
       showPage(mode)
     }
   }
 
-  function goTo(pageId, agent) {
+  function goTo(pageId, agent, tab) {
     var known = false
     for (var i = 0; i < pages.length; i++) if (pages[i].id === pageId) known = true
     page = known ? pageId : "overview"
-    // {"page": "agentdetails", "agent": "sora"} opens that agent's details.
+    // {"page": "agentdetails", "agent": "sora"} opens that agent's details,
+    // on its first tab unless "tab" names another.
     if (page === "agentdetails") {
-      if (agent) { detailsAgent = agent; detailsTab = "prompt" }
+      if (agent) { detailsAgent = agent; detailsTab = tab || "prompt" }
       focusAgent = ""
     } else {
       focusAgent = agent || ""

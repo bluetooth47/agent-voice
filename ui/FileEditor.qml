@@ -41,8 +41,14 @@ Column {
   property string watch: ""
   property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
+  // Something with keep(target, file, text, base): saves typed text this
+  // editor can no longer save itself, because it is being destroyed (the
+  // page left, the overlay closed) or moved to another agent mid-edit. The
+  // overlay's AgentFolders. Without one, such text is lost.
+  property var keeper: null
 
-  // What the agent is told now, as last read or saved.
+  // The file's own text, as last read or saved: uncut, so saving it never
+  // drops the end of a file over its budget (Phase 12 review).
   property string saved: ""
   property string stamp: ""
   property bool exists: false
@@ -67,6 +73,17 @@ Column {
   // either and finished after would otherwise put the old text and stamp
   // back over the new ones, or one agent's text on another's editor.
   property int saveGen: 0
+  // Bumped only when the target changes: a write's result is accepted only
+  // in the session it was started in, so A → B → A cannot take A's old
+  // result as the answer to the newer edit.
+  property int session: 0
+  // An edit committed while a write was still running, saved next, on the
+  // stamp that write returns.
+  property string queued: ""
+  property bool hasQueued: false
+  // A save asked for before the file was read: saved once it has been.
+  property bool retryAfterRead: false
+  property string boundTarget: ""
   // A reload asked for while the box was being edited, done when the edit
   // ends. Never during one: it would move the stamp on under text read at
   // the old one, and the save on blur would then overwrite a newer file
@@ -83,6 +100,7 @@ Column {
     if (!fe.loaded && reader.running) return "Reading…"
     if (writer.running) return "Saving…"
     if (fixer.running) return "Working…"
+    if (fe.retryAfterRead && reader.running) return "Reading, then saving…"
     if (fe.holding) return "Unsaved"
     if (box.dirty) return "Unsaved · Ctrl+S or click away to save"
     if (fe.justSaved) return "Saved · applies on the next turn"
@@ -96,9 +114,15 @@ Column {
   spacing: Style.space(4)
   width: parent ? parent.width : 300
 
+  // Characters as the daemon counts them (code points, not UTF-16 units).
+  function chars(t) { return Array.from(String(t)).length }
+
   function reload() {
     if (box.editing) { reloadWanted = true; return }
     if (target === "" || file === "" || holding) return
+    read()
+  }
+  function read() {
     // A change noticed during a read may have landed after the read began:
     // read again when it ends, rather than drop it (the folder made just
     // after a new agent's editor first looked, found by the preview).
@@ -109,22 +133,37 @@ Column {
     reader.running = true
   }
   function save(t) {
-    if (target === "" || file === "" || writer.running) return
+    if (target === "" || file === "") return
+    // One write at a time; a newer edit waits for the stamp this one returns.
+    if (writer.running) {
+      fe.queued = t; fe.hasQueued = true
+      fe.unsaved = t; fe.holding = true
+      return
+    }
     fe.saveGen++
     fe.unsaved = t
     fe.holding = true
     fe.justSaved = false
     fe.conflictStamp = ""
+    // Never cut to fit: the text stays in the box and the count says why.
+    if (fe.chars(t) > fe.limit) {
+      fe.note = "Not saved: " + fe.chars(t) + " characters, and at most " + fe.limit +
+                " are told to the agent. Shorten it, then save again."
+      return
+    }
     // With no stamp read there is no base to save against, and a save with
-    // none overwrites whatever is there. Kept in the box instead.
+    // none overwrites whatever is there: read first, then save.
     if (!fe.loaded) {
-      fe.note = "Not saved: the file could not be read first" +
-                (fe.readProblem !== "" ? " (" + fe.readProblem + ")" : "") +
-                ", so saving might overwrite it."
+      fe.note = ""
+      fe.retryAfterRead = true
+      read()
       return
     }
     fe.note = ""
     writer.forTarget = target
+    writer.session = fe.session
+    writer.text = t
+    writer.answered = false
     var cmd = ["agentvoice", "agents", "write", target, fe.file, "--line"]
     // "missing" is a stamp too: it means create, and only if still absent.
     if (fe.stamp !== "") cmd = cmd.concat(["--base", fe.stamp])
@@ -132,24 +171,45 @@ Column {
     writer.pending = JSON.stringify(t) + "\n"
     writer.running = true
   }
+  // What is in the box: the text as typed, which after a refused save may
+  // have been changed again since.
   function keepMine() {
     if (conflictStamp === "") return
     fe.stamp = conflictStamp
-    save(unsaved)
+    save(box.text.trim())
   }
   function showTheirs() {
     fe.holding = false
     fe.unsaved = ""
     fe.conflictStamp = ""
     fe.note = ""
+    fe.hasQueued = false
+    box.reset(fe.shown)
     reload()
   }
+  // Text typed here and not saved: what the keeper is handed when this
+  // editor can no longer save it. null when there is none.
+  function typed() {
+    if (!box) return null
+    var t = box.text.trim()
+    var showing = (fe.holding ? fe.unsaved : fe.shown).trim()
+    if (t !== showing) return t
+    return fe.holding ? fe.unsaved : null
+  }
+  function handOff(forTarget) {
+    var t = typed()
+    if (t === null || !fe.keeper || !fe.loaded || forTarget === "" || writer.running) return
+    fe.keeper.keep(forTarget, fe.file, t, fe.stamp)
+  }
+  Component.onDestruction: handOff(fe.boundTarget)
+
   // The outside-change notice: keep what is there now, or put back the
   // newest saved version. Both only if the file is still what was read.
   function fix(verb) {
     if (fixer.running || fe.stamp === "" || !fe.loaded) return
     fe.note = ""
     fixer.forTarget = target
+    fixer.started = false
     fixer.verb = verb
     fixer.command = ["agentvoice", "agents", verb, target, fe.file, "--base", fe.stamp]
     fixer.running = true
@@ -157,15 +217,21 @@ Column {
 
   // A different agent starts clean, and any read or save still running for
   // the previous one is ignored when it ends.
+  // Typed text for the previous agent is saved under that agent, never
+  // carried over to this one.
   onTargetChanged: {
-    saveGen++
+    handOff(boundTarget)
+    boundTarget = target
+    saveGen++; session++
     holding = false; loaded = false; exists = false; reloadWanted = false
     saved = ""; stamp = ""; unsaved = ""; note = ""; conflictStamp = ""
     readProblem = ""; changedOutside = false; justSaved = false
+    hasQueued = false; queued = ""; retryAfterRead = false
+    box.reset("")
     reload()
   }
   onWatchChanged: reload()
-  Component.onCompleted: reload()
+  Component.onCompleted: { boundTarget = target; reload() }
 
   Process {
     id: reader
@@ -173,30 +239,43 @@ Column {
     property string forTarget: ""
     onRunningChanged: if (!running && fe.readAgain) {
       fe.readAgain = false
-      Qt.callLater(fe.reload)
+      // A save waiting for its base reads past the hold that stops reloads.
+      Qt.callLater(function() { if (fe.retryAfterRead) fe.read(); else fe.reload() })
     }
     stdout: StdioCollector {
       onStreamFinished: {
-        if (reader.gen !== fe.saveGen || fe.holding || reader.forTarget !== fe.target) return
+        if (reader.gen !== fe.saveGen || reader.forTarget !== fe.target) return
+        if (fe.holding && !fe.retryAfterRead) return
         // An edit began while this read ran: read again once it ends.
-        if (box.editing) { fe.reloadWanted = true; return }
+        if (box.editing && !fe.retryAfterRead) { fe.reloadWanted = true; return }
         var d
         try { d = JSON.parse(String(text)) } catch (e) { return }
         var f = ((d || {}).files || {})[fe.file]
         if (!f) return
         fe.exists = f.exists === true && f.stamp !== "missing"
-        fe.saved = String(f.text || "")
+        fe.saved = String(f.full !== undefined ? f.full : (f.text || ""))
         fe.stamp = String(f.stamp || "missing")
         fe.loaded = true
         fe.readProblem = f.problem ? String(f.problem) : ""
         fe.changedOutside = f.changed_outside === true
+        // A save that waited for this read: now it has a base.
+        if (fe.retryAfterRead) {
+          fe.retryAfterRead = false
+          var t = fe.unsaved
+          Qt.callLater(function() { fe.save(t) })
+        }
       }
     }
     stderr: StdioCollector {
       onStreamFinished: {
         var t = String(text).trim()
-        if (t !== "" && reader.forTarget === fe.target)
-          fe.readProblem = t.replace(/^agentvoice agents: /, "")
+        if (t === "" || reader.forTarget !== fe.target) return
+        fe.readProblem = t.replace(/^agentvoice agents: /, "")
+        if (fe.retryAfterRead) {
+          fe.retryAfterRead = false
+          fe.note = "Not saved: the file could not be read first (" + fe.readProblem +
+                    "), so saving might overwrite it."
+        }
       }
     }
   }
@@ -205,6 +284,9 @@ Column {
     id: writer
     property string pending: ""
     property string forTarget: ""
+    property int session: 0
+    property string text: ""
+    property bool answered: false
     stdinEnabled: true
     // One JSON line, so the CLI needs no end of input to know it is done.
     onStarted: { write(writer.pending); writer.pending = "" }
@@ -215,13 +297,23 @@ Column {
     stdout: StdioCollector {
       onStreamFinished: {
         var t = String(text).trim()
-        if (!/^[0-9a-f]{16}-[0-9]+$/.test(t) || writer.forTarget !== fe.target) return
+        if (!/^[0-9a-f]{16}-[0-9]+$/.test(t)) return
+        writer.answered = true
+        if (writer.session !== fe.session || writer.forTarget !== fe.target) return
         fe.stamp = t
-        fe.saved = fe.unsaved.trim()
+        fe.saved = writer.text.trim()
         fe.exists = true
+        fe.note = ""
+        if (fe.hasQueued) {
+          // The edit made meanwhile, on the stamp just returned.
+          var next = fe.queued
+          fe.hasQueued = false
+          fe.queued = ""
+          Qt.callLater(function() { fe.save(next) })
+          return
+        }
         fe.holding = false
         fe.unsaved = ""
-        fe.note = ""
         fe.readProblem = ""
         fe.changedOutside = false
         fe.justSaved = true
@@ -230,7 +322,12 @@ Column {
     stderr: StdioCollector {
       onStreamFinished: {
         var t = String(text).trim()
-        if (t === "" || writer.forTarget !== fe.target) return
+        if (t === "") return
+        writer.answered = true
+        if (writer.session !== fe.session || writer.forTarget !== fe.target) return
+        // An edit queued behind a refused one is the newest text: it is what
+        // "Keep mine" saves.
+        if (fe.hasQueued) { fe.unsaved = fe.queued; fe.hasQueued = false; fe.queued = "" }
         var m = t.match(/current stamp ([0-9a-f]{16}-[0-9]+|missing)/)
         if (t.indexOf("conflict:") === 0 && m) {
           fe.conflictStamp = m[1]
@@ -247,8 +344,10 @@ Column {
   Timer {
     id: silentCheck
     interval: 300
-    onTriggered: if (fe.holding && fe.note === "")
-                   fe.note = "Not saved: the agentvoice command could not be run."
+    onTriggered: if (!writer.answered && !writer.running && writer.session === fe.session) {
+      writer.answered = true
+      fe.note = "Not saved: the agentvoice command could not be run."
+    }
   }
 
   Process {
@@ -256,7 +355,8 @@ Column {
     property string forTarget: ""
     property string verb: ""
     property string err: ""
-    onStarted: fixer.err = ""
+    property bool started: false
+    onStarted: { fixer.err = ""; fixer.started = true }
     stderr: StdioCollector { onStreamFinished: fixer.err = String(text).trim() }
     onRunningChanged: if (!running) fixDone.restart()
   }
@@ -266,7 +366,9 @@ Column {
     onTriggered: {
       if (fixer.forTarget !== fe.target) return
       var t = fixer.err
-      if (t.indexOf("conflict:") === 0)
+      if (!fixer.started)
+        fe.note = "Nothing changed: the agentvoice command could not be run."
+      else if (t.indexOf("conflict:") === 0)
         fe.note = "It changed again since it was shown; look at it once more first."
       else if (t !== "")
         fe.note = (fixer.verb === "revert" ? "Not reverted: " : "Not kept: ") +
@@ -311,6 +413,7 @@ Column {
           text: "Keep"
           bordered: true
           enabled: !fe.busy
+          focusable: true
           foreground: fe.foreground
           fontFamily: fe.fontFamily
           onClicked: fe.fix("ack")
@@ -319,6 +422,7 @@ Column {
           text: "Revert"
           bordered: true
           enabled: !fe.busy
+          focusable: true
           foreground: fe.foreground
           fontFamily: fe.fontFamily
           onClicked: fe.fix("revert")
@@ -332,6 +436,7 @@ Column {
     width: parent.width
     value: fe.holding ? fe.unsaved : fe.shown
     maxLength: fe.limit
+    cutOff: false
     minHeight: fe.minHeight
     editingHint: "Ctrl+S or click away saves"
     placeholder: fe.placeholder
@@ -388,6 +493,7 @@ Column {
     Button {
       text: "Keep mine"
       bordered: true
+      focusable: true
       foreground: fe.foreground
       fontFamily: fe.fontFamily
       onClicked: fe.keepMine()
@@ -395,6 +501,7 @@ Column {
     Button {
       text: "Reload"
       bordered: true
+      focusable: true
       foreground: fe.foreground
       fontFamily: fe.fontFamily
       onClicked: fe.showTheirs()
