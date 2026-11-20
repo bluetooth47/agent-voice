@@ -31,6 +31,9 @@ Rectangle {
   // files a second arrival under the first.
   property string taskId: ""
   property var chat: ({})
+  // The requested chat has been read into the brief: until then Send would
+  // send whatever the box held before.
+  property bool loaded: true
 
   visible: shown
   // Opaque: the theme's menu colour may be translucent, and the page
@@ -54,13 +57,15 @@ Rectangle {
     sheet.sending = false
     sheet.sent = false
     closeLater.stop()
+    ackTimeout.stop()
     sheet.taskId = sheet.hex(16)
     sheet.chat = ({})
     var c = sheet.candidates
     sheet.toId = c.length > 0 ? c[0].value : ""
     sheet.shown = true
-    if (sheet.chatId !== "") chatFile.reload()
-    else briefBox.reset(sheet.sessionBrief())
+    briefBox.reset("")
+    if (sheet.chatId !== "") { sheet.loaded = false; chatFile.reload() }
+    else { briefBox.reset(sheet.sessionBrief()); sheet.loaded = true }
     sheet.forceActiveFocus()
   }
   function close() { sheet.shown = false }
@@ -138,8 +143,15 @@ Rectangle {
       var last = ex.length > 0 ? ex[ex.length - 1] : {}
       briefBox.reset(sheet.briefOf(String(last.transcript || ""), String(last.reply || ""),
                                    String(last.agent_label || sheet.chat.agent_label || "")))
+      sheet.loaded = sheet.chat.id === sheet.chatId
+      if (!sheet.loaded) sheet.note = "That chat could not be read, so it cannot be sent."
     }
-    onLoadFailed: { sheet.chat = ({}); briefBox.reset("") }
+    onLoadFailed: {
+      sheet.chat = ({})
+      briefBox.reset("")
+      sheet.loaded = false
+      sheet.note = "That chat could not be read, so it cannot be sent."
+    }
   }
 
   // --- sending --------------------------------------------------------------------
@@ -177,11 +189,41 @@ Rectangle {
         if (sheet.note === "") sheet.note = "Not sent: agentvoice did not run."
         return
       }
+      // Handed over; what the daemon made of it is read back from its
+      // task list by id below, so a pass it refused is not shown as sent.
       sheet.sent = true
-      sheet.note = "Sent. " + sheet.nameOf(sheet.toId) + " takes the floor when their turn starts; " +
-                   "the reply shows in the conversation."
-      closeLater.restart()
+      sheet.note = "Handed to the service…"
+      ackTimeout.restart()
     }
+  }
+  // The daemon's answer, from the state file: the task filed under this
+  // press's id.
+  readonly property var ack: {
+    var tasks = sheet.s.vTasks || []
+    for (var i = 0; i < tasks.length; i++)
+      if (tasks[i] && tasks[i].id === sheet.taskId) return tasks[i]
+    return null
+  }
+  onAckChanged: {
+    if (!sheet.sent || sheet.ack === null) return
+    ackTimeout.stop()
+    var st = String(sheet.ack.state || "")
+    if (st === "refused" || st === "failed" || st === "cancelled") {
+      sheet.sent = false
+      sheet.taskId = sheet.hex(16)        // a fresh press is a fresh task
+      sheet.note = "Not passed: " + String(sheet.ack.reason || st)
+      return
+    }
+    sheet.note = st === "pending" && Number(sheet.ack.position || 0) > 0
+                 ? "Sent. " + sheet.nameOf(sheet.toId) + " is busy; it goes to them when they've finished."
+                 : "Sent. " + sheet.nameOf(sheet.toId) + " has it; the reply shows in the conversation."
+    closeLater.restart()
+  }
+  Timer {
+    id: ackTimeout
+    interval: 6000
+    onTriggered: if (sheet.sent && sheet.ack === null)
+                   sheet.note = "The service has not picked it up. Is it running?"
   }
   Timer { id: closeLater; interval: 2500; onTriggered: sheet.close() }
   function send() {
@@ -190,9 +232,12 @@ Rectangle {
     sheet.sending = true
     sender.failed = false
     sender.code = -1
-    sender.pending = JSON.stringify(briefBox.text.trim())
+    // Cut to what the daemon takes, so what is sent is what was shown.
+    sender.pending = JSON.stringify(Array.from(briefBox.text.trim()).slice(0, 2000).join(""))
+    // The host this sheet showed goes with it: the daemon refuses the pass
+    // if the chat would go anywhere else.
     sender.command = ["agentvoice", "pass", sheet.toId, "--from", sheet.fromId,
-                      "--entry", "sheet", "--id", sheet.taskId, "--line"]
+                      "--entry", "sheet", "--id", sheet.taskId, "--host", sheet.host, "--line"]
                      .concat(sheet.chatId !== "" ? ["--chat", sheet.chatId] : [])
     sender.running = true
   }
@@ -307,7 +352,7 @@ Rectangle {
         text: sheet.sending ? "Sending…" : "Send"
         bordered: true
         focusable: true
-        enabled: sheet.toId !== "" && !sheet.sending && !sheet.sent && sheet.s.serviceActive
+        enabled: sheet.toId !== "" && sheet.loaded && !sheet.sending && !sheet.sent && sheet.s.serviceActive
         fontFamily: sheet.s.fontFamily
         foreground: sheet.s.foreground
         onClicked: sheet.send()

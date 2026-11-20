@@ -109,13 +109,24 @@ class TestBoard:
         t, _ = b.add(task(not_before=time.time() + 60))
         assert b.due(time.time(), lambda a: False) == []
 
-    def test_cancel_returns_only_what_was_running(self):
+    def test_cancel_returns_every_task_it_cancelled(self):
         b = Board()
         a, _ = b.add(task("1" * 16, to="sora"))
         c, _ = b.add(task("2" * 16, to="hazel"))
         b.move(a.id, "active")
-        stopped = b.cancel(lambda t: True)
-        assert stopped == [a] and c.state == "cancelled"
+        done = b.cancel(lambda t: True)
+        assert done == [a, c] and a.started and not c.started
+        assert b.cancel(lambda t: True) == []
+
+    def test_an_old_id_never_makes_a_second_task(self):
+        b = Board()
+        t, _ = b.add(task("1" * 16))
+        b.move(t.id, "refused", "x")
+        for i in range(collab.KEEP_DONE + 5):
+            u, _ = b.add(task(f"{i + 100:016x}"))
+            b.move(u.id, "refused", "x")
+        assert b.get("1" * 16) is None          # pruned from the display
+        assert b.add(task("1" * 16)) == (None, False)
 
     def test_public_holds_no_text(self):
         b = Board()
@@ -478,6 +489,9 @@ def crew(daemon, tmp_path):
         p.agent = SlowAgent([f"{spec['label']} here."])
         p.speaker = Voice(spec["id"], log)
     d.chats = ChatStore(tmp_path / "chats")
+    # Its own conversation memory: the sandbox's shared one holds other
+    # tests' turns, which would count as something to pass.
+    d.history.path = tmp_path / "history.jsonl"
     d.collab = collab.Runtime(d, root=tmp_path / "crew")
     d.catch_up_one = lambda p: None
     d.log = log
@@ -895,8 +909,313 @@ def test_the_finished_line_leaves_the_readout(crew, monkeypatch):
     assert crew.collab.line() == ""
 
 
-def test_the_line_is_shown_when_it_cannot_be_heard(crew):
-    _theo_chat(crew)
-    crew.enabled = False                        # muted: nothing is said aloud
+def test_a_pass_that_could_not_be_said_is_not_passed(crew):
+    """Review: the disclosure is the condition. Muted, nothing is said
+    aloud, so nothing is passed, and the reason is shown."""
+    cid = _theo_chat(crew)
+    crew.enabled = False
     crew.pass_command(crew._main, "pass this to sora")
-    assert crew._main.last["reply"] == "Passing this chat to Sora."
+    _release(crew)
+    assert crew.crew["sora"].agent.sent == []
+    assert chat_schema.shared_with(crew.chats.load(cid)) == []
+    assert "couldn't say that out loud" in crew._main.last["reply"]
+    assert crew.collab.board.public()[-1]["state"] == "refused"
+
+
+def test_a_lock_cutting_the_line_refuses(crew, monkeypatch):
+    _theo_chat(crew)
+    real = crew._main.speaker.say
+
+    def say(text, watch=None):
+        real(text, watch)
+        crew.locked = True                      # the lock lands mid-line
+    monkeypatch.setattr(crew._main.speaker, "say", say)
+    crew.pass_command(crew._main, "pass this to sora")
+    crew.locked = False
+    _release(crew)
+    assert crew.crew["sora"].agent.sent == []
+
+
+def test_a_stale_stop_does_not_cut_the_line(crew):
+    _theo_chat(crew)
+    crew._main.interrupt.set()                  # left from an earlier "stop"
+    crew.pass_command(crew._main, "pass this to sora")
+    assert crew.collab.board.open(), "refused for a stop that was not now"
+
+
+def test_nothing_new_starts_behind_a_lock(crew):
+    _theo_chat(crew)
+    crew.pass_command(crew._main, "pass this to sora")
+    crew.locked = True
+    _release(crew)
+    assert crew.crew["sora"].agent.sent == []
+    crew.locked = False
+    _release(crew)
+    _idle(crew)
+    assert len(crew.crew["sora"].agent.sent) == 1
+
+
+def test_a_stop_from_the_signal_handler_publishes_nothing_there(crew, monkeypatch):
+    """Review: the handler runs between two bytecodes of the run loop, which
+    may hold the locks publishing takes."""
+    _theo_chat(crew)
+    crew.pass_command(crew._main, "pass this to sora")
+    published = []
+    monkeypatch.setattr(crew.collab, "publish", lambda: published.append(1))
+    crew._on_interrupt()
+    assert published == [] and crew.collab._dirty
+    assert crew.collab.board.public()[-1]["state"] == "cancelled"
+    crew.collab.tick()
+    assert published and not crew.collab._dirty
+
+
+def test_a_stop_between_going_active_and_sending_sends_nothing(crew, monkeypatch):
+    cid = _theo_chat(crew)
+    crew.pass_command(crew._main, "pass this to sora")
+    real = crew.collab._prepare
+
+    def prepare(task, target, source):
+        crew.collab.stop_all()                  # lands while it starts
+        return real(task, target, source)
+    monkeypatch.setattr(crew.collab, "_prepare", prepare)
+    _release(crew)
+    assert crew.crew["sora"].agent.sent == []
+    assert crew.crew["sora"].task is None
+
+
+def test_cancelled_tasks_are_audited_once(crew):
+    import audit
+    before = len(audit.read(1000))
+    _theo_chat(crew)
+    crew.pass_command(crew._main, "pass this to sora")
+    crew._send(crew._main, "stop", {}, {})
+    lines = audit.read(1000)[before:]
+    assert [(l["kind"], l["state"]) for l in lines] == [("task_pass", "cancelled")]
+
+
+def test_a_cancel_after_the_window_was_armed_closes_it(crew):
+    _theo_chat(crew)
+    gate = threading.Event()
+    sora = crew.crew["sora"]
+    sora.agent.wait = gate
+    crew.pass_command(crew._main, "pass this to sora")
+    _release(crew)
+    assert _until(lambda: sora.agent.sent)
+    crew.collab.cancel(crew.collab.board.open()[0].id)
+    gate.set()
+    _idle(crew)
+    assert sora.follow_up is False
+
+
+def test_a_cancel_landing_as_the_window_opens_closes_it(crew, monkeypatch):
+    """The narrow order: the turn has answered and armed its window, and the
+    cancel lands before the task is closed."""
+    _theo_chat(crew)
+    sora = crew.crew["sora"]
+
+    def arm():
+        crew.collab.board.cancel(lambda t: True)
+        return True
+    monkeypatch.setattr(crew, "arm_follow_up", arm)
+    crew.pass_command(crew._main, "pass this to sora")
+    _release(crew)
+    _idle(crew)
+    assert sora.follow_up is False
+
+
+def test_the_endpoint_must_be_the_one_shown(crew):
+    _theo_chat(crew)
+    d = crew
+    collab.write_request({"to": "sora", "from": "main", "entry": "sheet",
+                          "host": "evil.example"}, "x", d.collab.root)
+    d.collab.tick()
+    t = d.collab.board.public()[-1]
+    assert t["state"] == "refused" and "not the one you were shown" in t["reason"]
+
+
+def test_an_endpoint_changed_while_queued_is_refused(crew, monkeypatch):
+    _theo_chat(crew)
+    crew.pass_command(crew._main, "pass this to sora")
+    monkeypatch.setattr(crew.collab, "host", lambda agent: "elsewhere.example")
+    _release(crew)
+    assert crew.crew["sora"].agent.sent == []
+    assert "endpoint changed" in crew.collab.board.public()[-1]["reason"]
+
+
+def test_a_saved_chat_gone_before_the_start_is_refused(crew):
+    cid = _theo_chat(crew)
+    crew.pass_command(crew._main, "pass this to sora")
+    crew.chats.delete(cid)
+    _release(crew)
+    assert crew.crew["sora"].agent.sent == []
+    assert "gone" in crew.collab.board.public()[-1]["reason"]
+
+
+def test_saving_off_binds_the_transcript_at_the_confirmation(crew):
+    crew.cfg._values["saveChats"] = False
+    crew.history.path = Path(os.environ["XDG_RUNTIME_DIR"]) / "agentvoice" / "h2.jsonl"
+    crew.history.append({"agent_id": "", "transcript": "first topic", "reply": "a",
+                         "new": True})
+    crew._main.last = {"transcript": "first topic", "reply": "a"}
+    gate = threading.Event()
+    sora = crew.crew["sora"]
+    sora.agent.wait = gate
+    crew.dispatch(sora, "busy", {})
+    assert _until(lambda: sora.agent.sent)
+    crew.pass_command(crew._main, "pass this to sora")
+    # Theo moves on to another conversation while Sora is busy.
+    crew.history.append({"agent_id": "", "transcript": "second topic", "reply": "b",
+                         "new": True})
+    gate.set()
+    _idle(crew)
+    _release(crew)
+    _idle(crew)
+    prompt, _ = sora.agent.sent[1]
+    assert "first topic" in prompt and "second topic" not in prompt
+
+
+def test_a_sheet_brief_with_saving_off_still_brings_the_session(crew):
+    crew.cfg._values["saveChats"] = False
+    crew.history.path = Path(os.environ["XDG_RUNTIME_DIR"]) / "agentvoice" / "h3.jsonl"
+    crew.history.append({"agent_id": "", "transcript": "what we said", "reply": "ok",
+                         "new": True})
+    collab.write_request({"to": "sora", "from": "main", "entry": "sheet"}, "my brief",
+                         crew.collab.root)
+    crew.collab.tick()
+    _idle(crew)
+    prompt, _ = crew.crew["sora"].agent.sent[0]
+    assert "what we said" in prompt and "my brief" in prompt
+
+
+def test_a_sheet_brief_is_not_the_display_transcript(crew):
+    _theo_chat(crew)
+    collab.write_request({"to": "sora", "from": "main", "entry": "sheet"},
+                         BRIEF_MARK, crew.collab.root)
+    crew.collab.tick()
+    _idle(crew)
+    import paths
+    state = (paths.RUNTIME_DIR / "state").read_text()
+    assert BRIEF_MARK not in state
+
+
+def test_a_resumed_session_is_told_what_others_said_since(crew):
+    cid = _theo_chat(crew, text="opening")
+    crew.chats.record(chat_id=cid, agent_id="sora", agent_label="Sora", backend="claude",
+                      session_id="sora-in-chat", project_dir="/p",
+                      exchange={"transcript": "x", "reply": "y"})
+    crew.chats.record(chat_id=cid, agent_id="", agent_label="Theo", backend="claude",
+                      session_id="theo-1", project_dir="/p",
+                      exchange={"transcript": "later question", "reply": "later answer"})
+    crew.pass_command(crew._main, "pass this to sora")
+    _release(crew)
+    _idle(crew)
+    prompt, session = crew.crew["sora"].agent.sent[0]
+    assert session == "sora-in-chat"
+    replayed = prompt.split("<<<")[0]          # before the brief
+    assert "later answer" in replayed and "opening" not in replayed
+
+
+def test_different_spoken_requests_are_different_tasks(crew):
+    _theo_chat(crew)
+    crew.pass_command(crew._main, "pass this to sora and ask about the train")
+    crew.pass_command(crew._main, "pass this to sora and ask about the bus")
+    assert len(crew.collab.board.open()) == 2
+
+
+def test_continuing_an_unshared_chat_never_replays_it(crew):
+    cid = _theo_chat(crew)
+    crew.chats.record(chat_id=cid, agent_id="hazel", agent_label="Hazel", backend="codex",
+                      session_id="hz", project_dir="/elsewhere",
+                      exchange={"transcript": "x", "reply": "y"})
+    hazel = crew.crew["hazel"]
+    # Her session there cannot be resumed (another folder), and the chat is
+    # not shared with her: refused, not replayed.
+    assert crew.continue_chat(hazel, crew.chats.load(cid)) == "refused"
+    assert hazel.replay == ""
+
+
+def test_a_bad_origin_folder_does_not_end_the_poll(crew, monkeypatch, tmp_path):
+    _theo_chat(crew)
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    crew.collab.root = blocker                  # origin/ cannot be made under a file
+    crew.pass_command(crew._main, "pass this to sora")
+    _release(crew)
+    _idle(crew)
+    assert crew.crew["sora"].agent.sent
+
+
+def test_the_cli_rejects_a_newline_in_a_value(tmp_path, cfg_factory):
+    cfg = cfg_factory(voiceAgents=[{"id": "sora", "name": "sora", "agent": "claude"},
+                                   {"id": "hazel", "name": "hazel", "agent": "codex"}])
+    err = io.StringIO()
+    assert collab.cli_pass(["sora", "--from", "main\nto=hazel"], io.StringIO(""), err,
+                           cfg=cfg, root=tmp_path) == 2
+    assert not (tmp_path / "requests").exists()
+
+
+@pytest.mark.parametrize("head", ["to=sora\nto=hazel\n", "to=sora\nwho=x\n"])
+def test_a_request_with_a_repeated_or_unknown_field_is_dropped(head):
+    assert collab.parse_request(head + "\nbrief") is None
+
+
+def test_the_cli_refuses_a_switched_off_source(tmp_path, cfg_factory):
+    cfg = cfg_factory(voiceAgents=[{"id": "sora", "name": "sora", "agent": "claude"},
+                                   {"id": "nova", "name": "nova", "agent": "claude",
+                                    "enabled": False}])
+    err = io.StringIO()
+    assert collab.cli_pass(["sora", "--from", "nova"], io.StringIO(""), err, cfg=cfg,
+                           root=tmp_path) == 1
+    assert "switched off" in err.getvalue()
+
+
+def test_the_cli_checks_the_host_the_sheet_showed(tmp_path, cfg_factory):
+    cfg = cfg_factory(voiceAgents=[
+        {"id": "far", "name": "far", "agent": "endpoint",
+         "endpointUrl": "https://API.example.com/v1", "endpointModel": "m"}])
+    err = io.StringIO()
+    assert collab.cli_pass(["far", "--host", "other.example"], io.StringIO(""), err,
+                           cfg=cfg, root=tmp_path) == 1
+    err = io.StringIO()
+    assert collab.cli_pass(["far", "--host", "API.example.com"], io.StringIO(""), err,
+                           cfg=cfg, root=tmp_path) == 0
+    (req,) = collab.take_requests(tmp_path)
+    assert collab.host_key(req["host"]) == "api.example.com"
+
+
+def test_locked_reads_the_top_level_state_not_a_tasks(tmp_path):
+    """Review: `agentvoice locked` must not read a task's "state"."""
+    import subprocess
+    from conftest import ROOT
+    run = tmp_path / "agentvoice"
+    run.mkdir()
+    (run / "state").write_text(json.dumps(
+        {"state": "locked", "tasks": [{"state": "completed"}]}))
+    script = (ROOT / "bin" / "agentvoice").read_text()
+    body = script[script.index("vstate() {"):script.index("\n}\n", script.index("vstate() {")) + 3]
+    out = subprocess.run(["bash", "-c", f"active() {{ true; }}\nSTATE={run}/state\n{body}\nvstate"],
+                         capture_output=True, text=True).stdout.strip()
+    assert out == "locked"
+
+
+def test_the_lock_strips_turn_text_at_the_last_step(crew):
+    crew.locked = True
+    state, extra = crew._compose("thinking", {"transcript": "said", "reply": "answered",
+                                              "level_db": -40})
+    assert state == "locked" and "transcript" not in extra and "reply" not in extra
+
+
+def test_speaking_behind_a_lock_does_not_stop_a_task_turn(crew):
+    """Review: a lock landing between the reply loop's check and speak()
+    must not cancel the task through the turn-local silence()."""
+    sora = crew.crew["sora"]
+    sora.task = Task(id="e" * 16, kind="pass", frm="main", to="sora")
+    crew.locked = True
+    with crew._as(sora):
+        crew._here.turn = True
+        try:
+            crew.speak("A sentence.", 0)
+        finally:
+            crew._here.turn = False
+    assert not sora.interrupt.is_set() and sora.agent.cancelled == 0
+    sora.task = None

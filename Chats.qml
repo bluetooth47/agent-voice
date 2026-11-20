@@ -63,6 +63,13 @@ Item {
     return view.currentAgentName(view.ownerOf(c)) || String(c.agent_label || "a removed agent")
   }
 
+  // Some agent's current chat: a shared chat can be Sora's while its
+  // owner has moved on. For the label; Continue asks about the owner alone.
+  function inUseByAnyone(c) {
+    var cur = view.index.current || {}
+    for (var k in cur) if (cur[k] === c.id) return true
+    return false
+  }
   function inUse(c) {
     var cur = view.index.current || {}
     var id = view.ownerOf(c)
@@ -397,9 +404,9 @@ Item {
               width: parent.width
               elide: Text.ElideRight
               text: view.agentName(row.c) + " · " + view.whenOf(row.c.updated)
-                    + (view.inUse(row.c) ? " · in use" : "")
+                    + (view.inUseByAnyone(row.c) ? " · in use" : "")
               textFormat: Text.PlainText
-              color: view.inUse(row.c) ? view.s.accent : view.s.dim
+              color: view.inUseByAnyone(row.c) ? view.s.accent : view.s.dim
               font.family: view.s.fontFamily
               font.pixelSize: Style.font.caption
             }
@@ -572,7 +579,7 @@ Item {
         wrapMode: Text.WordWrap
         text: view.agentName(view.chat) + " · " + (view.chat.backend ? view.s.programLabel(view.chat.backend) : "agent")
               + " · started " + view.whenOf(view.chat.started)
-              + (view.inUse(view.chat) ? " · in use now" : "")
+              + (view.inUseByAnyone(view.chat) ? " · in use now" : "")
               // What was typed there is in the agent's own session, not here.
               + (Number(view.chat.terminal || 0) > 0
                  ? " · went on in a terminal " + view.whenOf(view.chat.terminal) : "")

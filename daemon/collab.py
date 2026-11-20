@@ -89,6 +89,11 @@ _CHAT = re.compile(r"[0-9a-f]{16}")
 ENTRIES = ("voice", "sheet", "cli")
 
 
+def host_key(host) -> str:
+    """A host as compared: lower case, without IPv6 brackets."""
+    return str(host or "").strip().strip("[]").lower()
+
+
 def new_id() -> str:
     return secrets.token_hex(8)
 
@@ -121,6 +126,8 @@ class Task:
     finished: float = 0.0
     frm_label: str = ""
     to_label: str = ""
+    host: str = ""                  # the endpoint host the person was told
+    replay: str = ""                # the in-memory transcript, snapshot
 
     def public(self, position: int = 0) -> dict:
         """What the state file shows: never the brief or the request."""
@@ -145,6 +152,9 @@ class Board:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._tasks: dict[str, Task] = {}
+        #: Every id seen, kept past the display's pruning, so a retried
+        #: request with an old id never starts a second turn.
+        self._seen: dict[str, None] = {}
 
     def add(self, task: Task) -> tuple[Task, bool]:
         """Add `task`, or return the one already filed under its id: one user
@@ -153,6 +163,11 @@ class Board:
             have = self._tasks.get(task.id)
             if have is not None:
                 return have, False
+            if task.id in self._seen:
+                return None, False
+            self._seen[task.id] = None
+            while len(self._seen) > 2000:
+                del self._seen[next(iter(self._seen))]
             task.created = task.created or time.time()
             self._tasks[task.id] = task
             self._prune()
@@ -161,6 +176,10 @@ class Board:
     def get(self, task_id: str) -> Task | None:
         with self._lock:
             return self._tasks.get(task_id)
+
+    def seen(self, task_id: str) -> bool:
+        with self._lock:
+            return task_id in self._seen
 
     def move(self, task_id: str, state: str, reason: str = "") -> bool:
         """One state transition. False, and nothing changed, when it is not
@@ -214,17 +233,15 @@ class Board:
             return len(ahead)
 
     def cancel(self, pick) -> list[Task]:
-        """Cancel every open task `pick(task)` chooses. Returns the ones
-        that were active, whose turns the caller must stop."""
-        stopped = []
+        """Cancel every open task `pick(task)` chooses. Returns every task
+        this cancelled -- the caller audits each once and stops the turns of
+        those that were running (state "cancelled", `started` set)."""
+        done = []
         with self._lock:
             for t in list(self._tasks.values()):
-                if t.state in OPEN and pick(t):
-                    was = t.state
-                    if self.move(t.id, "cancelled", "stopped"):
-                        if was == "active":
-                            stopped.append(t)
-        return stopped
+                if t.state in OPEN and pick(t) and self.move(t.id, "cancelled", "stopped"):
+                    done.append(t)
+        return done
 
     def public(self) -> list[dict]:
         with self._lock:
@@ -330,19 +347,23 @@ def write_origin(agent: str, task: Task, labels: dict, root: Path | None = None)
     """Name who `agent` is working for while its task turn runs."""
     if not _AGENT.fullmatch(agent or ""):
         return
-    d = _private((root or crew_dir()) / "origin")
     chain = [{"id": a, "label": str(labels.get(a) or a)[:40]}
              for a in task.chain if _AGENT.fullmatch(a or "")][:3]
     data = {"task": task.id, "kind": task.kind, "chain": chain}
-    tmp = d / f".{agent}.{os.getpid()}.tmp"
+    tmp = None
     try:
+        # Best effort throughout: it only names the chain on a card, and a
+        # folder that cannot be made must not end the poll that called it.
+        d = _private((root or crew_dir()) / "origin")
+        tmp = d / f".{agent}.{os.getpid()}.tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
         os.replace(tmp, d / f"{agent}.json")
     except OSError:
         try:
-            tmp.unlink()
+            if tmp is not None:
+                tmp.unlink()
         except OSError:
             pass
 
@@ -390,8 +411,7 @@ def write_request(fields: dict, brief: str, root: Path | None = None) -> Path:
     blank line, then the brief. Written privately and renamed into place,
     as typed messages are; the brief arrived on stdin, never argv."""
     d = _private((root or crew_dir()) / "requests")
-    head = "".join(f"{k}={fields[k]}\n" for k in ("id", "to", "from", "chat", "entry")
-                   if fields.get(k))
+    head = "".join(f"{k}={fields[k]}\n" for k in _FIELDS if fields.get(k))
     name = f"{time.time_ns()}-{os.getpid()}"
     tmp = d / f"{name}.tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -402,27 +422,43 @@ def write_request(fields: dict, brief: str, root: Path | None = None) -> Path:
     return final
 
 
+#: The header a request may carry, each once.
+_FIELDS = ("id", "to", "from", "chat", "entry", "host")
+#: A host as an endpoint URL names it: no spaces, no newline, no "=".
+_HOST = re.compile(r"[A-Za-z0-9.:\[\]_-]{1,255}")
+
+
+def valid_fields(fields: dict) -> bool:
+    """Each value checked on its own, before anything is serialised: a
+    newline inside one would otherwise become a second header line."""
+    for k, v in fields.items():
+        if k not in _FIELDS or not isinstance(v, str):
+            return False
+    pats = {"id": _TASK, "to": _AGENT, "from": _AGENT, "chat": _CHAT, "host": _HOST}
+    for k, pat in pats.items():
+        if fields.get(k) and not pat.fullmatch(fields[k]):
+            return False
+    if not fields.get("to") or fields.get("entry", "cli") not in ("sheet", "cli"):
+        return False
+    return True
+
+
 def parse_request(raw: str) -> dict | None:
-    """A request file's fields, each checked, or None when it is not one."""
+    """A request file's fields, each checked, or None when it is not one: a
+    field it does not know, or one given twice, and it is not."""
     head, sep, brief = raw.partition("\n\n")
     if not sep:
         head, brief = raw.rstrip("\n"), ""
     out = {"brief": brief.strip()[:BRIEF_MAX]}
+    fields = {}
     for line in head.splitlines():
         k, eq, v = line.partition("=")
-        if not eq:
+        if not eq or k in fields:
             return None
-        out[k.strip()] = v.strip()
-    if not _AGENT.fullmatch(out.get("to", "")):
+        fields[k] = v
+    if not valid_fields(fields):
         return None
-    if out.get("from") and not _AGENT.fullmatch(out["from"]):
-        return None
-    if out.get("chat") and not _CHAT.fullmatch(out["chat"]):
-        return None
-    if out.get("id") and not _TASK.fullmatch(out["id"]):
-        return None
-    if out.get("entry", "cli") not in ("sheet", "cli"):
-        return None
+    out.update(fields)
     out.setdefault("entry", "cli")
     return out
 
@@ -464,7 +500,12 @@ class Runtime:
         #: or the microphone lent out: (persona, text), said on the way back.
         self.held: list = []
         self._flash = ("", 0.0)
-        self._lock = threading.Lock()
+        #: A stop from the signal handler left the readout to redraw.
+        self._dirty = False
+        # Re-entrant: the interrupt handler runs on the run loop's thread
+        # between two bytecodes, and publishing from it reads line(), which
+        # takes this lock -- possibly while that same thread holds it.
+        self._lock = threading.RLock()
 
     # --- who is who ---------------------------------------------------------
 
@@ -536,11 +577,14 @@ class Runtime:
     def pass_conversation(self, source, target: str, *, entry: str,
                           request: str = "", brief: str | None = None,
                           chat_id: str | None = None,
-                          task_id: str | None = None) -> Task:
+                          task_id: str | None = None,
+                          host: str | None = None) -> Task | None:
         """Pass `source`'s conversation to `target` (external id). Every
         entry point comes here: the sheet and the CLI have already told the
-        person the chat goes with it; by voice it is said now, and the task
-        waits CANCEL_WINDOW_S before anything is shared or dispatched."""
+        person the chat goes with it, and `host` is the endpoint host they
+        were shown ("" for none); by voice it is said now, and the task
+        waits CANCEL_WINDOW_S before anything is shared or dispatched. None
+        when `task_id` was already used: one action is one task."""
         d = self.d
         frm = external(source.id)
         task = Task(id=task_id or new_id(), kind="pass", frm=frm, to=target,
@@ -549,39 +593,61 @@ class Runtime:
                     frm_label=source.label or self.label(frm),
                     to_label=self.label(target) if target else "")
         have = self.board.get(task.id)
-        if have is not None:
+        if have is not None or self.board.seen(task.id):
             return have                 # the same action, arriving again
         saving = d.cfg.get_bool("saveChats")
         task.chat_id = (chat_id if chat_id and _CHAT.fullmatch(chat_id)
                         else (source.chat_id or "") if saving else "")
-        # The same pass asked for again while the first is still open (said
-        # twice, or the sheet and a voice command at once) is that one: a
-        # retry makes at most one turn.
-        for t in self.board.open():
-            if (t.kind, t.frm, t.to, t.chat_id) == ("pass", frm, target, task.chat_id):
-                print(f"  pass {t.id}: asked for again; still the one task", flush=True)
-                return t
+        # The same words said twice inside the confirmation window are one
+        # pass; anything that differs (another brief, another request, a
+        # sheet's own id) is a pass of its own.
+        if entry == "voice":
+            for t in self.board.open():
+                if (t.state == "pending" and t.entry == "voice"
+                        and (t.frm, t.to, t.chat_id, t.request)
+                        == (frm, target, task.chat_id, task.request)):
+                    print(f"  pass {t.id}: asked for again; still the one task", flush=True)
+                    return t
         if brief is None:
             last = source.last or {}
             brief = last_exchange(str(last.get("transcript") or ""),
                                   str(last.get("reply") or ""), task.frm_label)
         task.brief = str(brief or "").strip()[:BRIEF_MAX]
+        if not task.chat_id:
+            # Bound now, to what the person was told about: with no chat on
+            # disk, the transcript is this session's memory as it is at the
+            # confirmation, not whatever it holds when the target is free.
+            task.replay = self._memory_replay(source)
+        task.host = self.host(target)
         why = self.refusal(target, frm)
-        if not why and not task.brief and not task.chat_id and not self._memory(source):
+        if not why and not task.brief and not task.chat_id and not task.replay:
             why = "There's nothing to pass yet. Ask me something first."
-        self.board.add(task)
+        if not why and host is not None and host_key(host) != host_key(task.host):
+            why = (f"{task.to_label}'s endpoint is not the one you were shown, so "
+                   f"nothing was sent. Open Send to another agent again.")
+        task, new = self.board.add(task)
+        if task is None or not new:
+            return task
         if why:
             self._refuse(task, why, source)
             return task
-        host = self.host(target)
         if entry == "voice":
             # Said before anything is shared or sent; "stop" in the window
-            # after it cancels. Shown as well, as the source's reply, for a
-            # typed command or a muted microphone, where it cannot be heard.
-            line = spoken_line(task.to_label, host)
+            # after it cancels. Shown as well, as the source's reply. If it
+            # could not be said in full -- no voice, a muted or lent
+            # microphone, a lock, a failure -- nothing is passed: the
+            # disclosure is the condition, not a courtesy.
+            line = spoken_line(task.to_label, task.host)
             source.last = {"transcript": "", "reply": line}
             d._recent = source
-            d._say_for(source, line)
+            if not source.busy:
+                # A stop left over from an earlier turn must not cut this
+                # line short and so refuse a pass that was asked for now.
+                source.interrupt.clear()
+            if not d._say_for(source, line):
+                self._refuse(task, "I couldn't say that out loud, so nothing was "
+                                   "passed. Use Send to another agent instead.", source)
+                return task
             task.not_before = time.time() + CANCEL_WINDOW_S
             # The follow-up window goes to the source, so a bare "stop" is
             # heard without a name.
@@ -599,16 +665,15 @@ class Runtime:
         self.publish()
         return task
 
-    def _memory(self, source) -> bool:
-        last = source.last or {}
-        return bool(last.get("transcript") or last.get("reply"))
-
     def _refuse(self, task: Task, why: str, source=None) -> None:
         if not self.board.move(task.id, "refused", why):
             return
         print(f"  pass {task.id} refused: {why}", flush=True)
         self._audit(task)
         if source is not None:
+            # Shown as the source's reply too, where it cannot be heard.
+            source.last = {"transcript": "", "reply": why}
+            self.d._recent = source
             self.d._say_for(source, why)
         self.publish()
 
@@ -618,8 +683,12 @@ class Runtime:
         """From the run loop: take requests filed by the CLI and the sheet,
         and start every task that is due."""
         d = self.d
+        if self._dirty:
+            self._dirty = False
+            self.publish()              # after a stop from the signal handler
+        hearable = getattr(d, "may_speak", True) and getattr(d, "listening", True)
         # What a task said behind a lock, once it can be heard again.
-        if self.held and getattr(d, "may_speak", True) and getattr(d, "listening", True):
+        if self.held and hearable:
             self.release_held()
         for req in take_requests(self.root):
             frm = req.get("from") or "main"
@@ -630,7 +699,7 @@ class Runtime:
                 continue
             self.pass_conversation(source, req["to"], entry=req["entry"],
                                    brief=req["brief"], chat_id=req.get("chat"),
-                                   task_id=req.get("id"))
+                                   task_id=req.get("id"), host=req.get("host", ""))
         now = time.time()
         with self._lock:
             text, until = self._flash
@@ -639,6 +708,10 @@ class Runtime:
                 self._flash = ("", 0.0)
         if expired:
             self.publish()              # "Sora finished" goes from the readout
+        if not getattr(d, "may_speak", True):
+            # Behind a lock, or with the microphone lent out, a running task
+            # keeps running; nothing new starts until it can be heard.
+            return
 
         def busy(agent):
             p = self.persona(agent)
@@ -647,42 +720,74 @@ class Runtime:
             self.start(task)
 
     def start(self, task: Task) -> bool:
-        """Start `task`'s turn, after checking again that it may run."""
+        """Start `task`'s turn, after checking again that it may run.
+
+        One order for start, cancel and completion: the task goes active and
+        is bound to its target first, so a stop from then on finds the turn;
+        and it is checked again before the chat is shared and before the
+        turn is sent, so a stop in between leaves nothing shared or sent."""
         d = self.d
         why = self.refusal(task.to, task.frm)
         source = self.persona(task.frm)
-        if why:
-            self._refuse(task, why, source)
-            return False
         target = self.persona(task.to)
-        # Caught up first: a rebuild inside dispatch() would start a new
-        # session and undo the one chosen below.
-        if threading.current_thread() is threading.main_thread():
+        if not why and target is not None and threading.current_thread() is threading.main_thread():
+            # Caught up first: a rebuild inside dispatch() would start a new
+            # session and undo the one chosen below, and the level and the
+            # endpoint checked here must be the ones the turn will use.
             catch_up = getattr(d, "catch_up_one", None)
             if callable(catch_up):
                 catch_up(target)
+            why = self.refusal(task.to, task.frm)
+        if not why and host_key(self.host(task.to)) != host_key(task.host):
+            why = (f"{task.to_label}'s endpoint changed after you were told where "
+                   f"the chat goes, so nothing was sent. Pass it again.")
+        if not why and task.chat_id and d.cfg.get_bool("saveChats"):
+            try:
+                gone = d.chats.load(task.chat_id) is None
+            except (OSError, ValueError):
+                gone = True
+            if gone:
+                why = "That chat is gone, so there is nothing to pass."
+        if why:
+            self._refuse(task, why, source)
+            return False
         if not self.board.move(task.id, "active"):
             return False
-        how = self._prepare(task, target, source)
-        write_origin(task.to, task, {a: self.label(a) for a in task.chain}, self.root)
-        heard = task.request or (task.brief if task.entry != "voice" else "") \
+        heard = (task.request if task.entry == "voice" else "") \
             or f"(passed from {task.frm_label})"
-        # Before the thread starts: the turn reads both.
+        # Bound before anything else happens: the turn reads both, and a stop
+        # from here on finds the turn through `target.task`.
         target.task, target.task_heard = task, heard[:REQUEST_MAX]
+        if task.state != "active":
+            return self._unbind(target, task)
+        how = self._prepare(task, target, source)
+        if task.state != "active":
+            return self._unbind(target, task)
+        write_origin(task.to, task, {a: self.label(a) for a in task.chain}, self.root)
         last = {"transcript": target.task_heard, "reply": ""}
         if not d.dispatch(target, task.request or "Please carry on from here.", last):
-            target.task, target.task_heard = None, ""
-            clear_origin(task.to, self.root)
-            self.board.move(task.id, "failed", f"{task.to_label} could not start.")
-            self._audit(task)
+            self._unbind(target, task)
+            if self.board.move(task.id, "failed", f"{task.to_label} could not start."):
+                self._audit(task)
             if source is not None:
                 d._say_for(source, f"{task.to_label} couldn't start, so I still "
                                    f"have it.")
             self.publish()
             return False
+        if task.state != "active":
+            # Cancelled while the turn was being started: dispatch() cleared
+            # the interrupt, so it is stopped again now.
+            target.stop()
         print(f"  pass {task.id}: {task.to_label} has the floor ({how})", flush=True)
         self.publish()
         return True
+
+    def _unbind(self, target, task: Task) -> bool:
+        if getattr(target, "task", None) is task:
+            target.task, target.task_heard = None, ""
+        clear_origin(task.to, self.root)
+        self.publish()
+        return False
 
     def _prepare(self, task: Task, target, source):
         """Put `target` into the chat's session for it, with the transcript
@@ -712,11 +817,18 @@ class Runtime:
                     and mine.get("project_dir", "") == here
                     and mine.get("session_id") != target.terminal):
                 target.session_id, how = mine["session_id"], "resumed"
+                # What the others said since it last spoke there, which
+                # its own session does not hold.
+                ex = chat.get("exchanges") or []
+                last = max((i for i, e in enumerate(ex)
+                            if e.get("agent_id") == task.to), default=-1)
+                if last + 1 < len(ex):
+                    replay = chat_store.replay_context(
+                        {**chat, "exchanges": ex[last + 1:]}, tail="")
             else:
                 target.session_id = None
                 if chat_store.may_replay(chat, task.to):
-                    replay = chat_store.replay_context(
-                        chat, tail="")
+                    replay = chat_store.replay_context(chat, tail="")
                     how = "replayed"
             target.chat_id, target.chat_continued = chat["id"], True
             try:
@@ -726,11 +838,11 @@ class Runtime:
         else:
             # No chat on disk (saving off, or nothing saved yet): a new
             # session, never the target's own conversation, and the replay
-            # is this session's memory only. Nothing of it is written.
+            # is this session's memory as it was when the person was told.
+            # Nothing of it is written.
             target.session_id, target.chat_id, target.chat_continued = None, None, False
-            if task.entry == "voice" or not task.brief:
-                replay = self._memory_replay(source)
-                how = "replayed from memory" if replay else how
+            replay = task.replay
+            how = "replayed from memory" if replay else how
         target.replay = replay + brief_block(task.frm_label, task.to_label, task.brief) \
             + "The user now says:\n"
         return how
@@ -784,19 +896,27 @@ class Runtime:
             moved = self.board.move(task.id, "completed")
         if moved:
             self._audit(task)
+        if task.state == "cancelled":
+            # A stop after the window was armed must not leave it open: the
+            # next thing said in the room would go to it without a name.
+            p.follow_up = False
         if task.kind == "delegate":
             saved = getattr(p, "saved_conversation", None)
             if saved is not None:
                 (p.session_id, p.chat_id, p.chat_continued, p.replay) = saved
                 p.saved_conversation = None
+        elif p.chat_id and not p.session_id:
+            # A backend with no session to resume stays in the shared chat
+            # all the same; its membership is not its session.
+            p.chat_continued = True
         if task.state == "completed":
             with self._lock:
                 self._flash = (f"{task.to_label} finished", time.time() + FLASH_S)
         self.publish()
 
     def hold(self, p, text: str) -> None:
-        """A task turn's reply that could not be said (locked, or the
-        microphone lent out), kept to say on the way back."""
+        """What a task turn could not say (locked, or the microphone lent
+        out), kept to say on the way back."""
         if text.strip():
             with self._lock:
                 self.held.append((p, text))
@@ -812,32 +932,39 @@ class Runtime:
 
     def stop_from(self, p) -> None:
         """"Sora, stop": every task Sora started, and anything still waiting
-        to reach her."""
+        to reach her, or still waiting to be said in her voice."""
         me = external(p.id)
-        stopped = self.board.cancel(
-            lambda t: t.frm == me or (t.to == me and t.state == "pending"))
-        self._stop_turns(stopped)
+        with self._lock:
+            self.held = [(q, t) for q, t in self.held if q is not p]
+        self._stopped(self.board.cancel(
+            lambda t: t.frm == me or (t.to == me and t.state == "pending")))
 
-    def stop_all(self) -> None:
-        """The global stop and `agentvoice interrupt`: everything, and the
-        queue cleared."""
-        self._stop_turns(self.board.cancel(lambda t: True))
+    def stop_all(self, from_signal: bool = False) -> None:
+        """The global stop and `agentvoice interrupt`: everything, the
+        queue and anything waiting to be said cleared. From the signal
+        handler nothing is published there -- the run loop does it on its
+        next poll -- so the handler takes no lock a turn could hold."""
+        with self._lock:
+            self.held = []
+        self._stopped(self.board.cancel(lambda t: True), publish=not from_signal)
 
     def cancel(self, task_id: str) -> bool:
-        stopped = self.board.cancel(lambda t: t.id == task_id)
-        self._stop_turns(stopped)
-        t = self.board.get(task_id)
-        if t is not None and t.state == "cancelled":
-            self.publish()
-            return True
-        return False
+        done = self.board.cancel(lambda t: t.id == task_id)
+        self._stopped(done)
+        return bool(done)
 
-    def _stop_turns(self, tasks) -> None:
+    def _stopped(self, tasks, publish: bool = True) -> None:
+        """Audit each task a stop cancelled, once, and stop the turns of
+        those that were running."""
         for t in tasks:
+            self._audit(t)
             p = self.persona(t.to)
-            if p is not None and getattr(p, "task", None) is t:
+            if t.started and p is not None and getattr(p, "task", None) is t:
                 p.stop()
-        self.publish()
+        if publish:
+            self.publish()
+        else:
+            self._dirty = True
 
     # --- what is shown ----------------------------------------------------------
 
@@ -909,7 +1036,7 @@ def cli_pass(args: list[str], stdin, stderr, cfg=None, root: Path | None = None)
     Says on stderr that the chat goes with it -- and, for an endpoint, the
     host it goes to -- and only then files the request (A15-2). The command
     is the person's own, so there is no cancel window."""
-    usage = ("usage: agentvoice pass TO [--from ID] [--chat ID] [--line] < brief\n"
+    usage = ("usage: agentvoice pass TO [--from ID] [--chat ID] [--host HOST] [--line] < brief\n"
              "  passes the conversation to agent TO; the brief is read from stdin")
     if not args or args[0].startswith("-"):
         print(usage, file=stderr)
@@ -917,10 +1044,15 @@ def cli_pass(args: list[str], stdin, stderr, cfg=None, root: Path | None = None)
     fields = {"to": args[0], "from": "main", "entry": "cli"}
     rest = args[1:]
     line = False
+    shown = None
     while rest:
         flag = rest.pop(0)
         if flag in ("--from", "--chat", "--id", "--entry") and rest:
             fields[flag[2:]] = rest.pop(0)
+        elif flag == "--host" and rest:
+            # The endpoint host the sheet showed ("" for none): the daemon
+            # refuses the pass if it is not where the chat would go.
+            shown = rest.pop(0)
         elif flag == "--line":
             # One JSON string on one line, for a caller that cannot close
             # stdin (the sheet), as `agents write --line` takes it.
@@ -928,7 +1060,8 @@ def cli_pass(args: list[str], stdin, stderr, cfg=None, root: Path | None = None)
         else:
             print(usage, file=stderr)
             return 2
-    if parse_request("".join(f"{k}={v}\n" for k, v in fields.items())) is None:
+    # Each value checked as given, before it is written as a header line.
+    if not valid_fields(fields) or (shown and not _HOST.fullmatch(shown)):
         print("agentvoice pass: an agent id is lower-case letters, digits and "
               "hyphens; a chat id is 16 hex characters", file=stderr)
         return 2
@@ -940,6 +1073,12 @@ def cli_pass(args: list[str], stdin, stderr, cfg=None, root: Path | None = None)
                 live=set(known) - off)
     if not why and fields["from"] not in known:
         why = "There's no agent by that name here."
+    if not why and fields["from"] in off:
+        why = f"{known[fields['from']]} is switched off, so it has nothing to pass."
+    host = hosts.get(fields["to"], "")
+    if not why and shown is not None and host_key(shown) != host_key(host):
+        why = (f"{known[fields['to']]}'s endpoint is not the one shown, so nothing "
+               f"was sent. Open the sheet again.")
     if why:
         print(f"agentvoice pass: {why}", file=stderr)
         return 1
@@ -956,9 +1095,9 @@ def cli_pass(args: list[str], stdin, stderr, cfg=None, root: Path | None = None)
             brief = stdin.read(BRIEF_MAX * 2)
     label = known[fields["to"]]
     print(f"Passing this chat from {known[fields['from']]} to {label}. "
-          f"{sees_line(label, hosts.get(fields['to'], ''))}", file=stderr)
+          f"{sees_line(label, host)}", file=stderr)
     stderr.flush()
-    write_request(fields, brief, root)
+    write_request({**fields, "host": host}, brief, root)
     return 0
 
 

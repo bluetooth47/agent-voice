@@ -38,7 +38,10 @@ active() { systemctl --user is-active --quiet "$UNIT"; }
 # What the daemon is doing right now; "off" when it is not running.
 vstate() {
   if [[ -r $STATE ]] && active; then
-    sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "$STATE"
+    # The top-level state is the file's first key. Anchored there, because
+    # the file also holds collaboration tasks, each with a "state" of its
+    # own, and a greedy match read the last of them (Phase 15 review).
+    sed -n 's/^{"state"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "$STATE"
   else
     echo off
   fi
