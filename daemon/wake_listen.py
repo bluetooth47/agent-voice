@@ -62,9 +62,12 @@ from noise_floor import MARGIN_MAX, MARGIN_MIN, NoiseFloor  # noqa: E402
 import headset  # noqa: E402
 from speech_text import (  # noqa: E402
     as_prompt, chat_command, is_full_stop, is_goodbye, is_handoff,
-    is_stop_command, open_mic_command, safe_for_terminal,
+    is_stop_command, is_take_over, open_mic_command, pass_command,
+    safe_for_terminal,
 )
 from chats import RETENTIONS, ChatStore, replay_context  # noqa: E402
+import chats as chat_schema  # noqa: E402
+import collab  # noqa: E402
 import narration  # noqa: E402
 import omarchy_skill  # noqa: E402
 from runtime import (  # noqa: E402
@@ -1618,6 +1621,9 @@ class Daemon:
         self.history = History()
         #: Saved chats, when `saveChats` is on. See chats.py.
         self.chats = ChatStore()
+        #: Tasks between agents: passing a conversation (Phase 15). See
+        #: collab.py; the hooks into this file are marked "collab".
+        self.collab = collab.Runtime(self)
         #: The agent the microphone is open for, without the wake word, and
         #: until when (plan item 11). None when it is not open.
         self.open_mic: Persona | None = None
@@ -1817,6 +1823,10 @@ class Daemon:
         for p in self.personas():
             if p.speaker:
                 p.speaker.cancel()
+            if p.task is not None and p.busy:
+                # collab: a task keeps running behind a lock, saying nothing;
+                # its reply waits for the unlock (Phase 15).
+                continue
             if p.agent:
                 p.agent.cancel()
             p.interrupt.set()
@@ -2326,6 +2336,8 @@ class Daemon:
         deliberately a no-op, so a stray keypress cannot leave it in a state
         the user never asked for.
         """
+        # collab: the global stop clears the task queue, busy or not.
+        self.collab.stop_all()
         if self.crew_mode:
             busy = [p for p in self.personas() if p.busy]
             if not busy:
@@ -2364,6 +2376,7 @@ class Daemon:
             if p.busy:
                 p.stop()
         self.end_open_mic("full stop")
+        self.collab.stop_all()          # collab: and the task queue
         # With one agent there is nothing else to stop: its turn runs on this
         # thread, so by the time a transcript is read it is already over, and
         # the wake word that let "full stop" be heard has stopped any reply.
@@ -3490,6 +3503,7 @@ class Daemon:
         persona.replay = ""
         reply_parts: list[str] = []
         thinking_parts: list[str] = []
+        unsaid = False
         ttft = None
         error = None
         kind = ""
@@ -3568,7 +3582,8 @@ class Daemon:
                     # thread this block runs under notices a lock during the
                     # agent's own turn, before any sentence exists.
                     self.poll_session()
-                    if self._interrupt.is_set() or not self.may_speak:
+                    if self._interrupt.is_set() or (not self.may_speak
+                                                    and persona.task is None):
                         self.silence()
                         break
                     if open_turn and not reply_parts and \
@@ -3619,6 +3634,8 @@ class Daemon:
                         # No voice: the text is the entire answer, so it matters
                         # more here, not less. Keep whatever state we are in.
                         out.publish(out.current, **last)
+                        if persona.task is not None and not self.may_speak:
+                            unsaid = True       # collab: said after the unlock
         except Exception as e:                  # a broken agent must not end the loop
             error = f"{type(e).__name__}: {e}"
 
@@ -3686,6 +3703,9 @@ class Daemon:
 
         reply = " ".join(reply_parts)
         last["reply"] = reply[:REPLY_MAX]
+        if unsaid and not self._interrupt.is_set():
+            # collab: a task finished behind a lock; what it said waits.
+            self.collab.hold(persona, reply)
         print(f"  {DIM}agent {time.time() - t0:.1f}s"
               f"{f', first token {ttft:.0f}ms' if ttft else ''}{OFF}")
         # A stopped turn still counts if it got as far as making a sound --
@@ -3709,6 +3729,11 @@ class Daemon:
         Saved chats are their own switch: keeping this session's view is not
         a promise to keep anything on disk, and the reverse holds too.
         """
+        p = self._persona()
+        p.turn_error = kind
+        # collab: a task turn records the user's request, not the transcript
+        # and brief that were put ahead of it.
+        heard = p.task_heard or heard
         self.save_chat(heard, reply, kind=kind, stopped=stopped, new=new,
                        thinking=thinking)
         if not self.cfg.get_bool("keepHistory"):
@@ -3753,7 +3778,10 @@ class Daemon:
                 project_dir=str(getattr(self.agent, "cwd", "") or ""),
                 exchange={"transcript": heard, "reply": reply, "error": kind,
                           "stopped": stopped,
-                          **({"thinking": thinking} if thinking else {})})
+                          **({"thinking": thinking} if thinking else {}),
+                          # collab: the first turn of a passed conversation.
+                          **({"kind": "brief", "for": p.task.frm}
+                             if p.task is not None else {})})
             p.chat_continued = False
             if p.chat_id != chat_id:
                 retention = self.cfg.get_str("chatRetention")
@@ -3768,11 +3796,14 @@ class Daemon:
         "replayed", when the chat is put ahead of the next request."""
         agent = p.agent
         here = str(getattr(agent, "cwd", "") or "")
+        # Its own session in the chat (Phase 15: each speaker has one); an
+        # older chat's top-level session is its owner's.
+        mine = chat_schema.sessions_of(chat).get(collab.external(p.id), {})
         if (agent is not None and getattr(agent, "remembers", False)
-                and chat.get("session_id")
-                and chat.get("backend") == getattr(agent, "name", "")
-                and chat.get("project_dir", "") == here):
-            p.session_id, p.replay, how = chat["session_id"], "", "resumed"
+                and mine.get("session_id")
+                and mine.get("backend") == getattr(agent, "name", "")
+                and mine.get("project_dir", "") == here):
+            p.session_id, p.replay, how = mine["session_id"], "", "resumed"
         else:
             # A session is one backend's, in one folder: anything else gets
             # the words, which costs tokens and says so on screen.
@@ -3838,16 +3869,23 @@ class Daemon:
     def apply_chat_command(self, cmd: str | None) -> bool:
         """`agentvoice chats continue ID` and `chats new [AGENT]`, from the
         conversation view. True if `cmd` was one of them."""
-        if not cmd or not cmd.startswith("chat-"):
+        if not cmd or not cmd.startswith(("chat-", "task-")):
             return False
         verb, _, arg = cmd.partition(" ")
         arg = arg.strip()
         if verb == "chat-continue":
-            chat = self.chats.load(arg) if arg else None
+            chat_id, _, who = arg.partition(" ")
+            chat = self.chats.load(chat_id) if chat_id else None
             if chat is None:
                 print(f"  {YEL}no such chat to continue{OFF}", flush=True)
                 return True
-            p = self._persona_by_id(chat.get("agent_id", ""))
+            # By its owner, or (Phase 15) another agent it was shared or
+            # passed to; anyone else is refused, with the reason.
+            who = who.strip() or chat_schema.owner_of(chat)
+            if not chat_schema.may_continue(chat, who):
+                print(f"  {YEL}{chat_schema.refusal(chat, who)}{OFF}", flush=True)
+                return True
+            p = self._persona_by_id(collab.internal(who))
             if p is None:
                 print(f"  {YEL}that chat's agent is not here any more{OFF}", flush=True)
             elif p.busy:
@@ -3855,6 +3893,11 @@ class Daemon:
                       f"has finished{OFF}", flush=True)
             else:
                 self.continue_chat(p, chat)
+            return True
+        if verb == "task-cancel":
+            # collab: Cancel on the Collaboration list, `agentvoice tasks cancel`.
+            if not self.collab.cancel(arg):
+                print(f"  {YEL}no open task {arg[:32]} to cancel{OFF}", flush=True)
             return True
         if verb == "chat-new":
             p = self._persona_by_id("" if arg in ("", "main") else arg)
@@ -3955,6 +3998,32 @@ class Daemon:
             return True
         if is_handoff(text):
             self.hand_off(p)
+            return True
+        # collab: "pass this to Sora", "Sora, take over" (Phase 15).
+        if self.pass_command(p, text):
+            return True
+        return False
+
+    def pass_command(self, p: Persona, text: str) -> bool:
+        """"pass this to Sora" said to `p`, or "take over" said to the agent
+        that is to take it from whoever was spoken to last. True when it was
+        one and has been dealt with."""
+        names = {}
+        for agent, label in self.collab._known().items():
+            names[" ".join(str(label).lower().split())] = agent
+        for q in self.personas():
+            for n in (q.label, q.name):
+                if n:
+                    names[" ".join(n.lower().split())] = collab.external(q.id)
+        name, request = pass_command(text, names)
+        if name:
+            self.collab.pass_conversation(p, names[name], entry="voice",
+                                          request=request)
+            return True
+        if is_take_over(text):
+            source = self._last_target if self._last_target is not None else self._main
+            self.collab.pass_conversation(source, collab.external(p.id),
+                                          entry="voice")
             return True
         return False
 
@@ -4277,6 +4346,7 @@ class Daemon:
             "level": self.cfg.level_for(program) if program else "",
             "phrase": phrase,
             "activity": main_activity,
+            "for": self.collab.working_for(main) if main.busy else "",
             "hearing": hearing and who in ("", main.id),
             "problem": "" if program else (payload.get("posture") or ""),
         }]
@@ -4296,6 +4366,8 @@ class Daemon:
                 "level": spec.get("level", ""),
                 "phrase": name,
                 "activity": (p.state if p is not None and p.busy else "idle"),
+                # collab: whom it is working for, while it runs a task.
+                "for": self.collab.working_for(p) if p is not None and p.busy else "",
                 "hearing": hearing and who == spec["id"],
                 "problem": unheard.get(name, "") or (p.problem if p is not None else ""),
             })
@@ -4323,6 +4395,22 @@ class Daemon:
             self.state.publish(state, **extra)
 
     def _compose(self, state: str, extra: dict) -> tuple[str, dict]:
+        """_compose_line, with the collaboration tasks beside it (Phase 15):
+        `tasks` for the Collaboration list and `collab`, one line for the
+        HUD. Neither holds a brief or a request. Absent when there are none,
+        so the state file reads as before."""
+        state, extra = self._compose_line(state, extra)
+        fields = self.collab.fields()
+        if fields["tasks"] or fields["collab"]:
+            extra = {**extra, **fields}
+            # Whose turn it is, and for whom: "Sora (for Theo)".
+            shown = self._persona_by_id(str(extra.get("who", "") or ""))
+            for_whom = self.collab.working_for(shown) if shown is not None else ""
+            if for_whom and extra.get("who_label"):
+                extra["who_label"] = f"{extra['who_label']} (for {for_whom})"
+        return state, extra
+
+    def _compose_line(self, state: str, extra: dict) -> tuple[str, dict]:
         """What the one line on screen shows, given the microphone's state.
 
         Installed as the state file's overlay, so every publish passes here.
@@ -4407,6 +4495,8 @@ class Daemon:
             return
         if is_stop_command(text):
             p.follow_up = False
+            # collab: and every task it started, or still waiting for it.
+            self.collab.stop_from(p)
             if p.busy:
                 p.stop()
                 print(f"  {DIM}(stopping {p.label}){OFF}")
@@ -4485,6 +4575,9 @@ class Daemon:
                     self._floor_owner, self._floor_until = None, 0.0
                 self._floor.notify_all()
             self._recent = p
+            # collab: a task turn's end is its task's end.
+            self.collab.turn_ended(p, stopped=p.interrupt.is_set(),
+                                   failed=p.turn_error)
             self._recompose()
 
     def open_mic_due(self, crew: bool) -> bool:
@@ -4672,6 +4765,9 @@ class Daemon:
                     if typed is not None:
                         self.handle_typed(*typed, crew)
                         continue
+                    # collab: pass requests from the CLI and the sheet, and
+                    # tasks whose cancel window or queue has cleared.
+                    self.collab.tick()
                 if cmd == "talk" and self.listening:
                     if utt is not None:
                         utt.abandon()

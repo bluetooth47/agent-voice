@@ -769,7 +769,7 @@ Column {
   }
 
   // --- Chats ------------------------------------------------------------------------
-  // This agent's saved chats, from the same index the conversation view reads.
+  // Chats this agent can continue, from the same index the conversation view reads.
   property var chatIndex: []
   FileView {
     id: chatIndexFile
@@ -786,14 +786,34 @@ Column {
     onLoadFailed: page.chatIndex = []
   }
   readonly property var chats: {
-    var want = isMain ? "" : target
     var out = []
     for (var i = 0; i < chatIndex.length; i++) {
       var c = chatIndex[i] || {}
-      if (/^[0-9a-f]{16}$/.test(String(c.id || "")) && String(c.agent_id || "") === want) out.push(c)
+      if (!/^[0-9a-f]{16}$/.test(String(c.id || ""))) continue
+      if (chatOwner(c) === target || (Array.isArray(c.agents) && c.agents.indexOf(target) >= 0)) out.push(c)
     }
     out.sort(function(a, b) { return (Number(b.updated) || 0) - (Number(a.updated) || 0) })
     return out
+  }
+  function chatOwner(chat) {
+    return String(chat.owner || chat.agent_id || "main")
+  }
+  // A Repeater's modelData turns a JSON array into a list Array.isArray
+  // does not recognise, so membership is checked by hand.
+  function listHas(list, id) {
+    if (!list || list.length === undefined) return false
+    for (var i = 0; i < list.length; i++) if (list[i] === id) return true
+    return false
+  }
+  function chatCaption(chat) {
+    var preview = String(chat.preview || "")
+    if (chatOwner(chat) === page.target) return preview
+    var relation = ""
+    if (page.listHas(chat.participants, page.target))
+      relation = "passed to it"
+    else if (page.listHas(chat.shared_with, page.target))
+      relation = "shared"
+    return relation && preview ? relation + " · " + preview : relation || preview
   }
   function openChat(id) {
     s.openChat = ""
@@ -801,10 +821,133 @@ Column {
     s.showPage("history")
   }
 
+  readonly property var collaborationTasks: {
+    var open = [], finished = []
+    for (var task of (s.vTasks || [])) {
+      if (!task || (task.from !== target && task.to !== target)) continue
+      if (task.state === "pending" || task.state === "active") open.push(task)
+      else if (["completed", "cancelled", "failed", "refused"].indexOf(task.state) >= 0) finished.push(task)
+    }
+    // The daemon publishes tasks oldest first.
+    return open.concat(finished.reverse().slice(0, 5))
+  }
+  function taskCaption(task) {
+    var status = task.state
+    if (task.state === "active") {
+      status = "working"
+    } else if (task.state === "pending") {
+      status = task.kind === "pass" ? "passing" : "queued"
+      var place = Number(task.position) || 0
+      if (place > 0) {
+        var suffix = place % 100 >= 11 && place % 100 <= 13 ? "th"
+                     : (["th", "st", "nd", "rd"][place % 10] || "th")
+        status += " (" + place + suffix + " in line)"
+      }
+    }
+    return (task.from_label || task.from) + " → " + (task.to_label || task.to) + " · " + status
+           + (task.reason ? " · " + task.reason : "")
+  }
+
+  Process {
+    id: taskCanceller
+    property string forTarget: ""
+    property string note: ""
+    property bool launched: false
+    onStarted: launched = true
+    onRunningChanged: if (!running && !launched) note = "Could not start agentvoice."
+    stderr: StdioCollector {
+      onStreamFinished: {
+        var message = text.trim()
+        if (message !== "") taskCanceller.note = message
+      }
+    }
+  }
+
   Column {
     width: parent.width
     spacing: Style.space(6)
     visible: page.tab === "chats"
+
+    Column {
+      width: parent.width
+      spacing: Style.space(6)
+
+      Text {
+        width: parent.width
+        text: "Collaboration"
+        color: page.s.foreground
+        font.family: page.s.fontFamily
+        font.pixelSize: Style.font.subtitle
+        font.bold: true
+      }
+      Text {
+        width: parent.width
+        visible: page.collaborationTasks.length === 0
+        wrapMode: Text.WordWrap
+        text: "No tasks between agents right now. Passing a chat to another agent shows here."
+        color: page.s.dim
+        font.family: page.s.fontFamily
+        font.pixelSize: Style.font.body
+      }
+      Repeater {
+        model: page.tab === "chats" ? page.collaborationTasks : []
+        Item {
+          id: taskRow
+          required property var modelData
+          readonly property bool isOpen: modelData.state === "pending" || modelData.state === "active"
+          width: parent.width
+          height: Math.max(taskText.implicitHeight, isOpen ? cancelTask.implicitHeight : 0)
+
+          Text {
+            id: taskText
+            anchors.left: parent.left
+            anchors.right: taskRow.isOpen ? cancelTask.left : parent.right
+            anchors.rightMargin: taskRow.isOpen ? Style.space(8) : 0
+            anchors.verticalCenter: parent.verticalCenter
+            wrapMode: Text.Wrap
+            textFormat: Text.PlainText
+            text: page.taskCaption(taskRow.modelData)
+            color: taskRow.isOpen ? page.s.foreground : page.s.dim
+            font.family: page.s.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+          Button {
+            id: cancelTask
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            visible: taskRow.isOpen
+            enabled: !taskCanceller.running
+            text: "Cancel"
+            bordered: true
+            focusable: true
+            foreground: page.s.foreground
+            fontFamily: page.s.fontFamily
+            fontSize: Style.font.caption
+            onClicked: {
+              taskCanceller.forTarget = page.target
+              taskCanceller.note = ""
+              taskCanceller.launched = false
+              taskCanceller.command = ["agentvoice", "tasks", "cancel", String(taskRow.modelData.id)]
+              taskCanceller.running = true
+            }
+          }
+        }
+      }
+      Text {
+        width: parent.width
+        visible: taskCanceller.forTarget === page.target && text !== ""
+        wrapMode: Text.WordWrap
+        textFormat: Text.PlainText
+        text: taskCanceller.note
+        color: page.s.urgent
+        font.family: page.s.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+    }
+    PanelSeparator {
+      width: parent.width
+      foreground: page.s.foreground
+    }
 
     Text {
       width: parent.width
@@ -866,13 +1009,14 @@ Column {
                   (chatRow.modelData.updated ? "  ·  " + Qt.formatDateTime(new Date(Number(chatRow.modelData.updated) * 1000), "MMM d, h:mm AP") : "")
             color: page.s.foreground
             font.family: page.s.fontFamily
+            font.pixelSize: Style.font.body
           }
           Text {
             width: parent.width
             visible: text !== ""
             elide: Text.ElideRight
             textFormat: Text.PlainText
-            text: String(chatRow.modelData.preview || "")
+            text: page.chatCaption(chatRow.modelData)
             color: page.s.dim
             font.family: page.s.fontFamily
             font.pixelSize: Style.font.caption

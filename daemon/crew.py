@@ -91,6 +91,17 @@ class Persona:
         #: The session handed to a terminal, while that terminal may still
         #: hold it: voice does not touch it until it is closed.
         self.terminal: str | None = None
+        #: The collaboration task this agent's turn is doing for another
+        #: agent (collab.Task), or None for its own conversation (Phase 15).
+        self.task = None
+        #: What that turn records as said: the user's request, not the
+        #: transcript and brief put ahead of it.
+        self.task_heard = ""
+        #: Its own (session, chat, continued, replay), kept across a
+        #: delegated task and put back after it.
+        self.saved_conversation = None
+        #: The failure kind of its last turn, "" when it answered.
+        self.turn_error = ""
 
     @property
     def main(self) -> bool:

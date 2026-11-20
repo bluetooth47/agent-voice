@@ -1,7 +1,7 @@
 """The audit log: who changed what between agents, and when (merged plan,
 section 3.7, Phase 14).
 
-One JSON line per note write, and from Phase 16 per collaboration call:
+One JSON line per note write, and from Phase 15 per collaboration task:
 the time, what kind of thing happened, who did it, where, the note's name
 or the task's id, and sizes in bytes. **Never the text.** A note is
 whatever an agent decided to write down, which may be a file's contents or
@@ -46,7 +46,11 @@ ROTATE_AT = 1024 * 1024
 KINDS = frozenset({
     "note_write", "note_append", "note_restore", "note_lock", "note_unlock",
     "note_refused",
+    # One per collaboration task, when it ends (Phase 15).
+    "task_pass", "task_delegate", "task_ask", "task_message",
 })
+#: How a task ended: collab.DONE, kept here so this file imports nothing.
+STATES = frozenset({"completed", "cancelled", "failed", "refused"})
 #: An agent's external id ("main", "sora", "jarvis-ajc"), "you", or
 #: "communal" for the shared folder.
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
@@ -80,7 +84,7 @@ def _size(value) -> int | None:
 
 def record(kind: str, *, frm: str, to: str, note: str = "", task: str = "",
            before: int | None = None, after: int | None = None,
-           reason: str = "") -> bool:
+           reason: str = "", state: str = "") -> bool:
     """Append one line. Returns False when it could not be written; never
     raises, because a log that fails must not fail the write it records
     (the write has already happened by the time this runs)."""
@@ -98,6 +102,8 @@ def record(kind: str, *, frm: str, to: str, note: str = "", task: str = "",
         line["bytes_after"] = a
     if reason:
         line["reason"] = reason if reason in REASONS else "?"
+    if state:
+        line["state"] = state if state in STATES else "?"
     data = (json.dumps(line, separators=(",", ":")) + "\n").encode()
     try:
         paths.private_dir(paths.DATA_DIR)

@@ -410,3 +410,47 @@ _HANDOFF = re.compile(
 def is_handoff(text: str) -> bool:
     """True for "move this to a terminal" and the ways it is said, whole."""
     return bool(_HANDOFF.match(_normalize(text)))
+
+
+#: "pass this to Sora" (merged plan, Phase 15): the conversation goes to
+#: another agent. "pass" or "send", never "hand", which is the terminal's
+#: word. What follows the name is the user's request riding with it.
+_PASS = re.compile(
+    r"^\W*(?:please\s+|can you\s+|could you\s+|now\s+)?(?:pass|send)\s+"
+    r"(?:(?:this|it|that|the chat|this chat|the conversation|this conversation)\s+)?"
+    r"(?:over\s+)?to\s+(?P<rest>.+)$", re.IGNORECASE | re.DOTALL)
+#: "Sora, take over", said to the agent that is to take it.
+_TAKE_OVER = frozenset({
+    "take over", "take it over", "take this over", "you take over",
+    "take over from here", "you take it from here", "take it from here",
+    "please take over", "can you take over", "take over please",
+})
+
+
+def pass_command(text: str, names) -> tuple[str, str]:
+    """(name, request) for "pass this to Sora, and ask her about the
+    weather" -> ("sora", "ask her about the weather"); ("", "") for anything
+    else, including a name that is no agent's ("pass this to the left").
+
+    `names` are the names an agent may be called by -- display names and
+    wake phrases, lower case. Matched at the start of what follows "to",
+    longest first, on whole words."""
+    m = _PASS.match(str(text or "").strip())
+    if not m:
+        return "", ""
+    rest = m.group("rest").strip()
+    words = rest.split()
+    plain = [re.sub(r"^[^\w']+|[^\w']+$", "", w).lower() for w in words]
+    for name in sorted({n for n in names if n}, key=len, reverse=True):
+        parts = name.lower().split()
+        if plain[:len(parts)] == parts:
+            request = " ".join(words[len(parts):])
+            request = re.sub(r"^[\s,.:;!?—–-]*(?:and\s+(?:then\s+)?)?", "", request,
+                             flags=re.IGNORECASE)
+            return name.lower(), request.strip()
+    return "", ""
+
+
+def is_take_over(text: str) -> bool:
+    """True for "take over" and the ways it is said, whole."""
+    return _normalize(text) in _TAKE_OVER

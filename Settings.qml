@@ -329,6 +329,17 @@ Item {
   // Per agent folder: sizes, problems, files changed outside Settings
   // (merged plan, Phases 9 and 10). Never the text.
   property var vAgentFiles: ({})
+  // Tasks between agents, from the state file (collab.py): never a brief.
+  property var vTasks: []
+  // "Send to another agent" (ui/SendSheet.qml), from the conversation view
+  // and a chat row. `fromId` is the source's external id ("main" for the
+  // main agent), `chatId` a saved chat or "" for this session.
+  // For bench/preview targets, which drive its controls.
+  readonly property alias sendSheetView: sendSheet
+  function openSendSheet(fromId, chatId) {
+    if (root.mode !== "history") root.showPage("history")
+    sendSheet.open(fromId, chatId)
+  }
 
   // Omarchy's default agent, read from the file `omarchy default agent`
   // writes, so the main agent has a name while the service is stopped.
@@ -825,7 +836,7 @@ Item {
       else if (validTab) detailsTab = tab
       focusAgent = ""
     } else {
-      if (page === "communal" && (tab === "rules" || tab === "skills" || tab === "notes")) communalTab = tab
+      if (page === "communal" && (tab === "rules" || tab === "skills" || tab === "notes" || tab === "chats")) communalTab = tab
       focusTools = page === "agents" && tab === "tools"
       focusAgent = ""
       focusAgent = agent || ""
@@ -865,6 +876,12 @@ Item {
   function clearSession() { clearHistory.running = true }
   readonly property bool saveChats: setting("saveChats", false) === true
   property string openChat: ""
+  // Open saved chat `id` in the conversation view.
+  function showChat(id) {
+    openChat = ""
+    openChat = String(id || "")
+    showPage("history")
+  }
 
   // What has already been turned into rows. A new turn only ever appends to
   // the file, so only the lines past this are parsed and added -- rebuilding
@@ -878,6 +895,8 @@ Item {
     return {
       at: Number(e.at) || 0,
       agent: String(e.agent || ""),
+      // External id ("main" for the main agent), for the send sheet.
+      agentId: String(e.agent_id || "") || "main",
       transcript: String(e.transcript || ""),
       reply: String(e.reply || ""),
       thought: String(e.thinking || ""),
@@ -1279,6 +1298,8 @@ Item {
         root.vCrew = Array.isArray(d.crew) ? d.crew : []
         root.vLive = (d.live && typeof d.live === "object") ? d.live : ({})
         root.vAgentFiles = (d.agent_files && typeof d.agent_files === "object") ? d.agent_files : ({})
+        // Collaboration tasks (Phase 15); absent when there are none.
+        root.vTasks = Array.isArray(d.tasks) ? d.tasks : []
       } catch (e) {}
     }
   }
@@ -1409,6 +1430,9 @@ Item {
             width: parent.width
             wrapMode: Text.WordWrap
             text: (root.askerName() !== "" ? "The agent “" + root.askerName() + "”" : "The agent") +
+                  // Whom it works for, on a task another agent passed it
+                  // (Phase 15): "…, for Theo, for you, wants to …".
+                  (String(root.request.chain || "") !== "" ? ", " + String(root.request.chain) + "," : "") +
                   " wants to " + root.toolWords(root.request.tool) + "."
             textFormat: Text.PlainText
             color: root.foreground
@@ -1748,13 +1772,30 @@ Item {
             Text {
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
-              width: parent.width - clearButton.width - Style.space(12)
+              width: parent.width - clearButton.width - passButton.width - Style.space(24)
               elide: Text.ElideRight
               text: historyModel.count + (historyModel.count === 1 ? " exchange" : " exchanges")
                     + " · in memory only, gone at logout · drag across text to copy it"
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
+            }
+            // Pass this session's conversation with its last agent on
+            // (Phase 15). Nothing is on disk with saving off: the target is
+            // given what this session holds in memory.
+            Button {
+              id: passButton
+              anchors.right: clearButton.left
+              anchors.rightMargin: Style.space(8)
+              visible: historyModel.count > 0
+              text: "Send to another agent"
+              enabled: root.serviceActive
+              tooltipText: root.serviceActive ? "Pass this conversation on, with a brief you can edit"
+                                              : "The service is not running"
+              fontFamily: root.fontFamily
+              bordered: true
+              onClicked: root.openSendSheet(historyModel.count > 0
+                                            ? historyModel.get(historyModel.count - 1).agentId : "main", "")
             }
             Button {
               id: clearButton
@@ -1775,6 +1816,24 @@ Item {
             }
           }
         }
+      }
+
+      // "Send to another agent" over the conversation (Phase 15). Inside the
+      // card, so Escape and a click outside behave as for the rest of it.
+      SendSheet {
+        id: sendSheet
+        anchors.fill: parent
+        // Inside the card's border, which stays drawn around it.
+        anchors.margins: Math.max(1, Style.space(2))
+        z: 10
+        s: root
+      }
+      // Only over the conversation: leaving it, or closing the overlay,
+      // drops an unsent sheet rather than leaving it over a settings page.
+      Connections {
+        target: root
+        function onModeChanged() { if (root.mode !== "history") sendSheet.close() }
+        function onOpenedChanged() { if (!root.opened) sendSheet.close() }
       }
     }
   }

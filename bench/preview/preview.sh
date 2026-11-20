@@ -40,6 +40,9 @@
 #                  way it does on the real shell. The round trip is where
 #                  rebuild bugs live (a card shutting on every save); the
 #                  real shell.json is still never touched.
+#   --scratch-data the overlay reads a scratch data folder (saved chats,
+#                  agent folders) seeded by targets/TARGET.seed.py when there
+#                  is one, so a screenshot holds no real conversation
 #   --keep         leave it running until Ctrl+C instead of exiting after the
 #                  last shot (for poking at it by hand)
 set -euo pipefail
@@ -49,7 +52,7 @@ repo=$(cd "$here/../.." && pwd)
 shell_src="${OMARCHY_PATH:-/usr/share/omarchy}/shell"
 themes="${OMARCHY_PATH:-/usr/share/omarchy}/themes"
 
-theme="" out="" size="" wait=3 shots=1 gap=1.5 arg="" keep=0 state="" live=0
+theme="" out="" size="" wait=3 shots=1 gap=1.5 arg="" keep=0 state="" live=0 scratch=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --theme) theme=$2; shift 2 ;;
@@ -62,6 +65,7 @@ while [ $# -gt 0 ]; do
     --state) state=$(realpath "$2"); shift 2 ;;
     --keep) keep=1; shift ;;
     --live-config) live=1; shift ;;
+    --scratch-data) scratch=1; shift ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     -*) echo "unknown option: $1" >&2; exit 2 ;;
     *) break ;;
@@ -182,14 +186,30 @@ case "\${1:-}" in
       mkdir -p '$tmp/exports'; set -- "\$@" '$tmp/exports'
     fi
     XDG_DATA_HOME='$tmp/data' exec '$repo/bin/agentvoice' "\$@" ;;
-  start|stop|restart|toggle|enable|disable|mic|open-mic|interrupt|lock|unlock|type|talk|talk-end|permit|wake-test|calibrate)
+  chats)
+    # Saved chats: from the scratch data folder under --scratch-data, so
+    # sharing a chat in a preview touches no real one; else as before.
+    if [ '$scratch' = 1 ]; then XDG_DATA_HOME='$tmp/data' exec '$repo/bin/agentvoice' "\$@"; fi ;;
+  start|stop|restart|toggle|enable|disable|mic|open-mic|interrupt|lock|unlock|type|talk|talk-end|permit|wake-test|calibrate|pass|tasks)
     printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0 ;;
 esac
 exec '$tmp/bin/agentvoice.rest' "\$@"
 STUB
 chmod +x "$tmp/bin/agentvoice"
 
-env "${runtime_env[@]}" "${config_env[@]}" \
+# --scratch-data: the overlay reads the scratch data folder too (saved
+# chats, agent folders), so a screenshot holds no real conversation. A
+# target's own synthetic content, targets/TARGET.seed.py, is written there
+# first.
+data_env=()
+if [ "$scratch" -eq 1 ]; then
+  data_env=(XDG_DATA_HOME="$tmp/data")
+  if [ -f "$here/targets/$target.seed.py" ]; then
+    PREVIEW_DATA="$tmp/data/agentvoice" python3 "$here/targets/$target.seed.py" "$repo/daemon"
+  fi
+fi
+
+env "${runtime_env[@]}" "${config_env[@]}" "${data_env[@]+"${data_env[@]}"}" \
 PATH="$tmp/bin:$PATH" PREVIEW_ARG="$arg" PREVIEW_WRITES="$out.writes" \
   PREVIEW_DATA="$tmp/data/agentvoice" PREVIEW_AGENTS_DELAY="${PREVIEW_AGENTS_DELAY:-0}" \
   PREVIEW_WAIT="$wait" PREVIEW_GAP="$gap" \

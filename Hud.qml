@@ -42,6 +42,9 @@ PanelWindow {
   // Which agent this is, when there is more than one: the name that wakes
   // it. Empty with a single agent, which then reads exactly as it did.
   property string who: ""
+  // Collaboration between agents (Phase 15), one line: "Theo → Sora:
+  // passing", "Sora (for Theo): working", "Sora finished". Empty otherwise.
+  property string collab: ""
   property color accent: Commons.Color.foreground
 
   // `var`, not QtObject: the bar is reached for position and thickness, and
@@ -63,7 +66,10 @@ PanelWindow {
   readonly property bool busy: enabled
     && (vState === "capture" || vState === "transcribing"
         || vState === "thinking" || vState === "speaking"
-        || vState === "followup")
+        || vState === "followup"
+        // A pass waiting out its cancel window is worth seeing; never over
+        // the lock screen.
+        || (collab !== "" && vState !== "locked" && vState !== "off"))
 
   property bool showing: false
 
@@ -246,6 +252,18 @@ PanelWindow {
             font.family: hud.fontFamily
             font.pixelSize: Style.font.caption
           }
+        }
+
+        Text {
+          width: parent.width
+          visible: hud.collab !== ""
+          wrapMode: Text.WordWrap
+          text: hud.collab
+          // Agents' names are any text somebody typed.
+          textFormat: Text.PlainText
+          color: hud.accent
+          font.family: hud.fontFamily
+          font.pixelSize: Style.font.caption
         }
 
         Text {

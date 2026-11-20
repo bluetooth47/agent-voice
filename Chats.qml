@@ -9,8 +9,8 @@ import "ui"
 
 // Saved conversations (saveChats), beside this session's: a list on the
 // left, grouped Pinned / Today / This week / Older, searchable and filtered
-// by agent; the open chat on the right with Continue, Rename, Pin, Export
-// and Delete.
+// by agent; the open chat on the right with continuation, sharing and
+// conversation management controls.
 //
 // Read straight from ~/.local/share/agentvoice/chats/, the way the state
 // file is: index.json for the list, one <id>.json for the open chat. Every
@@ -24,7 +24,7 @@ Item {
   // "session", or the id of a saved chat.
   property string selected: "session"
   property string query: ""
-  // "all", "" for the main agent, or an extra agent's id.
+  // "all", "multi", "" for the main agent, or "agent:" + an extra agent's id.
   property string agentFilter: "all"
   property var index: ({ chats: [], current: {} })
   property var chat: ({})
@@ -34,21 +34,59 @@ Item {
 
   readonly property string dir: s.dataHome + "/agentvoice/chats"
   readonly property bool sessionOpen: selected === "session"
+  readonly property bool savedChatOpen: view.validId(selected) && chat.id === selected
+  readonly property string ownerId: view.ownerOf(chat)
+  readonly property var sharedAgents: Array.isArray(chat.shared_with) ? chat.shared_with : []
+  readonly property var continueAgents: {
+    var entry = view.index.chats.find(function(c) { return c && c.id === view.chat.id })
+    // The index lists who can continue. The full chat can arrive ahead of it.
+    var ids = entry && Array.isArray(entry.agents) ? entry.agents
+              : view.sharedAgents.concat(Object.keys(view.chat.sessions || {}))
+    return ids.filter(function(id) { return id !== view.ownerId })
+  }
 
   function validId(id) { return /^[0-9a-f]{16}$/.test(String(id || "")) }
 
-  // What an agent is called now, rather than when the chat began: chats
-  // know their agent by id, so a rename shows up here too.
-  function agentName(c) {
-    var id = String((c || {}).agent_id || "")
-    if (id === "") return s.mainLabel
-    for (var i = 0; i < s.voiceAgents.length; i++)
-      if (s.agentId(s.voiceAgents[i]) === id) return s.agentLabel(s.voiceAgents[i])
-    return String((c || {}).agent_label || "") || "a removed agent"
+  function ownerOf(c) { return String(c.owner || c.agent_id || "main") }
+
+  function currentAgentName(id) {
+    if (id === "main") return s.mainLabel
+    for (var i = 0; i < s.voiceAgents.length; i++) {
+      var agent = s.voiceAgents[i]
+      if (s.agentId(agent) === id) return s.agentLabel(agent)
+    }
+    return ""
   }
+
+  // The owner's current name, or the saved label for a removed agent.
+  function agentName(c) {
+    return view.currentAgentName(view.ownerOf(c)) || String(c.agent_label || "a removed agent")
+  }
+
   function inUse(c) {
     var cur = view.index.current || {}
-    return cur[String(c.agent_id || "")] === c.id
+    var id = view.ownerOf(c)
+    return cur[id === "main" ? "" : id] === c.id
+  }
+
+  function lastSpeaker() {
+    var exchanges = view.chat.exchanges
+    var last = Array.isArray(exchanges) && exchanges.length > 0 ? exchanges[exchanges.length - 1] : null
+    return String((last && last.agent_id) || view.ownerId)
+  }
+
+  function sessionSpeaker() {
+    var rows = view.s.historyRows
+    return rows.count > 0 ? String(rows.get(rows.count - 1).agentId || "main") : "main"
+  }
+
+  function exchangeSpeaker(id, label, kind, passedFrom) {
+    var name = label || view.currentAgentName(id) || view.agentName(view.chat)
+    if (kind === "brief") {
+      var source = view.currentAgentName(passedFrom) || passedFrom || "another agent"
+      return name + " (passed from " + source + ")"
+    }
+    return name
   }
 
   function groupOf(c) {
@@ -69,7 +107,12 @@ Item {
     for (var i = 0; i < all.length; i++) {
       var c = all[i] || {}
       if (!view.validId(c.id)) continue
-      if (view.agentFilter !== "all" && String(c.agent_id || "") !== view.agentFilter) continue
+      if (view.agentFilter === "multi") {
+        if (!Array.isArray(c.participants) || c.participants.length <= 1) continue
+      } else if (view.agentFilter !== "all") {
+        var owner = view.ownerOf(c)
+        if ((owner === "main" ? "" : "agent:" + owner) !== view.agentFilter) continue
+      }
       if (q !== "") {
         var hay = (String(c.title || "") + " " + String(c.preview || "") + " " +
                    view.agentName(c)).toLowerCase()
@@ -87,12 +130,23 @@ Item {
     return out
   }
 
-  readonly property var agentOptions: {
-    var out = [{ label: "All agents", value: "all" }, { label: s.mainLabel, value: "" }]
+  readonly property var agents: {
+    var out = [{ label: s.mainLabel, value: "main" }]
     for (var i = 0; i < s.voiceAgents.length; i++)
       out.push({ label: s.agentLabel(s.voiceAgents[i]), value: s.agentId(s.voiceAgents[i]) })
     return out
   }
+  readonly property var agentOptions: [{ label: "All agents", value: "all" },
+                                       { label: "Agent conversations", value: "multi" }]
+    .concat(view.agents.map(function(agent) {
+      return { label: agent.label, value: agent.value === "main" ? "" : "agent:" + agent.value }
+    }))
+  readonly property var shareOptions: view.agents.filter(function(agent) {
+    return agent.value !== view.ownerId && view.sharedAgents.indexOf(agent.value) === -1
+  })
+  readonly property var unshareOptions: view.sharedAgents.map(function(id) {
+    return { label: "Stop sharing with " + (view.currentAgentName(id) || id), value: id }
+  })
 
   function whenOf(at) {
     if (!(at > 0)) return ""
@@ -156,9 +210,10 @@ Item {
       if (!d || d.id !== view.selected) return
       view.chat = d
       var ex = Array.isArray(d.exchanges) ? d.exchanges : []
-      // Appended rows only, when it has grown: a turn ending while it is
-      // open must not throw away where you had scrolled to.
-      if (chatModel.count > ex.length || chatList.chatId !== d.id) {
+      // Append in place to preserve scroll, unless the daemon dropped old turns.
+      var firstChanged = chatModel.count > 0 && ex.length > 0 &&
+                         chatModel.get(0).at !== (Number((ex[0] || {}).at) || 0)
+      if (chatModel.count > ex.length || chatList.chatId !== d.id || firstChanged) {
         chatModel.clear()
         chatList.chatId = d.id
       }
@@ -166,6 +221,10 @@ Item {
         var e = ex[i] || {}
         chatModel.append({
           at: Number(e.at) || 0,
+          speakerId: String(e.agent_id || ""),
+          speakerLabel: String(e.agent_label || ""),
+          kind: String(e.kind || ""),
+          passedFrom: String(e["for"] || ""),
           transcript: String(e.transcript || ""),
           reply: String(e.reply || ""),
           thought: String(e.thinking || ""),
@@ -196,21 +255,34 @@ Item {
     onRunningChanged: if (!running) { indexFile.reload(); chatFile.reload() }
   }
   function run(verb, args) {
-    if (action.running) return
+    if (action.running) return false
+    view.note = ""
     view.pendingVerb = verb
     action.command = ["agentvoice", "chats", verb].concat(args)
     action.running = true
+    return true
   }
 
   function continueChat() {
     var c = view.chat
-    run("continue", [c.id])
+    if (!run("continue", [c.id])) return
     var program = String(c.backend || "")
     view.note = program === "claude"
                 ? "Your next request to " + view.agentName(c) + " picks this conversation up where it left off."
                 : "Your next request to " + view.agentName(c) + " continues this chat. " +
                   (program !== "" ? s.programLabel(program) : "This program") + " cannot resume a " +
                   "conversation, so the chat's words go with that request, which costs tokens."
+  }
+
+  component SendButton: Button {
+    text: "Send to another agent"
+    bordered: true
+    focusable: true
+    enabled: view.s.serviceActive
+    tooltipText: view.s.serviceActive ? "" : "The service is not running"
+    fontFamily: view.s.fontFamily
+    foreground: enabled ? view.s.foreground : view.s.dim
+    width: Math.min(implicitWidth, parent.width)
   }
 
   // --- the list ---------------------------------------------------------------
@@ -268,6 +340,7 @@ Item {
 
     ListView {
       id: list
+      visible: view.rows.length > 0
       width: parent.width
       height: parent.height - y
       clip: true
@@ -346,9 +419,11 @@ Item {
       visible: view.rows.length === 0
       width: parent.width
       wrapMode: Text.WordWrap
-      text: view.query !== "" || view.agentFilter !== "all"
-            ? "No saved chat matches."
-            : "No saved chats yet. Each conversation is saved here as it happens."
+      text: view.agentFilter === "multi"
+            ? "No conversations with more than one agent yet. Pass a chat to another agent, or share it."
+            : (view.query !== "" || view.agentFilter !== "all"
+               ? "No saved chat matches."
+               : "No saved chats yet. Each conversation is saved here as it happens.")
       color: view.s.dim
       font.family: view.s.fontFamily
       font.pixelSize: Style.font.caption
@@ -417,34 +492,39 @@ Item {
       font.family: view.s.fontFamily
       font.pixelSize: Style.font.body
     }
-    Item {
+    Column {
       id: sessionFooter
       visible: view.sessionOpen
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.bottom: parent.bottom
-      height: clearSession.implicitHeight
+      spacing: Style.space(6)
       Text {
-        anchors.left: parent.left
-        anchors.verticalCenter: parent.verticalCenter
-        width: parent.width - clearSession.width - Style.space(12)
-        elide: Text.ElideRight
+        width: parent.width
+        wrapMode: Text.WordWrap
         text: "In memory only, gone at logout. Saved chats are kept separately."
         color: view.s.dim
         font.family: view.s.fontFamily
         font.pixelSize: Style.font.caption
       }
-      Button {
-        id: clearSession
-        anchors.right: parent.right
-        visible: view.s.historyRows.count > 0
-        text: view.s.confirmClear ? "Clear it all?" : "Clear"
-        fontFamily: view.s.fontFamily
-        bordered: true
-        onClicked: {
-          if (!view.s.confirmClear) { view.s.confirmClear = true; return }
-          view.s.confirmClear = false
-          view.s.clearSession()
+      Flow {
+        width: parent.width
+        layoutDirection: Qt.RightToLeft
+        spacing: Style.space(6)
+        Button {
+          visible: view.s.historyRows.count > 0
+          text: view.s.confirmClear ? "Clear it all?" : "Clear"
+          fontFamily: view.s.fontFamily
+          bordered: true
+          onClicked: {
+            if (!view.s.confirmClear) { view.s.confirmClear = true; return }
+            view.s.confirmClear = false
+            view.s.clearSession()
+          }
+        }
+        SendButton {
+          visible: view.s.historyRows.count > 0
+          onClicked: view.s.openSendSheet(view.sessionSpeaker(), "")
         }
       }
     }
@@ -452,7 +532,7 @@ Item {
     // A saved chat.
     Column {
       id: chatHead
-      visible: !view.sessionOpen
+      visible: view.savedChatOpen
       width: parent.width
       spacing: Style.space(6)
 
@@ -514,6 +594,39 @@ Item {
           fontFamily: view.s.fontFamily
           onClicked: view.continueChat()
         }
+        Repeater {
+          model: view.continueAgents
+          Button {
+            required property string modelData
+            readonly property string agentName: view.currentAgentName(modelData) || modelData
+            text: "Continue with " + agentName
+            width: Math.min(implicitWidth, parent.width)
+            bordered: true
+            focusable: true
+            enabled: view.s.serviceActive
+            tooltipText: view.s.serviceActive ? "Make this " + agentName + "'s current chat"
+                                              : "The service is not running"
+            fontFamily: view.s.fontFamily
+            foreground: enabled ? view.s.foreground : view.s.dim
+            onClicked: view.run("continue", [view.chat.id, modelData])
+          }
+        }
+        SendButton {
+          onClicked: view.s.openSendSheet(view.lastSpeaker(), view.chat.id)
+        }
+        Dropdown {
+          visible: view.shareOptions.length > 0
+          width: Math.min(implicitWidth, parent.width)
+          showLabel: false
+          fontFamily: view.s.fontFamily
+          foreground: view.s.foreground
+          options: view.shareOptions
+          value: "Share chat with…"
+          onChanged: function(agentId) {
+            value = "Share chat with…"
+            view.run("share", [view.chat.id, agentId])
+          }
+        }
         Button {
           text: "Rename"
           bordered: true
@@ -548,6 +661,34 @@ Item {
           }
         }
       }
+      Flow {
+        visible: view.sharedAgents.length > 0
+        width: parent.width
+        spacing: Style.space(6)
+        Text {
+          width: Math.min(implicitWidth, parent.width)
+          wrapMode: Text.Wrap
+          text: "Shared with: " + view.sharedAgents.map(function(id) {
+            return view.currentAgentName(id) || id
+          }).join(", ")
+          textFormat: Text.PlainText
+          color: view.s.dim
+          font.family: view.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Dropdown {
+          width: Math.min(implicitWidth, parent.width)
+          showLabel: false
+          fontFamily: view.s.fontFamily
+          foreground: view.s.foreground
+          options: view.unshareOptions
+          value: "Stop sharing with…"
+          onChanged: function(agentId) {
+            value = "Stop sharing with…"
+            view.run("unshare", [view.chat.id, agentId])
+          }
+        }
+      }
       Text {
         visible: view.note !== ""
         width: parent.width
@@ -564,7 +705,7 @@ Item {
     ListView {
       id: chatList
       property string chatId: ""
-      visible: !view.sessionOpen
+      visible: view.savedChatOpen
       anchors.top: chatHead.bottom
       anchors.topMargin: Style.spacing.md
       anchors.left: parent.left
@@ -577,6 +718,10 @@ Item {
       QQC.ScrollBar.vertical: QQC.ScrollBar { policy: QQC.ScrollBar.AsNeeded }
       delegate: ExchangeItem {
         required property real at
+        required property string speakerId
+        required property string speakerLabel
+        required property string kind
+        required property string passedFrom
         required property string transcript
         required property string reply
         required property string thought
@@ -584,6 +729,7 @@ Item {
         required property bool stopped
         width: ListView.view ? ListView.view.width - Style.space(10) : 0
         when: view.whenOf(at)
+        who: view.exchangeSpeaker(speakerId, speakerLabel, kind, passedFrom)
         heard: transcript
         answer: reply
         thinking: thought

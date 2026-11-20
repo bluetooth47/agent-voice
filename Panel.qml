@@ -71,6 +71,8 @@ Panel {
   property string lastReply: ""
   // Whose turn the readout is showing, with more than one agent.
   property string lastWho: ""
+  // The collaboration line for the HUD (Phase 15); "" when nothing is passing.
+  property string collabLine: ""
 
   readonly property bool live: serviceActive && vState !== "off"
 
@@ -416,6 +418,7 @@ Panel {
         // Absent with a single agent, and then cleared rather than kept: a
         // name left over from when there were several would be wrong.
         voice.lastWho = d.who_label !== undefined ? String(d.who_label) : ""
+        voice.collabLine = d.collab !== undefined ? String(d.collab) : ""
         if (d.agent !== undefined) voice.vAgent = String(d.agent)
         if (d.level !== undefined) voice.permissionLevel = String(d.level)
         if (d.posture !== undefined) voice.vPosture = String(d.posture)
@@ -474,6 +477,7 @@ Panel {
     transcript: voice.lastTranscript
     reply: voice.lastReply
     who: voice.lastWho
+    collab: voice.collabLine
     // A click on the readout opens the whole conversation -- the answer to
     // "the popup is too small" for anything longer than a glance.
     onOpenConversation: conversation.running = true

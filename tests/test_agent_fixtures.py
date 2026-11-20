@@ -138,7 +138,10 @@ def test_saved_chats_use_the_empty_id_for_the_main_agent():
 
 def test_saved_chats_are_shaped_as_the_real_writer_writes_them(tmp_path):
     """Each fixture chat, written again through ChatStore.record with the
-    same values, comes back equal apart from its random id and title."""
+    same values, comes back equal apart from its random id and title -- and,
+    from Phase 15, the shared-chat fields the writer adds beside the old
+    ones (owner, participants, sessions, each exchange's speaker), which an
+    older reader ignores. Every old field keeps its old value."""
     fx = load(FIXTURES / "saved-chats.json")
     store = ChatStore(tmp_path / "chats")
     for chat in fx["chats"]:
@@ -155,6 +158,15 @@ def test_saved_chats_are_shaped_as_the_real_writer_writes_them(tmp_path):
         written = store.load(new_id)
         for key in ("id", "title"):
             written.pop(key)
+        owner = chat["agent_id"] or "main"
+        assert written.pop("owner") == owner
+        assert written.pop("participants") == [owner]
+        assert written.pop("sessions") == {owner: {
+            "backend": chat["backend"], "session_id": chat["session_id"],
+            "project_dir": chat["project_dir"]}}
+        for e in written["exchanges"]:
+            assert e.pop("agent_id") == owner
+            assert e.pop("agent_label") == chat["agent_label"]
         want = {k: v for k, v in chat.items() if k not in ("id", "title")}
         assert written == want
 

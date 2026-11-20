@@ -75,6 +75,10 @@ def status(agent: dict, mic: str, running: bool = True) -> str:
     if not running:
         return "Off"
     activity = agent.get("activity", "idle")
+    # Doing a task another agent passed it (Phase 15): who it is for says
+    # more than whether it is thinking or speaking.
+    if activity in ("thinking", "speaking") and agent.get("for"):
+        return f"Working for {agent['for']}"
     if activity == "thinking":
         return "Thinking…"
     if activity == "speaking":

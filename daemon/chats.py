@@ -11,6 +11,23 @@ On disk: `~/.local/share/agentvoice/chats/`, 0700, one file per chat, 0600:
      "project_dir", "title", "started", "updated", "pinned",
      "exchanges": [{"at", "transcript", "reply", "error", "stopped"}]}
 
+Shared chats (merged plan, Phase 15) add, all optional so an older chat
+reads exactly as before:
+
+- `owner`: the agent that started it, by external id ("main" for the main
+  agent), fixed when the chat is made. `agent_id` stays in step with it,
+  still "" for the main agent, for older readers; record() no longer
+  overwrites either when another agent speaks.
+- each exchange's `agent_id` and `agent_label` (who answered), and
+  optionally `kind` ("brief" for a passed conversation's first turn) and
+  `for` (the agent it was passed from);
+- `sessions`: {agent: {backend, session_id, project_dir}} per speaker. The
+  top-level `session_id`, `backend` and `project_dir` remain the owner's.
+- `participants`: who has spoken in it. For display; it grants nothing.
+- `shared_with`: the agents that may be replayed the transcript besides its
+  owner -- those it was shared with, and those it was passed to. The only
+  grant of replay.
+
 and `index.json` beside them: every chat without its exchanges, plus which
 chat each agent is in right now (`current`), for the conversation view to
 watch. A chat knows its agent by the stable id (plan 7c), so renaming an
@@ -60,8 +77,93 @@ _FILLER = frozenset({
 })
 
 
+#: An agent's external id: "main", or an extra agent's id.
+_AGENT = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
+
+
 def valid_id(chat_id) -> bool:
     return isinstance(chat_id, str) and bool(_CHAT_ID.fullmatch(chat_id))
+
+
+def external(agent_id) -> str:
+    """The id written into the new fields: "" (the main agent inside the
+    daemon) is "main", as agentfs.folder_id has it."""
+    return str(agent_id or "") or "main"
+
+
+def internal(agent_id) -> str:
+    """The daemon's id for an external one: "main" is ""."""
+    agent_id = str(agent_id or "")
+    return "" if agent_id == "main" else agent_id
+
+
+def _ids(value) -> list[str]:
+    """A list of agent ids read from a chat, keeping only well-formed ones,
+    each once, in order: a hand-edited chat cannot put anything else here."""
+    out = []
+    for v in value if isinstance(value, list) else []:
+        if isinstance(v, str) and _AGENT.fullmatch(v) and v not in out:
+            out.append(v)
+    return out
+
+
+def owner_of(chat: dict) -> str:
+    """Who owns `chat`, by external id. A chat from before Phase 15 has no
+    `owner`: its `agent_id` is the owner, as it always was."""
+    own = chat.get("owner")
+    if isinstance(own, str) and _AGENT.fullmatch(own):
+        return own
+    return external(chat.get("agent_id", ""))
+
+
+def participants_of(chat: dict) -> list[str]:
+    """Who has spoken in `chat`. An older chat has only its owner."""
+    found = _ids(chat.get("participants"))
+    return found or [owner_of(chat)]
+
+
+def shared_with(chat: dict) -> list[str]:
+    return [a for a in _ids(chat.get("shared_with")) if a != owner_of(chat)]
+
+
+def sessions_of(chat: dict) -> dict:
+    """Each speaker's session in `chat`. An older chat's top-level session
+    is its owner's."""
+    out = {}
+    raw = chat.get("sessions")
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if isinstance(k, str) and _AGENT.fullmatch(k) and isinstance(v, dict):
+                out[k] = {"backend": str(v.get("backend") or ""),
+                          "session_id": str(v.get("session_id") or ""),
+                          "project_dir": str(v.get("project_dir") or "")}
+    own = owner_of(chat)
+    if own not in out and chat.get("session_id"):
+        out[own] = {"backend": str(chat.get("backend") or ""),
+                    "session_id": str(chat.get("session_id") or ""),
+                    "project_dir": str(chat.get("project_dir") or "")}
+    return out
+
+
+def may_replay(chat: dict, agent: str) -> bool:
+    """Whether `agent` (external id) may be given this chat's transcript:
+    its owner and the agents in `shared_with`, and nobody else. Having
+    spoken in it grants nothing."""
+    return agent == owner_of(chat) or agent in shared_with(chat)
+
+
+def may_continue(chat: dict, agent: str) -> bool:
+    """Whether `agent` may carry this chat on: it may be replayed it, or it
+    already has a session in it."""
+    return may_replay(chat, agent) or agent in sessions_of(chat)
+
+
+def who_may_continue(chat: dict) -> list[str]:
+    out = [owner_of(chat)]
+    for a in shared_with(chat) + list(sessions_of(chat)):
+        if a not in out:
+            out.append(a)
+    return out
 
 
 def title_from(text: str) -> str:
@@ -135,6 +237,13 @@ class ChatStore:
             # transcript here stops where the typing began.
             "terminal": chat.get("terminal", 0),
             "count": len(ex),
+            # Shared chats (Phase 15): the owner by external id, who has
+            # spoken, and who may carry it on, for the filters and the
+            # "Agent conversations" list. An older chat has only its owner.
+            "owner": owner_of(chat),
+            "participants": participants_of(chat),
+            "shared_with": shared_with(chat),
+            "agents": who_may_continue(chat),
             # For search in the list: the words, not the whole chat.
             "preview": str(ex[-1].get("transcript", ""))[:160] if ex else "",
         }
@@ -175,25 +284,60 @@ class ChatStore:
                backend: str, session_id: str | None, project_dir: str,
                exchange: dict, now: float | None = None) -> str:
         """Add one exchange: to `chat_id`, or to a new chat when that is None
-        or gone. Returns the chat's id, and makes it the agent's current one."""
+        or gone. Returns the chat's id, and makes it the agent's current one.
+
+        `agent_id` is the daemon's id of whoever answered ("" for the main
+        agent). A new chat is that agent's; in an existing one it is a
+        speaker, and the chat's owner, `agent_id`, `agent_label` and
+        top-level session stay the owner's (Phase 15: they used to be
+        overwritten on every exchange, so a second agent recording into a
+        chat would have taken it over). `exchange` may carry `kind` and
+        `for` (the agent a passed conversation came from)."""
         now = time.time() if now is None else now
+        speaker = external(agent_id)
         with self._locked():
             chat = self.load(chat_id) if valid_id(chat_id) else None
             if chat is None:
                 chat = {"id": secrets.token_hex(8), "started": now, "pinned": False,
                         "title": title_from(exchange.get("transcript", "")),
+                        "agent_id": agent_id, "agent_label": agent_label,
+                        "backend": backend, "project_dir": project_dir,
                         "exchanges": []}
-            chat.update({"agent_id": agent_id, "agent_label": agent_label,
-                         "backend": backend, "project_dir": project_dir,
-                         "updated": now})
-            if session_id:
-                chat["session_id"] = session_id
+            own = owner_of(chat)
+            sessions = sessions_of(chat)
+            people = participants_of(chat)
+            mine = sessions.get(speaker, {})
+            sessions[speaker] = {
+                "backend": backend,
+                # The previous session is kept when a turn reports none, as
+                # the top-level one always was.
+                "session_id": str(session_id or mine.get("session_id") or ""),
+                "project_dir": project_dir}
+            if speaker not in people:
+                people.append(speaker)
+            chat.update({"owner": own, "sessions": sessions,
+                         "participants": people, "updated": now})
+            if speaker == own:
+                chat.update({"agent_id": agent_id, "agent_label": agent_label,
+                             "backend": backend, "project_dir": project_dir})
+                if session_id:
+                    chat["session_id"] = session_id
+            extra = {}
+            if exchange.get("kind") in ("brief", "aside"):
+                extra["kind"] = exchange["kind"]
+            if isinstance(exchange.get("for"), str) and _AGENT.fullmatch(exchange["for"]):
+                extra["for"] = exchange["for"]
             chat["exchanges"] = (chat.get("exchanges") or [])[-(EXCHANGES_MAX - 1):] + [{
                 "at": round(now, 1),
                 "transcript": str(exchange.get("transcript", "")),
                 "reply": str(exchange.get("reply", "")),
                 "error": str(exchange.get("error", "")),
                 "stopped": bool(exchange.get("stopped")),
+                # Who answered (Phase 15), so one transcript can hold several
+                # agents' replies, each labelled.
+                "agent_id": speaker,
+                "agent_label": str(agent_label or ""),
+                **extra,
                 # A reasoning model's thinking, shown greyed; only when there
                 # was some, so chats from other backends are unchanged.
                 **({"thinking": str(exchange["thinking"])[:8000]}
@@ -205,6 +349,27 @@ class ChatStore:
             index["current"][agent_id] = chat["id"]
             self._save_index(index)
             return chat["id"]
+
+    def share(self, chat_id: str, agent: str) -> bool:
+        """Let `agent` (external id) be replayed this chat: "Share chat
+        with...", and what a pass does to its target. The owner already may;
+        sharing with it changes nothing and is not an error."""
+        agent = str(agent or "")
+        if not _AGENT.fullmatch(agent):
+            raise ValueError("not an agent id")
+
+        def add(chat):
+            if agent == owner_of(chat):
+                return
+            have = shared_with(chat)
+            if agent not in have:
+                chat["shared_with"] = have + [agent]
+        return self._change(chat_id, add)
+
+    def unshare(self, chat_id: str, agent: str) -> bool:
+        agent = str(agent or "")
+        return self._change(chat_id, lambda c: c.update(
+            shared_with=[a for a in shared_with(c) if a != agent]))
 
     def set_current(self, agent_id: str, chat_id: str | None) -> None:
         with self._locked():
@@ -308,8 +473,12 @@ class ChatStore:
         and filler ("the chat about our...") counts for nothing. An empty
         query is the most recent chat."""
         want = [w for w in _words(query) if w not in _FILLER]
+        me = external(agent_id)
+        # Its own, and those shared with it or passed to it (Phase 15).
         chats = [c for c in self.list()
-                 if c.get("agent_id") == agent_id and c.get("id") != exclude]
+                 if c.get("id") != exclude
+                 and (c.get("agent_id") == agent_id
+                      or me in (c.get("agents") if isinstance(c.get("agents"), list) else []))]
         if not want:
             return chats[:1]
         scored = []
@@ -342,7 +511,7 @@ class ChatStore:
             lines += [f"**You** ({when}): {e.get('transcript', '')}", ""]
             reply = e.get("reply", "")
             if reply:
-                lines += [f"**{who}**: {reply}", ""]
+                lines += [f"**{e.get('agent_label') or who}**: {reply}", ""]
             if e.get("error"):
                 lines += [f"_failed: {e['error']}_", ""]
             elif e.get("stopped"):
@@ -373,13 +542,17 @@ class ChatStore:
         return path
 
 
-def replay_context(chat: dict, max_chars: int = REPLAY_MAX) -> str:
+def replay_context(chat: dict, max_chars: int = REPLAY_MAX,
+                   tail: str = "The user now says:\n") -> str:
     """The chat as text to put ahead of the next request, for a backend
-    that cannot resume it natively. The newest exchanges win when it is long."""
+    that cannot resume it natively. The newest exchanges win when it is long.
+    Each reply is labelled with the agent that gave it, so a chat several
+    agents have spoken in reads as it happened."""
     who = chat.get("agent_label") or "You (the assistant)"
     turns = []
     for e in chat.get("exchanges") or []:
-        turns.append(f"User: {e.get('transcript', '')}\n{who}: {e.get('reply', '')}")
+        turns.append(f"User: {e.get('transcript', '')}\n"
+                     f"{e.get('agent_label') or who}: {e.get('reply', '')}")
     body = ""
     for turn in reversed(turns):
         if len(body) + len(turn) + 2 > max_chars:
@@ -388,7 +561,14 @@ def replay_context(chat: dict, max_chars: int = REPLAY_MAX) -> str:
     if not body:
         return ""
     return ("We are continuing an earlier conversation. Here it is, for "
-            "context:\n\n" + body.rstrip() + "\n\nThe user now says:\n")
+            "context:\n\n" + body.rstrip() + "\n\n" + tail)
+
+
+def refusal(chat: dict, agent: str) -> str:
+    """Why `agent` may not carry `chat` on, in words a person can act on."""
+    return (f"That chat isn't shared with {agent}: it has no session in it and "
+            f"nobody shared it. Use Share chat with... first, or pass the "
+            f"conversation to it.")
 
 
 def main(argv: list[str]) -> int:
@@ -418,6 +598,20 @@ def main(argv: list[str]) -> int:
             ok = store.pin(rest[0], verb == "pin")
         elif verb == "delete" and rest:
             ok = store.delete(rest[0])
+        elif verb in ("share", "unshare") and len(rest) == 2:
+            # By external id ("main" for the main agent).
+            ok = (store.share if verb == "share" else store.unshare)(rest[0], rest[1])
+        elif verb == "may-continue" and len(rest) == 2:
+            # Whether AGENT may carry chat ID on; asked by `agentvoice chats
+            # continue ID AGENT` before anything is sent to the daemon, so a
+            # refusal is said where it was asked for.
+            chat = store.load(rest[0])
+            if chat is None:
+                raise LookupError
+            if may_continue(chat, rest[1]):
+                return 0
+            print(refusal(chat, rest[1]), file=sys.stderr)
+            return 1
         elif verb == "export" and rest:
             where = store.export_to(rest[0], Path(rest[1]).expanduser() if len(rest) > 1 else None)
             if where is None:
@@ -429,7 +623,8 @@ def main(argv: list[str]) -> int:
             return 0
         else:
             print("usage: agentvoice chats [list|show ID|rename ID TITLE|pin ID|unpin ID|"
-                  "delete ID|export ID [FOLDER]|continue ID|new [AGENT]]", file=sys.stderr)
+                  "delete ID|export ID [FOLDER]|share ID AGENT|unshare ID AGENT|"
+                  "continue ID [AGENT]|new [AGENT]]", file=sys.stderr)
             return 2
         if not ok:
             raise LookupError

@@ -402,6 +402,19 @@ def _notes_question(crew: str, tool_input) -> tuple[dict, str, str]:
     return clean, note, locked
 
 
+def _chain() -> str:
+    """The chain the asking agent works for, from the origin file the daemon
+    writes while it runs a task; "" when there is none or it cannot be read.
+    Never raises: this is on the way to a question, and a hook that throws
+    is a hook that permitted."""
+    try:
+        import collab
+        chain = collab.read_origin(_named() or "main")
+        return collab.chain_text(chain) if chain else ""
+    except Exception:
+        return ""
+
+
 def _named() -> str:
     """The id of the extra agent this hook guards, or "" for the main one."""
     return sys.argv[2] if len(sys.argv) > 2 else ""
@@ -868,6 +881,10 @@ def _ask(tool_name: str, tool_input: dict, note: str = "",
         # answered knowingly.
         "who": _named(),
         "label": _label(),
+        # Whom it is working for, while it does a task another agent passed
+        # it (Phase 15): "for Theo, for you". Words on the card only; it
+        # never changes what is decided.
+        "chain": _chain(),
         "summary": shown,
         "note": note,
         "truncated": cut,

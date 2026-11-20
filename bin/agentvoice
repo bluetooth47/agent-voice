@@ -24,6 +24,8 @@
 #   agentvoice permit <id> allow|allow-session|deny   answer a pending permission request
 #   agentvoice pending             the request waiting for an answer, as JSON
 #   agentvoice endpoint ...        clean, models, test, key: the endpoint editor
+#   agentvoice pass TO [--from ID] < brief   pass the conversation to agent TO
+#   agentvoice tasks [cancel ID]   collaboration tasks between agents
 set -euo pipefail
 
 UNIT=agentvoice.service
@@ -305,6 +307,32 @@ case "${1:-status}" in
     PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
     exec "$PY" "$REPO/daemon/voices.py" "$@"
     ;;
+  pass)
+    # Pass the conversation to another agent (merged plan, Phase 15). The
+    # brief comes on stdin, never argv. Says on stderr that the chat goes
+    # with it, and only then sends; the daemon checks again when it starts.
+    #   agentvoice pass TO [--from ID] [--chat ID] < brief
+    active || { echo "agentvoice is not running" >&2; exit 1; }
+    REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+    PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+    shift
+    exec "$PY" "$REPO/daemon/collab.py" pass "$@"
+    ;;
+  tasks)
+    # Collaboration tasks: open ones and the last few finished.
+    #   agentvoice tasks [--json]
+    #   agentvoice tasks cancel ID
+    if [[ ${2:-} == cancel ]]; then
+      [[ ${3:-} =~ ^[0-9a-f]{12,32}$ ]] || { echo "usage: agentvoice tasks cancel ID" >&2; exit 2; }
+      active || { echo "agentvoice is not running" >&2; exit 1; }
+      send_command "task-cancel $3"
+      exit 0
+    fi
+    REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+    PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+    shift
+    exec "$PY" "$REPO/daemon/collab.py" tasks "$@"
+    ;;
   chats)
     # Saved conversations (saveChats). The daemon holds which chat each
     # agent is in, so continuing or starting one is a command to it; the
@@ -313,13 +341,27 @@ case "${1:-status}" in
     #   agentvoice chats show ID         as Markdown
     #   agentvoice chats rename ID TITLE / pin ID / unpin ID / delete ID
     #   agentvoice chats export ID [DIR] write it as Markdown, print where
-    #   agentvoice chats continue ID     its agent's next turn goes into it
+    #   agentvoice chats continue ID [AGENT]  its agent's (or AGENT's, when
+    #                                    the chat is shared with it) next
+    #                                    turn goes into it
+    #   agentvoice chats share ID AGENT / unshare ID AGENT   who besides its
+    #                                    owner may be given the chat
     #   agentvoice chats new [AGENT]     that agent (main if none) starts afresh
     case ${2:-list} in
       continue)
-        [[ ${3:-} =~ ^[0-9a-f]{16}$ ]] || { echo "usage: agentvoice chats continue ID" >&2; exit 2; }
+        [[ ${3:-} =~ ^[0-9a-f]{16}$ ]] || { echo "usage: agentvoice chats continue ID [AGENT]" >&2; exit 2; }
+        [[ -z ${4:-} || ${4:-} =~ ^[a-z0-9][a-z0-9-]{0,47}$ ]] || { echo "usage: agentvoice chats continue ID [AGENT]" >&2; exit 2; }
         active || { echo "agentvoice is not running" >&2; exit 1; }
-        send_command "chat-continue $3"
+        if [[ -n ${4:-} ]]; then
+          # Refused here, where it was asked, when the chat is neither the
+          # agent's nor shared with it; the daemon checks again.
+          REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+          PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+          "$PY" "$REPO/daemon/chats.py" may-continue "$3" "$4" || exit 1
+          send_command "chat-continue $3 $4"
+        else
+          send_command "chat-continue $3"
+        fi
         ;;
       new)
         [[ ${3:-main} =~ ^[a-z0-9][a-z0-9-]{0,47}$ ]] || { echo "usage: agentvoice chats new [AGENT_ID]" >&2; exit 2; }
@@ -390,7 +432,7 @@ case "${1:-status}" in
     active && echo yes || echo no
     ;;
   *)
-    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|interrupt|monitor|calibrate|voice|permit|pending|history|chats|agents|endpoint|open-mic|wake-test|status|is-active]" >&2
+    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|interrupt|monitor|calibrate|voice|permit|pending|history|chats|pass|tasks|agents|endpoint|open-mic|wake-test|status|is-active]" >&2
     exit 2
     ;;
 esac

@@ -1,0 +1,17 @@
+{"state": "listening", "level_db": -44, "agent": "claude", "level": "trusted",
+ "levels": ["ask", "edits", "trusted"], "posture": "nothing is asked", "remembers": true,
+ "overriding": "", "governed": true, "verifier": false, "takes_model": true,
+ "transcript": "", "reply": "", "who": "sora", "who_label": "Sora (for Theo)",
+ "live": {"": "idle", "sora": "thinking", "jarvis-ajc": "idle"},
+ "crew": [],
+ "collab": "Sora (for Theo): working",
+ "tasks": [
+   {"id": "a1b2c3d4e5f60718", "kind": "pass", "from": "main", "to": "sora",
+    "from_label": "Theo", "to_label": "Sora", "state": "active", "created": 1763600000.0},
+   {"id": "b1b2c3d4e5f60718", "kind": "pass", "from": "jarvis-ajc", "to": "sora",
+    "from_label": "Hazel", "to_label": "Sora", "state": "pending", "created": 1763600010.0,
+    "position": 2},
+   {"id": "c1b2c3d4e5f60718", "kind": "pass", "from": "main", "to": "wren",
+    "from_label": "Theo", "to_label": "Wren", "state": "refused", "created": 1763599000.0,
+    "reason": "Wren is switched off. Turn it on on the Agents page first."}
+ ]}

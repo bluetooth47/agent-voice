@@ -807,7 +807,9 @@ def test_the_audit_log_rotates_at_a_megabyte(monkeypatch):
 #: Names a call to audit.record may read. Content-bearing names (the text,
 #: the bytes, the old note) may appear only inside len(...).
 AUDIT_SAFE = {"author", "target", "name", "kind", "reason", "locked", "valid_name", "YOU",
-              "old_size", "me", "note_name"}
+              "old_size", "me", "note_name",
+              # collab._audit (Phase 15): ids, a state and a byte count.
+              "frm", "to", "tid", "state", "brief_bytes"}
 
 
 def _names_outside_len(node):
