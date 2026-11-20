@@ -126,11 +126,16 @@ Column {
     fontFamily: page.s.fontFamily
     // The Dropdown assigns its own value on a pick, which would cut it loose
     // from the page: it then kept naming a removed agent while the editors
-    // showed the main one (Phase 12 review). Bound again at once.
-    onChanged: function(v) {
-      page.s.detailsAgent = v
-      agentPicker.value = Qt.binding(function() { return page.target })
-    }
+    // showed the main one (Phase 12 review). The Binding below puts it back
+    // whenever the page's agent changes. (An assignment of Qt.binding here
+    // did the same, but qmllint stopped resolving the Dropdown's type once
+    // the page grew in Phase 13 and failed the check on it.)
+    onChanged: function(v) { page.s.detailsAgent = v }
+  }
+  Binding {
+    target: agentPicker
+    property: "value"
+    value: page.target
   }
 
   // The knobs, summarised, with the way to change them.
@@ -381,10 +386,19 @@ Column {
                                          instructionsEditor.stamp +
                                          JSON.stringify(s.vAgentFiles) + JSON.stringify(s.folders.folders) +
                                          JSON.stringify(s.voiceAgents) + JSON.stringify(s.vCrew) +
-                                         s.mainLabel + s.activePhrase
-  onPreviewWatchChanged: previewDelay.restart()
-  onTargetChanged: { previewParts = []; confirmRemove = false; loadPreview() }
-  Component.onCompleted: loadPreview()
+                                         s.mainLabel + s.activePhrase +
+                                         // What it is given (Phase 13): the switches, its
+                                         // program and level.
+                                         JSON.stringify([s.setting("mainTools", {}),
+                                                         s.setting("desktopTools", false),
+                                                         s.setting("browserTools", false),
+                                                         s.setting("omarchySkill", true),
+                                                         s.setting("permissions", {}),
+                                                         s.setting("mainProgram", ""),
+                                                         s.mainAgent, s.usingEndpoint])
+  onPreviewWatchChanged: { previewDelay.restart(); catalogDelay.restart() }
+  onTargetChanged: { previewParts = []; catalog = null; confirmRemove = false; loadPreview(); loadCatalog() }
+  Component.onCompleted: { loadPreview(); loadCatalog() }
   Timer { id: previewDelay; interval: 250; onTriggered: page.loadPreview() }
 
   // A source path, in words.
@@ -394,6 +408,7 @@ Column {
     if (src === "communal/rules.md") return "From Communal · rules"
     if (src === "communal/defaults.md") return "From Communal · defaults"
     if (src === "each agent's role.md") return "From each other agent's role"
+    if (src === "skills folders") return "From " + page.name + "'s and the communal skills"
     var m = src.match(/^agents\/[^\/]+\/(personality|instructions)\.md$/)
     if (m) return "From " + page.name + "'s " + m[1]
     return src
@@ -421,7 +436,8 @@ Column {
             label: label,
             from: page.fromWords(x.source),
             text: String(x.text || ""),
-            note: label.indexOf("Omarchy commands") === 0
+            note: String((x || {}).note || "") !== "" ? String(x.note)
+                  : label.indexOf("Omarchy commands") === 0
                   ? (page.program === "claude"
                      ? "Loaded by Claude Code as a skill, when a request needs one."
                      : "A list of this machine's omarchy commands, given in full.")
@@ -440,85 +456,210 @@ Column {
   }
 
   // --- Tools & skills -------------------------------------------------------------
-  // What it can use, worked out from the program and the switches on the
-  // Agents page. Per-agent switches come later (merged plan, Phase 13).
+  // Everything this agent can be given (merged plan, Phase 13), from `agents
+  // catalog`, the daemon's own resolution: each tool switched on or off (its
+  // own switch, or the setting for every agent), whether its program can use
+  // it and why not, and whether it asks first at its level; then its skills.
+  // The switches themselves are on its Agents card.
+  property var catalog: null
+  property string catalogError: ""
+  function loadCatalog() {
+    if (page.reserved) { catalog = null; return }
+    if (cataloger.running) { catalogDelay.restart(); return }
+    cataloger.forTarget = page.target
+    cataloger.command = ["agentvoice", "agents", "catalog", page.target, "--json"]
+    cataloger.running = true
+  }
+  Timer { id: catalogDelay; interval: 250; onTriggered: page.loadCatalog() }
+  Process {
+    id: cataloger
+    property string forTarget: ""
+    stdout: StdioCollector {
+      onStreamFinished: {
+        if (cataloger.forTarget !== page.target) return
+        var d
+        try { d = JSON.parse(String(text)) } catch (e) { return }
+        if (!d || !Array.isArray(d.tools)) return
+        page.catalogError = ""
+        page.catalog = d
+      }
+    }
+    stderr: StdioCollector {
+      onStreamFinished: {
+        var t = String(text).trim()
+        if (t !== "" && cataloger.forTarget === page.target)
+          page.catalogError = t.replace(/^agentvoice agents: /, "").split("\n").pop()
+      }
+    }
+  }
+  Process {
+    id: skillsFolder
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var path = String(text).trim()
+        if (path !== "") page.openFolder(path)
+      }
+    }
+  }
+  function openSkills() {
+    skillsFolder.command = ["agentvoice", "agents", "skills-folder", page.target]
+    skillsFolder.running = true
+  }
+
   Column {
     id: toolsTab
     width: parent.width
     spacing: Style.space(10)
     visible: page.tab === "tools"
 
-    readonly property bool claude: page.program === "claude"
-    readonly property bool mcp: page.program === "claude" || page.program === "codex"
-    readonly property bool endpoint: page.program === "endpoint"
+    readonly property var c: page.catalog && page.catalog.agent === page.target ? page.catalog : null
+    readonly property var ownSkills: c ? c.skills.filter(function(x) { return x.source !== "communal" }) : []
+    readonly property var sharedSkills: c ? c.skills.filter(function(x) { return x.source === "communal" }) : []
+
+    Text {
+      width: parent.width
+      visible: toolsTab.c === null
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: page.catalogError !== "" ? "Could not read what it is given: " + page.catalogError : "Reading…"
+      color: page.catalogError !== "" ? page.s.urgent : page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
 
     Repeater {
-      model: [
-        { label: "Desktop tools",
-          state: toolsTab.endpoint ? "No: an endpoint runs nothing on this machine."
-               : !toolsTab.mcp ? "No: " + page.s.programLabel(page.program) + " cannot take them."
-               : page.s.setting("desktopTools", false) === true ? "On" : "Off" },
-        { label: "Browser",
-          state: toolsTab.endpoint ? "No: an endpoint runs nothing on this machine."
-               : !toolsTab.claude ? "No: only Claude Code agents can use Claude in Chrome."
-               : page.s.setting("browserTools", false) === true ? "On" : "Off" },
-        { label: "Omarchy commands",
-          state: toolsTab.endpoint ? "No: an endpoint runs nothing on this machine."
-               : page.s.setting("omarchySkill", true) !== true ? "Off"
-               : toolsTab.claude ? "On, as a skill" : "On, in what it is told" }
-      ]
+      model: toolsTab.c ? toolsTab.c.tools : []
       SettingRow {
         required property var modelData
         width: parent.width
         label: modelData.label
+        hint: !modelData.can ? modelData.why_not
+              : !modelData.on ? ""
+              : modelData.asks + (modelData.how !== "" ? " " + modelData.how : "")
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
         Text {
-          text: modelData.state
+          text: !modelData.can ? "Cannot use"
+                : (modelData.on ? "On" : "Off") +
+                  (modelData.choice === "inherit" ? ", as for every agent" : ", its own switch")
           textFormat: Text.PlainText
-          color: page.s.dim
+          color: modelData.can && modelData.on ? page.s.foreground : page.s.dim
           font.family: page.s.fontFamily
           font.pixelSize: Style.font.caption
         }
       }
     }
-    Text {
-      width: parent.width
-      wrapMode: Text.WordWrap
-      text: "These follow the switches at the foot of the Agents page, which apply to every agent " +
-            "that can use them."
-      color: page.s.dim
-      font.family: page.s.fontFamily
-      font.pixelSize: Style.font.caption
-    }
     Button {
-      text: "Change on Agents page →"
+      text: "Change on " + page.name + "'s Agents card →"
       focusable: true
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
       fontSize: Style.font.caption
-      onClicked: page.s.goTo("agents", "")
+      onClicked: page.s.goTo("agents", page.target, "tools")
+    }
+
+    Text {
+      width: parent.width
+      topPadding: Style.space(8)
+      text: "Skills"
+      color: page.s.foreground
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.body
+      font.bold: true
+    }
+    Text {
+      width: parent.width
+      visible: toolsTab.c !== null
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: toolsTab.c ? toolsTab.c.delivery_how +
+                         (toolsTab.c.skills_asks !== "" ? " A skill's scripts, at its level: " +
+                          toolsTab.c.skills_asks.charAt(0).toLowerCase() + toolsTab.c.skills_asks.slice(1) : "")
+                       : ""
+      color: page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    Repeater {
+      model: [
+        { title: page.name + "'s own", items: toolsTab.ownSkills,
+          empty: "None in " + page.name + "'s folder." },
+        { title: "From Communal", items: toolsTab.sharedSkills,
+          empty: "None in the communal folder." }
+      ]
+      Column {
+        required property var modelData
+        width: toolsTab.width
+        spacing: Style.space(4)
+        visible: toolsTab.c !== null
+        Text {
+          text: modelData.title
+          color: page.s.foreground
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+          font.bold: true
+        }
+        Text {
+          visible: modelData.items.length === 0
+          text: modelData.empty
+          textFormat: Text.PlainText
+          color: page.s.dim
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Repeater {
+          model: modelData.items
+          Text {
+            required property var modelData
+            width: toolsTab.width
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: modelData.name + " — " +
+                  (modelData.problem !== "" ? "not given: " + modelData.problem
+                   : modelData.shadowed ? "not given: " + page.name + " has its own of the same name"
+                   : !modelData.delivered ? "not given to " + page.name
+                   : modelData.description)
+            color: modelData.problem !== "" ? page.s.urgent
+                   : modelData.delivered ? page.s.foreground : page.s.dim
+            font.family: page.s.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+      }
     }
     Text {
       width: parent.width
       wrapMode: Text.WordWrap
+      text: "A skill is a folder holding SKILL.md, which starts with a line of ---, then " +
+            "“name:” (the folder's name) and “description:” (one line on when to use it, at most " +
+            "300 characters), then ---, then the instructions. Scripts beside it are run by the " +
+            "agent, never by Agent Voice. One in " + page.name + "'s folder beats a communal one " +
+            "of the same name."
       textFormat: Text.PlainText
-      readonly property var skills: {
-        var out = []
-        var files = (page.folder || {}).files || {}
-        for (var k in files) {
-          var m = k.match(/^skills\/([^\/]+)\/SKILL\.md$/)
-          if (m) out.push(m[1])
-        }
-        return out
-      }
-      text: skills.length === 0
-            ? "No skills in " + page.name + "'s folder."
-            : "In " + page.name + "'s folder: " + skills.join(", ") + ". Skills in agent folders are " +
-              "not given to agents yet."
       color: page.s.dim
       font.family: page.s.fontFamily
       font.pixelSize: Style.font.caption
+    }
+    Flow {
+      width: parent.width
+      spacing: Style.space(8)
+      Button {
+        text: "Open " + page.name + "'s skills folder"
+        bordered: true
+        focusable: true
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onClicked: page.openSkills()
+      }
+      Button {
+        text: "Communal skills →"
+        focusable: true
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        fontSize: Style.font.caption
+        onClicked: page.s.goTo("communal", "", "skills")
+      }
     }
   }
 

@@ -38,7 +38,8 @@ Trusted Codex) this visibility is the only thing standing in for
 enforcement; see merged-plan.md section 3.5.
 
     python agentfs.py list|show|create|trash|restore|trash-list|write|
-                      history|revert|ack|preview|export|ensure-communal|migrate ...
+                      history|revert|ack|preview|export|skills|skills-folder|
+                      catalog|ensure-communal|migrate ...
                       (see --help)
 """
 from __future__ import annotations
@@ -399,7 +400,10 @@ def snapshot() -> tuple[dict, dict[str, dict[str, str]]]:
             "problems": r["problems"],
             "changed_outside": r["changed_outside"],
         }
-        said[t] = {n: f["text"] for n, f in r["files"].items() if f["exists"]}
+        said[t] = {n: f["text"] for n, f in r["files"].items()
+                   if f["exists"] and not _SKILL.fullmatch(n)}
+        # Skills whole, and only those whose folder can be given (Phase 13).
+        said[t].update(_skill_texts(t, r["files"]))
     return out, said
 
 
@@ -439,6 +443,29 @@ def stamp() -> tuple:
                     seen.append((str(p), st.st_mtime_ns, st.st_size, st.st_ino))
                 except OSError:
                     seen.append((str(p), 0, -1, 0))
+        # Everything else in skills/ too (Phase 13): a script beside a
+        # SKILL.md is copied into a Claude agent's plugin folder, so editing
+        # it has to be noticed as an edit of the SKILL.md is.
+        skills_root = base / "skills"
+        count = 0
+        try:
+            _no_link(base)
+            _no_link(skills_root)
+            walk = os.walk(skills_root, followlinks=False)
+            for d, dirs, names in walk:
+                dirs[:] = sorted(x for x in dirs if not x.startswith("."))
+                for n in [".", *sorted(names)]:
+                    p = Path(d) / n if n != "." else Path(d)
+                    try:
+                        st = os.lstat(p)
+                    except OSError:
+                        continue
+                    seen.append((str(p), st.st_mtime_ns, st.st_size, st.st_ino))
+                    count += 1
+                if count > 2000:
+                    break
+        except (OSError, AgentFsError):
+            pass
     return tuple(seen)
 
 
@@ -896,6 +923,350 @@ def export(target: str, dest: str | None = None) -> str:
     return str(out)
 
 
+# --- skills (Phase 13) ---------------------------------------------------------
+#
+# A skill is a folder under skills/ holding SKILL.md, whose front matter
+# names it and says in one line what it is for, and whatever else it needs
+# (scripts, references). The agents run its scripts themselves, at their own
+# permission level; the daemon never runs anything from here.
+#
+#     ---
+#     name: weekly-report
+#     description: How to write the weekly report. Use when asked for it.
+#     ---
+#     ...the instructions...
+#
+# Claude Code gets an agent's skills in a plugin folder made for it
+# (plugin_dir); a backend that loads no skills but has file tools gets a short
+# index in its prompt instead (skills_index), and reads a SKILL.md only when
+# it needs it. An endpoint gets none: it runs nothing here.
+
+SKILL_DESC_MAX = 300
+#: A skill's whole folder, its SKILL.md included: copied for Claude on every
+#: change, so kept to something a copy does not notice.
+SKILL_FILES_MAX = 64
+SKILL_BYTES_MAX = 2 * 1024 * 1024
+#: The index a backend with no skills of its own is told (section 3.6).
+SKILL_INDEX_MAX = 1500
+SKILL_INDEX_LINE = 160
+#: Names a folder skill may not take: the built-in Omarchy skill's.
+RESERVED_SKILLS = ("omarchy",)
+_SKILL_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
+_FRONT_KEY = re.compile(r"([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)")
+
+
+def _front_matter(text: str) -> tuple[dict | None, str]:
+    """The `key: value` pairs between the opening and closing `---`, or None
+    and why not. A small subset of YAML: plain or quoted values on one
+    line, and `>` or `|` followed by indented lines (folded into one)."""
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return None, ("it has no front matter: SKILL.md starts with a line of ---, "
+                      "then name: and description:, then ---")
+    out: dict[str, str] = {}
+    key, block = None, []
+    for i, line in enumerate(lines[1:], 1):
+        if line.strip() == "---":
+            if key is not None:
+                out[key] = " ".join(block)
+            return out, ""
+        if key is not None:
+            if line[:1] in (" ", "\t") or not line.strip():
+                block += line.split()
+                continue
+            out[key] = " ".join(block)
+            key, block = None, []
+        m = _FRONT_KEY.fullmatch(line.rstrip())
+        if not m:
+            continue                    # other YAML is the agent's business
+        name, value = m.group(1).lower(), m.group(2).strip()
+        if value in (">", "|", ">-", "|-"):
+            key, block = name, []
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        out[name] = " ".join(value.split())
+    return None, "its front matter is not closed with a line of ---"
+
+
+def parse_skill(folder: str, text) -> tuple[str, str]:
+    """(description, problem) for a skill in the folder named `folder`
+    whose SKILL.md reads `text`. A skill with a problem is listed with it
+    and given to no agent."""
+    if not _SKILL_NAME.fullmatch(folder or ""):
+        return "", ("its folder name must be lower-case letters, digits and "
+                    "hyphens, at most 48")
+    if folder in RESERVED_SKILLS:
+        return "", f"the name {folder} is the built-in Omarchy skill's"
+    if not isinstance(text, str) or not text.strip():
+        return "", "SKILL.md is empty"
+    if len(text) > SKILL_MAX:
+        return "", f"SKILL.md is longer than {SKILL_MAX} characters"
+    front, why = _front_matter(text)
+    if front is None:
+        return "", why
+    name = front.get("name", "")
+    if not name:
+        return "", "its front matter has no name"
+    if name != folder:
+        return "", f"its name is “{name[:48]}” but its folder is “{folder}”; they must match"
+    desc = front.get("description", "")
+    if not desc:
+        return "", "its front matter has no description"
+    if len(desc) > SKILL_DESC_MAX:
+        return "", f"its description is longer than {SKILL_DESC_MAX} characters"
+    return desc, ""
+
+
+def _skill_tree(target: str, name: str) -> tuple[list[tuple[str, Path]], str]:
+    """Every file of one skill as (path inside the skill, path), and the
+    problem, if any, that keeps it from being given to an agent: a link
+    anywhere in it, something that is not a file or a folder, or more than
+    SKILL_FILES_MAX files or SKILL_BYTES_MAX bytes."""
+    root = _base(target) / "skills" / name
+    out, total = [], 0
+    try:
+        for d in (paths.AGENTS_DIR if target != COMMUNAL else None, _base(target),
+                  _base(target) / "skills", root):
+            if d is not None:
+                _no_link(d)
+        stack = [Path()]
+        while stack:
+            rel = stack.pop()
+            for e in sorted(os.scandir(root / rel), key=lambda e: e.name):
+                sub = rel / e.name
+                if e.is_symlink():
+                    return [], f"it holds a link ({sub}), which is refused here"
+                if e.is_dir(follow_symlinks=False):
+                    stack.append(sub)
+                    continue
+                if not e.is_file(follow_symlinks=False):
+                    return [], f"{sub} is not a plain file"
+                total += e.stat(follow_symlinks=False).st_size
+                out.append((sub.as_posix(), root / sub))
+                if len(out) > SKILL_FILES_MAX:
+                    return [], f"it holds more than {SKILL_FILES_MAX} files"
+                if total > SKILL_BYTES_MAX:
+                    return [], f"it holds more than {SKILL_BYTES_MAX // 1024 // 1024} MB"
+    except AgentFsError as e:
+        return [], str(e)
+    except OSError as e:
+        return [], f"it cannot be read ({e.strerror})"
+    return sorted(out), ""
+
+
+def _skill_dirs(target: str) -> list[str]:
+    """Every entry under skills/, valid name or not, so a skill that cannot
+    be used is listed with why rather than missing."""
+    try:
+        _no_link(_base(target))
+        _no_link(_base(target) / "skills")
+        return sorted(e.name for e in os.scandir(_base(target) / "skills")
+                      if not e.name.startswith("."))
+    except (OSError, AgentFsError):
+        return []
+
+
+def skills(target: str) -> list[dict]:
+    """One folder's skills as they are on disk now, for the pages and
+    `agents skills`: name, description, the SKILL.md path, and the problem
+    that keeps it from being given to an agent ("" when it can be)."""
+    out = []
+    for name in _skill_dirs(target):
+        path = _base(target) / "skills" / name / "SKILL.md"
+        entry = {"name": name, "description": "", "path": str(path),
+                 "source": target, "problem": ""}
+        if not _SKILL_NAME.fullmatch(name):
+            entry["problem"] = parse_skill(name, "")[1]
+        else:
+            _, why = _skill_tree(target, name)
+            got = read_file(target, f"skills/{name}/SKILL.md")
+            if why:
+                entry["problem"] = why
+            elif not got["exists"]:
+                entry["problem"] = "it has no SKILL.md"
+            elif got["problem"] and len(got["full"]) <= got["limit"]:
+                entry["problem"] = got["problem"]
+            else:
+                entry["description"], entry["problem"] = parse_skill(name, got["full"])
+        out.append(entry)
+    return out
+
+
+def skills_from(texts: dict, target: str) -> list[dict]:
+    """skills() from folder texts as snapshot() gives them, which hold a
+    SKILL.md only when its folder passed the checks that need the disk."""
+    own = texts.get(target, {}) if isinstance(texts, dict) else {}
+    out = []
+    for key in sorted(own):
+        m = _SKILL.fullmatch(key)
+        if not m:
+            continue
+        desc, why = parse_skill(m.group(1), own[key])
+        out.append({"name": m.group(1), "description": desc, "source": target,
+                    "path": str(_base(target) / key), "problem": why})
+    return out
+
+
+def skill_set(own: list[dict], communal: list[dict]) -> list[dict]:
+    """An agent's own skills and the communal ones, each marked `shadowed`
+    (an own skill of the same name wins, even one with a problem: the
+    person meant this agent to have its own) and `delivered`."""
+    mine = {s["name"] for s in own}
+    out = []
+    for s in own:
+        out.append({**s, "shadowed": False, "delivered": not s["problem"]})
+    for s in communal:
+        hidden = s["name"] in mine
+        out.append({**s, "shadowed": hidden, "delivered": not s["problem"] and not hidden})
+    return out
+
+
+def skills_index(entries: list[dict]) -> str:
+    """The lines of the index a backend with no skills of its own is told:
+    `- name: description (path)`, each within SKILL_INDEX_LINE and all of
+    them within SKILL_INDEX_MAX. The header is the adapter's. Empty when
+    no skill is delivered."""
+    lines, size, left = [], 0, 0
+    for s in entries:
+        if not s.get("delivered"):
+            continue
+        tail = f" ({s['path']})"
+        head = f"- {s['name']}: "
+        room = SKILL_INDEX_LINE - len(head) - len(tail)
+        desc = " ".join(s["description"].split())
+        if len(desc) > room:
+            desc = desc[:max(0, room - 1)].rstrip() + "…"
+        line = head + desc + tail
+        if size + len(line) + 1 > SKILL_INDEX_MAX:
+            left += 1
+            continue
+        lines.append(line)
+        size += len(line) + 1
+    if left:
+        lines.append(f"- and {left} more, not listed here")
+    return "\n".join(lines)
+
+
+def _skill_texts(target: str, files: dict[str, dict]) -> dict[str, str]:
+    """For snapshot(): each skill's SKILL.md in full (a skill is given whole
+    or not at all, never cut to its budget), only when the file was read
+    and its folder passes _skill_tree. Oversize stays in, for parse_skill
+    to name."""
+    out = {}
+    for key, f in files.items():
+        m = _SKILL.fullmatch(key)
+        if not m or not f["exists"]:
+            continue
+        if f["problem"] and len(f["full"]) <= f["limit"]:
+            continue
+        if _skill_tree(target, m.group(1))[1]:
+            continue
+        out[key] = f["full"]
+    return out
+
+
+#: The plugin folders made for Claude agents (section 3.3), named by their
+#: content, so a change makes a new one and never rewrites a file a running
+#: process has open.
+def plugins_dir() -> Path:
+    return paths.DATA_DIR / "agent-plugins"
+
+
+def plugin_dir(agent_id: str, omarchy_root: str | None) -> str | None:
+    """The folder a Claude agent is given with --plugin-dir: the Omarchy
+    skill (from `omarchy_root`, when it is wanted) and every skill this
+    agent is to have, its own and the communal ones. When it has no skill of
+    its own or communal one, `omarchy_root` exactly, as before Phase 13.
+
+    Each file is copied whole, read without following links, with its
+    executable bit kept; a skill that changes between the check and the
+    copy is copied as it is then, and checked again on the next change."""
+    me = folder_id(agent_id)
+    chosen = [s for s in skill_set(skills(me) if _valid_agent(me) else [],
+                                   skills(COMMUNAL)) if s["delivered"]]
+    if not chosen:
+        return omarchy_root
+    files: list[tuple[str, bytes, int]] = []
+    files.append((".claude-plugin/plugin.json", (json.dumps({
+        "name": "agentvoice",
+        "version": "1.0.0",
+        "description": "Skills for one Agent Voice agent: the Omarchy commands "
+                       "and the skills in its folder and the communal one.",
+    }, indent=2) + "\n").encode(), 0o600))
+    if omarchy_root:
+        src = Path(omarchy_root) / "skills" / "omarchy" / "SKILL.md"
+        try:
+            files.append(("skills/omarchy/SKILL.md", src.read_bytes(), 0o600))
+        except OSError:
+            pass                        # built at install; none is no skill
+    for s in chosen:
+        tree, why = _skill_tree(s["source"], s["name"])
+        if why:
+            continue
+        for rel, path in tree:
+            try:
+                data, more = _read_bytes(path)
+                mode = os.stat(path, follow_symlinks=False).st_mode
+            except (OSError, AgentFsError):
+                continue
+            if more:
+                continue
+            files.append((f"skills/{s['name']}/{rel}", data,
+                          0o700 if mode & stat.S_IXUSR else 0o600))
+    digest = hashlib.sha256()
+    for rel, data, mode in files:
+        digest.update(f"{rel}\0{mode}\0{len(data)}\0".encode())
+        digest.update(data)
+    root = plugins_dir()
+    paths.private_dir(root)
+    _no_link(root)
+    dest = root / digest.hexdigest()[:20]
+    if (dest / ".claude-plugin" / "plugin.json").is_file():
+        return str(dest)
+    import tempfile
+    stage = Path(tempfile.mkdtemp(prefix=".stage-", dir=root))
+    try:
+        for rel, data, mode in files:
+            where = stage / rel
+            for parent in reversed(Path(rel).parents[:-1]):
+                d = stage / parent
+                if not d.is_dir():
+                    os.mkdir(d, 0o700)
+            fd = os.open(where, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+        try:
+            os.rename(stage, dest)
+        except OSError:
+            # Made by someone else in the meantime: theirs is the same bytes.
+            shutil.rmtree(stage, ignore_errors=True)
+    except BaseException:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+    return str(dest)
+
+
+def prune_plugins(keep=()) -> int:
+    """Remove every plugin folder not in `keep`, and any staging left by a
+    copy cut short. The daemon calls it when it starts, before any agent
+    has one open. Returns how many went."""
+    root, gone = plugins_dir(), 0
+    keep = {str(k) for k in keep}
+    try:
+        _no_link(root)
+        entries = list(os.scandir(root))
+    except (OSError, AgentFsError):
+        return 0
+    for e in entries:
+        if str(root / e.name) in keep or e.is_symlink():
+            continue
+        if e.is_dir(follow_symlinks=False):
+            shutil.rmtree(root / e.name, ignore_errors=True)
+            gone += 1
+    return gone
+
+
 # --- prompt parts (Phase 11) --------------------------------------------------
 
 #: The roster: at most this many other agents, each line at most this long
@@ -937,8 +1308,10 @@ def parts_from(texts: dict, me: str, name: str, live: list[dict]) -> dict:
 
     `me` is the agent's folder id and `name` its display name. `live` is
     every reachable agent as {"id": folder id, "label", "phrase"}: the
-    roster lists each of them but `me`, with its role line. Instructions and
-    the Omarchy commands are not here; they reach the adapter as before.
+    roster lists each of them but `me`, with its role line. `skills` is the
+    index of its skills (Phase 13), which the adapter tells only a backend
+    that cannot load skills itself. Instructions and the Omarchy commands
+    are not here; they reach the adapter as before.
     Keys with nothing in them are empty, so the preamble leaves no header."""
     comm = texts.get(COMMUNAL, {}) if isinstance(texts, dict) else {}
     own = texts.get(me, {}) if isinstance(texts, dict) else {}
@@ -950,10 +1323,17 @@ def parts_from(texts: dict, me: str, name: str, live: list[dict]) -> dict:
                                   texts.get(a.get("id"), {}).get("role.md", "")))
         if len(roster) == ROSTER_MAX:
             break
+    try:
+        index = skills_index(skill_set(skills_from(texts, me),
+                                       skills_from(texts, COMMUNAL)))
+    except AgentFsError:
+        index = ""
     return {"rules": comm.get("rules.md", ""),
             "defaults": comm.get("defaults.md", ""),
             "personality": own.get("personality.md", ""),
-            "name": name, "roster": roster}
+            "name": name, "roster": roster,
+            # Told only by a backend that loads no skills itself (Phase 13).
+            "skills": index}
 
 
 def live_from_state() -> set[str] | None:
@@ -992,10 +1372,152 @@ def _configured(cfg, live_ids=None) -> list[dict]:
 
 
 def roster(cfg, live_ids=None) -> list[dict]:
-    """Every agent with its role line, as the roster tells the others."""
+    """Every agent with its role line, as the roster tells the others, and
+    the generated half of its description (Phase 13): its program, the
+    tools it can use now (switched on and usable by that program) and the
+    skills it is given. From the same resolution as catalog(), so turning
+    Chrome off for an agent changes what this says about it at once."""
     texts = snapshot()[1]
-    return [{**a, "role": " ".join(texts.get(a["id"], {}).get("role.md", "").split())}
-            for a in _configured(cfg, live_ids)]
+    comm = skills_from(texts, COMMUNAL)
+    out = []
+    for a in _configured(cfg, live_ids):
+        program = program_of(a["id"], cfg)
+        switched = cfg.tools_for(a["id"])
+        tools = [k for k in TOOL_ROWS if switched[k] and not _why_not(k, program)]
+        given = [] if program == "endpoint" else [
+            s["name"] for s in skill_set(skills_from(texts, a["id"]), comm) if s["delivered"]]
+        out.append({**a, "role": " ".join(texts.get(a["id"], {}).get("role.md", "").split()),
+                    "program": program, "tools": tools, "skills": given})
+    return out
+
+
+# --- what an agent can use (Phase 13) -------------------------------------------
+
+#: The three switched tools, in the order the pages list them.
+TOOL_ROWS = {"desktop": "Desktop tools", "browser": "Browser (Claude in Chrome)",
+             "omarchySkill": "Omarchy commands"}
+#: Which programs can take which tool. Held to the adapters by a test:
+#: desktop tools need Agent Voice's MCP server (Claude Code, Codex), the
+#: browser is Claude Code's own, and only Claude Code loads a plugin folder.
+DESKTOP_PROGRAMS = ("claude", "codex")
+BROWSER_PROGRAMS = ("claude",)
+PLUGIN_PROGRAMS = ("claude",)
+PROGRAM_LABELS = {"claude": "Claude Code", "codex": "Codex", "gemini": "Gemini",
+                  "agy": "Antigravity", "antigravity": "Antigravity",
+                  "antigravity-cli": "Antigravity", "copilot": "Copilot",
+                  "endpoint": "An endpoint"}
+
+
+def program_of(agent_id: str, cfg) -> str:
+    """The program an agent runs, as Omarchy spells it, "endpoint" for an
+    OpenAI-compatible endpoint, "" when none is chosen. The main agent's is
+    its own setting, else Omarchy's default, unless its endpoint answers."""
+    me = folder_id(agent_id)
+    if me == MAIN:
+        if cfg.main_endpoint() is not None:
+            return "endpoint"
+        from adapters import main_program
+        return main_program(cfg.get_str("mainProgram")) or ""
+    spec = next((a for a in cfg.all_agents() if a["id"] == me), None)
+    return (spec or {}).get("agent") or ""
+
+
+def level_of(agent_id: str, cfg, program: str) -> str:
+    """Its permission level: the main agent's is kept per program."""
+    me = folder_id(agent_id)
+    if me == MAIN:
+        return cfg.level_for(program)
+    spec = next((a for a in cfg.all_agents() if a["id"] == me), None)
+    return (spec or {}).get("level") or "ask"
+
+
+def _label(program: str) -> str:
+    return PROGRAM_LABELS.get(program, program or "No program")
+
+
+def _why_not(key: str, program: str) -> str:
+    """Why this program cannot use the tool `key`, "" when it can."""
+    if program == "endpoint":
+        return "An endpoint runs nothing on this machine."
+    if not program:
+        return "No program is chosen for it."
+    if key == "desktop" and program not in DESKTOP_PROGRAMS:
+        return f"{_label(program)} cannot take Agent Voice's tools; only Claude Code and Codex can."
+    if key == "browser" and program not in BROWSER_PROGRAMS:
+        return "Only Claude Code can use Claude in Chrome."
+    return ""
+
+
+def _commands_ask(program: str, level: str) -> str:
+    """Whether running a command asks first, which is how a skill's or the
+    Omarchy skill's commands are run."""
+    if level == "trusted":
+        return "Runs commands without asking."
+    if program == "claude":
+        return "Asks before running a command."
+    if program == "codex":
+        return "Runs read-only: a command that changes something is refused."
+    return f"Held in {_label(program)}'s safest mode, which cannot ask."
+
+
+def _asks(key: str, program: str, level: str) -> str:
+    if key == "desktop":
+        return ("Acts without asking, except a screenshot, which is asked about every time."
+                if level == "trusted" else
+                "Asks before a change; a screenshot is asked about every time.")
+    if key == "browser":
+        return ("Reads and clicks without asking; sending, buying or posting is still asked about."
+                if level == "trusted" else
+                "Asks before acting; sending, buying or posting is asked about at every level.")
+    return _commands_ask(program, level)
+
+
+def catalog(agent_id: str, cfg) -> dict:
+    """Everything an agent can be given, as the Tools & skills tab shows
+    it (merged plan, Phase 13): each tool with whether it is switched on
+    (and whether that is its own switch or the setting for every agent),
+    whether its program can use it and why not, and whether it asks first
+    at its level; then each skill, its own and the communal ones, with its
+    problem, whether another of the same name hides it, and how it is
+    given. Read now, from the settings and the folders."""
+    me = folder_id(agent_id)
+    program = program_of(agent_id, cfg)
+    level = level_of(agent_id, cfg, program)
+    from runtime import TOOL_GLOBALS, tool_choices
+    if me == MAIN:
+        choices = tool_choices(cfg["mainTools"])
+    else:
+        spec = next((a for a in cfg.all_agents() if a["id"] == me), None)
+        choices = (spec or {}).get("tools") or tool_choices(None)
+    switched = cfg.tools_for(agent_id if me != MAIN else "")
+    tools = []
+    for key, label in TOOL_ROWS.items():
+        why = _why_not(key, program)
+        how = ""
+        if key == "omarchySkill" and not why:
+            how = ("Loaded as a skill when a request needs it." if program in PLUGIN_PROGRAMS
+                   else "A list of the commands, in what it is told.")
+        tools.append({"key": key, "label": label, "choice": choices[key],
+                      "global": cfg.get_bool(TOOL_GLOBALS[key]), "on": switched[key],
+                      "can": not why, "why_not": why, "how": how,
+                      "asks": _asks(key, program, level) if not why else ""})
+    if program == "endpoint":
+        delivery, how = "none", "An endpoint runs nothing on this machine, so it is given no skills."
+    elif not program:
+        delivery, how = "none", "No program is chosen for it."
+    elif program in PLUGIN_PROGRAMS:
+        delivery, how = "plugin", "Claude Code loads each skill itself when a request needs it."
+    else:
+        delivery, how = "index", (f"{_label(program)} loads no skills itself, so it is told a "
+                                  "list of them and reads a skill's file when it needs it.")
+    own = skills(me) if me != COMMUNAL else []
+    entries = skill_set(own, skills(COMMUNAL))
+    if delivery == "none":
+        entries = [{**s, "delivered": False} for s in entries]
+    return {"agent": me, "program": program, "program_label": _label(program),
+            "level": level, "tools": tools, "skills": entries,
+            "delivery": delivery, "delivery_how": how,
+            "skills_asks": _commands_ask(program, level) if delivery != "none" else ""}
 
 
 def parts(agent_id: str, cfg, live_ids=None) -> dict:
@@ -1041,9 +1563,22 @@ def preview(agent_id: str, cfg, live_ids=None) -> list[dict]:
     if own:
         out.append({"label": "Standing instructions",
                     "source": f"agents/{me}/instructions.md", "text": own})
+    # Phase 13: a backend with no skills of its own is told the index; Claude
+    # Code is told nothing and loads them itself; an endpoint gets none.
+    program = program_of(agent_id, cfg)
+    if not endpoint and program in PLUGIN_PROGRAMS:
+        names = [s["name"] for s in skill_set(skills(me), skills(COMMUNAL)) if s["delivered"]]
+        if names:
+            out.append({"label": "Skills", "source": "skills folders", "text": "",
+                        "note": "Loaded by Claude Code when a request needs one: "
+                                + ", ".join(names) + "."})
+    elif not endpoint and p["skills"]:
+        from adapters.base import SKILLS_HEAD
+        out.append({"label": "Skills", "source": "skills folders",
+                    "text": SKILLS_HEAD + p["skills"]})
     # An endpoint runs nothing here, so it is told no commands (Settings,
     # "Omarchy skill").
-    if cfg.get_bool("omarchySkill") and not endpoint:
+    if cfg.tools_for(agent_id if me != MAIN else "")["omarchySkill"] and not endpoint:
         out.append({"label": "Omarchy commands and keybindings", "source": "built in",
                     "text": ""})
     if p["roster"]:
@@ -1269,6 +1804,14 @@ def main(argv=None) -> int:
     p = sub.add_parser("preview", help="what an agent is told, piece by piece")
     p.add_argument("id")
     p.add_argument("--json", action="store_true")
+    p = sub.add_parser("skills", help="a folder's skills, each with its problem if any")
+    p.add_argument("target")
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("skills-folder", help="make a folder's skills/ if missing; print its path")
+    p.add_argument("target")
+    p = sub.add_parser("catalog", help="the tools and skills an agent is given, and why")
+    p.add_argument("id")
+    p.add_argument("--json", action="store_true")
     sub.add_parser("ensure-communal")
     p = sub.add_parser("migrate", help="make the folders, copy the old instructions in")
     p.add_argument("--dry-run", action="store_true", help="say what it would do; change nothing")
@@ -1333,6 +1876,31 @@ def main(argv=None) -> int:
             ack(a.target, a.file, base=a.base)
         elif a.cmd == "export":
             print(export(a.target, a.dir))
+        elif a.cmd == "skills":
+            v = skills(a.target)
+            _print(v, a.json, "\n".join(
+                f"{x['name']}: " + (f"! {x['problem']}" if x["problem"] else x["description"])
+                for x in v) or "no skills")
+        elif a.cmd == "skills-folder":
+            base = _base(a.target)
+            for d in ([paths.AGENTS_DIR] if a.target != COMMUNAL else []) + [base, base / "skills"]:
+                _no_link(d)
+                paths.private_dir(d)
+                _no_link(d)
+            print(base / "skills")
+        elif a.cmd == "catalog":
+            from runtime import Config
+            v = catalog(a.id, Config())
+            lines = [f"{v['program_label']} at {v['level']}"]
+            for t in v["tools"]:
+                state = ("on" if t["on"] else "off") + ("" if t["choice"] == "inherit" else " (its own)")
+                lines.append(f"{t['label']}: {state}; " + (t["why_not"] or t["asks"]))
+            lines.append(f"Skills ({v['delivery']}): {v['delivery_how']}")
+            for x in v["skills"]:
+                mark = ("given" if x["delivered"] else "hidden by its own" if x["shadowed"]
+                        else f"! {x['problem']}" if x["problem"] else "not given")
+                lines.append(f"  {x['name']} [{x['source']}] {mark}")
+            _print(v, a.json, "\n".join(lines))
         elif a.cmd == "ensure-communal":
             print("\n".join(ensure_communal()))
         elif a.cmd == "preview":

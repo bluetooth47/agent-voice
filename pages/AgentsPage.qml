@@ -84,16 +84,21 @@ Column {
   // A deep link ({page: "agents", agent: "sarah"}), a new agent, a rename.
   Connections {
     target: page.s
-    function onFocusAgentChanged() { page.setOpen(page.s.focusAgent, true) }
+    function onFocusAgentChanged() { page.openLinked() }
   }
   // Which card starts open: the one linked to, else the main card when it is
   // the only one. Decided once the settings have loaded, not at creation --
   // before that every list reads empty, so the main card always opened.
+  function openLinked() {
+    if (s.focusAgent === "") return
+    setOpen(s.focusAgent, true)
+    if (s.focusTools) setOpen("tools:" + s.focusAgent, true)
+  }
   property bool openingDecided: false
   function decideOpening() {
     if (openingDecided || !s.store.loaded) return
     openingDecided = true
-    if (s.focusAgent !== "") setOpen(s.focusAgent, true)
+    if (s.focusAgent !== "") openLinked()
     else if (s.voiceAgents.length === 0) setOpen("main", true)
   }
   Connections {
@@ -176,6 +181,39 @@ Column {
     return out
   }
 
+  // --- tool switches (merged plan, Phase 13) ----------------------------------
+  // Each agent's own, beating the settings for every agent at the foot of
+  // this page. Written as inherit / on / off; inherit is written by leaving
+  // the key out, so an entry nobody changed stays as it was.
+  readonly property var toolGlobals: ({
+    desktop: s.setting("desktopTools", false) === true,
+    browser: s.setting("browserTools", false) === true,
+    omarchySkill: s.setting("omarchySkill", true) === true
+  })
+  function toolMap(current, key, value) {
+    var all = {}
+    if (current && typeof current === "object")
+      for (var k in current) all[k] = current[k]
+    if (value === "inherit") delete all[key]
+    else all[key] = value
+    return all
+  }
+  function putMainTool(key, value) { s.put("mainTools", toolMap(s.setting("mainTools", {}), key, value)) }
+  function putAgentTool(index, key, value) {
+    updateAgent(index, "tools", toolMap((s.voiceAgents[index] || {}).tools, key, value))
+  }
+  // The Rule of Two (merged plan, Phase 13): reading web pages, acting
+  // without asking, and being able to change what the other agents are
+  // told, all in one agent. A warning, not a block.
+  function ruleOfTwo(program, level, choices, notesWrite) {
+    var c = (choices && typeof choices === "object") ? choices.browser : undefined
+    var browser = c === "on" || (c !== "off" && toolGlobals.browser)
+    if (!browser || program !== "claude" || level !== "trusted" || notesWrite === "deny") return ""
+    return "It reads web pages, acts without asking, and can change what the other agents are " +
+           "told (the communal rules, shared notes). A page could steer it into doing that. " +
+           "Turning its browser off, or asking first, takes the risk away."
+  }
+
   // `named` leaves the program out, for the main card, whose title is it.
   function summary(program, model, effort, level, levels, named) {
     var parts = named ? [] : [s.programLabel(program) || "no agent"]
@@ -244,6 +282,9 @@ Column {
              : page.s.projectDir.trim() === "" && page.mainLevel === "edits" && !page.endpointChosen
                ? "No project folder, so “edits are fine” has nothing to be inside: every change is asked about."
                : ""
+    warning: page.endpointChosen ? ""
+             : page.ruleOfTwo(page.main, page.mainLevel, page.s.setting("mainTools", {}),
+                              String(page.s.setting("mainNotesWrite", "")))
     expanded: page.isOpen("main")
     onToggled: function(open) { page.setOpen("main", open) }
     foreground: page.s.foreground
@@ -586,6 +627,18 @@ Column {
       }
     }
 
+    ToolSwitches {
+      width: parent.width
+      choices: page.s.setting("mainTools", {})
+      globals: page.toolGlobals
+      program: page.endpointChosen ? "endpoint" : page.main
+      expanded: page.isOpen("tools:main")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onToggled: function(open) { page.setOpen("tools:main", open) }
+      onPicked: function(key, value) { page.putMainTool(key, value) }
+    }
+
     SettingRow {
       width: parent.width
       stacked: true
@@ -708,6 +761,8 @@ Column {
                : String(card.info.problem || "") !== "" ? String(card.info.problem)
                : card.agentName !== "" && !/^[a-z]+( [a-z]+){0,2}$/.test(card.agentName)
                  ? "A wake phrase is one to three plain words, letters only." : ""
+      warning: card.on ? page.ruleOfTwo(card.program, card.level, card.modelData.tools,
+                                        String(card.modelData.notesWrite || "")) : ""
       expanded: page.isOpen(card.agentId)
       onToggled: function(open) { page.setOpen(card.agentId, open) }
       foreground: page.s.foreground
@@ -1009,6 +1064,18 @@ Column {
         }
       }
 
+      ToolSwitches {
+        width: parent.width
+        choices: card.modelData.tools || ({})
+        globals: page.toolGlobals
+        program: card.program
+        expanded: page.isOpen("tools:" + card.agentId)
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onToggled: function(open) { page.setOpen("tools:" + card.agentId, open) }
+        onPicked: function(key, value) { page.putAgentTool(card.index, key, value) }
+      }
+
       SettingRow {
         width: parent.width
         stacked: true
@@ -1211,13 +1278,22 @@ Column {
   }
 
   // What every agent gets on the desktop (plan 12a, 12b), whichever program
-  // runs it. Here rather than on each card, because these are about the
-  // machine, not about one agent.
+  // runs it, unless its card's "Tools & collaboration" says otherwise
+  // (Phase 13).
   SettingsGroup {
     width: parent.width
     title: "ON THE DESKTOP"
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
+
+    Text {
+      width: parent.width
+      wrapMode: Text.WordWrap
+      text: "For every agent, unless its card's “Tools & collaboration” says otherwise."
+      color: page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
 
     ToggleRow {
       width: parent.width

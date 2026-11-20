@@ -77,15 +77,19 @@ def first_text(adapter, session=None):
     return first, sid
 
 
-def extras(ad, cfg):
-    """What the daemon's apply_extras gives an adapter, from the same keys."""
+def extras(ad, cfg, named=""):
+    """What the daemon's apply_extras gives an adapter: since Phase 13 this
+    agent's own tool switches (else the settings for every agent) and its
+    plugin folder, built from the folders exactly as the daemon builds it."""
+    tools = cfg.tools_for(named)
     if hasattr(ad, "desktop_tools"):
-        ad.desktop_tools = cfg.get_bool("desktopTools")
+        ad.desktop_tools = tools["desktop"]
     if hasattr(ad, "browser_tools"):
-        ad.browser_tools = cfg.get_bool("browserTools")
-    skill_on = cfg.get_bool("omarchySkill")
+        ad.browser_tools = tools["browser"]
+    skill_on = tools["omarchySkill"]
     if hasattr(ad, "skill_dir"):
-        ad.skill_dir = omarchy_skill.plugin_dir() if skill_on else None
+        ad.skill_dir = agentfs.plugin_dir(named or "main",
+                                          omarchy_skill.plugin_dir() if skill_on else None)
     if ad.takes_skill_text and ad.has_tools:
         ad.skill_text = omarchy_skill.instructions() if skill_on else ""
 
@@ -96,7 +100,37 @@ def extras(ad, cfg):
 #: "full" fills every budget with synthetic text -- rules, defaults,
 #: personality and instructions to their limits, and eight roster lines of
 #: 380 characters -- the most the folders can ever add.
-VARIANTS = ("none", "folders", "full")
+VARIANTS = ("none", "folders", "full", "skills")
+#: "skills" (Phase 13 gate, A13-4) is "folders" plus three synthetic
+#: communal skills of a realistic size: Claude is handed a plugin folder
+#: holding them beside the Omarchy skill, any other backend their index.
+#: They are made in a scratch data folder, so no real agent sees them.
+SKILL_BODY = ("Synthetic skill for timing only. " * 90).strip()
+
+
+def synthetic_skills(omarchy_root):
+    """(plugin folder, index) for three synthetic skills, made once in a
+    scratch data folder that agentfs is pointed at only while it builds."""
+    import paths
+    scratch = Path(tempfile.mkdtemp(prefix="av-skills-"))
+    saved = paths.DATA_DIR, paths.AGENTS_DIR, paths.COMMUNAL_DIR
+    paths.DATA_DIR, paths.AGENTS_DIR, paths.COMMUNAL_DIR = (
+        scratch, scratch / "agents", scratch / "communal")
+    try:
+        for n in ("timing-one", "timing-two", "timing-three"):
+            d = paths.COMMUNAL_DIR / "skills" / n
+            d.mkdir(parents=True)
+            (d / "SKILL.md").write_text(
+                f"---\nname: {n}\ndescription: A synthetic skill used only to time a turn; "
+                f"it is never the right one to use for any request.\n---\n\n{SKILL_BODY}\n")
+        folder = agentfs.plugin_dir("main", omarchy_root)
+        index = agentfs.skills_index(agentfs.skill_set([], agentfs.skills("communal")))
+    finally:
+        paths.DATA_DIR, paths.AGENTS_DIR, paths.COMMUNAL_DIR = saved
+    return folder, index
+
+
+_SYNTHETIC = {}
 
 
 def _filler(n: int, word: str) -> str:
@@ -113,8 +147,16 @@ def full_parts(name: str) -> dict:
 def assign_parts(ad, spec, cfg, variant):
     """Give the adapter the folder pieces as the daemon would, or the
     synthetic full set, or none."""
-    if variant == "folders":
+    if variant in ("folders", "skills"):
         ad.parts = agentfs.parts(spec["named"] or "main", cfg)
+    if variant == "skills":
+        root = omarchy_skill.plugin_dir() if cfg.tools_for(spec["named"])["omarchySkill"] else None
+        if root not in _SYNTHETIC:
+            _SYNTHETIC[root] = synthetic_skills(root)
+        folder, index = _SYNTHETIC[root]
+        if hasattr(ad, "skill_dir"):
+            ad.skill_dir = folder
+        ad.parts = {**ad.parts, "skills": index}
     elif variant == "full":
         ad.parts = full_parts(spec.get("label") or spec["named"] or "main")
         ad.instructions = _filler(runtime.INSTRUCTIONS_MAX, "brief")
@@ -135,7 +177,7 @@ def build(spec, cfg, cwd, variant="folders"):
     if level in getattr(ad, "levels", ()):
         ad.level = level
     ad.instructions = spec["instructions"]
-    extras(ad, cfg)
+    extras(ad, cfg, spec["named"])
     assign_parts(ad, spec, cfg, variant)
     return ad
 

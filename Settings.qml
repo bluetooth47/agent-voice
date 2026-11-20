@@ -54,10 +54,14 @@ Item {
   // Which settings page, and which agent's card to open on the Agents page.
   property string page: "overview"
   property string focusAgent: ""
+  // With focusAgent: open that card's "Tools & collaboration" too (Phase 13).
+  property bool focusTools: false
   // The agent and tab Agent details shows, kept for the session so leaving
   // the page and coming back finds them where they were.
   property string detailsAgent: "main"
   property string detailsTab: "prompt"
+  // Communal's tab (Phase 13): "rules" or "skills".
+  property string communalTab: "rules"
   property var request: ({})
   property int secondsLeft: 0
   // True once a verdict has been written for the request on screen, so
@@ -804,7 +808,7 @@ Item {
     } else {
       // A deep link: {"page": "agents", "agent": "sarah"} opens that card.
       if (mode === "settings") goTo(String(p.page || "overview"), String(p.agent || ""),
-                                    /^(prompt|tools|chats|advanced)$/.test(String(p.tab || "")) ? String(p.tab) : "")
+                                    /^(prompt|tools|chats|advanced|rules|skills)$/.test(String(p.tab || "")) ? String(p.tab) : "")
       showPage(mode)
     }
   }
@@ -816,9 +820,12 @@ Item {
     // {"page": "agentdetails", "agent": "sora"} opens that agent's details,
     // on its first tab unless "tab" names another.
     if (page === "agentdetails") {
-      if (agent) { detailsAgent = agent; detailsTab = tab || "prompt" }
+      if (agent) { detailsAgent = agent; detailsTab = /^(prompt|tools|chats|advanced)$/.test(String(tab || "")) ? tab : "prompt" }
       focusAgent = ""
     } else {
+      if (page === "communal" && (tab === "rules" || tab === "skills")) communalTab = tab
+      focusTools = page === "agents" && tab === "tools"
+      focusAgent = ""
       focusAgent = agent || ""
     }
     mode = "settings"

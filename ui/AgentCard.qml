@@ -33,6 +33,10 @@ Rectangle {
   // Shown under the header in the urgent colour when something stops this
   // agent working (no folder for "edits", a name the recogniser lacks).
   property string problem: ""
+  // A risk worth knowing that stops nothing (merged plan, Phase 13: the
+  // Rule of Two), shown under the header, open or shut, without the red
+  // border a problem gets.
+  property string warning: ""
 
   property color foreground: Commons.Color.foreground
   property color accent: Commons.Color.accent
@@ -177,6 +181,17 @@ Rectangle {
       textFormat: Text.PlainText
       wrapMode: Text.WordWrap
       color: card.urgent
+      font.family: card.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    Text {
+      width: parent.width
+      visible: card.warning !== ""
+      text: "⚠  " + card.warning
+      textFormat: Text.PlainText
+      wrapMode: Text.WordWrap
+      color: card.accent
       font.family: card.fontFamily
       font.pixelSize: Style.font.caption
     }

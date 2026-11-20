@@ -85,6 +85,7 @@
       "desktopTools": false,
       "browserTools": false,
       "omarchySkill": true,
+      "mainTools": {},
       "bargeIn": false,
       "bargeOnHeadset": true,
       "bargeFactor": 150,

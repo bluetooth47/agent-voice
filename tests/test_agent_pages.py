@@ -246,7 +246,11 @@ def test_a_restored_entry_takes_the_id_its_folder_came_back_under():
 
 
 def test_the_picker_and_the_tab_stay_bound():
-    assert "agentPicker.value = Qt.binding(function() { return page.target })" in DETAILS
+    # A Binding element puts the picker back on the page's agent whenever it
+    # changes, after the Dropdown's own assignment cut it loose (Phase 13:
+    # the Qt.binding assignment it replaces upset qmllint).
+    import re
+    assert re.search(r'Binding \{\s*target: agentPicker\s*property: "value"\s*value: page\.target', DETAILS)
     assert "readonly property string tab: s.detailsTab" in DETAILS
     assert "function pickTab(id) { s.detailsTab = id }" in DETAILS
 

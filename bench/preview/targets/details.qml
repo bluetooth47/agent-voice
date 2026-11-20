@@ -236,6 +236,10 @@ ShellRoot {
           overlay.check(p && p.target === overlay.made && p.tab === "prompt", "the deep link opens its details")
           e = overlay.editor("instructions.md")
           overlay.check(e && e.target === overlay.made && e.loaded, "its editors read its own folder")
+          // As the Dropdown does on a pick: assigns its own value, which
+          // cuts its binding to the page.
+          var dd = overlay.find(overlay.content(), function(i) { return i.options === p.choices && i.value !== undefined })
+          if (dd) dd.value = overlay.made
           p.pickTab("advanced")
           break
         case 24:
@@ -246,6 +250,8 @@ ShellRoot {
         case 25:
           overlay.check(overlay.indexOf(overlay.made) < 0 && overlay.folders.trashed !== null, "Remove took it off the list, into the trash")
           overlay.check(p.target === "main", "and the page fell back to the main agent")
+          var dd2 = overlay.find(overlay.content(), function(i) { return i.options === p.choices && i.value !== undefined })
+          overlay.check(dd2 && dd2.value === "main", "and so did the agent picker (" + (dd2 ? dd2.value : "none") + ")")
           overlay.click(overlay.button("Undo"), "Undo")
           break
         case 26:

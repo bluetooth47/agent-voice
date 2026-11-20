@@ -7,8 +7,8 @@ import ".."
 import "../ui"
 
 // What every agent shares: the communal rules and defaults (merged plan,
-// Phase 12). Shared skills, notes and chats join this page as they are
-// built (Phases 13 to 15); until then it is one subject, so it has no tabs.
+// Phase 12) and the shared skills (Phase 13), one tab each. Notes and
+// shared chats join as tabs when they are built (Phases 14 and 15).
 //
 // The wording follows section 3.5 of the plan: a rule is text every agent
 // is told, not a limit the app enforces, and an agent that runs at "Trust
@@ -40,6 +40,21 @@ Column {
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
   }
+
+  readonly property string tab: s.communalTab === "skills" ? "skills" : "rules"
+  TabStrip {
+    width: parent.width
+    options: [{ id: "rules", label: "Rules & defaults" }, { id: "skills", label: "Skills" }]
+    current: page.tab
+    foreground: page.s.foreground
+    fontFamily: page.s.fontFamily
+    onPicked: function(id) { page.s.communalTab = id }
+  }
+
+  Column {
+    width: parent.width
+    spacing: Style.space(16)
+    visible: page.tab === "rules"
 
   Text {
     width: parent.width
@@ -165,6 +180,147 @@ Column {
         font.family: page.s.fontFamily
         font.pixelSize: Style.font.caption
       }
+    }
+  }
+  }
+
+  // --- Skills (Phase 13) ------------------------------------------------------------
+  // The shared skills, from `agents skills communal`, and which agents get
+  // each: every agent whose program can take skills, unless it has its own
+  // of the same name.
+  property var skillList: null
+  property string skillError: ""
+  readonly property string skillWatch: page.watch + JSON.stringify(s.vAgentFiles) +
+                                       JSON.stringify(s.folders.folders)
+  onSkillWatchChanged: skillDelay.restart()
+  onTabChanged: if (tab === "skills") loadSkills()
+  Component.onCompleted: if (tab === "skills") loadSkills()
+  Timer { id: skillDelay; interval: 250; onTriggered: if (page.tab === "skills") page.loadSkills() }
+  function loadSkills() {
+    if (skillReader.running) { skillDelay.restart(); return }
+    skillReader.running = true
+  }
+  Process {
+    id: skillReader
+    command: ["agentvoice", "agents", "skills", "communal", "--json"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var d
+        try { d = JSON.parse(String(text)) } catch (e) { return }
+        if (!Array.isArray(d)) return
+        page.skillError = ""
+        page.skillList = d
+      }
+    }
+    stderr: StdioCollector {
+      onStreamFinished: {
+        var t = String(text).trim()
+        if (t !== "") page.skillError = t.replace(/^agentvoice agents: /, "").split("\n").pop()
+      }
+    }
+  }
+  Process {
+    id: skillsFolder
+    command: ["agentvoice", "agents", "skills-folder", "communal"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var path = String(text).trim()
+        if (path !== "") { opener.command = ["xdg-open", path]; opener.running = true }
+      }
+    }
+  }
+  // Which agents have their own skill of this name (from the folder sizes
+  // every page already reads), so the list can say who does not get it.
+  function hiddenBy(name) {
+    var out = []
+    var ids = {}
+    for (var a in s.folders.folders) ids[a] = true
+    for (var b in s.vAgentFiles) ids[b] = true
+    for (var id in ids) {
+      if (id === "communal") continue
+      // The overlay's own read (every 3s on this page), else the daemon's.
+      var f = s.folders.folders[id] || s.vAgentFiles[id]
+      if (((f || {}).files || {})["skills/" + name + "/SKILL.md"]) out.push(labelOf(id))
+    }
+    return out
+  }
+  function labelOf(id) {
+    if (id === "main") return s.mainLabel
+    for (var i = 0; i < s.voiceAgents.length; i++)
+      if (s.agentId(s.voiceAgents[i] || {}) === id) return s.agentLabel(s.voiceAgents[i])
+    return id
+  }
+
+  Column {
+    width: parent.width
+    spacing: Style.space(10)
+    visible: page.tab === "skills"
+
+    Text {
+      width: parent.width
+      wrapMode: Text.WordWrap
+      text: "Given to every agent whose program can take skills: Claude Code loads each one " +
+            "itself when a request needs it; Codex, Gemini, Antigravity and Copilot are told a list " +
+            "and read a skill's file when they need it; an endpoint gets none. An agent with its " +
+            "own skill of the same name gets its own instead."
+      color: page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+    Text {
+      width: parent.width
+      visible: page.skillList === null || page.skillError !== ""
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: page.skillError !== "" ? "Could not read the skills: " + page.skillError : "Reading…"
+      color: page.skillError !== "" ? page.s.urgent : page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+    Text {
+      width: parent.width
+      visible: page.skillList !== null && page.skillList.length === 0
+      wrapMode: Text.WordWrap
+      text: "No shared skills yet."
+      color: page.s.foreground
+      font.family: page.s.fontFamily
+    }
+    Repeater {
+      model: page.skillList || []
+      SettingRow {
+        required property var modelData
+        readonly property var hidden: page.hiddenBy(modelData.name)
+        width: parent.width
+        label: modelData.name
+        hint: modelData.problem !== "" ? "Not given to any agent: " + modelData.problem
+              : modelData.description +
+                (hidden.length > 0 ? " Not given to " + hidden.join(", ") + ", which " +
+                                     (hidden.length === 1 ? "has its" : "have their") +
+                                     " own of the same name." : "")
+        foreground: modelData.problem !== "" ? page.s.urgent : page.s.foreground
+        fontFamily: page.s.fontFamily
+      }
+    }
+    Text {
+      width: parent.width
+      wrapMode: Text.WordWrap
+      text: "A skill is a folder holding SKILL.md, which starts with a line of ---, then " +
+            "“name:” (the folder's name) and “description:” (one line on when to use it, at most " +
+            "300 characters), then ---, then the instructions. Scripts beside it are run by each " +
+            "agent at its own permission level, never by Agent Voice. Changes apply on each " +
+            "agent's next turn."
+      color: page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+    Button {
+      text: "Open the skills folder"
+      iconText: "\u{f0770}"
+      bordered: true
+      focusable: true
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onClicked: skillsFolder.running = true
     }
   }
 }

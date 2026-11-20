@@ -13,5 +13,6 @@ SidebarNav 1.0 SidebarNav.qml
 StatusCard 1.0 StatusCard.qml
 TabStrip 1.0 TabStrip.qml
 ToggleRow 1.0 ToggleRow.qml
+ToolSwitches 1.0 ToolSwitches.qml
 VoiceLibraryRow 1.0 VoiceLibraryRow.qml
 VoiceSlider 1.0 VoiceSlider.qml

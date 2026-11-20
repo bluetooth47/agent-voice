@@ -29,7 +29,7 @@ import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from paths import AGENTS_DIR, COMMUNAL_DIR, CONFIG_DIR, RUNTIME_DIR, scope_root  # noqa: E402
+from paths import AGENTS_DIR, COMMUNAL_DIR, CONFIG_DIR, DATA_DIR, RUNTIME_DIR, scope_root  # noqa: E402
 
 PENDING = RUNTIME_DIR / "permissions"
 
@@ -235,7 +235,11 @@ def _sensitive(p: Path) -> bool:
         # it -- and only a project that contains that folder can reach them
         # here at all, so this is defence in depth below Trusted. At Trusted
         # there is no hook; the saved versions in agentfs make it visible.
-        return _under(p, AGENTS_DIR) or _under(p, COMMUNAL_DIR)
+        # And the Claude plugin folders made from them (Phase 13), whose
+        # skills an agent loads as its own.
+        return (_under(p, AGENTS_DIR) or _under(p, COMMUNAL_DIR)
+                or _under(p, DATA_DIR / "agent-plugins")
+                or _under(p, DATA_DIR / "omarchy-skill"))
     except (OSError, ValueError, RuntimeError):
         return True
 

@@ -62,6 +62,23 @@ MAX_AGENTS = 8
 #: sounds like speech rather than a tape at the wrong speed.
 SPEED_MIN, SPEED_MAX = 50, 200
 
+#: The per-agent tool switches (merged plan, Phase 13, section 3.4), each
+#: named by its own key and following the global setting it overrides.
+TOOL_GLOBALS = {"desktop": "desktopTools", "browser": "browserTools",
+                "omarchySkill": "omarchySkill"}
+#: What each switch may say. Anything else, a missing key or a map that is
+#: not a map reads as "inherit": the global setting decides, as it did
+#: before the switches existed.
+TOOL_CHOICES = ("inherit", "on", "off")
+
+
+def tool_choices(raw) -> dict[str, str]:
+    """A tools map as written, cleaned: every switch present, each one of
+    TOOL_CHOICES."""
+    raw = raw if isinstance(raw, dict) else {}
+    return {k: (raw.get(k) if raw.get(k) in TOOL_CHOICES else "inherit")
+            for k in TOOL_GLOBALS}
+
 
 def speed_pct(value, fallback: int = 100) -> int:
     """A speaking speed as a whole percent inside the bounds, or `fallback`.
@@ -207,6 +224,10 @@ DEFAULTS = {
     # person's own signed-in browser.
     "browserTools": False,
     "omarchySkill": True,
+    # The main agent's own tool switches (merged plan, Phase 13): a map of
+    # desktop / browser / omarchySkill to inherit, on or off. Extra agents
+    # keep theirs in their entry, as `tools`.
+    "mainTools": {},
     "conversationMode": True,
     "yieldToRecorders": True,
     "logSpeech": False,
@@ -290,6 +311,7 @@ TOML_ALIASES = {
     "desktopTools": ("agent", "desktop_tools"),
     "browserTools": ("agent", "browser_tools"),
     "omarchySkill": ("agent", "omarchy_skill"),
+    "mainTools": ("agent", "main_tools"),
     "conversationMode": ("wake", "conversation_mode"),
     "yieldToRecorders": ("wake", "yield_to_recorders"),
     "logSpeech": ("ui", "log_speech"),
@@ -620,6 +642,8 @@ class Config:
                 "narration": talk if talk in NARRATION_LEVELS else "",
                 "instructions": instructions_text(entry.get("instructions")),
                 "level": level if level in ("ask", "edits", "trusted") else "ask",
+                # Its tool switches as written, each inherit / on / off.
+                "tools": tool_choices(entry.get("tools")),
                 "projectDir": folder.strip() if isinstance(folder, str) else "",
                 # Its own OpenAI-compatible endpoint, when its program is
                 # "endpoint" (plan 7b); None otherwise.
@@ -634,6 +658,25 @@ class Config:
             if enabled:
                 out.append(spec)
         return out, off, every
+
+    def tools_for(self, agent_id: str | None) -> dict[str, bool]:
+        """Which of the desktop tools, the browser and the Omarchy skill the
+        settings give this agent: its own switch where it says on or off,
+        else the global setting (merged plan, Phase 13). `agent_id` is ""
+        or "main" for the main agent, else an extra agent's id; one the
+        settings do not have follows the globals.
+
+        Whether the agent's program can use a tool at all is a separate
+        question (agentfs.catalog); this is only what was switched on. Read
+        fresh by whoever asks, so a switch turned off reaches a warm
+        process on its next turn."""
+        if not agent_id or agent_id == "main":
+            own = tool_choices(self["mainTools"])
+        else:
+            spec = next((a for a in self.all_agents() if a["id"] == agent_id), None)
+            own = (spec or {}).get("tools") or tool_choices(None)
+        return {k: (own[k] == "on" if own[k] != "inherit" else self.get_bool(g))
+                for k, g in TOOL_GLOBALS.items()}
 
     def main_endpoint(self) -> dict | None:
         """The main agent's endpoint, cleaned like an extra agent's, or None

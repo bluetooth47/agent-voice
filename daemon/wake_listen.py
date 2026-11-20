@@ -1592,6 +1592,15 @@ class Daemon:
         #: Whether the Omarchy skill has been checked against the installed
         #: Omarchy since this daemon started (reconcile_extras).
         self._skill_checked = False
+        #: Each agent's Claude plugin folder, by what it was built from
+        #: (Phase 13): see plugin_dir_for.
+        self._plugin_dirs: dict = {}
+        # Plugin folders from an earlier run: nothing has them open now.
+        try:
+            import agentfs
+            agentfs.prune_plugins()
+        except Exception:
+            pass
         #: How long an explicitly announced lock outranks the poll, for the
         #: moment between the lock key being pressed and the compositor
         #: admitting to a lock.
@@ -2703,17 +2712,18 @@ class Daemon:
         """Desktop tools and the Omarchy skill, on every idle agent (plan 12a,
         12b). Outside the reload guard: the skill is a file, rebuilt when
         Omarchy updates, and a file changes with no setting change at all."""
-        if self.cfg.get_bool("omarchySkill") and not getattr(self, "_skill_checked", True):
+        agents = [self._main] + list(getattr(self, "crew", {}).values())
+        wanted = any(self.tools_for(p)["omarchySkill"] for p in agents)
+        if wanted and not getattr(self, "_skill_checked", True):
             # Once per daemon: built at install, rebuilt here only when the
             # Omarchy version moved underneath it. On a thread, because
             # asking omarchy for its command list takes about a second.
             self._skill_checked = True
             threading.Thread(target=self._rebuild_skill, daemon=True).start()
-        agents = [self._main] + list(getattr(self, "crew", {}).values())
         for p in agents:
             agent = self.agent if p.main else p.agent
             if agent is not None and not p.busy:
-                self.apply_extras(agent)
+                self.apply_extras(agent, p)
 
     def _rebuild_skill(self) -> None:
         try:
@@ -2727,23 +2737,57 @@ class Daemon:
             print(f"  {YEL}omarchy skill not rebuilt: {type(e).__name__}{OFF}",
                   flush=True)
 
-    def apply_extras(self, agent) -> bool:
-        """Give `agent` the desktop tools and the Omarchy skill the settings
-        ask for. Both are read when its process starts, so a change lets the
-        idle process go -- the conversation is kept, as for instructions.
-        True when anything changed."""
+    def tools_for(self, p) -> dict:
+        """The tool switches for persona `p` (Phase 13): its own where it
+        says on or off, else the setting for every agent. Read fresh."""
+        try:
+            return self.cfg.tools_for(getattr(p, "id", "") or "")
+        except Exception:               # an odd setting is the globals
+            return {"desktop": self.cfg.get_bool("desktopTools"),
+                    "browser": self.cfg.get_bool("browserTools"),
+                    "omarchySkill": self.cfg.get_bool("omarchySkill")}
+
+    def plugin_dir_for(self, p, omarchy_root: str | None) -> str | None:
+        """Persona `p`'s Claude plugin folder (Phase 13): the Omarchy skill
+        when `omarchy_root` is given, and its own and the communal skills.
+        Built again only when the folders changed (their stamp) or the
+        Omarchy skill moved, so the idle poll copies nothing. A build that
+        fails keeps the Omarchy skill alone and says so once."""
+        import agentfs
+        fid = agentfs.folder_id(getattr(p, "id", "") or "")
+        key = (omarchy_root, getattr(self, "_agentfs_stamp", None))
+        cache = self.__dict__.setdefault("_plugin_dirs", {})
+        have = cache.get(fid)
+        if have is not None and have[0] == key and key[1] is not None:
+            return have[1]
+        try:
+            got = agentfs.plugin_dir(fid, omarchy_root)
+        except Exception as e:
+            self.say_once(f"plugins-{fid}", f"  {YEL}skills for “{fid}”: not given "
+                                            f"({type(e).__name__}){OFF}")
+            got = omarchy_root
+        cache[fid] = (key, got)
+        return got
+
+    def apply_extras(self, agent, p=None) -> bool:
+        """Give `agent` (persona `p`'s) the desktop tools, the browser, the
+        Omarchy skill and its skills, as its switches ask (Phase 13; before
+        it, the settings for every agent). All are read when its process
+        starts, so a change lets the idle process go -- the conversation is
+        kept, as for instructions. True when anything changed."""
         changed = False
-        skill_on = self.cfg.get_bool("omarchySkill")
+        tools = self.tools_for(p)
+        skill_on = tools["omarchySkill"]
         if hasattr(agent, "desktop_tools"):
-            want = self.cfg.get_bool("desktopTools")
+            want = tools["desktop"]
             if agent.desktop_tools != want:
                 agent.desktop_tools, changed = want, True
         if hasattr(agent, "browser_tools"):
-            want = self.cfg.get_bool("browserTools")
+            want = tools["browser"]
             if agent.browser_tools != want:
                 agent.browser_tools, changed = want, True
         if hasattr(agent, "skill_dir"):
-            want = omarchy_skill.plugin_dir() if skill_on else None
+            want = self.plugin_dir_for(p, omarchy_skill.plugin_dir() if skill_on else None)
             if agent.skill_dir != want:
                 agent.skill_dir, changed = want, True
         if getattr(agent, "takes_skill_text", False) and getattr(agent, "has_tools", False):
@@ -4068,13 +4112,14 @@ class Daemon:
 
         An effort, voice, speed or instructions keep the conversation, as
         they do for the main agent, and so do its display name and wake
-        phrase: the permission hook knows it by id. Anything else -- program,
-        model, folder, level -- starts a new one, because a session is scoped
-        to all of those.
+        phrase: the permission hook knows it by id. So do its tool switches
+        (Phase 13), which apply_extras hands to the adapter between turns.
+        Anything else -- program, model, folder, level -- starts a new one,
+        because a session is scoped to all of those.
         """
         old = p.spec or {}
         kept = ("effort", "voice", "speed", "instructions", "name", "label",
-                "narration")
+                "narration", "tools")
         same = {k: v for k, v in spec.items() if k not in kept}
         was = {k: v for k, v in old.items() if k not in kept}
         if same == was and p.agent is not None:
