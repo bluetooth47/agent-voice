@@ -2,17 +2,20 @@
 
 Written 2026-11-20. Branch `phase-14`, cut from `phase-13` at 2e2fa7b,
 pushed to `fork/phase-14` only (the hashes are in `git log`). Installed:
-yes (98bc5a4 plus the uncommitted saving-message fix later committed as
-0718582). Tested on: i7-1185G7, Quickshell under Omarchy's shell, `claude`
+yes, twice: 98bc5a4 (the live checklist), then 893bf15 (Codex's second
+pass, smoke-checked live). Tested on: i7-1185G7, Quickshell under Omarchy's shell, `claude`
 2.1.329, `codex-cli` 0.171.0.
 
-`./bin/agentvoice-check`: green, 2476 tests (was 2346), qmllint clean. The
+`./bin/agentvoice-check`: green, 2492 tests (was 2346), qmllint clean. The
 bare-runner variant (`AGENTVOICE_STRICT=1`, a venv with only
 requirements-dev.txt) green on 3b2a33a, all 111 notes tests of that commit
 running there. Box: not run (`install.sh` did not change). Preview: the new
 `notes` target 20/20, against a scratch data folder and a scratch shell.json.
-Mutations: 38 guards, each removed in turn, each turned a named test red
+Mutations: 43 guards, each removed in turn, each turned a named test red
 (listed under Found along the way).
+
+The run was cut off once by my own usage limit, partway through live check
+L3; it resumed from there (L3 had not taken effect) and nothing was redone.
 
 ## What was built
 
@@ -35,7 +38,7 @@ Mutations: 38 guards, each removed in turn, each turned a named test red
 - **Hand edits are the person's**: a note whose bytes no longer match its
   hash moves to a new rev, last written by "you", keeping its taint. A note
   deleted by hand leaves a tombstone, so its rev never restarts (oldest
-  unlocked tombstones past 200 are dropped; locked ones are kept, so a
+  unlocked tombstones past 1000 are dropped; locked ones are kept, so a
   locked note deleted by hand cannot be made again by an agent).
 - **`daemon/crew_mcp.py`**, a stdlib MCP server (`agentvoice-crew`) with
   `notes_list`, `notes_read`, `notes_write`, `notes_append`, scope `mine`
@@ -120,7 +123,7 @@ Mutations: 38 guards, each removed in turn, each turned a named test red
   `pages/CommunalPage.qml` (the tabs), `ui/ToolSwitches.qml` (the row),
   `ui/qmldir`, `bin/agentvoice` (usage comment).
 - `bench/start_bench.py`: the `nocrew` variant. `bench/FINDINGS.md` §37.
-- Tests: new `tests/test_notes.py` (130); `test_crew.py`,
+- Tests: new `tests/test_notes.py` (146); `test_crew.py`,
   `test_desktop_tools.py`, `test_codex_desktop.py`, `test_codex_models.py`
   updated for the new server in argv and the new entry key. Preview: new
   `bench/preview/targets/notes.qml`.
@@ -193,7 +196,9 @@ and 7088 characters after install, as before. Main and Hazel not run
   agents, prune after commit, ambiguous settings, broken TOML, the card
   shows the text, tombstone compaction, mtime clamp, audit FIFO, recheck
   before publish, name checked before the question, the person's conflict
-  on create.
+  on create; and from the second pass: a duplicate key in the entry's
+  subtree, the hook's malformed-write refusal, the main agent's folder,
+  the saved copy kept on a failed rollback, the audit lock's O_NONBLOCK.
 
 ### Codex's review, and what was done
 
@@ -228,19 +233,35 @@ Three passes were attempted.
    without its taint or audit line; the failure paths that return are
    rolled back); the session-preservation test reads the source rather than
    driving `reconcile_crew` (it did go red under mutation).
-3. **Second pass on 98bc5a4**: **Codex hit its usage limit** before
-   reviewing (resets 05:21). I re-read the fix commit myself and changed
-   one message (a switch during a save says "Still saving").
+3. **Second pass on 3b2a33a..0718582**: the first attempt hit Codex's
+   usage limit before it read the diff; I re-read the fix commit myself
+   meanwhile and changed one message. After the 05:21 reset it ran: 4 high,
+   7 medium, 4 low, fixed in 893bf15 but three. Fixed: Keep mine and Reload
+   followed whatever the name field said by then, not the refused save's
+   name; a target change (an agent removed) with a dirty editor could save
+   into another folder; a duplicate `notesWrite` inside `voiceAgents` (or a
+   key twice above the entry) escaped the ambiguity check; the outside-save
+   recheck ran before history was written; a failed rollback deleted the
+   only copy of the old text; on a TOML-only install the main agent had no
+   folder to keep notes in; a FIFO at `.audit.lock` could stall a save; the
+   queue could be left undrained (it was drained with `callLater` while the
+   writer was still running, a bug since the first fix); Close during its
+   own blur's save could lose the text on a refusal; typing before the
+   first read held the read off; an oversized draft could be reloaded
+   over; Save repeated the blur's save; New note kept an old name; the hook
+   asked about malformed writes. Not changed: a tombstone evicted after
+   1000 newer deletions lets a rev restart (the cap was raised from 200
+   rather than adding a counter to the record's format); a user TOML that
+   is a dangling symlink falls back to the shipped file (as every setting
+   does; Open issues); old-format history names (only ever written on a
+   development build of this phase).
 
 ## Not verified (what was skipped, and why)
 
-- **A Codex turn using the notes tools** (Hazel), and Codex's S run:
-  Codex's usage limit was spent by the reviews. The Codex argv, `--guard`
-  on its own level and the env are tested; no live Codex turn called the
-  server. Hazel is Trusted, so `--guard` would not have been exercised live
-  anyway.
-- **Main and Hazel S runs** for the new server (Opus noise is ±0.48s;
-  Codex quota).
+- **`--guard` live**: Hazel is Trusted, so her live turn (L6) ran without
+  it; the guard is driven in tests only.
+- **Main and Hazel S runs** for the new server (Opus noise is ±0.48s; the
+  Codex quota was spent by the reviews when the bench ran).
 - **Answering a permission card** for a notes write at Ask: I did not
   answer one on the person's behalf, so only the silent-deny path was
   driven live (L5). The allow path is driven in tests through the guard.
@@ -273,10 +294,16 @@ Three passes were attempted.
 - **`onFailure: block` needs Claude Code that knows it.** 2.1.329 does; an
   older CLI might ignore the key (fails open as before) or reject the
   settings. Not tested on an older CLI.
+- A rev can restart for a note whose tombstone was dropped after 1000
+  newer hand deletions; a folder-level counter in `.meta.json` would close
+  it (a record-format change, so not done in a fix pass).
 - The editor trims whitespace (shared `InstructionsBox`); an exact-text
   mode would keep leading indentation of a note.
 - Deleting a note from the tab, and creating a skill from a page (Phase 13
   open issue), for the UX walkthrough.
+- A user `agentvoice.toml` that is a dangling symlink is read as absent,
+  so the shipped file's values (allow) apply; true of every setting, not
+  only notes.
 - JSON-RPC strictness in both MCP servers (Codex, low): batching is not
   implemented though `2025-03-26` is offered.
 - The notes preview target and the tools target assume the copied
@@ -323,5 +350,15 @@ synthetic phase 14 note."). All test notes were removed afterwards;
   `crew_mcp.py claude --browser` (Theo, no id) and `crew_mcp.py claude
   sora --browser`; the hook entry carried `"onFailure": "block"`; no note
   text in any argv.
-- Not done: Hazel (Codex quota), answering a card, the keyboard walk, a
-  spoken turn (above).
+- **L6, Hazel (Codex, Trusted)**, after Codex's limit reset: "append the
+  line: synthetic hazel test. to the communal note phase14-hazel" →
+  journal `[mcp_tool_call]`; the note: author `jarvis-ajc`, untainted (no
+  browser for Codex), audit `note_append … "from":"jarvis-ajc"`; reply
+  quoted "Added to phase14-hazel in the communal notes; it is now at rev
+  1." So a real Codex turn found and called the server through its `-c`
+  options.
+- **After the second install (893bf15)**: the same prompt sizes; Theo wrote
+  `phase14-smoke` and read it back (rev 1, author `main`, audit line).
+- Test notes and chats removed after each check; 18 saved chats before and
+  after.
+- Not done: answering a card, the keyboard walk, a spoken turn (above).

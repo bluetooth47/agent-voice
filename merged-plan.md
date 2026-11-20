@@ -930,9 +930,10 @@ every call; plus mutations of each guard.
 (`onFailure: block`, checked against claude 2.1.329). The gate holds on Sora
 with the new server (+0.05s cold, +0.01s warm, pooled 50). Live: a Trusted
 agent's write (tainted), a read wrapped as information, a lock and a deny
-refusing a Trusted agent, an Ask agent asked and denied on silence. **Still
-open:** a Codex turn through the server and Codex's review of the fix
-commit (quota), answering a card, the keyboard walk.
+refusing a Trusted agent, an Ask agent asked and denied on silence, a
+Codex turn through the server. Codex reviewed three times; its findings are
+fixed but four, with reasons. **Still open:** answering a card, the
+keyboard walk, `--guard` live (Hazel is Trusted).
 
 ---
 
