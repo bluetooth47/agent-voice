@@ -699,3 +699,39 @@ def test_the_bench_skills_variant_hands_claude_three_skills_and_keeps_the_folder
     codex = start_bench.build(start_bench.agent_spec(cfg, "hz"), cfg, str(tmp_path), "skills")
     assert codex.preamble().count("- timing-") == 3
     assert not (paths.COMMUNAL_DIR / "skills").exists()           # nothing real touched
+
+
+# --- loading its own skill at Ask (found in the live check) --------------------------------
+
+@pytest.mark.parametrize("skill_name", ["agentvoice:test-passphrase", "agentvoice-omarchy:omarchy"])
+def test_loading_its_own_skill_is_a_read_at_every_level(monkeypatch, skill_name):
+    monkeypatch.setattr(hook, "_settings", lambda: ("ask", None))
+    monkeypatch.setattr(hook, "_ask", lambda *a, **k: ("deny", "asked"))
+    assert hook.decide("Skill", {"skill": skill_name}) == ("allow", "")
+
+
+@pytest.mark.parametrize("tool_input", [
+    {"skill": "someone-else:report"}, {"skill": "agentvoice:../x"}, {"skill": "agentvoice:x y"},
+    {"skill": "agentvoice:"}, {"skill": ["agentvoice:x"]}, {}, "agentvoice:x", None,
+    {"skill": "agentvoice:X"}, {"skill": "agentvoice:x\n"},
+])
+def test_any_other_skill_or_malformed_input_is_still_asked(monkeypatch, tool_input):
+    monkeypatch.setattr(hook, "_settings", lambda: ("ask", None))
+    monkeypatch.setattr(hook, "_ask", lambda *a, **k: ("deny", "asked"))
+    assert hook.decide("Skill", tool_input)[0] == "deny"
+
+
+def test_a_hand_made_skill_reads_as_changed_outside_until_kept():
+    skill("sora", "pirate")
+    [s] = agentfs.skills("sora")
+    assert s["changed_outside"] is True and s["stamp"]
+    agentfs.ack("sora", "skills/pirate/SKILL.md", base=s["stamp"])
+    [s] = agentfs.skills("sora")
+    assert s["changed_outside"] is False
+    assert s["problem"] == ""                     # kept or not, it is given
+
+
+def test_the_pages_can_keep_a_skill():
+    for page in ("pages/AgentDetailsPage.qml", "pages/CommunalPage.qml"):
+        text = (ROOT / page).read_text()
+        assert '"agentvoice", "agents", "ack"' in text and '"--base", stamp' in text

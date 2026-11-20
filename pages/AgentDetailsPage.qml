@@ -501,6 +501,25 @@ Column {
       }
     }
   }
+  // Keep a skill made or changed by hand: `agents ack`, on the stamp shown.
+  property string skillNote: ""
+  Process {
+    id: skillKeeper
+    stderr: StdioCollector {
+      onStreamFinished: {
+        var t = String(text).trim()
+        page.skillNote = t === "" ? "" : "Not kept: " + t.replace(/^agentvoice agents: /, "").split("\n").pop()
+      }
+    }
+    onRunningChanged: if (!running) { page.s.folders.refresh(); page.loadCatalog() }
+  }
+  function keepSkill(source, name, stamp) {
+    if (skillKeeper.running) return
+    skillNote = ""
+    skillKeeper.command = ["agentvoice", "agents", "ack", source, "skills/" + name + "/SKILL.md"]
+                          .concat(stamp ? ["--base", stamp] : [])
+    skillKeeper.running = true
+  }
   function openSkills() {
     skillsFolder.command = ["agentvoice", "agents", "skills-folder", page.target]
     skillsFolder.running = true
@@ -610,23 +629,60 @@ Column {
         }
         Repeater {
           model: modelData.items
-          Text {
+          Column {
             required property var modelData
             width: toolsTab.width
-            wrapMode: Text.WordWrap
-            textFormat: Text.PlainText
-            text: modelData.name + " — " +
-                  (modelData.problem !== "" ? "not given: " + modelData.problem
-                   : modelData.shadowed ? "not given: " + page.name + " has its own of the same name"
-                   : !modelData.delivered ? "not given to " + page.name
-                   : modelData.description)
-            color: modelData.problem !== "" ? page.s.urgent
-                   : modelData.delivered ? page.s.foreground : page.s.dim
-            font.family: page.s.fontFamily
-            font.pixelSize: Style.font.caption
+            spacing: Style.space(2)
+            Text {
+              width: parent.width
+              wrapMode: Text.WordWrap
+              textFormat: Text.PlainText
+              text: modelData.name + " — " +
+                    (modelData.problem !== "" ? "not given: " + modelData.problem
+                     : modelData.shadowed ? "not given: " + page.name + " has its own of the same name"
+                     : !modelData.delivered ? "not given to " + page.name
+                     : modelData.description)
+              color: modelData.problem !== "" ? page.s.urgent
+                     : modelData.delivered ? page.s.foreground : page.s.dim
+              font.family: page.s.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            // Made or edited by hand (a skill always is), so it reads as
+            // changed outside Settings until it is kept, as the other files.
+            Flow {
+              width: parent.width
+              visible: modelData.changed_outside === true
+              spacing: Style.space(8)
+              Text {
+                text: "Added or changed outside Settings."
+                color: page.s.dim
+                font.family: page.s.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              Button {
+                text: "Keep"
+                focusable: true
+                enabled: !skillKeeper.running
+                foreground: page.s.foreground
+                fontFamily: page.s.fontFamily
+                fontSize: Style.font.caption
+                tooltipText: "It applies already. Keep saves this version, so the notice goes."
+                onClicked: page.keepSkill(modelData.source, modelData.name, modelData.stamp)
+              }
+            }
           }
         }
       }
+    }
+    Text {
+      width: parent.width
+      visible: page.skillNote !== ""
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: page.skillNote
+      color: page.s.urgent
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
     }
     Text {
       width: parent.width

@@ -1076,13 +1076,19 @@ def skills(target: str) -> list[dict]:
     out = []
     for name in _skill_dirs(target):
         path = _base(target) / "skills" / name / "SKILL.md"
+        # changed_outside and stamp (Phase 13): a skill is only ever written
+        # by hand, so a new or edited one reads as changed outside Settings
+        # until the person keeps it (`agents ack`), as for the other files.
         entry = {"name": name, "description": "", "path": str(path),
-                 "source": target, "problem": ""}
+                 "source": target, "problem": "", "changed_outside": False,
+                 "stamp": ""}
         if not _SKILL_NAME.fullmatch(name):
             entry["problem"] = parse_skill(name, "")[1]
         else:
             _, why = _skill_tree(target, name)
             got = read_file(target, f"skills/{name}/SKILL.md")
+            entry["changed_outside"] = bool(got["changed_outside"])
+            entry["stamp"] = got["stamp"]
             if why:
                 entry["problem"] = why
             elif not got["exists"]:

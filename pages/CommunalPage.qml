@@ -219,6 +219,24 @@ Column {
       }
     }
   }
+  property string skillNote: ""
+  Process {
+    id: skillKeeper
+    stderr: StdioCollector {
+      onStreamFinished: {
+        var t = String(text).trim()
+        page.skillNote = t === "" ? "" : "Not kept: " + t.replace(/^agentvoice agents: /, "").split("\n").pop()
+      }
+    }
+    onRunningChanged: if (!running) { page.s.folders.refresh(); page.loadSkills() }
+  }
+  function keepSkill(name, stamp) {
+    if (skillKeeper.running) return
+    skillNote = ""
+    skillKeeper.command = ["agentvoice", "agents", "ack", "communal", "skills/" + name + "/SKILL.md"]
+                          .concat(stamp ? ["--base", stamp] : [])
+    skillKeeper.running = true
+  }
   Process {
     id: skillsFolder
     command: ["agentvoice", "agents", "skills-folder", "communal"]
@@ -292,14 +310,38 @@ Column {
         readonly property var hidden: page.hiddenBy(modelData.name)
         width: parent.width
         label: modelData.name
-        hint: modelData.problem !== "" ? "Not given to any agent: " + modelData.problem
-              : modelData.description +
-                (hidden.length > 0 ? " Not given to " + hidden.join(", ") + ", which " +
-                                     (hidden.length === 1 ? "has its" : "have their") +
-                                     " own of the same name." : "")
+        hint: (modelData.problem !== "" ? "Not given to any agent: " + modelData.problem
+               : modelData.description +
+                 (hidden.length > 0 ? " Not given to " + hidden.join(", ") + ", which " +
+                                      (hidden.length === 1 ? "has its" : "have their") +
+                                      " own of the same name." : "")) +
+              (modelData.changed_outside === true ? " Added or changed outside Settings." : "")
         foreground: modelData.problem !== "" ? page.s.urgent : page.s.foreground
         fontFamily: page.s.fontFamily
+        // Made or edited by hand (a skill always is): Keep saves this
+        // version, so the outside-change notice goes (Phase 13).
+        Button {
+          visible: modelData.changed_outside === true
+          text: "Keep"
+          focusable: true
+          enabled: !skillKeeper.running
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          fontSize: Style.font.caption
+          tooltipText: "It applies already. Keep saves this version, so the notice goes."
+          onClicked: page.keepSkill(modelData.name, modelData.stamp)
+        }
       }
+    }
+    Text {
+      width: parent.width
+      visible: page.skillNote !== ""
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: page.skillNote
+      color: page.s.urgent
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
     }
     Text {
       width: parent.width

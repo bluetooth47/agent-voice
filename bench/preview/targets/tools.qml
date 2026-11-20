@@ -174,17 +174,25 @@ ShellRoot {
                         "her own skill hides the communal one of the same name")
           var line = overlay.find(overlay.content(), function(i) { return String(i.text).indexOf("Sora has its own of the same name") >= 0 })
           overlay.check(line !== null, "the tab says so")
+          overlay.check(own && own.changed_outside === true, "a skill made by hand reads as changed outside Settings")
+          overlay.click(overlay.find(overlay.content(), function(i) { return i.clicked !== undefined && i.text === "Keep" }), "Keep")
+          break
+        case 10:
+          d = overlay.details()
+          cat = d ? d.catalog : null
+          own = cat ? cat.skills.filter(function(s) { return s.source === "sora" && s.name === "greeting" })[0] : null
+          overlay.check(own && own.changed_outside === false && own.delivered, "Keep saved it, and the notice went")
           overlay.click(overlay.find(overlay.content(), function(i) { return i.clicked !== undefined && String(i.text).indexOf("Agents card") >= 0 }),
                         "Change on her Agents card")
           break
-        case 10:
+        case 11:
           overlay.check(overlay.page === "agents" && overlay.switches("sora") && overlay.switches("sora").expanded,
                         "the link back opens her card's tool switches")
           overlay.goTo("communal", "", "skills")
           break
-        case 11:
-          break
         case 12:
+          break
+        case 13:
           c = overlay.communal()
           var list = c ? (c.skillList || []) : []
           var broken = list.filter(function(s) { return s.name === "broken" })[0]

@@ -70,6 +70,14 @@ TIMEOUT = _timeout()
 #: (seen in the first real turn through desktop_mcp.py).
 NO_EFFECT = {"TodoWrite", "BashOutput", "ExitPlanMode", "ToolSearch"}
 
+#: One of the agent's own skills, as Claude Code names it when the Skill tool
+#: loads it from the plugin folder Agent Voice made for this agent (Phase 13).
+#: That folder holds only the skills this agent is meant to have, so loading
+#: one reads instructions into the conversation, like a Read of its own
+#: folder; whatever the skill then has it do is judged call by call. A skill
+#: from any other plugin is asked about as before.
+OWN_SKILL = re.compile(r"agentvoice:[a-z0-9][a-z0-9-]{0,47}|agentvoice-omarchy:omarchy")
+
 #: Tools that only read. Allowed, but against SECRETS below rather than
 #: unconditionally: the attack is not "the agent read a file", it is "a
 #: sentence from a podcast told it to read ~/.ssh/id_ed25519 and put it
@@ -654,6 +662,11 @@ def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, st
     # "trusted", it covers everything, credentials included -- that is what
     # the button says -- but only this agent, only this conversation.
     if granted(session):
+        return "allow", ""
+
+    if (tool_name == "Skill" and isinstance(tool_input, dict)
+            and isinstance(tool_input.get("skill"), str)
+            and OWN_SKILL.fullmatch(tool_input["skill"])):
         return "allow", ""
 
     # Reads are free unless they are reads of a credential. Checked before

@@ -176,7 +176,13 @@ Column {
     }
     var out = [size("role.md", "Role"), size("personality.md", "personality"),
                size("instructions.md", "instructions")].join(" · ")
-    if ((f.changed_outside || []).length > 0) out += " · changed outside Settings"
+    var outside = f.changed_outside || []
+    var skillsOutside = outside.filter(function(n) { return n.indexOf("skills/") === 0 })
+    if (outside.length > skillsOutside.length) out += " · changed outside Settings"
+    // A skill is made by hand; it is kept on Agent details' Tools & skills.
+    if (skillsOutside.length > 0)
+      out += " · " + (skillsOutside.length === 1 ? "a skill" : skillsOutside.length + " skills") +
+             " added or changed outside Settings (Tools & skills)"
     if ((f.problems || []).length > 0) out += " · " + f.problems[0]
     return out
   }
