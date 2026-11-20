@@ -149,14 +149,15 @@ def assign_parts(ad, spec, cfg, variant):
     synthetic full set, or none."""
     if variant in ("folders", "skills"):
         ad.parts = agentfs.parts(spec["named"] or "main", cfg)
-    if variant == "skills":
-        root = omarchy_skill.plugin_dir() if cfg.tools_for(spec["named"])["omarchySkill"] else None
-        if root not in _SYNTHETIC:
-            _SYNTHETIC[root] = synthetic_skills(root)
-        folder, index = _SYNTHETIC[root]
-        if hasattr(ad, "skill_dir"):
-            ad.skill_dir = folder
-        ad.parts = {**ad.parts, "skills": index}
+        if variant == "skills":
+            root = (omarchy_skill.plugin_dir()
+                    if cfg.tools_for(spec["named"])["omarchySkill"] else None)
+            if root not in _SYNTHETIC:
+                _SYNTHETIC[root] = synthetic_skills(root)
+            folder, index = _SYNTHETIC[root]
+            if hasattr(ad, "skill_dir"):
+                ad.skill_dir = folder
+            ad.parts = {**ad.parts, "skills": index}
     elif variant == "full":
         ad.parts = full_parts(spec.get("label") or spec["named"] or "main")
         ad.instructions = _filler(runtime.INSTRUCTIONS_MAX, "brief")

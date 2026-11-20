@@ -410,7 +410,7 @@ def test_the_index_keeps_to_its_budgets():
     text = agentfs.skills_index(entries)
     lines = text.split("\n")
     assert all(len(line) <= agentfs.SKILL_INDEX_LINE for line in lines)
-    assert len(text) <= agentfs.SKILL_INDEX_MAX + 40
+    assert len(text) <= agentfs.SKILL_INDEX_MAX
     assert lines[-1].startswith("- and ") and "more" in lines[-1]
 
 
@@ -585,3 +585,117 @@ def test_the_cards_copy_of_the_program_table_matches_agentfs():
         return tuple(re.findall(r'"([a-z-]+)"', m.group(1)))
     assert listed("desktopPrograms") == agentfs.DESKTOP_PROGRAMS
     assert listed("browserPrograms") == agentfs.BROWSER_PROGRAMS
+
+
+# --- fixes from Codex's review of 6f03e29 ---------------------------------------------
+
+def test_a_path_too_long_for_a_line_is_counted_not_overrun():
+    long = {"name": "s", "description": "d", "path": "/" + "p" * 200, "delivered": True}
+    ok = {"name": "t", "description": "d", "path": "/short", "delivered": True}
+    text = agentfs.skills_index([long, ok])
+    assert all(len(line) <= agentfs.SKILL_INDEX_LINE for line in text.split("\n"))
+    assert text.endswith("- and 1 more, not listed here") and "- t: d (/short)" in text
+
+
+@pytest.mark.parametrize("value", ["null", "~", "Null"])
+def test_a_yaml_null_description_is_no_description(value):
+    assert "no description" in agentfs.parse_skill("w", f"---\nname: w\ndescription: {value}\n---\n")[1]
+
+
+def test_a_program_agent_voice_cannot_run_is_given_nothing(cfg_factory, monkeypatch):
+    import adapters
+    monkeypatch.setattr(adapters, "omarchy_default", lambda: "opencode")
+    skill("communal", "shared")
+    cfg = cfg_factory(desktopTools=True)
+    c = agentfs.catalog("main", cfg)
+    assert c["program"] == "opencode" and c["delivery"] == "none"
+    assert not any(t["can"] for t in c["tools"])
+    assert all("cannot run opencode" in t["why_not"] for t in c["tools"])
+    assert not [x for x in agentfs.preview("main", cfg, live_ids={"main"}) if x["label"] == "Skills"]
+    assert agentfs.roster(cfg, live_ids={"main"})[0]["skills"] == []
+
+
+def test_a_plugin_folder_is_named_for_its_agent():
+    skill("sora", "pirate")
+    name = Path(agentfs.plugin_dir("sora", None)).name
+    owner, _, digest = name.rpartition("-")
+    assert owner == "sora" and len(digest) == 20
+
+
+def test_another_agents_plugin_copy_is_as_private_as_its_folder(data, monkeypatch):
+    plugins = data / "agent-plugins"
+    monkeypatch.setattr(hook, "_named", lambda: "sora")
+    mine = plugins / ("sora-" + "a" * 20) / "skills/x/SKILL.md"
+    theirs = plugins / ("main-" + "b" * 20) / "skills/x/SKILL.md"
+    trap = plugins / ("sora-x-" + "c" * 20) / "skills/x/SKILL.md"
+    assert not hook._foreign(str(mine))
+    assert hook._foreign(str(theirs)) and hook._foreign(str(trap))
+    assert hook._foreign(str(plugins))
+    monkeypatch.setattr(hook, "_named", lambda: "")
+    assert not hook._foreign(str(theirs))           # the main agent's own copy
+
+
+def test_a_failed_build_is_tried_again_later(cfg_factory, monkeypatch, tmp_path):
+    import wake_listen
+    root = omarchy_root(tmp_path)
+    d = _daemon(cfg_factory(), monkeypatch, root)
+    d.say_once = lambda key, line: True
+    clock = [100.0]
+    monkeypatch.setattr(wake_listen.time, "monotonic", lambda: clock[0])
+    calls = []
+
+    def build(*a):
+        calls.append(a)
+        if len(calls) == 1:
+            raise OSError("busy")
+        return "/built"
+    monkeypatch.setattr(agentfs, "plugin_dir", build)
+    d._agentfs_stamp = ("same",)
+    assert d.plugin_dir_for(P(""), root) == root
+    assert d.plugin_dir_for(P(""), root) == root and len(calls) == 1   # not every poll
+    clock[0] += 31
+    assert d.plugin_dir_for(P(""), root) == "/built"
+
+
+def test_a_turn_that_replaces_a_running_one_gets_the_new_switches(cfg_factory, monkeypatch, tmp_path):
+    """dispatch() stops a busy agent and catches it up before the new turn:
+    its tool switches too, not only its prompt (Codex's review)."""
+    from adapters.claude_code import ClaudeCode
+    from wake_listen import Persona
+    agents = [{"name": "sora", "id": "sora", "agent": "claude", "tools": {"browser": "on"}}]
+    d = _daemon(cfg_factory(voiceAgents=agents), monkeypatch, omarchy_root(tmp_path))
+    p = Persona("sora", d.cfg.agents()[0])
+    p.id, p.agent = "sora", ClaudeCode(named="sora")
+    p.agent.cancel = lambda: None
+    d._main = Persona("", {})
+    d.reconcile_agent_files = lambda: None
+    d.reconcile_parts = lambda: None
+    d.instructions_for = lambda *a: ""
+    d.apply_extras(p.agent, p)
+    assert p.agent.browser_tools is True
+    agents[0]["tools"] = {"browser": "off"}
+    d.cfg = cfg_factory(voiceAgents=agents)
+    d.catch_up_one(p)
+    assert p.agent.browser_tools is False
+
+
+def test_the_bench_skills_variant_hands_claude_three_skills_and_keeps_the_folders(
+        cfg_factory, monkeypatch, tmp_path):
+    sys.path.insert(0, str(ROOT / "bench"))
+    import runtime
+    import start_bench
+    monkeypatch.setattr(omarchy_skill, "plugin_dir", lambda: None)
+    cfg = cfg_factory(omarchySkill=False, mainProgram="claude", phrase="theo",
+                      voiceAgents=[{"id": "sora", "name": "sora", "agent": "claude", "level": "ask"},
+                                   {"id": "hz", "name": "hazel", "agent": "codex", "level": "trusted"}])
+    agentfs.migrate(cfg)
+    agentfs.write("communal", "rules.md", "Never shout.")
+    spec = start_bench.agent_spec(cfg, "sora")
+    base = start_bench.build(spec, cfg, str(tmp_path), "folders")
+    assert base.parts == agentfs.parts("sora", cfg) and "Never shout." in base.preamble()
+    timed = start_bench.build(spec, cfg, str(tmp_path), "skills")
+    assert sorted(os.listdir(Path(timed.skill_dir) / "skills")) == ["timing-one", "timing-three", "timing-two"]
+    assert "Never shout." in timed.preamble() and "timing" not in timed.preamble()
+    codex = start_bench.build(start_bench.agent_spec(cfg, "hz"), cfg, str(tmp_path), "skills")
+    assert codex.preamble().count("- timing-") == 3
+    assert not (paths.COMMUNAL_DIR / "skills").exists()           # nothing real touched

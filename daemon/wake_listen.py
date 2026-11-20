@@ -2598,9 +2598,11 @@ class Daemon:
     def catch_up_one(self, p: Persona) -> None:
         """What `p` is told, brought up to date: for an agent whose turn
         dispatch() just stopped, which every refresh until then passed by
-        because it was busy (Phase 11 review). Its instructions and prompt
-        parts only; a changed setting (model, level) still waits for the
-        next idle poll, as it always has."""
+        because it was busy (Phase 11 review). Its instructions, prompt
+        parts and tool switches (Phase 13 review: a turn that replaced a
+        running one kept Chrome after it was switched off); a changed
+        setting (model, level) still waits for the next idle poll, as it
+        always has."""
         self.reconcile_agent_files()
         agent = p.agent
         if agent is not None:
@@ -2613,6 +2615,9 @@ class Daemon:
             if getattr(agent, "instructions", "") != want:
                 agent.instructions = want
         self.reconcile_parts()
+        extras_for = self.agent if getattr(p, "main", False) else agent
+        if extras_for is not None:
+            self.apply_extras(extras_for, p)
 
     def reconcile_agent_files(self) -> None:
         """Notice a change to the agent and communal folders (Phase 9).
@@ -2758,15 +2763,19 @@ class Daemon:
         key = (omarchy_root, getattr(self, "_agentfs_stamp", None))
         cache = self.__dict__.setdefault("_plugin_dirs", {})
         have = cache.get(fid)
-        if have is not None and have[0] == key and key[1] is not None:
+        now = time.monotonic()
+        if (have is not None and have[0] == key and key[1] is not None
+                and (have[2] is None or now < have[2])):
             return have[1]
         try:
-            got = agentfs.plugin_dir(fid, omarchy_root)
+            got, retry = agentfs.plugin_dir(fid, omarchy_root), None
         except Exception as e:
             self.say_once(f"plugins-{fid}", f"  {YEL}skills for “{fid}”: not given "
                                             f"({type(e).__name__}){OFF}")
-            got = omarchy_root
-        cache[fid] = (key, got)
+            # Tried again in a while even with nothing changed: a full disk
+            # or a busy file clears on its own (Phase 13 review).
+            got, retry = omarchy_root, now + 30.0
+        cache[fid] = (key, got, retry)
         return got
 
     def apply_extras(self, agent, p=None) -> bool:

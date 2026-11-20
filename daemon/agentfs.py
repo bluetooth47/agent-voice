@@ -985,6 +985,8 @@ def _front_matter(text: str) -> tuple[dict | None, str]:
             continue
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
+        elif value.lower() in ("null", "~"):
+            value = ""                  # YAML's empty, not the word (Phase 13 review)
         out[name] = " ".join(value.split())
     return None, "its front matter is not closed with a line of ---"
 
@@ -1127,6 +1129,9 @@ def skills_index(entries: list[dict]) -> str:
     `- name: description (path)`, each within SKILL_INDEX_LINE and all of
     them within SKILL_INDEX_MAX. The header is the adapter's. Empty when
     no skill is delivered."""
+    #: Room kept for the closing "and N more" line, so the index with it
+    #: still fits (Phase 13 review: it ran 30 characters over).
+    more_room = 40
     lines, size, left = [], 0, 0
     for s in entries:
         if not s.get("delivered"):
@@ -1134,11 +1139,16 @@ def skills_index(entries: list[dict]) -> str:
         tail = f" ({s['path']})"
         head = f"- {s['name']}: "
         room = SKILL_INDEX_LINE - len(head) - len(tail)
+        if room < 12:
+            # A path so long the line cannot say what the skill is for: left
+            # out and counted, rather than a line over its budget.
+            left += 1
+            continue
         desc = " ".join(s["description"].split())
         if len(desc) > room:
-            desc = desc[:max(0, room - 1)].rstrip() + "…"
+            desc = desc[:room - 1].rstrip() + "…"
         line = head + desc + tail
-        if size + len(line) + 1 > SKILL_INDEX_MAX:
+        if size + len(line) + 1 > SKILL_INDEX_MAX - more_room:
             left += 1
             continue
         lines.append(line)
@@ -1221,7 +1231,10 @@ def plugin_dir(agent_id: str, omarchy_root: str | None) -> str | None:
     root = plugins_dir()
     paths.private_dir(root)
     _no_link(root)
-    dest = root / digest.hexdigest()[:20]
+    # The agent's id first, so the permission hook can tell its own copy
+    # from another agent's (another's skills are asked about, as its folder
+    # is: Phase 13 review).
+    dest = root / f"{me}-{digest.hexdigest()[:20]}"
     if (dest / ".claude-plugin" / "plugin.json").is_file():
         return str(dest)
     import tempfile
@@ -1384,7 +1397,7 @@ def roster(cfg, live_ids=None) -> list[dict]:
         program = program_of(a["id"], cfg)
         switched = cfg.tools_for(a["id"])
         tools = [k for k in TOOL_ROWS if switched[k] and not _why_not(k, program)]
-        given = [] if program == "endpoint" else [
+        given = [] if program == "endpoint" or not _runnable(program) else [
             s["name"] for s in skill_set(skills_from(texts, a["id"]), comm) if s["delivered"]]
         out.append({**a, "role": " ".join(texts.get(a["id"], {}).get("role.md", "").split()),
                     "program": program, "tools": tools, "skills": given})
@@ -1435,12 +1448,22 @@ def _label(program: str) -> str:
     return PROGRAM_LABELS.get(program, program or "No program")
 
 
+def _runnable(program: str) -> bool:
+    """A program Agent Voice can run: an adapter of its own, a CLI template,
+    or an endpoint. Omarchy's default may name one it cannot (Phase 13
+    review: "opencode" was described as told a skills index)."""
+    from adapters import CLI_TEMPLATES, REGISTRY
+    return program == "endpoint" or program in REGISTRY or program in CLI_TEMPLATES
+
+
 def _why_not(key: str, program: str) -> str:
     """Why this program cannot use the tool `key`, "" when it can."""
     if program == "endpoint":
         return "An endpoint runs nothing on this machine."
     if not program:
         return "No program is chosen for it."
+    if not _runnable(program):
+        return f"Agent Voice cannot run {program}, so it answers nothing."
     if key == "desktop" and program not in DESKTOP_PROGRAMS:
         return f"{_label(program)} cannot take Agent Voice's tools; only Claude Code and Codex can."
     if key == "browser" and program not in BROWSER_PROGRAMS:
@@ -1505,6 +1528,8 @@ def catalog(agent_id: str, cfg) -> dict:
         delivery, how = "none", "An endpoint runs nothing on this machine, so it is given no skills."
     elif not program:
         delivery, how = "none", "No program is chosen for it."
+    elif not _runnable(program):
+        delivery, how = "none", f"Agent Voice cannot run {program}, so it answers nothing."
     elif program in PLUGIN_PROGRAMS:
         delivery, how = "plugin", "Claude Code loads each skill itself when a request needs it."
     else:
@@ -1566,7 +1591,9 @@ def preview(agent_id: str, cfg, live_ids=None) -> list[dict]:
     # Phase 13: a backend with no skills of its own is told the index; Claude
     # Code is told nothing and loads them itself; an endpoint gets none.
     program = program_of(agent_id, cfg)
-    if not endpoint and program in PLUGIN_PROGRAMS:
+    if not endpoint and program and not _runnable(program):
+        pass                            # it answers nothing, so is told nothing
+    elif not endpoint and program in PLUGIN_PROGRAMS:
         names = [s["name"] for s in skill_set(skills(me), skills(COMMUNAL)) if s["delivered"]]
         if names:
             out.append({"label": "Skills", "source": "skills folders", "text": "",

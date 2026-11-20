@@ -263,12 +263,24 @@ def _foreign(path: str) -> bool:
     """
     try:
         p = _resolved(path)
+        me = _named() or "main"
+        # The Claude plugin folders hold copies of each agent's skills
+        # (Phase 13), named "<id>-<hash>": another agent's copy is as
+        # private as its folder (Phase 13 review).
+        plugins = (DATA_DIR / "agent-plugins").resolve()
+        if p == plugins:
+            return True
+        if plugins in p.parents:
+            # Exactly "<its id>-<20 hex>": "sora" must not own "sora-x-…".
+            owner, _, digest = p.relative_to(plugins).parts[0].rpartition("-")
+            return not (owner == me and len(digest) == 20
+                        and all(c in "0123456789abcdef" for c in digest))
         root = AGENTS_DIR.resolve()
         if p == root:
             return True
         if root not in p.parents:
             return False
-        return p.relative_to(root).parts[0] != (_named() or "main")
+        return p.relative_to(root).parts[0] != me
     except (OSError, ValueError, RuntimeError):
         return True
 
