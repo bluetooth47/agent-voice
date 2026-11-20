@@ -471,6 +471,13 @@ Column {
     cataloger.running = true
   }
   Timer { id: catalogDelay; interval: 250; onTriggered: page.loadCatalog() }
+  // The commands read shell.json from disk, which the store writes after
+  // the page already shows a change: read again once a save has landed
+  // (Phase 13 review: a switch could show its old value after saving).
+  Connections {
+    target: page.s.store
+    function onSaved(key) { catalogDelay.restart(); previewDelay.restart() }
+  }
   Process {
     id: cataloger
     property string forTarget: ""
@@ -537,10 +544,13 @@ Column {
 
     Text {
       width: parent.width
-      visible: toolsTab.c === null
+      visible: toolsTab.c === null || page.catalogError !== ""
       wrapMode: Text.WordWrap
       textFormat: Text.PlainText
-      text: page.catalogError !== "" ? "Could not read what it is given: " + page.catalogError : "Reading…"
+      // Shown over an older reading too, which then may be out of date.
+      text: page.catalogError !== "" ? "Could not read what it is given" +
+                                       (toolsTab.c !== null ? " now; this may be out of date" : "") +
+                                       ": " + page.catalogError : "Reading…"
       color: page.catalogError !== "" ? page.s.urgent : page.s.dim
       font.family: page.s.fontFamily
       font.pixelSize: Style.font.caption
@@ -614,6 +624,7 @@ Column {
         visible: toolsTab.c !== null
         Text {
           text: modelData.title
+          textFormat: Text.PlainText
           color: page.s.foreground
           font.family: page.s.fontFamily
           font.pixelSize: Style.font.caption

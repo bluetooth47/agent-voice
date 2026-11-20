@@ -687,9 +687,13 @@ def ack(target: str, file: str, base: str | None = None) -> None:
     deletion saves an empty version."""
     with _locked():
         path, _ = _resolve(target, file)
-        if base is not None and _stamp_of(path) != base:
-            raise Conflict(_stamp_of(path))
-        raw = _raw_text(path)
+        # One read for the comparison and the saved copy, so a hand save in
+        # between is never recorded as kept unseen (Phase 13 review).
+        got = _bytes_or_none(path)
+        now = "missing" if got is None else _stamp_from(got[0], path)
+        if base is not None and now != base:
+            raise Conflict(now)
+        raw = None if got is None else _decode(*got)
         _save_version(target, file, raw or "", "you")
         _prune(target, file)
 
@@ -980,12 +984,16 @@ def _front_matter(text: str) -> tuple[dict | None, str]:
         if not m:
             continue                    # other YAML is the agent's business
         name, value = m.group(1).lower(), m.group(2).strip()
-        if value in (">", "|", ">-", "|-"):
+        if value in (">", "|", ">-", "|-", ""):
+            # A block scalar, or a key with nested YAML under it (`hooks:`):
+            # the indented lines that follow belong to it.
             key, block = name, []
             continue
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
-        elif value.lower() in ("null", "~"):
+        else:
+            value = re.split(r"\s#", value, maxsplit=1)[0].strip()   # a YAML comment
+        if value.lower() in ("null", "~"):
             value = ""                  # YAML's empty, not the word (Phase 13 review)
         out[name] = " ".join(value.split())
     return None, "its front matter is not closed with a line of ---"
@@ -1012,6 +1020,12 @@ def parse_skill(folder: str, text) -> tuple[str, str]:
         return "", "its front matter has no name"
     if name != folder:
         return "", f"its name is “{name[:48]}” but its folder is “{folder}”; they must match"
+    if "hooks" in front:
+        # Claude Code runs a skill's own hooks as commands while it is in
+        # use, outside the agent's permission level and this app's hook
+        # (Phase 13 review). Such a skill is not given to any agent.
+        return "", ("it declares hooks, which would run commands outside the agent's "
+                    "permission level; Agent Voice does not give such a skill")
     desc = front.get("description", "")
     if not desc:
         return "", "its front matter has no description"
@@ -1044,7 +1058,12 @@ def _skill_tree(target: str, name: str) -> tuple[list[tuple[str, Path]], str]:
                     continue
                 if not e.is_file(follow_symlinks=False):
                     return [], f"{sub} is not a plain file"
-                total += e.stat(follow_symlinks=False).st_size
+                size = e.stat(follow_symlinks=False).st_size
+                if size > READ_CAP:
+                    # Copied whole or not at all (Phase 13 review: it was
+                    # dropped from the plugin folder without a word).
+                    return [], f"{sub} is larger than {READ_CAP // 1024} KB"
+                total += size
                 out.append((sub.as_posix(), root / sub))
                 if len(out) > SKILL_FILES_MAX:
                     return [], f"it holds more than {SKILL_FILES_MAX} files"
@@ -1110,7 +1129,10 @@ def skills_from(texts: dict, target: str) -> list[dict]:
         m = _SKILL.fullmatch(key)
         if not m:
             continue
-        desc, why = parse_skill(m.group(1), own[key])
+        if own[key] is None:
+            desc, why = "", "it cannot be read, or holds something refused here"
+        else:
+            desc, why = parse_skill(m.group(1), own[key])
         out.append({"name": m.group(1), "description": desc, "source": target,
                     "path": str(_base(target) / key), "problem": why})
     return out
@@ -1170,15 +1192,19 @@ def _skill_texts(target: str, files: dict[str, dict]) -> dict[str, str]:
     and its folder passes _skill_tree. Oversize stays in, for parse_skill
     to name."""
     out = {}
-    for key, f in files.items():
-        m = _SKILL.fullmatch(key)
-        if not m or not f["exists"]:
-            continue
-        if f["problem"] and len(f["full"]) <= f["limit"]:
-            continue
-        if _skill_tree(target, m.group(1))[1]:
-            continue
-        out[key] = f["full"]
+    for name in _skill_dirs(target):
+        key = f"skills/{name}/SKILL.md"
+        if not _SKILL.fullmatch(key):
+            continue                    # a name no communal skill can have either
+        f = files.get(key)
+        # None: the folder is there but cannot be given. It still hides a
+        # communal skill of its name, as it does for Claude and on the pages
+        # (Phase 13 review: Codex was given the communal one instead).
+        if (f is None or not f["exists"] or (f["problem"] and len(f["full"]) <= f["limit"])
+                or _skill_tree(target, name)[1]):
+            out[key] = None
+        else:
+            out[key] = f["full"]
     return out
 
 
@@ -1219,15 +1245,17 @@ def plugin_dir(agent_id: str, omarchy_root: str | None) -> str | None:
     for s in chosen:
         tree, why = _skill_tree(s["source"], s["name"])
         if why:
-            continue
+            # It changed since it was checked: no folder rather than one
+            # missing a skill, and the daemon tries again (Phase 13 review).
+            raise AgentFsError(f"skill {s['name']} changed while it was copied: {why}")
         for rel, path in tree:
             try:
                 data, more = _read_bytes(path)
                 mode = os.stat(path, follow_symlinks=False).st_mode
-            except (OSError, AgentFsError):
-                continue
+            except OSError as e:
+                raise AgentFsError(f"skill {s['name']}: {rel} cannot be copied ({e.strerror})") from None
             if more:
-                continue
+                raise AgentFsError(f"skill {s['name']}: {rel} grew past {READ_CAP // 1024} KB")
             files.append((f"skills/{s['name']}/{rel}", data,
                           0o700 if mode & stat.S_IXUSR else 0o600))
     digest = hashlib.sha256()
@@ -1258,8 +1286,11 @@ def plugin_dir(agent_id: str, omarchy_root: str | None) -> str | None:
         try:
             os.rename(stage, dest)
         except OSError:
-            # Made by someone else in the meantime: theirs is the same bytes.
             shutil.rmtree(stage, ignore_errors=True)
+            # Made by someone else in the meantime (theirs is the same
+            # bytes), or a failure to say so: never a folder that is not there.
+            if not (dest / ".claude-plugin" / "plugin.json").is_file():
+                raise
     except BaseException:
         shutil.rmtree(stage, ignore_errors=True)
         raise

@@ -210,13 +210,16 @@ Column {
   }
   // The Rule of Two (merged plan, Phase 13): reading web pages, acting
   // without asking, and being able to change what the other agents are
-  // told, all in one agent. A warning, not a block.
-  function ruleOfTwo(program, level, choices, notesWrite) {
+  // told, all in one agent. A warning, not a block. Denying notes writes
+  // (Phase 14) does not lift it: at Trust everything a Claude agent can
+  // still rewrite the communal rules and skills with a shell command
+  // (Phase 13 review).
+  function ruleOfTwo(program, level, choices) {
     var c = (choices && typeof choices === "object") ? choices.browser : undefined
     var browser = c === "on" || (c !== "off" && toolGlobals.browser)
-    if (!browser || program !== "claude" || level !== "trusted" || notesWrite === "deny") return ""
+    if (!browser || program !== "claude" || level !== "trusted") return ""
     return "It reads web pages, acts without asking, and can change what the other agents are " +
-           "told (the communal rules, shared notes). A page could steer it into doing that. " +
+           "told (the communal rules and skills). A page could steer it into doing that. " +
            "Turning its browser off, or asking first, takes the risk away."
   }
 
@@ -289,8 +292,7 @@ Column {
                ? "No project folder, so “edits are fine” has nothing to be inside: every change is asked about."
                : ""
     warning: page.endpointChosen ? ""
-             : page.ruleOfTwo(page.main, page.mainLevel, page.s.setting("mainTools", {}),
-                              String(page.s.setting("mainNotesWrite", "")))
+             : page.ruleOfTwo(page.main, page.mainLevel, page.s.setting("mainTools", {}))
     expanded: page.isOpen("main")
     onToggled: function(open) { page.setOpen("main", open) }
     foreground: page.s.foreground
@@ -767,8 +769,7 @@ Column {
                : String(card.info.problem || "") !== "" ? String(card.info.problem)
                : card.agentName !== "" && !/^[a-z]+( [a-z]+){0,2}$/.test(card.agentName)
                  ? "A wake phrase is one to three plain words, letters only." : ""
-      warning: card.on ? page.ruleOfTwo(card.program, card.level, card.modelData.tools,
-                                        String(card.modelData.notesWrite || "")) : ""
+      warning: card.on ? page.ruleOfTwo(card.program, card.level, card.modelData.tools) : ""
       expanded: page.isOpen(card.agentId)
       onToggled: function(open) { page.setOpen(card.agentId, open) }
       foreground: page.s.foreground

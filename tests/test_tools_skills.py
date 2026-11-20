@@ -428,7 +428,7 @@ def test_the_snapshot_holds_a_skill_whole_or_not_at_all(tmp_path):
     os.symlink(tmp_path / "x", d / "x")
     texts = agentfs.snapshot()[1]["sora"]
     assert len(texts["skills/long/SKILL.md"]) > agentfs.SKILL_MAX   # for parse_skill to refuse
-    assert "skills/linked/SKILL.md" not in texts
+    assert texts["skills/linked/SKILL.md"] is None      # there, but not given
 
 
 def test_editing_a_script_moves_the_stamp():
@@ -735,3 +735,126 @@ def test_the_pages_can_keep_a_skill():
     for page in ("pages/AgentDetailsPage.qml", "pages/CommunalPage.qml"):
         text = (ROOT / page).read_text()
         assert '"agentvoice", "agents", "ack"' in text and '"--base", stamp' in text
+
+
+# --- fixes from Codex's second pass -------------------------------------------------------
+
+@pytest.mark.parametrize("front", [
+    "hooks:\n  PreToolUse:\n    - command: echo hi\n",
+    'hooks: {"Stop": [{"command": "echo hi"}]}\n',
+])
+def test_a_skill_with_its_own_hooks_is_not_given(front):
+    text = f"---\nname: w\ndescription: Fine.\n{front}---\nbody\n"
+    desc, why = agentfs.parse_skill("w", text)
+    assert "hooks" in why and desc == ""
+
+
+def test_other_nested_front_matter_is_still_fine():
+    text = "---\nname: w\ndescription: Fine.\nmetadata:\n  version: 2\nallowed-tools: Read\n---\nbody\n"
+    assert agentfs.parse_skill("w", text) == ("Fine.", "")
+
+
+def test_a_yaml_null_with_a_comment_is_no_description():
+    assert "no description" in agentfs.parse_skill("w", "---\nname: w\ndescription: null # todo\n---\n")[1]
+    assert agentfs.parse_skill("w", "---\nname: w\ndescription: Use it # really\n---\n")[0] == "Use it"
+
+
+def test_a_file_too_large_to_copy_whole_is_a_problem():
+    skill("sora", "big", extra={"data.bin": "x" * (agentfs.READ_CAP + 1)})
+    [s] = agentfs.skills("sora")
+    assert "larger than" in s["problem"]
+    assert agentfs.plugin_dir("sora", None) is None
+
+
+def test_a_copy_that_fails_publishes_nothing(monkeypatch):
+    skill("sora", "pirate", extra={"run.sh": "echo"})
+    real = agentfs._read_bytes
+
+    def flaky(path):
+        if path.name == "run.sh":
+            raise PermissionError(13, "Permission denied")
+        return real(path)
+    monkeypatch.setattr(agentfs, "_read_bytes", flaky)
+    with pytest.raises(agentfs.AgentFsError):
+        agentfs.plugin_dir("sora", None)
+    assert not agentfs.plugins_dir().exists() or not [
+        e for e in os.listdir(agentfs.plugins_dir()) if not e.startswith(".")]
+
+
+def test_an_own_folder_that_cannot_be_given_hides_the_communal_one_everywhere():
+    skill("communal", "report", desc="Communal way.")
+    (paths.AGENTS_DIR / "sora/skills/report").mkdir(parents=True)        # no SKILL.md
+    parts = agentfs.parts_from(agentfs.snapshot()[1], "sora", "Sora", [])
+    assert "report" not in parts["skills"]                                  # the index (Codex)
+    assert agentfs.plugin_dir("sora", None) is None                         # the plugin (Claude)
+    got = agentfs.skill_set(agentfs.skills("sora"), agentfs.skills("communal"))
+    assert not any(s["delivered"] for s in got)                             # the pages
+
+
+def test_keep_refuses_a_file_changed_since_it_was_shown():
+    d = skill("sora", "pirate")
+    [s] = agentfs.skills("sora")
+    (d / "SKILL.md").write_text(GOOD.format(n="pirate", d="Changed by hand.", body="new"))
+    with pytest.raises(agentfs.Conflict):
+        agentfs.ack("sora", "skills/pirate/SKILL.md", base=s["stamp"])
+    assert agentfs.skills("sora")[0]["changed_outside"] is True
+
+
+def test_an_omarchy_rebuild_in_place_rebuilds_the_plugin_folder(cfg_factory, monkeypatch, tmp_path):
+    root = omarchy_root(tmp_path)
+    d = _daemon(cfg_factory(), monkeypatch, root)
+    calls = []
+    monkeypatch.setattr(agentfs, "plugin_dir", lambda *a: calls.append(a) or root)
+    d._agentfs_stamp = ("same",)
+    d.plugin_dir_for(P(""), root)
+    d.plugin_dir_for(P(""), root)
+    f = Path(root) / "skills/omarchy/SKILL.md"
+    f.write_text(f.read_text() + "a newer Omarchy\n")
+    d.plugin_dir_for(P(""), root)
+    assert len(calls) == 2
+
+
+def test_every_turn_is_caught_up_not_only_one_that_replaced_another(cfg_factory, monkeypatch, tmp_path):
+    from adapters.claude_code import ClaudeCode
+    from wake_listen import Daemon, Persona
+    agents = [{"name": "sora", "id": "sora", "agent": "claude", "tools": {"browser": "on"}}]
+    d = _daemon(cfg_factory(voiceAgents=agents), monkeypatch, omarchy_root(tmp_path))
+    p = Persona("sora", d.cfg.agents()[0])
+    p.id, p.agent = "sora", ClaudeCode(named="sora")
+    p.agent.cancel = lambda: None
+    d._main = Persona("", {})
+    d.reconcile_agent_files = lambda: None
+    d.reconcile_parts = lambda: None
+    d.instructions_for = lambda *a: ""
+    d.apply_extras(p.agent, p)
+    agents[0]["tools"] = {"browser": "off"}
+    d.cfg = cfg_factory(voiceAgents=agents)
+    seen = []
+    monkeypatch.setattr(Daemon, "_turn", lambda self, p, *a: seen.append(p.agent.browser_tools))
+    assert not p.busy
+    assert d.dispatch(p, "next request", {}, typed=True)
+    p.thread.join(timeout=5)
+    assert seen == [False]
+
+
+def test_the_bench_skills_variant_keeps_the_agents_own_skills(cfg_factory, monkeypatch, tmp_path):
+    sys.path.insert(0, str(ROOT / "bench"))
+    import start_bench
+    monkeypatch.setattr(omarchy_skill, "plugin_dir", lambda: None)
+    start_bench._SYNTHETIC.clear()
+    cfg = cfg_factory(omarchySkill=False, voiceAgents=[
+        {"id": "sora", "name": "sora", "agent": "claude", "level": "ask"}])
+    agentfs.migrate(cfg)
+    skill("sora", "her-own")
+    timed = start_bench.build(start_bench.agent_spec(cfg, "sora"), cfg, str(tmp_path), "skills")
+    assert "her-own" in os.listdir(Path(timed.skill_dir) / "skills")
+    assert len(os.listdir(Path(timed.skill_dir) / "skills")) == 4
+
+
+def test_cards_and_groups_ask_rather_than_assign_when_clicked():
+    """`expanded` stays bound to the page, so a deep link can reopen them."""
+    for f in ("ui/AgentCard.qml", "ui/ToolSwitches.qml"):
+        text = (ROOT / f).read_text()
+        assert ".expanded = " not in text, f
+    page = (ROOT / "pages/AgentsPage.qml").read_text()
+    assert "notesWrite" not in page.split("function ruleOfTwo")[1].split("\n  }\n")[0]

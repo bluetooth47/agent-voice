@@ -80,7 +80,9 @@ Rectangle {
       MouseArea {
         anchors.fill: parent
         cursorShape: Qt.PointingHandCursor
-        onClicked: { card.expanded = !card.expanded; card.toggled(card.expanded) }
+        // Asks, without assigning, so `expanded` stays bound to the page and
+        // a deep link can reopen a card a click shut (Phase 13 review).
+        onClicked: card.toggled(!card.expanded)
       }
 
       Text {

@@ -2760,11 +2760,20 @@ class Daemon:
         fails keeps the Omarchy skill alone and says so once."""
         import agentfs
         fid = agentfs.folder_id(getattr(p, "id", "") or "")
-        key = (omarchy_root, getattr(self, "_agentfs_stamp", None))
+        # The Omarchy skill is rebuilt in place when Omarchy updates, so its
+        # file's revision is in the key, not only its folder's path.
+        revision = None
+        if omarchy_root:
+            try:
+                st = os.stat(Path(omarchy_root) / "skills" / "omarchy" / "SKILL.md")
+                revision = (st.st_mtime_ns, st.st_size)
+            except OSError:
+                pass
+        key = (omarchy_root, revision, getattr(self, "_agentfs_stamp", None))
         cache = self.__dict__.setdefault("_plugin_dirs", {})
         have = cache.get(fid)
         now = time.monotonic()
-        if (have is not None and have[0] == key and key[1] is not None
+        if (have is not None and have[0] == key and key[2] is not None
                 and (have[2] is None or now < have[2])):
             return have[1]
         try:
@@ -4431,12 +4440,15 @@ class Daemon:
                 print(f"  {YEL}{p.label or 'the agent'} did not stop; not "
                       f"sending{OFF}", flush=True)
                 return False
-            # It was busy, so every refresh until now passed it by: caught up
-            # here, or the new turn runs on the prompt the stopped one had
-            # (Phase 11 review). Only on the run loop's thread, where a
-            # refresh belongs.
-            if threading.current_thread() is threading.main_thread():
-                self.catch_up_one(p)
+        # Caught up before every turn, not only one that replaced a busy
+        # turn (Phase 11 review): a turn stopped by a wake word may end while
+        # the next request is still being spoken, and the polls that would
+        # have caught it up do not run during a capture (Phase 13 review: it
+        # kept Chrome after Chrome was switched off). Cheap when nothing
+        # changed: stamps and comparisons. Only on the run loop's thread,
+        # where a refresh belongs.
+        if threading.current_thread() is threading.main_thread():
+            self.catch_up_one(p)
         p.interrupt.clear()
         p.follow_up = False
         turn = dict(last)

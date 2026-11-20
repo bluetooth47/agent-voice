@@ -251,11 +251,11 @@ Column {
   // every page already reads), so the list can say who does not get it.
   function hiddenBy(name) {
     var out = []
-    var ids = {}
-    for (var a in s.folders.folders) ids[a] = true
-    for (var b in s.vAgentFiles) ids[b] = true
+    // Only agents that exist: a removed agent's folder may still be read
+    // (the trash, an orphan) and must not be named here (Phase 13 review).
+    var ids = { "main": true }
+    for (var i = 0; i < s.voiceAgents.length; i++) ids[s.agentId(s.voiceAgents[i] || {})] = true
     for (var id in ids) {
-      if (id === "communal") continue
       // The overlay's own read (every 3s on this page), else the daemon's.
       var f = s.folders.folders[id] || s.vAgentFiles[id]
       if (((f || {}).files || {})["skills/" + name + "/SKILL.md"]) out.push(labelOf(id))

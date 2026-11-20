@@ -102,29 +102,37 @@ def extras(ad, cfg, named=""):
 #: 380 characters -- the most the folders can ever add.
 VARIANTS = ("none", "folders", "full", "skills")
 #: "skills" (Phase 13 gate, A13-4) is "folders" plus three synthetic
-#: communal skills of a realistic size: Claude is handed a plugin folder
-#: holding them beside the Omarchy skill, any other backend their index.
-#: They are made in a scratch data folder, so no real agent sees them.
+#: communal skills of a realistic size, beside whatever skills the agent
+#: already has: Claude is handed a plugin folder holding them all with the
+#: Omarchy skill, any other backend their index. They are made in a scratch
+#: data folder (the real skills copied in), so no real agent sees them.
 SKILL_BODY = ("Synthetic skill for timing only. " * 90).strip()
 
 
-def synthetic_skills(omarchy_root):
-    """(plugin folder, index) for three synthetic skills, made once in a
+def synthetic_skills(omarchy_root, me="main"):
+    """(plugin folder, index) for agent `me`: its own and the communal
+    skills as they are, plus three synthetic communal ones, made once in a
     scratch data folder that agentfs is pointed at only while it builds."""
+    import shutil
     import paths
     scratch = Path(tempfile.mkdtemp(prefix="av-skills-"))
+    real = {me: paths.AGENTS_DIR / me / "skills", "communal": paths.COMMUNAL_DIR / "skills"}
     saved = paths.DATA_DIR, paths.AGENTS_DIR, paths.COMMUNAL_DIR
     paths.DATA_DIR, paths.AGENTS_DIR, paths.COMMUNAL_DIR = (
         scratch, scratch / "agents", scratch / "communal")
     try:
+        for target, src in real.items():
+            dest = (paths.COMMUNAL_DIR if target == "communal" else paths.AGENTS_DIR / me) / "skills"
+            if src.is_dir() and not src.is_symlink():
+                shutil.copytree(src, dest, symlinks=True)   # a link stays one, and is refused
         for n in ("timing-one", "timing-two", "timing-three"):
             d = paths.COMMUNAL_DIR / "skills" / n
             d.mkdir(parents=True)
             (d / "SKILL.md").write_text(
                 f"---\nname: {n}\ndescription: A synthetic skill used only to time a turn; "
                 f"it is never the right one to use for any request.\n---\n\n{SKILL_BODY}\n")
-        folder = agentfs.plugin_dir("main", omarchy_root)
-        index = agentfs.skills_index(agentfs.skill_set([], agentfs.skills("communal")))
+        folder = agentfs.plugin_dir(me, omarchy_root)
+        index = agentfs.skills_index(agentfs.skill_set(agentfs.skills(me), agentfs.skills("communal")))
     finally:
         paths.DATA_DIR, paths.AGENTS_DIR, paths.COMMUNAL_DIR = saved
     return folder, index
@@ -152,9 +160,10 @@ def assign_parts(ad, spec, cfg, variant):
         if variant == "skills":
             root = (omarchy_skill.plugin_dir()
                     if cfg.tools_for(spec["named"])["omarchySkill"] else None)
-            if root not in _SYNTHETIC:
-                _SYNTHETIC[root] = synthetic_skills(root)
-            folder, index = _SYNTHETIC[root]
+            me = spec["named"] or "main"
+            if (root, me) not in _SYNTHETIC:
+                _SYNTHETIC[(root, me)] = synthetic_skills(root, me)
+            folder, index = _SYNTHETIC[(root, me)]
             if hasattr(ad, "skill_dir"):
                 ad.skill_dir = folder
             ad.parts = {**ad.parts, "skills": index}

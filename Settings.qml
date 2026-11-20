@@ -820,7 +820,9 @@ Item {
     // {"page": "agentdetails", "agent": "sora"} opens that agent's details,
     // on its first tab unless "tab" names another.
     if (page === "agentdetails") {
-      if (agent) { detailsAgent = agent; detailsTab = /^(prompt|tools|chats|advanced)$/.test(String(tab || "")) ? tab : "prompt" }
+      var validTab = /^(prompt|tools|chats|advanced)$/.test(String(tab || ""))
+      if (agent) { detailsAgent = agent; detailsTab = validTab ? tab : "prompt" }
+      else if (validTab) detailsTab = tab
       focusAgent = ""
     } else {
       if (page === "communal" && (tab === "rules" || tab === "skills")) communalTab = tab

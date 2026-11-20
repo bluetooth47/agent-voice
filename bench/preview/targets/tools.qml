@@ -200,6 +200,19 @@ ShellRoot {
           var hid = overlay.find(overlay.content(), function(i) { return i.label === "greeting" && String(i.hint).indexOf("Not given to Sora") >= 0 })
           var g = overlay.find(overlay.content(), function(i) { return i.label === "greeting" && i.hint !== undefined })
           overlay.check(hid !== null, "and says Sora gets her own greeting instead (" + (g ? g.hint : "no row") + ")")
+          overlay.goTo("agents", "sora", "tools")
+          break
+        case 14:
+          sw = overlay.switches("sora")
+          overlay.click(overlay.header(sw), "Sora's Tools header, to shut it")
+          break
+        case 15:
+          overlay.check(overlay.switches("sora") && !overlay.switches("sora").expanded, "a click shuts the group")
+          overlay.goTo("agents", "sora", "tools")
+          break
+        case 16:
+          overlay.check(overlay.switches("sora") && overlay.switches("sora").expanded,
+                        "and the deep link opens it again")
           console.warn("PREVIEW DONE " + overlay.passed + " passed, " + overlay.failed + " failed")
           Qt.quit()
           break

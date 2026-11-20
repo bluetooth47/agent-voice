@@ -80,7 +80,9 @@ Column {
     focusable: true
     foreground: sw.foreground
     fontFamily: sw.fontFamily
-    onClicked: { sw.expanded = !sw.expanded; sw.toggled(sw.expanded) }
+    // Asks, without assigning: `expanded` stays bound to the page, so a
+    // deep link can open the group again after a click shut it.
+    onClicked: sw.toggled(!sw.expanded)
   }
 
   Column {
