@@ -2808,6 +2808,16 @@ class Daemon:
                 agent.cancel()
             except Exception:
                 pass
+            # Structural: which tools, and the plugin folder's name (an id
+            # and a hash), never a skill's text.
+            have = [k for k, a in (("desktop", "desktop_tools"), ("browser", "browser_tools"))
+                    if getattr(agent, a, False)]
+            if skill_on and (getattr(agent, "skill_dir", None) or getattr(agent, "skill_text", "")):
+                have.append("omarchy")
+            folder = getattr(agent, "skill_dir", None)
+            who = getattr(p, "label", "") or getattr(p, "name", "") or "main"
+            print(f"  {DIM}tools for “{who}”: {' · '.join(have) or 'none'}"
+                  f"{' · plugins ' + Path(folder).name if folder else ''}{OFF}", flush=True)
         return changed
 
     def reconcile_voice(self) -> None:
