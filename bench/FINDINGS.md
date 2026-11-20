@@ -1407,3 +1407,43 @@ short answers"). Without it, Theo went looking with his own tools and
 found other things: another Claude session on the machine, Claude Code's
 subagent types, and once said the other agents "are for searching,
 planning or fetching pages". So the roster stays in the preamble.
+
+## 36. Phase 13: what three skills cost a turn
+
+i7-1185G7, 2026-11-19, Phase 13, `claude` 2.1.328. A Claude agent with
+skills is handed a plugin folder built for it (`agent-plugins/<id>-<hash>`)
+holding the Omarchy skill and its own and the communal skills; Claude Code
+puts each skill's name and description in its prompt and loads the body
+only when a request needs it. Codex and the other CLIs are told an index of
+up to 1500 characters instead. On this machine nobody has a skill yet, so
+every prompt is unchanged (main 1109, sora 1210, jarvis-ajc 7088 characters,
+from the daemon's own log after install) and the argv is the same as before.
+
+**Send to first text with three synthetic skills** (`bench/start_bench.py
+--variants folders,skills`: `skills` is the real folders plus three communal
+skills of about 3,000 characters each, built in a scratch data folder so no
+real agent saw them; interleaved run by run). Three rounds on Sora (Haiku,
+ask), the gate's agent:
+
+| Sora | folders | skills | change |
+|---|---|---|---|
+| round 1 cold, 20 runs, **the test suite running alongside** | 3.05 / 3.96s | 2.78 / 4.27s | −0.27 / +0.31s |
+| round 1 warm | 0.94 / 1.40s | 0.93 / 1.29s | −0.01 / −0.11s |
+| round 2 cold, 20 runs, quiet | 2.05 / 4.05s | 2.23 / 3.88s | +0.18 / −0.17s |
+| round 2 warm | 0.88 / 1.20s | 0.95 / 1.19s | +0.07 / −0.01s |
+| round 3 cold, 30 runs, quiet | 2.00 / 3.89s | 2.03 / 2.34s | +0.03 / −1.55s |
+| rounds 2 and 3 cold pooled (50) | 2.02 / 4.04s | 2.07 / 3.26s | +0.06 / −0.78s |
+
+(median / p95.) **The gate holds**, on the quiet runs: +0.06s on the pooled
+cold median and +0.07s warm (gate +0.15s), p95 lower or level (gate 10% or
+0.30s). Round 2's +0.18s cold median is outside the gate on its own; round
+3, run straight after with half as many runs again, shows +0.03s, and Haiku
+cold starts moved by up to 2.4s between runs in all three rounds (min 1.7s,
+max 4.5s), which is what a 20-run median cannot resolve to 0.15s. Round 1
+is reported but not judged: the full test suite ran during its cold half.
+
+Main (Opus, trusted), 20 runs: cold 3.27 → 3.49s median (p95 5.92 →
+5.24s), warm 2.02 → 2.17s (p95 3.07 → 2.80s); both medians inside the
+±0.48s noise of an Opus median (§33). jarvis-ajc (Codex) was **not run**:
+Codex's usage limit was spent by the review, and with no skill on this
+machine its prompt is byte for byte what it was.

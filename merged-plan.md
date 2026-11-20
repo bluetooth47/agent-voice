@@ -851,6 +851,18 @@ reason; a warm process losing a tool when it is switched off.
 
 **Measure:** the Phase 11 gate again, with three skills installed.
 
+**Built (2026-11-19)**, record `phase13notes.md`, FINDINGS §36: the
+switches on each card (`mainTools`, `voiceAgents[i].tools`), resolved per
+agent and reaching a warm process; skills checked, shadowed and delivered
+(a plugin folder per Claude agent, an index for the other CLIs, none for an
+endpoint); `agents catalog` behind both Tools & skills tabs; the Rule of Two
+warning. Codex gets the index: its skills load only from its own home or
+the project (A13-3). The gate holds on Sora with three skills. Live: Chrome
+off for Sora mid-session (A13-1) and a skill only Sora could use (A13-2).
+Loading an agent's own skill is now a read in the hook (it asked at Ask).
+**Still open:** Codex's S run and a Codex turn through the index (quota),
+the keyboard walk in the real shell.
+
 ---
 
 ## Phase 14: Notes
