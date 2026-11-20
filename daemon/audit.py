@@ -1,7 +1,8 @@
 """The audit log: who changed what between agents, and when (merged plan,
 section 3.7, Phase 14).
 
-One JSON line per note write, and from Phase 15 per collaboration task:
+One JSON line per note write, and from Phase 15 per collaboration task
+(from Phase 16 also each call an agent made, refused ones included):
 the time, what kind of thing happened, who did it, where, the note's name
 or the task's id, and sizes in bytes. **Never the text.** A note is
 whatever an agent decided to write down, which may be a file's contents or
@@ -59,7 +60,12 @@ _NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 #: Why a write was refused, from a fixed vocabulary: never the agent's own
 #: words, which could carry anything.
 REASONS = frozenset({"", "denied", "locked", "stale", "unreadable-record",
-                     "too-long", "too-many", "bad-name", "not-configured"})
+                     "too-long", "too-many", "bad-name", "not-configured",
+                     # Why a collaboration call an agent made was refused
+                     # (Phase 16): collab's codes, never its sentences.
+                     "off", "unknown", "self", "disabled", "unreachable", "no-work",
+                     "cycle", "depth", "open-tasks", "inbox-full", "rate", "timeout",
+                     "declined", "unheard", "stopped", "busy", "failed"})
 
 
 def log_path() -> Path:

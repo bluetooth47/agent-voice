@@ -109,6 +109,14 @@ CREW_READ_ONLY = {"notes_list", "notes_read"}
 #: level; a denied agent is refused here too, so nobody is asked about a
 #: write that cannot happen.
 CREW_WRITES = {"notes_write", "notes_append"}
+#: The collaboration tools (Phase 16). Judged by the daemon itself, at every
+#: level and whatever a chat grant says, from the calling agent's own
+#: `collaboration` setting -- off, ask (the card, on screen and out loud),
+#: announce or allow -- so the hook passing them is not a silent yes, and
+#: a Trusted agent, which has no hook at all, is held the same. One prompt,
+#: not two: the pattern DESKTOP_SELF_ASKED uses for the screenshot.
+CREW_SELF_ASKED = {"list_agents", "ask_agent", "delegate", "pass_conversation",
+                   "message_agent", "task_status", "cancel_task"}
 
 #: Claude in Chrome (plan 12d). Its tools act in the person's real browser,
 #: signed in as them, so a click can send, buy or post. Those are asked
@@ -746,7 +754,7 @@ def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, st
                     session=session)
 
     crew = tool_name[len(CREW_PREFIX):] if tool_name.startswith(CREW_PREFIX) else ""
-    if crew in CREW_READ_ONLY:
+    if crew in CREW_READ_ONLY or crew in CREW_SELF_ASKED:
         return "allow", ""
 
     # Allowed wholesale for this conversation, from the prompt. Like
@@ -830,18 +838,6 @@ def _ask(tool_name: str, tool_input: dict, note: str = "",
     timeout. `note` is why it is being asked, when that is not obvious
     from the tool and the path.
     """
-    # 0o700: the request holds whatever the agent is about to run, and the
-    # response is the word "yes". Neither is anyone else's business, and a
-    # response another local user could write would be a free allow.
-    PENDING.mkdir(parents=True, exist_ok=True, mode=0o700)
-    try:
-        PENDING.chmod(0o700)      # mkdir's mode is ignored if it exists
-    except OSError:
-        pass
-    request_id = uuid.uuid4().hex[:12]
-    request = PENDING / f"{request_id}.request"
-    response = PENDING / f"{request_id}.response"
-
     # One line the overlay can show without wrapping. The full input goes
     # along too, for anything that wants the detail.
     # A notebook edit writes its notebook_path; with a different file_path
@@ -872,9 +868,7 @@ def _ask(tool_name: str, tool_input: dict, note: str = "",
     # the same order the state file uses. `input` is the whole tool call, which
     # for a write is the entire file content, so the directory mode is not the
     # only thing standing in front of it.
-    staged = PENDING / f"{request_id}.staging"
-    staged.write_text(json.dumps({
-        "id": request_id,
+    answer = ask_card({
         "tool": tool_name,
         # Which agent is asking, when there is more than one: two can be at
         # work at once, and a card that only says "the agent" cannot be
@@ -890,51 +884,86 @@ def _ask(tool_name: str, tool_input: dict, note: str = "",
         "truncated": cut,
         "length": len(summary),
         "input": tool_input,
-        "asked_at": time.time(),
-        "timeout": TIMEOUT,
         # Whether "allow everything in this chat" can be offered: only when
         # there is a conversation to scope it to.
         "sessionWide": bool(_SESSION.fullmatch(session or "")),
         # Said out loud by the daemon as well as shown (plan 12d): a
         # purchase should not wait on somebody happening to look.
         "announce": bool(announce),
-    }))
-    staged.chmod(0o600)
-    staged.replace(request)
+    })
+    if answer is None:
+        return "deny", f"Nobody answered within {TIMEOUT:.0f} seconds."
+    # `is True`, not truthiness: only the literal yes the overlay writes
+    # counts. A response file holding anything else is a response this
+    # cannot read, and that is a denial.
+    if answer.get("allow") is True:
+        # This one is allowed whatever happens next; the grant only saves
+        # asking again in this conversation.
+        if answer.get("session") is True:
+            grant(session)
+        return "allow", ""
+    return "deny", str(answer.get("reason") or "Denied at the desktop.")
 
-    # Put it on screen. The overlay reads the request file itself, so the
-    # payload only has to say which one. Failure here is not fatal: the
-    # request still times out into a denial, which is the safe direction.
+
+def ask_card(fields: dict, timeout: float | None = None, on_posted=None) -> dict | None:
+    """Put one question on screen and wait for its answer: the file protocol
+    the overlay reads, shared by the hook, the desktop server's screenshot
+    and the daemon's collaboration questions (Phase 16).
+
+    Returns the answer as a dict -- `{}` for a response that cannot be read,
+    which every caller treats as a no -- or None when nobody answered within
+    `timeout`. Only `answer.get("allow") is True` is a yes. `on_posted` runs
+    once the card is up (the daemon says the question out loud then); it
+    cannot change the answer."""
+    timeout = TIMEOUT if timeout is None else timeout
+    # 0o700: the request holds whatever the agent is about to run, and the
+    # response is the word "yes". Neither is anyone else's business, and a
+    # response another local user could write would be a free allow.
+    PENDING.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
-        import subprocess
-        subprocess.run(["omarchy-shell", "shell", "summon", "duaneoca.agentvoice",
-                        json.dumps({"mode": "permission", "id": request_id})],
-                       timeout=5, capture_output=True)
-    except Exception:
+        PENDING.chmod(0o700)      # mkdir's mode is ignored if it exists
+    except OSError:
         pass
-
-    deadline = time.time() + TIMEOUT
+    request_id = uuid.uuid4().hex[:12]
+    request = PENDING / f"{request_id}.request"
+    response = PENDING / f"{request_id}.response"
+    staged = PENDING / f"{request_id}.staging"
     try:
+        # Written to a temporary name and chmod'd before it is given the one
+        # the overlay watches, so it is never briefly readable under its real
+        # name -- the same order the state file uses. `input` is the whole
+        # tool call, which for a write is the entire file content.
+        staged.write_text(json.dumps({**fields, "id": request_id, "asked_at": time.time(),
+                                      "timeout": timeout}))
+        staged.chmod(0o600)
+        staged.replace(request)
+
+        # Put it on screen. The overlay reads the request file itself, so the
+        # payload only has to say which one. Failure here is not fatal: the
+        # request still times out into a denial, which is the safe direction.
+        try:
+            import subprocess
+            subprocess.run(["omarchy-shell", "shell", "summon", "duaneoca.agentvoice",
+                            json.dumps({"mode": "permission", "id": request_id})],
+                           timeout=5, capture_output=True)
+        except Exception:
+            pass
+        if on_posted is not None:
+            try:
+                on_posted()
+            except Exception:
+                pass
+
+        deadline = time.time() + timeout
         while time.time() < deadline:
             if response.exists():
                 try:
                     answer = json.loads(response.read_text())
                 except Exception:
                     answer = {}
-                if not isinstance(answer, dict):
-                    answer = {}
-                # `is True`, not truthiness: only the literal yes the overlay
-                # writes counts. A response file holding anything else is a
-                # response this cannot read, and that is a denial.
-                if answer.get("allow") is True:
-                    # This one is allowed whatever happens next; the grant
-                    # only saves asking again in this conversation.
-                    if answer.get("session") is True:
-                        grant(session)
-                    return "allow", ""
-                return "deny", str(answer.get("reason") or "Denied at the desktop.")
+                return answer if isinstance(answer, dict) else {}
             time.sleep(0.1)
-        return "deny", f"Nobody answered within {TIMEOUT:.0f} seconds."
+        return None
     finally:
         # staged is normally gone -- replace() consumed it -- but a chmod that
         # raised would otherwise leave the whole tool call on disk unowned.

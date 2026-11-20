@@ -87,6 +87,8 @@
       "omarchySkill": true,
       "mainTools": {},
       "mainNotesWrite": "allow",
+      "mainCollaboration": "announce",
+      "mainAcceptsWork": true,
       "bargeIn": false,
       "bargeOnHeadset": true,
       "bargeFactor": 150,
@@ -613,6 +615,26 @@
         ],
         "defaultValue": "allow",
         "description": "Whether the main agent may write its own and the communal notes through Agent Voice's notes tools. Denied, it can still read them. Set on the main agent's card, under Tools & collaboration."
+      },
+      {
+        "key": "mainCollaboration",
+        "type": "enum",
+        "label": "Main agent starts collaboration",
+        "options": [
+          "off",
+          "ask",
+          "announce",
+          "allow"
+        ],
+        "defaultValue": "announce",
+        "description": "Whether the main agent may ask, give work to, pass the conversation to or leave messages for the other agents, and how you hear about it: off, ask you first, announce it out loud with a moment to say stop, or quietly (still shown on screen). Set on the main agent's card, under Tools & collaboration."
+      },
+      {
+        "key": "mainAcceptsWork",
+        "type": "bool",
+        "label": "Main agent accepts work from agents",
+        "defaultValue": true,
+        "description": "Whether other agents may give the main agent a task or pass it a conversation. Off, it can still be asked questions. A pass you start yourself is not affected."
       },
       {
         "key": "bargeOnHeadset",

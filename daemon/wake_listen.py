@@ -2826,6 +2826,18 @@ class Daemon:
             want = omarchy_skill.instructions() if skill_on else ""
             if getattr(agent, "skill_text", "") != want:
                 agent.skill_text, changed = want, True
+        if getattr(agent, "crew_tools", False):
+            # collab: the crew server lists the collaboration tools unless
+            # this agent's collaboration is off, when its process starts; a
+            # change between off and on lets the idle process go (Phase 16).
+            try:
+                want = self.cfg.collaboration_for(getattr(p, "id", "") or "") != "off"
+            except Exception:
+                want = True
+            if getattr(agent, "collab_listed", None) is None:
+                agent.collab_listed = want
+            elif agent.collab_listed != want:
+                agent.collab_listed, changed = want, True
         if changed:
             try:
                 agent.cancel()
@@ -3503,6 +3515,12 @@ class Daemon:
         # A continued chat its backend cannot resume: the chat goes ahead of
         # this one request, then the session it starts carries it.
         prompt = persona.replay + text if persona.replay else text
+        # collab: messages other agents left it, and the results of tasks it
+        # delegated, ahead of everything else, as information (Phase 16).
+        try:
+            prompt = self.collab.deliveries(persona) + prompt
+        except Exception as e:
+            print(f"  {YEL}deliveries not read: {type(e).__name__}{OFF}", flush=True)
         if open_turn:
             prompt = OPEN_MIC_PREAMBLE + prompt
         persona.replay = ""
@@ -3771,9 +3789,12 @@ class Daemon:
         A turn that started a new session starts a new chat, unless Continue
         put it in one. Never costs the turn: a disk that will not take the
         write loses the record, not the reply."""
+        p = self._persona()
+        # collab: taken whether or not chats are saved, so nothing of a
+        # question waits in memory past the turn that asked it.
+        asides = self.collab.take_asides(p)
         if not self.cfg.get_bool("saveChats") or not heard:
             return
-        p = self._persona()
         chat_id = None if (new and not p.chat_continued) else p.chat_id
         try:
             p.chat_id = self.chats.record(
@@ -3789,6 +3810,18 @@ class Daemon:
                           **({"kind": "brief", "for": p.task.frm}
                              if p.task is not None else {})})
             p.chat_continued = False
+            # collab: the questions it asked other agents this turn, each a
+            # collapsed "Theo asked Sora" entry after its own (Phase 16).
+            for aside in asides:
+                self.chats.record(
+                    chat_id=p.chat_id, agent_id=p.id,
+                    agent_label=p.label or getattr(self.agent, "name", "") or "Agent",
+                    backend=getattr(self.agent, "name", "") or "",
+                    session_id=None,
+                    project_dir=str(getattr(self.agent, "cwd", "") or ""),
+                    exchange={"transcript": aside["question"], "reply": aside["answer"],
+                              "kind": "aside", "asked": aside["asked"],
+                              "asked_label": aside["asked_label"]})
             if p.chat_id != chat_id:
                 retention = self.cfg.get_str("chatRetention")
                 if retention in RETENTIONS:
@@ -3988,19 +4021,75 @@ class Daemon:
             self.start_open_mic(p or self._last_target or self._main, say=False)
         return True
 
-    def _say_for(self, p: Persona, line: str) -> bool:
+    def _say_for(self, p: Persona, line: str, beside: bool = False) -> bool:
         """Something short said in `p`'s voice, from the run loop. True when
         it was said to the end: not muted, locked, lent out, stopped or
-        failing (collab needs to know a disclosure was heard)."""
+        failing (collab needs to know a disclosure was heard).
+
+        `beside`: from a thread beside the run loop -- a collaboration call
+        p made mid-turn (Phase 16) -- so it takes the speaking floor as p's
+        own turn would, and never talks over another agent's reply."""
         said = False
+        was = getattr(self._here, "turn", False)
         with self._as(p):
-            if self.speaker and self.listening:
-                try:
-                    self.speak(line, self.cfg.get_int("echoTailMs"))
-                    said = self.may_speak and self.listening and not self._interrupt.is_set()
-                except Exception as e:
-                    print(f"  {YEL}could not say it: {type(e).__name__}{OFF}")
+            if beside:
+                self._here.turn = True
+            try:
+                if self.speaker and self.listening:
+                    try:
+                        self.speak(line, self.cfg.get_int("echoTailMs"))
+                        said = (self.may_speak and self.listening
+                                and not self._interrupt.is_set())
+                    except Exception as e:
+                        print(f"  {YEL}could not say it: {type(e).__name__}{OFF}")
+            finally:
+                if beside:
+                    self._here.turn = was
         return said
+
+    def fresh_config(self) -> Config:
+        """collab: the settings as on disk now, for a collaboration call's
+        knobs, read fresh on every call (merged plan 3.4)."""
+        return Config()
+
+    def side_adapter(self, p: Persona):
+        """collab: a fresh adapter for `p`'s program, for a quiet side turn
+        (Phase 16, `ask_agent`): text only, no spoken style, a new session,
+        thrown away afterwards -- never p's own warm process or session. Its
+        own level, folder, model, instructions, prompt parts and tools, so
+        nothing about the answer is escalated. None when p has no agent."""
+        have = self.agent if p is self._main else p.agent
+        if have is None:
+            return None
+        program = getattr(have, "name", "") or None
+        endpoint = None
+        if hasattr(have, "base_url"):
+            endpoint = (self.cfg.main_endpoint() if p is self._main
+                        else (p.spec or {}).get("endpoint"))
+            if not endpoint:
+                return None
+            endpoint = {**endpoint, "key": endpoint_key(_host(endpoint["url"]))}
+            program = None
+        side = load_adapter(name=program, endpoint=endpoint, spoken=False,
+                            level=getattr(have, "level", None),
+                            ask_permission=getattr(have, "ask_permission", True),
+                            cwd=getattr(have, "cwd", None),
+                            model=getattr(have, "model", None),
+                            effort=getattr(have, "effort", None),
+                            instructions=getattr(have, "instructions", ""),
+                            named=getattr(have, "named", "") or "")
+        if side is None:
+            return None
+        side.spoken = False
+        side.parts = getattr(have, "parts", None)
+        for attr in ("skill_text",):
+            if hasattr(have, attr):
+                setattr(side, attr, getattr(have, attr))
+        try:
+            self.apply_extras(side, p)
+        except Exception:
+            pass
+        return side
 
     # --- spoken commands that are not requests -------------------------------
 
@@ -4237,7 +4326,7 @@ class Daemon:
         """
         old = p.spec or {}
         kept = ("effort", "voice", "speed", "instructions", "name", "label",
-                "narration", "tools", "notesWrite")
+                "narration", "tools", "notesWrite", "collaboration", "acceptsWork")
         same = {k: v for k, v in spec.items() if k not in kept}
         was = {k: v for k, v in old.items() if k not in kept}
         if same == was and p.agent is not None:

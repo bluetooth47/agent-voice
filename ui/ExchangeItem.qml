@@ -11,7 +11,11 @@ import qs.Ui
 //     when: "3:04 PM"; who: "Theo"; latencyMs: 1800
 //     heard: "make the hud wider"; answer: "Done."
 //     failure: ""; wasStopped: false; startsNew: false
+//     aside: ""      // "Theo asked Sora": a question between agents (Phase 16)
 //   }
+//
+// An aside is drawn folded to its one line; a click opens the question
+// (heard) and the answer. Both halves are an agent's words, plain text.
 Column {
   id: turn
 
@@ -27,6 +31,10 @@ Column {
   property bool thinkingOpen: false
   // Draws the "new conversation" rule above it.
   property bool startsNew: false
+  // "Theo asked Sora" for a question one agent asked another; "" otherwise.
+  property string aside: ""
+  property bool asideOpen: false
+  readonly property bool folded: aside !== "" && !asideOpen
 
   property color foreground: Commons.Color.foreground
   property color background: Commons.Color.background
@@ -67,13 +75,20 @@ Column {
   Text {
     width: parent.width
     elide: Text.ElideRight
-    text: turn.when
-          + (turn.who !== "" ? " · " + turn.who : "")
+    text: (turn.aside !== "" ? (turn.asideOpen ? "▾ " : "▸ ") : "") + turn.when
+          + (turn.aside !== "" ? " · " + turn.aside
+             : (turn.who !== "" ? " · " + turn.who : ""))
           + (turn.latencyMs > 0 ? " · answered in " + (turn.latencyMs / 1000).toFixed(1) + "s" : "")
     textFormat: Text.PlainText
     color: turn.dim
     font.family: turn.fontFamily
     font.pixelSize: Style.font.caption
+    MouseArea {
+      anchors.fill: parent
+      enabled: turn.aside !== ""
+      cursorShape: turn.aside !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
+      onClicked: turn.asideOpen = !turn.asideOpen
+    }
   }
 
   // TextEdit, read-only, rather than Text: selectable, so a path or a
@@ -81,6 +96,7 @@ Column {
   // the same reason every other transcript here is -- neither half of this
   // was written by us.
   TextEdit {
+    visible: !turn.folded
     width: parent.width
     readOnly: true
     selectByMouse: true
@@ -117,9 +133,9 @@ Column {
   }
 
   Item {
-    visible: turn.answer !== ""
+    visible: turn.answer !== "" && !turn.folded
     width: parent.width
-    height: replyText.implicitHeight
+    height: visible ? replyText.implicitHeight : 0
 
     // A rule down the left of the answer, rather than an arrow in its text
     // that would come along with every copy.

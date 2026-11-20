@@ -1455,6 +1455,20 @@ PLUGIN_PROGRAMS = ("claude",)
 #: The programs that take the notes tools (crew_mcp.py, Phase 14): the two
 #: that take Agent Voice's MCP server. ui/ToolSwitches.qml holds a copy.
 NOTES_PROGRAMS = ("claude", "codex")
+#: The programs that can *start* collaboration (Phase 16): the two that take
+#: Agent Voice's crew server. Any reachable agent can *receive* it, because
+#: receiving is a turn with a prompt.
+COLLAB_PROGRAMS = ("claude", "codex")
+#: What each `collaboration` level does, in the words the page uses.
+COLLAB_SAYS = {
+    "off": "Starts nothing with other agents: the tools are not offered to it.",
+    "ask": "Asks you first, on screen and out loud, before it asks, gives work to, passes to "
+           "or messages another agent.",
+    "announce": "Says out loud when it gives work to or passes to another agent, with three "
+                "seconds to say stop; questions and messages go quietly, shown on screen.",
+    "allow": "Works with the other agents quietly; it is still shown on screen, in the chat "
+             "and in the audit log. Sending anything to an endpoint is still said out loud.",
+}
 PROGRAM_LABELS = {"claude": "Claude Code", "codex": "Codex", "gemini": "Gemini",
                   "agy": "Antigravity", "antigravity": "Antigravity",
                   "antigravity-cli": "Antigravity", "copilot": "Copilot",
@@ -1588,12 +1602,28 @@ def catalog(agent_id: str, cfg) -> dict:
                           "Reads without asking; may not write." if not may else
                           "Reads and writes without asking." if level in ("edits", "trusted") else
                           "Reads without asking; asks before each write.")}
+    start = cfg.collaboration_for(me if me != MAIN else "")
+    accepts = cfg.accepts_work_for(me if me != MAIN else "")
+    collab_why = notes_why if notes_why else (
+        "" if program in COLLAB_PROGRAMS else
+        f"{_label(program)} can be asked and given work, but cannot start any: only Claude "
+        f"Code and Codex can.")
+    collab_row = {"can_start": not collab_why, "why_not": collab_why, "level": start,
+                  "says": COLLAB_SAYS.get(start, "") if not collab_why else "",
+                  "accepts": accepts,
+                  "receives": ("Other agents may ask it questions, give it tasks and pass it "
+                               "a conversation; it works at its own permission level."
+                               if accepts else
+                               "Other agents may ask it questions, but not give it tasks or "
+                               "pass it a conversation.")
+                  if program and _runnable(program) or program == "endpoint" else ""}
     own = skills(me) if me != COMMUNAL else []
     entries = skill_set(own, skills(COMMUNAL))
     if delivery == "none":
         entries = [{**s, "delivered": False} for s in entries]
     return {"agent": me, "program": program, "program_label": _label(program),
-            "level": level, "tools": tools, "notes": notes_row, "skills": entries,
+            "level": level, "tools": tools, "notes": notes_row, "collab": collab_row,
+            "skills": entries,
             "delivery": delivery, "delivery_how": how,
             "skills_asks": _commands_ask(program, level) if delivery != "none" else ""}
 
@@ -2065,6 +2095,11 @@ def main(argv=None) -> int:
             for t in v["tools"]:
                 state = ("on" if t["on"] else "off") + ("" if t["choice"] == "inherit" else " (its own)")
                 lines.append(f"{t['label']}: {state}; " + (t["why_not"] or t["asks"]))
+            c = v["collab"]
+            lines.append(f"Collaboration: {c['level'] if c['can_start'] else 'cannot start'}; "
+                         + (c["why_not"] or c["says"]))
+            if c["receives"]:
+                lines.append(f"Receives: {c['receives']}")
             lines.append(f"Skills ({v['delivery']}): {v['delivery_how']}")
             for x in v["skills"]:
                 mark = ("given" if x["delivered"] else "hidden by its own" if x["shadowed"]

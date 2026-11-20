@@ -579,6 +579,17 @@ Item {
     var what = m[2].replace(/_/g, " ")
     if (m[1] === "claude-in-chrome") return "act in your browser (" + what + ")"
     if (m[1] === "agentvoice-desktop") return "use a desktop tool (" + what + ")"
+    if (m[1] === "agentvoice-crew") {
+      switch (m[2]) {
+        case "notes_write":
+        case "notes_append": return "write a note"
+        case "delegate": return "give another agent a task"
+        case "pass_conversation": return "pass this conversation to another agent"
+        case "ask_agent": return "ask another agent a question"
+        case "message_agent": return "leave another agent a message"
+        default: return "use Agent Voice's " + what + " tool"
+      }
+    }
     return "use " + what + " from " + m[1]
   }
 

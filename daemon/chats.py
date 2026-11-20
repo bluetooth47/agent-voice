@@ -327,6 +327,12 @@ class ChatStore:
                 extra["kind"] = exchange["kind"]
             if isinstance(exchange.get("for"), str) and _AGENT.fullmatch(exchange["for"]):
                 extra["for"] = exchange["for"]
+            if exchange.get("kind") == "aside":
+                # A question this speaker asked another agent (Phase 16): who
+                # was asked. Grants nothing: the asked agent is no speaker.
+                if isinstance(exchange.get("asked"), str) and _AGENT.fullmatch(exchange["asked"]):
+                    extra["asked"] = exchange["asked"]
+                extra["asked_label"] = str(exchange.get("asked_label") or "")[:80]
             chat["exchanges"] = (chat.get("exchanges") or [])[-(EXCHANGES_MAX - 1):] + [{
                 "at": round(now, 1),
                 "transcript": str(exchange.get("transcript", "")),
@@ -508,6 +514,12 @@ class ChatStore:
                  ""]
         for e in chat.get("exchanges") or []:
             when = time.strftime("%H:%M", time.localtime(e.get("at", 0)))
+            if e.get("kind") == "aside":
+                asked = e.get("asked_label") or e.get("asked") or "another agent"
+                lines += [f"_{e.get('agent_label') or who} asked {asked}_ ({when}): "
+                          f"{e.get('transcript', '')}", "",
+                          f"**{asked}**: {e.get('reply', '')}", ""]
+                continue
             lines += [f"**You** ({when}): {e.get('transcript', '')}", ""]
             reply = e.get("reply", "")
             if reply:
@@ -551,8 +563,16 @@ def replay_context(chat: dict, max_chars: int = REPLAY_MAX,
     who = chat.get("agent_label") or "You (the assistant)"
     turns = []
     for e in chat.get("exchanges") or []:
+        speaker = e.get('agent_label') or who
+        if e.get("kind") == "aside":
+            # A question one agent asked another (Phase 16): its words are
+            # that agent's, never the user's.
+            asked = e.get("asked_label") or e.get("asked") or "another agent"
+            turns.append(f"({speaker} asked {asked}, not the user: "
+                         f"{e.get('transcript', '')})\n{asked}: {e.get('reply', '')}")
+            continue
         turns.append(f"User: {e.get('transcript', '')}\n"
-                     f"{e.get('agent_label') or who}: {e.get('reply', '')}")
+                     f"{speaker}: {e.get('reply', '')}")
     body = ""
     for turn in reversed(turns):
         if len(body) + len(turn) + 2 > max_chars:

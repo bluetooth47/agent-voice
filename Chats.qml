@@ -237,6 +237,8 @@ Item {
           speakerLabel: String(e.agent_label || ""),
           kind: String(e.kind || ""),
           passedFrom: String(e["for"] || ""),
+          asked: String(e.asked || ""),
+          askedLabel: String(e.asked_label || ""),
           transcript: String(e.transcript || ""),
           reply: String(e.reply || ""),
           thought: String(e.thinking || ""),
@@ -736,6 +738,8 @@ Item {
         required property string speakerLabel
         required property string kind
         required property string passedFrom
+        required property string asked
+        required property string askedLabel
         required property string transcript
         required property string reply
         required property string thought
@@ -744,6 +748,11 @@ Item {
         width: ListView.view ? ListView.view.width - Style.space(10) : 0
         when: view.whenOf(at)
         who: view.exchangeSpeaker(speakerId, speakerLabel, kind, passedFrom)
+        // A question one agent asked another (Phase 16): folded to one line.
+        aside: kind === "aside"
+               ? view.exchangeSpeaker(speakerId, speakerLabel, "", "") + " asked "
+                 + (askedLabel || view.currentAgentName(asked) || asked || "another agent")
+               : ""
         heard: transcript
         answer: reply
         thinking: thought

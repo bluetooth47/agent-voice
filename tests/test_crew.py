@@ -51,7 +51,7 @@ class TestConfigAgents:
             "name": "jarvis", "id": "jarvis", "label": "Jarvis", "agent": "claude", "model": "sonnet",
             "effort": "high", "voice": "amy-medium", "speed": 0, "narration": "", "instructions": "", "level": "edits",
             "tools": {"desktop": "inherit", "browser": "inherit", "omarchySkill": "inherit"},
-            "notesWrite": "allow",
+            "notesWrite": "allow", "collaboration": "announce", "acceptsWork": True,
             "projectDir": "~/code", "endpoint": None}]
 
     def test_the_program_defaults_to_claude(self, cfg_factory):

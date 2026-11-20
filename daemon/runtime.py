@@ -87,6 +87,29 @@ def notes_choice(holder: dict, key: str) -> str:
     return value if value in NOTES_CHOICES else "deny"
 
 
+#: What an agent may start with other agents (merged plan, Phase 16,
+#: section 3.4): nothing, asking you first, announcing it out loud with a
+#: moment to say stop, or quietly (still shown, logged and in the chat).
+COLLAB_CHOICES = ("off", "ask", "announce", "allow")
+
+
+def collab_choice(holder: dict, key: str) -> str:
+    """`collaboration` as written: a missing key is "announce" (the user's
+    decision, Phase 8, question 1), and a value that is there but is none of
+    the four is "ask" -- somebody meant to say something, and the setting
+    that cannot be read asks rather than acts quietly."""
+    if not isinstance(holder, dict) or key not in holder:
+        return "announce"
+    value = holder.get(key)
+    return value if value in COLLAB_CHOICES else "ask"
+
+
+def accepts_choice(holder: dict, key: str) -> bool:
+    """`acceptsWork` as written: only an explicit false is off, as
+    `enabled` is, so entries written before the setting existed accept."""
+    return not (isinstance(holder, dict) and holder.get(key) is False)
+
+
 def tool_choices(raw) -> dict[str, str]:
     """A tools map as written, cleaned: every switch present, each one of
     TOOL_CHOICES."""
@@ -246,6 +269,12 @@ DEFAULTS = {
     # Whether the main agent may write notes (merged plan, Phase 14): allow
     # or deny. Extra agents keep theirs in their entry, as `notesWrite`.
     "mainNotesWrite": "allow",
+    # What the main agent may start with other agents (merged plan, Phase
+    # 16): off, ask, announce or allow; and whether other agents may give it
+    # work. Extra agents keep theirs in their entry, as `collaboration` and
+    # `acceptsWork`.
+    "mainCollaboration": "announce",
+    "mainAcceptsWork": True,
     "conversationMode": True,
     "yieldToRecorders": True,
     "logSpeech": False,
@@ -331,6 +360,8 @@ TOML_ALIASES = {
     "omarchySkill": ("agent", "omarchy_skill"),
     "mainTools": ("agent", "main_tools"),
     "mainNotesWrite": ("agent", "main_notes_write"),
+    "mainCollaboration": ("agent", "main_collaboration"),
+    "mainAcceptsWork": ("agent", "main_accepts_work"),
     "conversationMode": ("wake", "conversation_mode"),
     "yieldToRecorders": ("wake", "yield_to_recorders"),
     "logSpeech": ("ui", "log_speech"),
@@ -705,6 +736,10 @@ class Config:
                 "tools": tool_choices(entry.get("tools")),
                 # Whether it may write notes: allow or deny (Phase 14).
                 "notesWrite": notes_choice(entry, "notesWrite"),
+                # What it may start with other agents, and whether it takes
+                # work from them (Phase 16).
+                "collaboration": collab_choice(entry, "collaboration"),
+                "acceptsWork": accepts_choice(entry, "acceptsWork"),
                 "projectDir": folder.strip() if isinstance(folder, str) else "",
                 # Its own OpenAI-compatible endpoint, when its program is
                 # "endpoint" (plan 7b); None otherwise.
@@ -771,6 +806,36 @@ class Config:
             return notes_choice(self._values, "mainNotesWrite") == "allow"
         spec = next((a for a in self.all_agents() if a["id"] == agent_id), None)
         return bool(spec) and spec.get("notesWrite") == "allow"
+
+    def collaboration_for(self, agent_id: str | None) -> str:
+        """What this agent may start with other agents (merged plan, Phase
+        16): "off", "ask", "announce" or "allow". `agent_id` is "" or "main"
+        for the main agent, else an extra agent's id. Settings that cannot
+        be read are "ask" (section 3.4: unreadable asks); an agent the
+        settings no longer have has nobody's decision behind it and starts
+        nothing. Read fresh by the crew server and the daemon on every call,
+        so a change reaches a warm process at once."""
+        if not self.settings_readable():
+            return "ask"
+        if not agent_id or agent_id == "main":
+            return collab_choice(self._values, "mainCollaboration")
+        spec = next((a for a in self.all_agents() if a["id"] == agent_id), None)
+        return spec["collaboration"] if spec else "off"
+
+    def accepts_work_for(self, agent_id: str | None) -> bool:
+        """Whether other agents may give this agent a task or pass it a
+        conversation (Phase 16). Off, it can still be asked a question, and
+        a pass the person starts is not affected. Only an explicit false is
+        off; settings that cannot be read are on (section 3.4), because this
+        only narrows what agents may send and every send is judged by the
+        sender's own `collaboration` too. An agent the settings do not have
+        cannot be a target at all."""
+        if not self.settings_readable():
+            return True
+        if not agent_id or agent_id == "main":
+            return accepts_choice(self._values, "mainAcceptsWork")
+        spec = next((a for a in self.all_agents() if a["id"] == agent_id), None)
+        return bool(spec) and spec["acceptsWork"]
 
     def main_endpoint(self) -> dict | None:
         """The main agent's endpoint, cleaned like an extra agent's, or None

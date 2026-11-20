@@ -761,7 +761,9 @@ def test_the_server_speaks_mcp_over_stdio(tmp_path):
     replies = [json.loads(l) for l in out.stdout.splitlines()]
     assert [r["id"] for r in replies] == [1, 2, 3, 4]
     assert replies[0]["result"]["serverInfo"]["name"] == "agentvoice-crew"
-    assert len(replies[1]["result"]["tools"]) == 4
+    # the notes tools, and (collaboration is "announce" by default) the seven
+    # collaboration tools of Phase 16
+    assert len(replies[1]["result"]["tools"]) == 4 + 7
     assert not replies[2]["result"].get("isError"), replies[2]
     assert "hello" in replies[3]["result"]["content"][0]["text"]
 
@@ -809,7 +811,9 @@ def test_the_audit_log_rotates_at_a_megabyte(monkeypatch):
 AUDIT_SAFE = {"author", "target", "name", "kind", "reason", "locked", "valid_name", "YOU",
               "old_size", "me", "note_name",
               # collab._audit (Phase 15): ids, a state and a byte count.
-              "frm", "to", "tid", "state", "brief_bytes"}
+              "frm", "to", "tid", "state", "brief_bytes",
+              # Phase 16: why a call was refused, a code from collab's fixed list.
+              "code"}
 
 
 def _names_outside_len(node):

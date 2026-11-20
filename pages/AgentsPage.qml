@@ -119,7 +119,10 @@ Column {
       // Written down before anything changes, the wake phrase above all: an
       // entry from before ids existed is known by the one derived from it.
       copy.id = s.agentId(a)
-      if (i === index) copy[key] = value
+      if (i === index) {
+        if (value === undefined) delete copy[key]
+        else copy[key] = value
+      }
       list.push(copy)
     }
     saveAgents(list)
@@ -208,22 +211,15 @@ Column {
   function putAgentTool(index, key, value) {
     updateAgent(index, "tools", toolMap((s.voiceAgents[index] || {}).tools, key, value))
   }
-  // Notes write (Phase 14): "allow" is written by leaving the key out, as a
-  // tool switch's inherit is, so an entry nobody changed stays as it was.
+  // Leave out the keys for the notes and collaboration defaults.
   function putAgentNotes(index, value) {
-    var list = []
-    for (var i = 0; i < s.voiceAgents.length; i++) {
-      var copy = {}
-      var a = s.voiceAgents[i] || {}
-      for (var k in a) copy[k] = a[k]
-      copy.id = s.agentId(a)
-      if (i === index) {
-        if (value === "allow") delete copy.notesWrite
-        else copy.notesWrite = "deny"
-      }
-      list.push(copy)
-    }
-    saveAgents(list)
+    updateAgent(index, "notesWrite", value === "allow" ? undefined : "deny")
+  }
+  function putAgentCollab(index, value) {
+    updateAgent(index, "collaboration", value === "announce" ? undefined : value)
+  }
+  function putAgentAccepts(index, value) {
+    updateAgent(index, "acceptsWork", value ? undefined : false)
   }
   // The Rule of Two (merged plan, Phase 13): reading web pages, acting
   // without asking, and being able to change what the other agents are
@@ -666,6 +662,10 @@ Column {
       // deny (runtime.notes_choice), so the switch never says more.
       notesWrite: page.s.setting("mainNotesWrite", "allow") === "allow" ? "allow" : "deny"
       onNotesPicked: function(value) { page.s.put("mainNotesWrite", value) }
+      collaboration: page.s.setting("mainCollaboration", "announce")
+      onCollaborationPicked: function(value) { page.s.put("mainCollaboration", value) }
+      acceptsWork: page.s.setting("mainAcceptsWork", true) !== false
+      onAcceptsWorkPicked: function(value) { page.s.put("mainAcceptsWork", value) }
     }
 
     SettingRow {
@@ -1107,6 +1107,10 @@ Column {
         notesWrite: card.modelData.notesWrite === undefined || card.modelData.notesWrite === "allow"
                     ? "allow" : "deny"
         onNotesPicked: function(value) { page.putAgentNotes(card.index, value) }
+        collaboration: card.modelData.collaboration === undefined ? "announce" : String(card.modelData.collaboration)
+        onCollaborationPicked: function(value) { page.putAgentCollab(card.index, value) }
+        acceptsWork: card.modelData.acceptsWork !== false
+        onAcceptsWorkPicked: function(value) { page.putAgentAccepts(card.index, value) }
       }
 
       SettingRow {

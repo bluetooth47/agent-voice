@@ -22,11 +22,17 @@ import qs.Ui
 //     onPicked: function(key, value) { ... }
 //     notesWrite: entry.notesWrite || "allow"   // "allow" | "deny" (Phase 14)
 //     onNotesPicked: function(value) { ... }
+//     collaboration: entry.collaboration === undefined ? "announce" : String(entry.collaboration)
+//     onCollaborationPicked: function(value) { ... }
+//     acceptsWork: entry.acceptsWork !== false
+//     onAcceptsWorkPicked: function(value) { ... }
 //   }
 //
 // Notes (Phase 14) are a row of their own: whether this agent may write its
 // own and the communal notes through Agent Voice's notes tools. Reading is
 // always allowed. Only Claude Code and Codex take the notes tools.
+// Collaboration (Phase 16) sets what an agent can start with other agents
+// and whether it takes work from them.
 Column {
   id: sw
 
@@ -44,6 +50,10 @@ Column {
   // "allow" or "deny": notesWrite / mainNotesWrite.
   property string notesWrite: "allow"
   signal notesPicked(string value)
+  property string collaboration: "announce"
+  signal collaborationPicked(string value)
+  property bool acceptsWork: true
+  signal acceptsWorkPicked(bool value)
 
   readonly property var desktopPrograms: ["claude", "codex"]
   readonly property var browserPrograms: ["claude"]
@@ -56,6 +66,27 @@ Column {
     if (notesPrograms.indexOf(program) < 0) return "Notes need Claude Code or Codex."
     return ""
   }
+  // The programs that can start collaboration: agentfs.COLLAB_PROGRAMS.
+  readonly property var collabPrograms: ["claude", "codex"]
+  readonly property string collabWhyNot: {
+    if (program === "endpoint")
+      return "An endpoint can be asked and given work (what it is sent leaves this machine), but cannot start any."
+    if (program === "") return "No program is chosen for it."
+    if (collabPrograms.indexOf(program) < 0)
+      return "Can be asked and given work, but cannot start any: only Claude Code and Codex can."
+    return ""
+  }
+  readonly property string collabLevel:
+    ["off", "ask", "announce", "allow"].indexOf(collaboration) >= 0 ? collaboration : "ask"
+  // Keep these descriptions in step with agentfs.COLLAB_SAYS.
+  readonly property var collabHints: ({
+    off: "Starts nothing with other agents: the tools are not offered to it.",
+    ask: "Asks you first, on screen and out loud, before it asks, gives work to, passes to or messages another agent.",
+    announce: "Says out loud when it gives work to or passes to another agent, with three seconds to say stop; " +
+              "questions and messages go quietly, shown on screen.",
+    allow: "Works with the other agents quietly; it is still shown on screen, in the chat and in the audit log. " +
+           "Sending anything to an endpoint is still said out loud."
+  })
 
   function choice(key) {
     var c = (choices && typeof choices === "object") ? choices[key] : undefined
@@ -88,6 +119,12 @@ Column {
       if (effective(rows[i].key) && whyNot(rows[i].key) === "") on.push(rows[i].short)
     var out = on.length > 0 ? on.join(", ") : "no tools"
     if (notesWhyNot === "" && notesDenied) out += " · notes read only"
+    if (collabWhyNot === "") {
+      if (collabLevel === "off") out += " · collaboration off"
+      else if (collabLevel === "ask") out += " · asks before collaborating"
+      else if (collabLevel === "allow") out += " · collaborates quietly"
+    }
+    if (!acceptsWork) out += " · questions only"
     return out
   }
 
@@ -165,6 +202,54 @@ Column {
         foreground: sw.foreground
         fontFamily: sw.fontFamily
         onCommitted: function(v) { if (v !== (sw.notesDenied ? "deny" : "allow")) sw.notesPicked(v) }
+      }
+    }
+    SettingRow {
+      width: parent.width
+      stacked: sw.collabWhyNot === ""
+      label: "Collaboration"
+      hint: sw.collabWhyNot !== "" ? sw.collabWhyNot : sw.collabHints[sw.collabLevel]
+      changed: sw.collabWhyNot === "" && sw.collabLevel !== "announce"
+      foreground: sw.foreground
+      fontFamily: sw.fontFamily
+      onReset: sw.collaborationPicked("announce")
+      SegmentedChoice {
+        visible: sw.collabWhyNot === ""
+        options: [
+          { value: "off", label: "Off" },
+          { value: "ask", label: "Ask me first" },
+          { value: "announce", label: "Announce" },
+          { value: "allow", label: "Quietly" }
+        ]
+        value: sw.collabLevel
+        foreground: sw.foreground
+        fontFamily: sw.fontFamily
+        onCommitted: function(v) { if (v !== sw.collabLevel) sw.collaborationPicked(v) }
+      }
+    }
+    SettingRow {
+      width: parent.width
+      visible: sw.program !== ""
+      stacked: true
+      label: "Takes work from agents"
+      hint: sw.acceptsWork
+            ? "Other agents may ask it questions, give it tasks and pass it a conversation. " +
+              "It works at its own permission level; their request is never your approval."
+            : "Other agents may ask it questions, but not give it tasks or pass it a conversation. " +
+              "A pass you start yourself still works."
+      changed: !sw.acceptsWork
+      foreground: sw.foreground
+      fontFamily: sw.fontFamily
+      onReset: sw.acceptsWorkPicked(true)
+      SegmentedChoice {
+        options: [
+          { value: "true", label: "Yes" },
+          { value: "false", label: "Questions only" }
+        ]
+        value: String(sw.acceptsWork)
+        foreground: sw.foreground
+        fontFamily: sw.fontFamily
+        onCommitted: function(v) { if ((v === "true") !== sw.acceptsWork) sw.acceptsWorkPicked(v === "true") }
       }
     }
     Text {

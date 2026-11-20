@@ -579,6 +579,24 @@ Column {
         }
       }
     }
+    SettingRow {
+      readonly property var collab: toolsTab.c ? toolsTab.c.collab : undefined
+
+      width: parent.width
+      visible: !!collab
+      label: "Collaboration"
+      hint: {
+        if (!collab) return ""
+        var levelWords = { off: "Off", ask: "Ask me first", announce: "Announce", allow: "Quietly" }
+        var status = collab.can_start
+                     ? page.name + " can start collaboration: " + (levelWords[collab.level] || levelWords.ask)
+                     : page.name + " can be asked; " + page.name + " can't ask others."
+        return [status, collab.can_start ? collab.says : collab.why_not, collab.receives]
+               .filter(Boolean).join("\n")
+      }
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+    }
     Button {
       text: "Change on " + page.name + "'s Agents card →"
       focusable: true
