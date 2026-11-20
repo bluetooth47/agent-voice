@@ -1386,8 +1386,17 @@ budget full (gate +0.15s); p95 at most +0.06s (gate 10% or 0.30s). On
 main both medians are inside the ±0.48s noise of an Opus median; its cold
 p95 moved 2s on one slow run, which is the noise §33 says an Opus p95 has
 (it trips on an unchanged build in a third of 20-run pairs). jarvis-ajc
-(Codex) could not be measured: every turn returned Codex's usage limit
-until 19:13; its preamble grew 3%.
+(Codex) was measured after Codex's usage limit lifted, with 10 interleaved
+runs per variant to spare the quota: fresh 3.64 → 3.23s, resume 3.32 →
+3.15s median (p95 4.42 → 3.89s, 4.09 → 3.86s). Faster, which is noise
+(a 20-run Codex median moves ±0.36s on its own); nothing points to a cost.
+
+**After Codex's review** the roster lines became escaped JSON objects
+(`{"name": …, "wake_phrase": …, "role": …}`), so a name or role cannot pass
+for the prompt's own words. That adds about 52 characters for two agents:
+main **1109**, sora **1210**, jarvis-ajc **7088**. Each line is still cut
+at 380 characters, so the `full` variant above, eight lines of 380, is
+still the most the roster can add; it was not re-measured.
 
 **The roster earns its place** (`bench/roster_check.py`, Theo, five
 questions with the roster and five without; the role lines were synthetic,

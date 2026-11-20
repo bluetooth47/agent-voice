@@ -86,7 +86,7 @@ def test_it_is_checked_outside_the_config_changed_guard():
     src = (ROOT / "daemon" / "wake_listen.py").read_text()
     refresh = src[src.index("    def refresh(self):"):]
     refresh = refresh[:refresh.index("\n    def ", 10)]
-    before_guard = refresh[:refresh.index("if not self.cfg.reload():")]
+    before_guard = refresh[:refresh.index("if not changed:")]
     assert "reconcile_vocab()" in before_guard
 
 

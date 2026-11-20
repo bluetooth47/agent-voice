@@ -162,12 +162,17 @@ Column {
   // The last agent moved to the trash: { name, label, index }, or null.
   property var trashed: null
   property var folderQueue: []
+  // From launch until its result has been handled, so a second operation
+  // cannot start in the moment between the process ending and its result
+  // being read, and take that result's place (Phase 10 review).
+  property bool folderBusy: false
   function folderOp(args, input, what) {
     folderQueue = folderQueue.concat([{ args: args, input: input, what: what }])
-    if (!folderProc.running) nextFolderOp()
+    if (!folderBusy) nextFolderOp()
   }
   function nextFolderOp() {
     if (folderQueue.length === 0) return
+    folderBusy = true
     var next = folderQueue[0]
     folderQueue = folderQueue.slice(1)
     folderProc.what = next.what
@@ -197,7 +202,34 @@ Column {
     onTriggered: {
       page.folderFinished(folderProc.what, folderProc.out, folderProc.err)
       page.folderEpoch++
+      page.folderBusy = false
       page.nextFolderOp()
+    }
+  }
+  // The agent list is saved after its folder moved, through `omarchy bar
+  // set`, which can fail. Then the folder is moved back, so the folders and
+  // the list never disagree (Phase 10 review): a removal whose list was not
+  // saved restores the folder; an undo whose list was not saved trashes it
+  // again, settings entry and all.
+  property var rollback: null
+  Connections {
+    target: page.s.store
+    function onSaved(key) { if (key === "voiceAgents") page.rollback = null }
+    function onFailed(key, message) {
+      if (key !== "voiceAgents" || page.rollback === null) return
+      var r = page.rollback
+      page.rollback = null
+      if (r.verb === "trash") {
+        page.trashed = null
+        page.folderOp(["restore", r.name], "", { verb: "rolledback" })
+        page.folderNote = "The agent list could not be saved (" + message + "), so " +
+                          r.label + " was not removed; its folder was put back."
+      } else {
+        page.folderOp(["trash", r.id, "--line"], JSON.stringify(r.entry) + "\n",
+                      { verb: "rolledback" })
+        page.folderNote = "The agent list could not be saved (" + message + "), so " +
+                          r.label + " was not put back; it is still in the trash."
+      }
     }
   }
   function folderFinished(what, out, err) {
@@ -232,7 +264,12 @@ Column {
       }
       page.trashed = { name: out, label: what.label, index: at < 0 ? list.length : at }
       page.folderNote = ""
+      page.rollback = { verb: "trash", name: out, label: what.label }
       saveAgents(list)
+    } else if (what.verb === "rolledback") {
+      if (err !== "")
+        page.folderNote += " Moving the folder back failed too (" + why + "); " +
+                           "`agentvoice agents trash-list` shows what the trash holds."
     } else if (what.verb === "restore") {
       var entry = null
       try { entry = JSON.parse(out) } catch (e) { entry = null }
@@ -251,6 +288,8 @@ Column {
       back.splice(Math.min(what.index, back.length), 0, entry)
       page.trashed = null
       page.folderNote = ""
+      page.rollback = { verb: "restore", id: s.agentId(entry), entry: entry,
+                        label: s.agentLabel(entry) || "the agent" }
       s.focusAgent = s.agentId(entry)
       saveAgents(back)
     }
@@ -261,6 +300,25 @@ Column {
     var entry = {}
     for (var k in a) entry[k] = a[k]
     entry.id = s.agentId(a)
+    // A second entry claiming an id another entry has (only a hand edit can
+    // make one) is not that agent: the settings drop it, and the folder is
+    // the first entry's. Removed from the list alone, its folder untouched.
+    for (var d = 0; d < index; d++) {
+      if (s.agentId(s.voiceAgents[d] || {}) === entry.id) {
+        var keep = []
+        for (var i = 0; i < s.voiceAgents.length; i++) {
+          if (i === index) continue
+          var c = {}
+          var b = s.voiceAgents[i] || {}
+          for (var m in b) c[m] = b[m]
+          c.id = s.agentId(b)
+          keep.push(c)
+        }
+        page.folderNote = ""
+        saveAgents(keep)
+        return
+      }
+    }
     // The settings entry goes over stdin as one JSON line. The agent stays
     // in the list until its folder is in the trash, so a failure loses
     // nothing.
@@ -1305,7 +1363,7 @@ Column {
       text: "Undo"
       iconText: "\u{f054c}"
       bordered: true
-      enabled: !folderProc.running
+      enabled: !page.folderBusy
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
       onClicked: page.undoRemove()

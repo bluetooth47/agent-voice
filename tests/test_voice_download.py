@@ -167,7 +167,7 @@ def test_a_downloaded_voice_is_picked_up_without_touching_a_setting():
     reached the running engine."""
     refresh = DAEMON[DAEMON.index("    def refresh(self):"):]
     refresh = refresh[:refresh.index("    def reconcile_voice")]
-    before_gate = refresh[:refresh.index("if not self.cfg.reload():")]
+    before_gate = refresh[:refresh.index("if not changed:")]
     assert "self.reconcile_voice()" in before_gate, \
         "the voice check must not sit behind the config-changed guard"
 

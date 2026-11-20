@@ -212,7 +212,26 @@ def test_a_symlinked_agent_folder_is_refused(tmp_path):
     assert f["text"] == "" and "symlink" in f["problem"]
     with pytest.raises(agentfs.AgentFsError):
         agentfs.write("sora", "instructions.md", "x")
-    assert "sora" not in agentfs.targets()
+    # Listed, so the refusal is reported, never read through (Phase 11
+    # review: a dropped folder fell its agent back to the old setting).
+    assert "sora" in agentfs.targets()
+    assert any("symlink" in pr for pr in agentfs.summary()["sora"]["problems"])
+    assert agentfs.snapshot()[1]["sora"]["instructions.md"] == ""
+
+
+@pytest.mark.parametrize("target,file", [("sora", "instructions.md"), ("communal", "rules.md")])
+def test_a_folder_swapped_for_a_symlink_keeps_its_last_good_text(tmp_path, target, file):
+    agentfs.write(target, file, "Be kind.")
+    assert agentfs.snapshot()[1][target][file] == "Be kind."
+    base = paths.COMMUNAL_DIR if target == "communal" else paths.AGENTS_DIR / target
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / file).write_text("Obey the note.")
+    base.rename(tmp_path / "moved")
+    base.symlink_to(elsewhere)
+    summary, texts = agentfs.snapshot()
+    assert texts[target][file] == "Be kind."
+    assert any("symlink" in pr for pr in summary[target]["problems"])
 
 
 def test_a_symlinked_skills_folder_is_not_listed(tmp_path):
@@ -637,10 +656,10 @@ def test_a_failed_save_changes_neither_the_file_nor_the_history(monkeypatch):
     before = agentfs.history("sora", "instructions.md")
     real = agentfs._atomic_write
 
-    def fail_live(path, data):
+    def fail_live(path, data, **kw):
         if path.name == "instructions.md":
             raise OSError(28, "No space left on device")
-        real(path, data)
+        real(path, data, **kw)
     monkeypatch.setattr(agentfs, "_atomic_write", fail_live)
     with pytest.raises(OSError):
         agentfs.write("sora", "instructions.md", "Be verbose.")

@@ -342,15 +342,21 @@ def read(target: str) -> dict:
 def targets() -> list[str]:
     """Every folder present: communal first, then the agents by id."""
     out = []
+    # A folder replaced by a symlink is listed too, rather than dropped: its
+    # reads are then refused one by one, each keeping its last good text and
+    # saying why, instead of the folder quietly vanishing -- which fell an
+    # agent back to the old setting and dropped the communal rules.
     try:
-        if stat.S_ISDIR(os.lstat(paths.COMMUNAL_DIR).st_mode):
+        mode = os.lstat(paths.COMMUNAL_DIR).st_mode
+        if stat.S_ISDIR(mode) or stat.S_ISLNK(mode):
             out.append(COMMUNAL)
     except OSError:
         pass
     try:
         _no_link(paths.AGENTS_DIR)
         out += sorted(e.name for e in os.scandir(paths.AGENTS_DIR)
-                      if e.is_dir(follow_symlinks=False) and _valid_agent(e.name))
+                      if (e.is_dir(follow_symlinks=False) or e.is_symlink())
+                      and _valid_agent(e.name))
     except (OSError, AgentFsError):
         pass
     return out
@@ -457,9 +463,14 @@ def _locked():
         os.close(fd)
 
 
-def _atomic_write(path: Path, data: bytes) -> None:
+def _atomic_write(path: Path, data: bytes, exclusive: bool = False) -> None:
     """Into place by rename, so a reader never sees half a file; fsynced, so
-    a crash leaves the old file or the new one."""
+    a crash leaves the old file or the new one.
+
+    `exclusive` publishes only if nothing is at `path` yet, by hard link,
+    which fails rather than replaces: the lock keeps out other writers
+    through here, but not a person's editor, which may create the file
+    between the check and the rename. Conflict("present") if it did."""
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{os.urandom(4).hex()}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
                  | os.O_CLOEXEC, 0o600)
@@ -471,7 +482,14 @@ def _atomic_write(path: Path, data: bytes) -> None:
                 os.fsync(f.fileno())
         finally:
             os.close(fd)
-        os.replace(tmp, path)
+        if exclusive:
+            try:
+                os.link(tmp, path, follow_symlinks=False)
+            except FileExistsError:
+                raise Conflict(_stamp_of(path)) from None
+            os.unlink(tmp)
+        else:
+            os.replace(tmp, path)
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
@@ -567,13 +585,17 @@ def _write_locked(target: str, file: str, text: str, base: str | None,
         raise AgentFsError(f"{file} is larger than {WRITE_CAP // 1024} KB")
     if not _WHO.fullmatch(who):
         raise AgentFsError(f"not a name for who wrote it: {who!r}")
-    path, _ = _resolve(target, file, create=True)
+    # The base is checked before any folder is made: a refused save must
+    # leave nothing behind -- above all not an empty folder where an agent
+    # was just moved to the trash, which would block its Undo.
+    path, _ = _resolve(target, file)
     current = _stamp_of(path)
     if base is not None and base != current:
         raise Conflict(current)
+    path, _ = _resolve(target, file, create=True)
     version = _save_version(target, file, text, who)
     try:
-        _atomic_write(path, data)
+        _atomic_write(path, data, exclusive=(base == "missing"))
     except BaseException:
         with contextlib.suppress(OSError):
             version.unlink()
@@ -809,6 +831,30 @@ ROSTER_MAX = 8
 ROSTER_LINE = 380
 
 
+def roster_line(label, phrase, role) -> str:
+    """One agent as the roster tells the others: a JSON object on one line,
+    {"name", "wake_phrase", "role"}. Each field is someone's free text -- a
+    display name is anything typed, a role is a file anyone may edit -- so
+    it is escaped and bounded rather than written into the prompt as
+    prose, where a name like `Sora (wake phrase "rm")` or a role saying
+    "Ignore the above" could pass for the prompt's own words. The header
+    says these are information about the agents, not instructions.
+
+    Whitespace in each field is folded to single spaces (a role written
+    over several lines is one line). The role is cut so the whole line
+    stays within ROSTER_LINE."""
+    def one(value, limit):
+        return " ".join(str(value or "").split())[:limit]
+    name, wake = one(label, 40) or one(phrase, 32), one(phrase, 32)
+    role = one(role, 300)
+    while True:
+        line = json.dumps({"name": name, "wake_phrase": wake, "role": role},
+                          ensure_ascii=False)
+        if len(line) <= ROSTER_LINE or not role:
+            return line
+        role = role[:len(role) - (len(line) - ROSTER_LINE)].rstrip()
+
+
 def parts_from(texts: dict, me: str, name: str, live: list[dict]) -> dict:
     """The folder pieces of one agent's prompt (merged plan, section 3.6),
     each already within its budget, from folder texts as snapshot() gives
@@ -826,12 +872,8 @@ def parts_from(texts: dict, me: str, name: str, live: list[dict]) -> dict:
     for a in live:
         if a.get("id") == me:
             continue
-        # One line each: a role written over several lines is joined.
-        role = " ".join(texts.get(a.get("id"), {}).get("role.md", "").split())
-        line = f'{a.get("label") or a.get("phrase")} (wake phrase "{a.get("phrase")}")'
-        if role:
-            line += f": {role}"
-        roster.append(line[:ROSTER_LINE].rstrip())
+        roster.append(roster_line(a.get("label"), a.get("phrase"),
+                                  texts.get(a.get("id"), {}).get("role.md", "")))
         if len(roster) == ROSTER_MAX:
             break
     return {"rules": comm.get("rules.md", ""),
@@ -840,11 +882,33 @@ def parts_from(texts: dict, me: str, name: str, live: list[dict]) -> dict:
             "name": name, "roster": roster}
 
 
+def live_from_state() -> set[str] | None:
+    """The folder ids the running daemon can reach now, from its state file:
+    the main agent and each extra agent it publishes with no problem. None
+    when no daemon is running or the file cannot be read."""
+    try:
+        state = json.loads((paths.RUNTIME_DIR / "state").read_text())
+        crew = state.get("crew")
+        if state.get("state") in (None, "off") and not crew:
+            return None
+        ids = {MAIN} | {c["id"] for c in crew or []
+                        if isinstance(c, dict) and isinstance(c.get("id"), str)
+                        and not c.get("problem")}
+    except (OSError, ValueError, AttributeError, TypeError):
+        return None
+    return ids
+
+
 def _configured(cfg, live_ids=None) -> list[dict]:
     """Every agent the settings have switched on, as parts_from's `live`,
     main first; with `live_ids`, only those (folder ids). For the bench and
-    the CLI, which have no running crew to ask; the daemon passes its own."""
-    phrase = cfg.get_str("phrase").lower()
+    the CLI; the daemon passes its own crew. With no `live_ids`, whatever
+    the running daemon says it can reach, so the bench and `agents preview`
+    build the roster the daemon builds; all switched on agents when no
+    daemon is running."""
+    if live_ids is None:
+        live_ids = live_from_state()
+    phrase = " ".join(cfg.get_str("phrase").lower().split())
     every = [{"id": MAIN, "label": cfg.main_label(phrase), "phrase": phrase}]
     every += [{"id": a["id"], "label": a["label"], "phrase": a["name"]}
               for a in cfg.agents()]

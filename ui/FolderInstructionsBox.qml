@@ -50,9 +50,15 @@ Column {
   property string unsaved: ""
   property bool holding: false
 
-  // Bumped by every save. A read started before a save and finished after
-  // it would otherwise put the old text and stamp back over the new ones.
+  // Bumped by every save and every change of target. A read started before
+  // either and finished after would otherwise put the old text and stamp
+  // back over the new ones, or one agent's text on another's card.
   property int saveGen: 0
+  // A reload asked for while the box was being edited, done when the edit
+  // ends. Never during one: it would move the stamp on under text read at
+  // the old one, and the save on blur would then overwrite a newer file
+  // with no conflict (Phase 10 review).
+  property bool reloadWanted: false
 
   readonly property string shown: exists ? saved : fallback.trim()
   readonly property bool busy: reader.running || writer.running
@@ -61,8 +67,10 @@ Column {
   width: parent ? parent.width : 300
 
   function reload() {
+    if (box.editing) { reloadWanted = true; return }
     if (target === "" || reader.running || holding) return
     reader.gen = fib.saveGen
+    reader.forTarget = target
     reader.command = ["agentvoice", "agents", "show", target, "--json"]
     reader.running = true
   }
@@ -71,8 +79,17 @@ Column {
     fib.saveGen++
     fib.unsaved = t
     fib.holding = true
-    fib.note = ""
     fib.conflictStamp = ""
+    // With no stamp read there is no base to save against, and a save with
+    // none overwrites whatever is there. Kept in the box instead.
+    if (!fib.loaded) {
+      fib.note = "Not saved: the current instructions could not be read first" +
+                 (fib.note !== "" ? " (" + fib.note + ")" : "") +
+                 ", so saving might overwrite them."
+      return
+    }
+    fib.note = ""
+    writer.forTarget = target
     var cmd = ["agentvoice", "agents", "write", target, "instructions.md", "--line"]
     // "missing" is a stamp too: it means create, and only if still absent.
     if (fib.stamp !== "") cmd = cmd.concat(["--base", fib.stamp])
@@ -93,16 +110,26 @@ Column {
     reload()
   }
 
-  onTargetChanged: { holding = false; loaded = false; reload() }
+  // A card reused for another agent (the list reordered) starts clean, and
+  // any read or save still running for the old one is ignored when it ends.
+  onTargetChanged: {
+    saveGen++
+    holding = false; loaded = false; exists = false; reloadWanted = false
+    saved = ""; stamp = ""; unsaved = ""; note = ""; conflictStamp = ""
+    reload()
+  }
   onWatchChanged: reload()
   Component.onCompleted: reload()
 
   Process {
     id: reader
     property int gen: 0
+    property string forTarget: ""
     stdout: StdioCollector {
       onStreamFinished: {
-        if (reader.gen !== fib.saveGen || fib.holding) return
+        if (reader.gen !== fib.saveGen || fib.holding || reader.forTarget !== fib.target) return
+        // An edit began while this read ran: read again once it ends.
+        if (box.editing) { fib.reloadWanted = true; return }
         var d
         try { d = JSON.parse(String(text)) } catch (e) { return }
         var f = ((d || {}).files || {})["instructions.md"]
@@ -117,7 +144,8 @@ Column {
     stderr: StdioCollector {
       onStreamFinished: {
         var t = String(text).trim()
-        if (t !== "") fib.note = t.replace(/^agentvoice agents: /, "")
+        if (t !== "" && reader.forTarget === fib.target)
+          fib.note = t.replace(/^agentvoice agents: /, "")
       }
     }
   }
@@ -125,6 +153,7 @@ Column {
   Process {
     id: writer
     property string pending: ""
+    property string forTarget: ""
     stdinEnabled: true
     // One JSON line, so the CLI needs no end of input to know it is done.
     onStarted: { write(writer.pending); writer.pending = "" }
@@ -135,7 +164,7 @@ Column {
     stdout: StdioCollector {
       onStreamFinished: {
         var t = String(text).trim()
-        if (!/^[0-9a-f]{16}-[0-9]+$/.test(t)) return
+        if (!/^[0-9a-f]{16}-[0-9]+$/.test(t) || writer.forTarget !== fib.target) return
         fib.stamp = t
         fib.saved = fib.unsaved.trim()
         fib.exists = true
@@ -147,7 +176,7 @@ Column {
     stderr: StdioCollector {
       onStreamFinished: {
         var t = String(text).trim()
-        if (t === "") return
+        if (t === "" || writer.forTarget !== fib.target) return
         var m = t.match(/current stamp ([0-9a-f]{16}-[0-9]+|missing)/)
         if (t.indexOf("conflict:") === 0 && m) {
           fib.conflictStamp = m[1]
@@ -177,6 +206,11 @@ Column {
     foreground: fib.foreground
     fontFamily: fib.fontFamily
     onCommitted: function(t) { fib.save(t) }
+    // After the commit that losing focus makes, so the save goes first.
+    onEditingChanged: if (!editing && fib.reloadWanted) {
+      fib.reloadWanted = false
+      Qt.callLater(fib.reload)
+    }
   }
 
   Text {

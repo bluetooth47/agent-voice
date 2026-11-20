@@ -72,7 +72,10 @@ def speed_pct(value, fallback: int = 100) -> int:
         return fallback
     try:
         n = int(round(float(value)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: "inf", or Infinity, which Python's JSON reader
+        # accepts. A switched off entry is cleaned too since Phase 10, so
+        # this is read on start, where a raise stops the daemon.
         return fallback
     if n <= 0:
         return fallback
@@ -694,7 +697,7 @@ def endpoint_entry(url, model, is_agent=False, timeout_s=0,
     def number(value, default, lo, hi):
         try:
             value = int(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return default
         return max(lo, min(hi, value))
 

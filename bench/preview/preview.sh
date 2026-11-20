@@ -165,11 +165,17 @@ if [ ! -x "$tmp/bin/agentvoice.rest" ]; then
   printf '#!/usr/bin/env bash\nexec %q "$@"\n' "${real_agentvoice:-false}" > "$tmp/bin/agentvoice.rest"
   chmod +x "$tmp/bin/agentvoice.rest"
 fi
+# Starting, stopping or toggling the real service, typing to a real agent or
+# answering its permission question is never what a preview means, and since
+# Phase 10 a start also migrates the real agent folders: those are logged and
+# do nothing, in every mode.
 cat > "$tmp/bin/agentvoice" <<STUB
 #!/usr/bin/env bash
-if [ "\${1:-}" = agents ]; then
-  XDG_DATA_HOME='$tmp/data' exec '$repo/bin/agentvoice' "\$@"
-fi
+case "\${1:-}" in
+  agents) XDG_DATA_HOME='$tmp/data' exec '$repo/bin/agentvoice' "\$@" ;;
+  start|stop|restart|toggle|enable|disable|mic|open-mic|interrupt|lock|unlock|type|talk|talk-end|permit|wake-test|calibrate)
+    printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0 ;;
+esac
 exec '$tmp/bin/agentvoice.rest' "\$@"
 STUB
 chmod +x "$tmp/bin/agentvoice"

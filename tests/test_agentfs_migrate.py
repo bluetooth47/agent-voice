@@ -539,7 +539,120 @@ def test_adding_and_removing_an_agent_go_through_its_folder():
     remove = PAGE[PAGE.index("function removeAgent("):PAGE.index("function undoRemove(")]
     assert '["trash", entry.id, "--line"]' in remove
     assert "JSON.stringify(entry)" in remove
-    # The agent leaves the list only once its folder is in the trash.
-    assert "saveAgents" not in remove
+    # The agent leaves the list only once its folder is in the trash; the
+    # one save here is the duplicate-row branch, which returns before it.
+    dup, rest = remove.split('folderOp(["trash"', 1)
+    assert dup.count("saveAgents(") == 1 and "return" in dup
+    assert "saveAgents" not in rest
     undo = PAGE[PAGE.index("function undoRemove("):]
     assert '["restore", page.trashed.name]' in undo[:600]
+
+
+# --- Codex's review of Phases 10 and 11 ----------------------------------------
+
+def test_a_malformed_switched_off_entry_cannot_stop_the_daemon(cfg_factory):
+    """Switched off entries are cleaned since Phase 10, so a speed of
+    Infinity (which Python's JSON reader accepts) raised on start."""
+    cfg = cfg_factory(voiceAgents=[
+        {"id": "a", "name": "alpha", "speed": float("inf"), "enabled": False},
+        {"id": "b", "name": "bravo", "speed": float("-inf"),
+         "agent": "endpoint", "endpointUrl": "http://x:1", "endpointModel": "m",
+         "endpointTimeoutS": float("inf"), "endpointHistoryTurns": float("nan")}])
+    assert [a["speed"] for a in cfg.all_agents()] == [0, 0]
+    assert cfg.agents()[0]["endpoint"]["timeout_s"] == 0
+
+
+def test_migration_never_overwrites_a_file_an_editor_makes_meanwhile(cfg_factory, monkeypatch):
+    """The lock keeps out writers through agentfs, not a person's editor:
+    a file that appears between the check and the publish is kept, and the
+    migration skips it."""
+    real = agentfs._save_version
+
+    def editor_wins(target, file, text, who):
+        if target == "nova" and file == "instructions.md":
+            (paths.AGENTS_DIR / "nova" / "instructions.md").write_text("Typed by hand.")
+        return real(target, file, text, who)
+
+    monkeypatch.setattr(agentfs, "_save_version", editor_wins)
+    agentfs.migrate(cfg_factory(**load(FIXTURES / "three-agents.json")["settings"]))
+    assert (paths.AGENTS_DIR / "nova" / "instructions.md").read_text() == "Typed by hand."
+    assert not [p for p in paths.DATA_DIR.rglob("*.tmp")]
+
+
+def test_a_refused_save_leaves_no_folder_behind_so_undo_still_works():
+    agentfs.create("nova")
+    stamp = agentfs.file_stamp("nova", "instructions.md")
+    name = agentfs.trash("nova", "{}")
+    with pytest.raises(agentfs.Conflict):
+        agentfs.write("nova", "instructions.md", "late save", base=stamp)
+    assert not (paths.AGENTS_DIR / "nova").exists()
+    assert agentfs.restore(name) == {}
+
+
+def test_write_line_ends_at_the_line_without_stdin_closing(tmp_path):
+    """The page writes one line and never closes stdin: the CLI must finish
+    on the line alone, or every save from the page would hang."""
+    env = {**os.environ, "XDG_DATA_HOME": str(tmp_path / "x")}
+    proc = subprocess.Popen([sys.executable, str(ROOT / "daemon" / "agentfs.py"), "write",
+                             "main", "instructions.md", "--line"],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, env=env)
+    try:
+        proc.stdin.write(json.dumps("Hello.").encode() + b"\n")
+        proc.stdin.flush()
+        assert proc.wait(timeout=20) == 0
+    finally:
+        proc.kill()
+        proc.stdin.close()
+
+
+def test_refresh_reads_the_settings_before_anything_else(daemon, monkeypatch):
+    order = []
+    monkeypatch.setattr(daemon.cfg, "reload", lambda: order.append("reload") or False,
+                        raising=False)
+    for name in ("reconcile_agent_files", "reconcile_agent", "reconcile_crew",
+                 "reconcile_extras", "reconcile_parts", "reconcile_voice", "reconcile_output"):
+        monkeypatch.setattr(daemon, name, lambda n=name: order.append(n))
+    monkeypatch.setattr(daemon, "pipe", type("P", (), {"reconcile_vocab": lambda s: None})())
+    daemon.refresh()
+    assert order[0] == "reload" and order.count("reload") == 1
+
+
+def test_the_loop_builds_every_prompt_before_the_first_frame():
+    src = (ROOT / "daemon" / "wake_listen.py").read_text()
+    run = src[src.index("    def run(self, device"):]
+    assert run.index("self.refresh()") < run.index("last_poll = last_lock_poll")
+
+
+def test_a_stopped_turn_is_caught_up_before_the_new_one(daemon, monkeypatch):
+    """Every refresh passes a busy agent by; dispatch stops it and then
+    brings its instructions and prompt up to date before the new turn."""
+    import threading
+    from crew import Persona
+    daemon.agent = None
+    daemon.pipe = type("P", (), {"conversation": False, "phrase": "theo",
+                                 "names": ["fri"], "unheard": {}})()
+    daemon.cfg._values["voiceAgents"] = [{"id": "fri", "name": "fri"}]
+    p = daemon.crew["fri"] = Persona("fri", {"id": "fri", "name": "fri", "label": "Fri",
+                                             "instructions": "old"})
+
+    class Slow:
+        instructions = "old"
+        def __init__(self): self.gate = threading.Event()
+        def cancel(self): self.gate.set()
+        def preamble(self): return self.instructions
+        def send(self, text, session_id=None):
+            self.gate.wait(5)
+            return iter(())
+    p.agent = Slow()
+    gate = threading.Event()
+    p.thread = threading.Thread(target=gate.wait, args=(5,))
+    p.thread.start()
+    monkeypatch.setattr(p, "stop", lambda: gate.set())
+    agentfs.write("fri", "instructions.md", "new")
+    started = []
+    monkeypatch.setattr(threading, "Thread", lambda *a, **k: type(
+        "T", (), {"start": lambda s: started.append(1), "is_alive": lambda s: False})())
+    daemon.dispatch(p, "hello", {})
+    assert p.agent.instructions == "new" and p.spec["instructions"] == "new"
+    assert started == [1]

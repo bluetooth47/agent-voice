@@ -2149,12 +2149,20 @@ class Daemon:
             return                  # nothing read yet: the old preamble
         import agentfs
         main = self._main
+        # Who can be woken now: the settings switch it on and the wake
+        # engine hears its name. Not the crew as it stands, which still
+        # holds an agent deleted or switched off mid-turn until its turn
+        # ends (Phase 11 review).
+        agents = getattr(self.cfg, "agents", None)
+        wanted = {s["id"]: s["name"] for s in agents()} if callable(agents) else {}
+        heard = set(getattr(self.pipe, "names", ()) or ())
         live = []
         if main.agent is not None:
             live.append({"id": "main", "label": main.label or main.name,
                          "phrase": main.name})
         for p in self.crew.values():
-            if p.agent is not None and p.id:
+            if (p.agent is not None and p.id and p.id in wanted
+                    and (not heard or wanted[p.id] in heard)):
                 live.append({"id": p.id, "label": p.label, "phrase": p.name})
         for p in [main, *self.crew.values()]:
             agent = p.agent
@@ -2529,18 +2537,13 @@ class Daemon:
         # below the gate in the run loop, so a lock check here would stop
         # being called the moment it closed the gate -- see the dedicated
         # poll in run(), which is above it.
-        # Outside the guard: the agent folders are files, and a hand edit
-        # changes no setting (merged plan, Phase 9). First, because the
-        # instructions the two calls after it hand their agents come from
-        # what this read (Phase 10).
-        self.reconcile_agent_files()
-        self.reconcile_agent()
-        self.reconcile_crew()
-        self.reconcile_extras()
-        # After the crew, so the roster in each agent's prompt is the crew
-        # just reconciled, and after the extras, so the size it logs is the
-        # whole preamble, Omarchy commands included (Phase 11).
-        self.reconcile_parts()
+        # The settings first, so everything below works from what they say
+        # now: a typed turn straight after a change (handle_typed refreshes
+        # before it runs) is otherwise told the old values (Phase 10 review).
+        # What depends on the wake engine is caught up at the end, after
+        # pipe.apply, when it changed.
+        changed = self.cfg.reload()
+        self.catch_up()
         # Outside the guard for the same reason: a voice arrives on disk when
         # the installer fetches it, and a file appearing changes no setting.
         # Behind the guard, a substitution outlived its own download until
@@ -2558,7 +2561,7 @@ class Daemon:
         # left from earlier in the session when the daemon starts.
         if not self.cfg.get_bool("keepHistory"):
             self.history.clear()
-        if not self.cfg.reload():
+        if not changed:
             return
         self.pipe.apply(self.cfg)
         self.reconcile_voice()
@@ -2566,6 +2569,41 @@ class Daemon:
         self.reconcile_crew()
         self.reconcile_parts()
         print(f"  {CYA}knobs updated{OFF}")
+
+    def catch_up(self) -> None:
+        """The part of refresh() that decides what each agent is and is told,
+        outside the reload guard."""
+        # Outside the guard: the agent folders are files, and a hand edit
+        # changes no setting (merged plan, Phase 9). Before the agents,
+        # because the instructions the calls after it hand them come from
+        # what this read (Phase 10).
+        self.reconcile_agent_files()
+        self.reconcile_agent()
+        self.reconcile_crew()
+        self.reconcile_extras()
+        # After the crew, so the roster in each agent's prompt is the crew
+        # just reconciled, and after the extras, so the size it logs is the
+        # whole preamble, Omarchy commands included (Phase 11).
+        self.reconcile_parts()
+
+    def catch_up_one(self, p: Persona) -> None:
+        """What `p` is told, brought up to date: for an agent whose turn
+        dispatch() just stopped, which every refresh until then passed by
+        because it was busy (Phase 11 review). Its instructions and prompt
+        parts only; a changed setting (model, level) still waits for the
+        next idle poll, as it always has."""
+        self.reconcile_agent_files()
+        agent = p.agent
+        if agent is not None:
+            if p is self._main:
+                want = self.instructions_for("", self.cfg["agentInstructions"])
+            else:
+                spec = p.spec or {}
+                want = self.instructions_for(p.id, spec.get("instructions", ""))
+                p.spec = {**spec, "instructions": want}
+            if getattr(agent, "instructions", "") != want:
+                agent.instructions = want
+        self.reconcile_parts()
 
     def reconcile_agent_files(self) -> None:
         """Notice a change to the agent and communal folders (Phase 9).
@@ -4329,6 +4367,12 @@ class Daemon:
                 print(f"  {YEL}{p.label or 'the agent'} did not stop; not "
                       f"sending{OFF}", flush=True)
                 return False
+            # It was busy, so every refresh until now passed it by: caught up
+            # here, or the new turn runs on the prompt the stopped one had
+            # (Phase 11 review). Only on the run loop's thread, where a
+            # refresh belongs.
+            if threading.current_thread() is threading.main_thread():
+                self.catch_up_one(p)
         p.interrupt.clear()
         p.follow_up = False
         turn = dict(last)
@@ -4512,6 +4556,12 @@ class Daemon:
             active_lead_in = self.pipe.lead_in_ms
 
             level_shown = gate_shown = 0.0
+            # One idle poll before the first frame, so every agent -- the
+            # extra agents are built here -- has its prompt before the first
+            # word can be heard: the first poll would otherwise be 2s away,
+            # and a wake inside that started Claude on the old preamble
+            # (Phase 11 review).
+            self.refresh()
             last_poll = last_lock_poll = time.time()
             # Push-to-talk: the key decides both ends of the turn, so the
             # wake word is bypassed and silence no longer endpoints.

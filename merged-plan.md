@@ -726,8 +726,10 @@ preamble for an empty folder.
 FINDINGS §35. The gate holds on Sora with the real folders and with every
 budget full; the roster changed all five answers and stays. Instructions
 and the Omarchy commands stay on their own adapter attributes; `parts`
-holds rules, defaults, personality, name and roster. Hazel's S run and the
-Codex review are still owed (Codex usage limit).
+holds rules, defaults, personality, name and roster. Codex then reviewed
+Phases 10 and 11 together; 14 findings were fixed on this branch (two
+deferred, with reasons, in `phase11notes.md`), and Hazel's S run showed no
+cost. Roster lines are escaped JSON objects since that review.
 
 ---
 

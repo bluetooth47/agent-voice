@@ -9,10 +9,11 @@ live check below ran on the installed build. Tested on: i7-1185G7, `claude`
 (`install.sh` did not change). Preview: `voices` 21/21 and the new `folders`
 target 11/11, both against a scratch data folder.
 
-**Codex did not review this phase.** Its usage limit was reached partway
-through the first review (it resets at 19:13 today), so the review below is
-my own, plus mutation testing. A Codex review is owed and its findings go in
-a follow-up commit on this branch.
+**Codex did not review this phase before it was committed.** Its usage
+limit was reached partway through the first review, so the review below is
+my own, plus mutation testing. Codex reviewed Phases 10 and 11 together
+afterwards; its findings and the fixes are in `phase11notes.md` (they are
+on branch `phase-11`).
 
 ## What was built
 

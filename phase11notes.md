@@ -8,10 +8,12 @@ and the live checks ran on the installed build. Tested on: i7-1185G7,
 `./bin/agentvoice-check`: green, 2180 tests (was 1984). Box: not run
 (`install.sh` did not change).
 
-**Codex did not review this phase either**: its usage limit (shared with
-Hazel, who runs on Codex) was in force for the whole phase and resets at
-19:13. A Codex review of Phases 10 and 11 is owed, and so is Hazel's
-latency run (below).
+**Codex reviewed Phases 10 and 11 together** once its usage limit lifted
+(19:13; the limit is shared with Hazel, who runs on Codex): 4 high, 10
+medium and 2 low findings. Each was checked against the code; 14 were fixed
+in a second commit on this branch and two are deferred, both under "Found
+along the way". The fixes are tested, and each new guard was mutated and
+went red.
 
 ## What was built
 
@@ -73,11 +75,13 @@ FINDINGS §35 has the table. Send to first text, 20 interleaved runs each:
   noise. Cold p95 4.46s → 6.46s on one slow run; Opus p95 trips on an
   unchanged build in a third of 20-run pairs (§33), which is why the gate
   is judged on Sora.
-- **Hazel (Codex)**: not measured; see "Not verified".
+- **Hazel (Codex)**, after the limit lifted, 10 interleaved runs each:
+  fresh 3.64 → 3.23s, resume 3.32 → 3.15s median: noise, no cost.
 - **J** (the journal, real voice turns on this build): none yet; not
   reported.
-- Preambles: main 1057, sora 1158, jarvis-ajc 7036 characters (+201, +201,
-  +199: the roster), the same in `preamble_size.py` and the daemon's log.
+- Preambles: main 1057, sora 1158, jarvis-ajc 7036 characters as measured
+  (+201, +201, +199: the roster); after the review's JSON roster lines,
+  1109, 1210 and 7088, the same in `preamble_size.py` and the daemon's log.
 
 ## Different from the plan, and why
 
@@ -110,12 +114,70 @@ FINDINGS §35 has the table. Send to first text, 20 interleaved runs each:
   the first read, the bench assigns the folders, the log holds no text).
   The line cap survived the first round and got its own test.
 
+### Codex's review of Phases 10 and 11, and what was done
+
+Fixed (each with a test; each new guard mutated and caught):
+
+- **A reload under an edit could overwrite a hand edit** (high). The box
+  moved its stamp on when a background read finished, under text read at
+  the old one, so the save on blur replaced a newer file with no conflict.
+  Reloads now wait until the edit ends, and a box that never read its file
+  will not save over it.
+- **A failed agent-list save left folders and list disagreeing** (high):
+  after Remove, the folder was in the trash with the agent still listed;
+  after Undo, the trash entry was gone and the agent missing. The page now
+  moves the folder back when `omarchy bar set` fails.
+- **A second folder operation could take the first one's result** (high),
+  in the 200ms between a process ending and its result being read. One at
+  a time until handled.
+- **Migration could overwrite a file an editor created meanwhile** (high):
+  a write meant only for a missing file now publishes by hard link, which
+  fails rather than replaces.
+- A refused save recreated a trashed agent's folder and blocked its Undo:
+  the base is now checked before any folder is made.
+- Removing one of two entries sharing an id moved the first entry's folder:
+  the second is now removed from the list alone.
+- A card reused for another agent could show the previous agent's text or
+  save under its stamp: results are now checked against the card's target.
+- **Stale prompts**: a wake in the first 2s after start used the old
+  preamble (now one poll runs before the first frame); a typed turn that
+  stopped a busy agent ran on its old prompt (now caught up first); and the
+  settings were re-read after the agents were reconciled (now first).
+- A folder swapped for a symlink vanished, falling its agent back to the old
+  setting and dropping the communal rules: it is now listed, refused file by
+  file, and keeps its last good text.
+- **Roster lines could pass for the prompt's own words**: each is now an
+  escaped JSON object on one line.
+- The roster kept an agent deleted mid-turn: it now lists only agents the
+  settings want and the wake engine hears.
+- **A switched off entry with a speed of Infinity stopped the daemon on
+  start** (Phase 10 began cleaning switched off entries): non-finite
+  numbers now read as unset, in the endpoint fields too.
+- The bench and `agents preview` now build the roster from who the running
+  daemon says it can reach.
+- The preview now stubs every command that would start, stop or type to the
+  real service.
+
+Deferred, with the reason:
+
+- **The agent list goes through argv** (medium): `omarchy bar set` takes the
+  whole `voiceAgents` value as an argument, so an entry's old `instructions`
+  is briefly in `/proc/<pid>/cmdline` on every list save. This predates
+  these phases (every save since instructions were per agent did it). The
+  plan keeps `instructions` in saved entries for one release so an older
+  build still finds them; stripping them then ends this. Omarchy's command
+  cannot take the value on stdin.
+- **Instructions that are only an HTML comment** (low) migrate, then read as
+  empty, because the reader strips a leading comment (the starter text).
+  Already written down in Phase 10's notes; not seen on any machine.
+
 ## Not verified (what was skipped, and why)
 
-- **Hazel's latency (S for jarvis-ajc)**: every Codex turn returned the
-  usage limit until 19:13. Her preamble grew 3%.
+- **Hazel's latency** was run with 10 runs per variant, not 20, to spare
+  the Codex quota the review had just used.
+- **The JSON roster's latency** was not re-measured: it is within the
+  `full` variant's eight 380-character lines, which passed.
 - **J**: no voice turns on this build yet.
-- **Codex review**: not run (usage limit).
 - A11-5 used synthetic role lines (this machine's role files are empty);
   the answers are recorded in FINDINGS §35 in summary.
 
@@ -127,7 +189,8 @@ preamble.
 
 ## Open issues, for the next phase
 
-- Codex review of Phases 10 and 11; Hazel's S run.
+- Strip `voiceAgents[i].instructions` from saved entries in the release
+  after this (the plan's schedule), which also ends the argv exposure below.
 - Phase 12 shows `agents preview` on the Agent details page, and should say
   on an endpoint agent's card that its prompt (roster included) goes to
   that host.
