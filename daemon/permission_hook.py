@@ -382,6 +382,13 @@ def _notes_question(crew: str, tool_input) -> tuple[dict, str, str]:
     note = (f"this {verb} the note “{name or '?'}” in {where or 'an unknown place'} "
             f"({size})")
     locked = ""
+    base = raw.get("base", 0)
+    if not name or not where or (crew == "notes_write" and "base" in raw and (
+            isinstance(base, bool) or not isinstance(base, int) or base < 0)):
+        # The server refuses these before writing anything; nobody is asked.
+        return clean, note, ("That note name, scope or base is not valid: a name is 1 to 48 "
+                             "characters of a-z, 0-9 and -; scope is mine or communal; base "
+                             "is the rev notes_read gave, or left out.")
     if name and where:
         try:
             import notes

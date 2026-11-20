@@ -81,6 +81,13 @@ Column {
   // rev that save returns, rather than dropped.
   property string queued: ""
   property bool hasQueued: false
+  property int queuedSession: -1
+  // The folder the open note belongs to: a save goes there or nowhere, so a
+  // target change (an agent removed) can never send it to another folder.
+  property string editTarget: ""
+  // The name a refused save was for: what Keep mine and Reload act on, not
+  // whatever the name field says by the time they are clicked.
+  property string conflictName: ""
 
   width: parent ? parent.width : 400
   spacing: Style.space(10)
@@ -117,6 +124,7 @@ Column {
                                              : "Save or reload this note first; what you typed is not saved."; return }
     clearEditor()
     creating = false
+    editTarget = target
     openName = name
     read()
   }
@@ -126,12 +134,17 @@ Column {
                                              : "Save or reload this note first; what you typed is not saved."; return }
     clearEditor()
     openName = ""
+    editTarget = target
+    creating = false                    // the Loader makes a fresh, empty field
     creating = true
     noteLoaded = true
     Qt.callLater(function() { if (np.nameInput) np.nameInput.forceActiveFocus() })
   }
   function close() {
     if (box.dirty) { box.commit(); return }
+    // A save started by the click's own blur: wait for its answer, so a
+    // refusal keeps the text on screen rather than closing over it.
+    if (writer.running) { noteNote = "Still saving; close again in a moment."; return }
     clearEditor()
     openName = ""; creating = false
   }
@@ -145,6 +158,7 @@ Column {
     reader.running = true
   }
   function save(t) {
+    if (editTarget !== target) return    // the folder changed under the editor
     var name = creating ? newName : openName
     // Refusals before anything is sent leave the box's baseline alone, so
     // the same text is saved by the next Ctrl+S or Save once fixed.
@@ -156,10 +170,11 @@ Column {
     if (!creating && !noteLoaded) { noteNote = "Still reading the note; save again in a moment."; return }
     if (Array.from(t).length > 20000) {
       noteNote = "Not saved: " + Array.from(t).length + " characters, and a note holds at most 20000."
+      held = t; holding = true            // kept, and nothing reloads over it
       return
     }
     if (writer.running) {
-      queued = t; hasQueued = true
+      queued = t; hasQueued = true; queuedSession = session
       held = t; holding = true
       return
     }
@@ -179,13 +194,14 @@ Column {
   }
   function keepMine() {
     if (conflictRev < 0) return
-    if (creating) { openName = newName; creating = false }
+    openName = conflictName
+    creating = false
     noteRev = conflictRev
     noteLoaded = true
     save(box.text)
   }
   function reloadTheirs() {
-    var name = creating ? newName : openName
+    var name = conflictRev >= 0 ? conflictName : (creating ? newName : openName)
     clearEditor()
     creating = false
     openName = name
@@ -230,7 +246,14 @@ Column {
     opener.running = true
   }
 
-  onTargetChanged: { listing = null; listError = ""; close(); list() }
+  // No save on the way: a commit here would go to the new folder. What was
+  // typed for the old one is refused by save() (editTarget) and dropped.
+  onTargetChanged: {
+    listing = null; listError = ""
+    clearEditor()
+    openName = ""; creating = false; editTarget = ""
+    list()
+  }
   onActiveChanged: if (active) list()
   Component.onCompleted: list()
 
@@ -326,13 +349,9 @@ Column {
         if (writer.creating) { np.openName = writer.forName; np.creating = false }
         np.conflictRev = -1; np.noteNote = ""
         np.list()
-        if (np.hasQueued) {
-          // Typed and committed while this save ran: saved now, on its rev.
-          var next = np.queued
-          np.hasQueued = false; np.queued = ""
-          Qt.callLater(function() { np.save(next) })
-          return
-        }
+        // An edit queued behind this one is saved when the writer is idle
+        // (writeCheck), on the rev just returned.
+        if (np.hasQueued) return
         np.holding = false; np.held = ""
         np.justSaved = true
       }
@@ -348,6 +367,7 @@ Column {
         var m = t.match(/current rev (\d+)/)
         if (t.indexOf("conflict:") === 0 && m) {
           np.conflictRev = parseInt(m[1])
+          np.conflictName = writer.forName
           np.noteNote = writer.creating
                         ? "A note called " + writer.forName + " already exists, so yours was not saved."
                         : "Changed since you opened it (by an agent, or by hand), so yours was not saved."
@@ -360,9 +380,18 @@ Column {
   Timer {
     id: writeCheck
     interval: 300
-    onTriggered: if (!writer.answered && !writer.running) {
-      writer.answered = true
-      np.noteNote = "Not saved: the agentvoice command could not be run."
+    onTriggered: {
+      if (!writer.answered && !writer.running) {
+        writer.answered = true
+        np.noteNote = "Not saved: the agentvoice command could not be run."
+      }
+      // Both streams are done by now: drain the queue, for this note only.
+      if (np.hasQueued && !writer.running) {
+        var next = np.queued
+        var mine = np.queuedSession === np.session && np.conflictRev < 0
+        np.hasQueued = false; np.queued = ""
+        if (mine) np.save(next)
+      }
     }
   }
 
@@ -655,6 +684,9 @@ Column {
     InstructionsBox {
       id: box
       width: parent.width
+      // Not typed in before the note has been read: an edit begun on the
+      // empty box would hold off the read, and the save would have no rev.
+      enabled: np.creating || np.noteLoaded
       value: np.holding ? np.held : np.noteText
       maxLength: 20000
       cutOff: false
@@ -700,7 +732,9 @@ Column {
         enabled: !writer.running
         foreground: np.foreground
         fontFamily: np.fontFamily
-        onClicked: np.save(box.text.trim())
+        // The click's blur has already started this save when there was
+        // anything to save; a second one would be the same text again.
+        onClicked: if (!writer.running) np.save(box.text.trim())
       }
       Button {
         visible: np.conflictRev >= 0

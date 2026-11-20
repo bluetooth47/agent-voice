@@ -70,7 +70,9 @@ YOU = "you"
 _VERSION = re.compile(r"(\d{19})-([a-z0-9][a-z0-9-]{0,47})(\.t)?\.md")
 #: Tombstones (hand-deleted notes, unlocked) kept so a rev never restarts;
 #: past this many the oldest go, so the record stays well under its cap.
-TOMBSTONES_KEEP = 200
+#: A thousand tombstones is about 120 KB of record, under its 256 KB read cap;
+#: a rev can be reused only for a note deleted a thousand deletions ago.
+TOMBSTONES_KEEP = 1000
 _HASH = re.compile(r"[0-9a-f]{16}")
 _META_VERSION = 1
 
@@ -447,7 +449,8 @@ def _write(target: str, name: str, produce, *, author: str, allowed, base, kind:
         raise _refuse("a note's name is 1 to 48 characters of a-z, 0-9 and -, starting "
                       "with a letter or digit", "bad-name", author=author, target=target, name="")
     with agentfs._locked():
-        d, meta, got = _current(target, create=True, make_folder=allowed is None)
+        d, meta, got = _current(target, create=True,
+                                make_folder=allowed is None or target == agentfs.MAIN)
         if meta is None:
             raise _refuse("the notes record here cannot be read, so every note is locked "
                           "until the person fixes it", "unreadable-record",
@@ -498,10 +501,14 @@ def _write(target: str, name: str, produce, *, author: str, allowed, base, kind:
         # note since the folder was read is not overwritten unseen. (A save
         # in the instant between this and the rename still can be; the
         # history keeps what this replaced.)
-        if exists and _read_note_bytes(path) != old:
-            raise Stale(rev)
         kept = (_keep_version(d, name, old, e["author"] if e else YOU, bool(e and e["tainted"]))
                 if exists else None)
+        if exists and _read_note_bytes(path) != old:
+            # Saved by hand since the scan (or while history was written):
+            # not overwritten; the next read records it as the person's.
+            with contextlib.suppress(OSError):
+                kept.unlink()
+            raise Stale(rev)
         try:
             # A new note is published only if nothing appeared there since
             # the folder was read: a hand-made file, or a FIFO the scan
@@ -525,16 +532,20 @@ def _write(target: str, name: str, produce, *, author: str, allowed, base, kind:
         except BaseException:
             # The text landed and its record did not: put the text back, so a
             # failed write leaves nothing behind and a retry adds nothing twice.
+            rolled_back = False
             with contextlib.suppress(OSError, AgentFsError):
                 if exists:
                     agentfs._atomic_write(path, old)
                 else:
                     path.unlink()
+                rolled_back = True
             if previous is None:
                 meta.pop(name, None)
             else:
                 meta[name] = previous
-            if kept is not None:
+            # The saved copy of the old text goes only if the old text is
+            # back in place; otherwise it is the one copy left of it.
+            if kept is not None and rolled_back:
                 with contextlib.suppress(OSError):
                     kept.unlink()
             raise

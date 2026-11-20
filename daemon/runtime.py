@@ -367,17 +367,31 @@ class Config:
         # it: settings_readable() tells "read, all defaults" from "unread".
         self._entry_found = False
         self._ambiguous = False
+        self._twice = set()
         try:
             data = json.loads(SHELL_JSON.read_text(), object_pairs_hook=self._pairs)
         except Exception:
             return {}
-        layout = (data.get("bar") or {}).get("layout") or {}
+        bar = data.get("bar") or {}
+        layout = bar.get("layout") or {}
         for entries in layout.values():
             for entry in entries or []:
                 if entry.get("id") == PLUGIN_ID:
                     self._entry_found = True
+                    # A key given twice in this entry, anywhere inside it
+                    # (voiceAgents[i].notesWrite), or in an object above it,
+                    # makes it say two things: a guard reading it closes.
+                    self._ambiguous = (any(id(o) in self._twice for o in (data, bar, layout))
+                                       or self._has_twice(entry))
                     return {k: v for k, v in entry.items() if k != "id"}
         return {}
+
+    def _has_twice(self, node) -> bool:
+        if isinstance(node, dict):
+            return id(node) in self._twice or any(self._has_twice(v) for v in node.values())
+        if isinstance(node, list):
+            return any(self._has_twice(v) for v in node)
+        return False
 
     def _pairs(self, pairs):
         """json's object hook: a key given twice is remembered, so a guard
@@ -387,10 +401,11 @@ class Config:
         for k, v in pairs:
             twice |= k in out
             out[k] = v
-        # Only this widget's own entry counts: another widget's slip is not
-        # a reason to doubt these settings.
-        if twice and out.get("id") == PLUGIN_ID:
-            self._ambiguous = True
+        # Remembered by object; only this widget's entry, what is inside it
+        # and what is above it count (_from_shell_json): another widget's
+        # slip is not a reason to doubt these settings.
+        if twice:
+            self._twice.add(id(out))
         return out
 
     def _from_toml(self) -> dict:

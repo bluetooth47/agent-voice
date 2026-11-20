@@ -1156,3 +1156,68 @@ def test_an_outside_save_after_the_scan_is_not_overwritten(monkeypatch, data):
     with pytest.raises(notes.Stale):
         notes.write("communal", "n", "agent text", base=1, author="sora", allowed=lambda: True)
     assert (data / "communal/notes/n.md").read_text() == "saved by an editor meanwhile"
+
+
+# --- fixes from Codex's second pass (3b2a33a..0718582) --------------------------------
+
+def test_a_key_twice_inside_an_agents_entry_denies(monkeypatch):
+    as_agent(monkeypatch, "claude", "sora")
+    runtime.SHELL_JSON.write_text(
+        '{"bar": {"layout": {"right": [{"id": "%s", "voiceAgents": [{"name": "sora", '
+        '"id": "sora", "agent": "claude", "notesWrite": "deny", "notesWrite": "allow"}]}]}}}'
+        % runtime.PLUGIN_ID)
+    with pytest.raises(ToolError, match="aren't allowed"):
+        crew_mcp.call("notes_append", {"scope": "communal", "name": "n", "text": "x"})
+    runtime.SHELL_JSON.write_text(
+        '{"bar": {"layout": {"right": [{"id": "%s"}]}, "layout": {}}}' % runtime.PLUGIN_ID)
+    as_agent(monkeypatch)
+    with pytest.raises(ToolError, match="aren't allowed"):       # twice above the entry
+        crew_mcp.call("notes_append", {"scope": "mine", "name": "n", "text": "x"})
+
+
+@pytest.mark.parametrize("bad", [{"scope": "communal", "name": "../x", "text": "y"},
+                                 {"scope": "nowhere", "name": "x", "text": "y"},
+                                 {"scope": "mine", "name": "x", "text": "y", "base": None},
+                                 {"scope": "mine", "name": "x", "text": "y", "base": -1}])
+@pytest.mark.parametrize("level", ["ask", "edits", "trusted"])
+def test_the_hook_refuses_a_malformed_write_without_asking(monkeypatch, asked, bad, level):
+    _at(monkeypatch, level)
+    monkeypatch.setattr(sys, "argv", ["permission_hook.py", "claude"])
+    assert hook.decide(P + "notes_write", bad)[0] == "deny"
+    assert asked == []
+
+
+def test_the_main_agent_can_keep_notes_before_its_folder_exists(data):
+    assert not (data / "agents/main").exists()
+    notes.append("main", "n", "x", author="main", allowed=lambda: True)
+    assert notes.read_note("main", "n")["text"] == "x"
+
+
+def test_a_failed_rollback_keeps_the_saved_copy(monkeypatch, data):
+    notes.write("communal", "n", "old text")
+    real = agentfs._atomic_write
+    calls = {"n": 0}
+
+    def publish_then_fail(path, data_, exclusive=False):
+        if path.name == "n.md":
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise OSError("rollback failed")
+        return real(path, data_, exclusive)
+
+    def broken(*a, **k):
+        raise OSError("record failed")
+    with monkeypatch.context() as m:
+        m.setattr(agentfs, "_atomic_write", publish_then_fail)
+        m.setattr(notes, "_save_meta", broken)
+        with pytest.raises(OSError):
+            notes.write("communal", "n", "new text", base=1)
+    texts = [notes.version_text("communal", "n", v["version"])
+             for v in notes.history("communal", "n")]
+    assert "old text" in texts
+
+
+def test_a_fifo_at_the_audit_lock_never_stalls_a_save(data):
+    paths.private_dir(data)
+    os.mkfifo(data / ".audit.lock")
+    assert audit.record("note_write", frm="sora", to="communal", note="n") is False

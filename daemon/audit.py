@@ -106,8 +106,10 @@ def record(kind: str, *, frm: str, to: str, note: str = "", task: str = "",
         # both saw the log full would otherwise both rotate, and the second
         # would replace the archive with the first one's fresh log.
         lock = os.open(paths.DATA_DIR / ".audit.lock", os.O_WRONLY | os.O_CREAT
-                       | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+                       | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, 0o600)
         try:
+            if not stat.S_ISREG(os.fstat(lock).st_mode):
+                return False                # a FIFO there must not stall a save
             fcntl.flock(lock, fcntl.LOCK_EX)
             _rotate(path)
             # O_NONBLOCK: a FIFO left at this path must not hang a note
