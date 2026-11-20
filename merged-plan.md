@@ -923,6 +923,17 @@ each tool; deny and a locked note both refusing at every level, Trusted
 included; a corrupt `.meta.json` reading as locked; the knob read fresh on
 every call; plus mutations of each guard.
 
+**Built (2026-11-20)**, record `phase14notes.md`, FINDINGS §37: the store
+(`notes.py`), `crew_mcp.py` on every Claude and Codex agent, `audit.py`,
+`notesWrite`/`mainNotesWrite` on each card, the Notes tabs on both pages,
+`agentvoice agents notes`. The hook now blocks a tool when it cannot answer
+(`onFailure: block`, checked against claude 2.1.329). The gate holds on Sora
+with the new server (+0.05s cold, +0.01s warm, pooled 50). Live: a Trusted
+agent's write (tainted), a read wrapped as information, a lock and a deny
+refusing a Trusted agent, an Ask agent asked and denied on silence. **Still
+open:** a Codex turn through the server and Codex's review of the fix
+commit (quota), answering a card, the keyboard walk.
+
 ---
 
 ## Phase 15: Collaboration runtime, passing a conversation, shared chats
