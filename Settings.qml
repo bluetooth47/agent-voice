@@ -808,7 +808,7 @@ Item {
     } else {
       // A deep link: {"page": "agents", "agent": "sarah"} opens that card.
       if (mode === "settings") goTo(String(p.page || "overview"), String(p.agent || ""),
-                                    /^(prompt|tools|chats|advanced|rules|skills)$/.test(String(p.tab || "")) ? String(p.tab) : "")
+                                    /^(prompt|tools|notes|chats|advanced|rules|skills)$/.test(String(p.tab || "")) ? String(p.tab) : "")
       showPage(mode)
     }
   }

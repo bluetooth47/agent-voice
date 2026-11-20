@@ -65,8 +65,12 @@ HAZEL = {"name": "hazel", "id": "jarvis-ajc", "label": "Hazel", "agent": "codex"
 
 
 def as_agent(monkeypatch, program="claude", agent=""):
+    """Run the server's calls as this agent, whose folder exists, as the
+    daemon's migration makes it (an agent's write never makes it)."""
     argv = ["crew_mcp.py", program] + ([agent] if agent else [])
     monkeypatch.setattr(sys, "argv", argv)
+    if agent not in ("communal", "you"):
+        paths.private_dir(paths.AGENTS_DIR / (agent or "main"))
 
 
 def audit_lines():
@@ -99,7 +103,7 @@ def test_a_stale_base_is_refused_and_the_current_rev_returned():
 def test_replacing_a_note_needs_a_base_at_all():
     notes.write("communal", "plan", "a")
     with pytest.raises(notes.NotesError, match="read it first"):
-        notes.write("communal", "plan", "b")
+        notes.write("communal", "plan", "b", author="sora", allowed=lambda: True)
     with pytest.raises(notes.Stale):
         notes.write("communal", "fresh", "x", base=4)
 
@@ -924,3 +928,231 @@ def test_a_new_note_never_replaces_something_the_scan_skipped(data):
     with pytest.raises(agentfs.AgentFsError):
         notes.write("communal", "x", "y", author="sora", allowed=lambda: True)
     assert (d / "x.md").is_fifo()
+
+
+# --- fixes from Codex's review of 3b2a33a ----------------------------------------------
+
+def test_a_deny_set_while_the_question_waits_still_refuses(monkeypatch):
+    """The store reads the knob again inside its lock: a deny that lands
+    while the person is being asked beats the yes."""
+    settings(voiceAgents=[HAZEL])
+    as_agent(monkeypatch, "codex", "jarvis-ajc")
+    monkeypatch.setattr(hook, "_settings", lambda: ("ask", None))
+    monkeypatch.setattr(hook, "granted", lambda s: False)
+    monkeypatch.setattr(crew_mcp, "GUARD", True)
+
+    def deny_then_allow(*a, **k):
+        settings(voiceAgents=[{**HAZEL, "notesWrite": "deny"}])
+        return ("allow", "")
+    monkeypatch.setattr(hook, "_ask", deny_then_allow)
+    with pytest.raises(ToolError, match="aren't allowed"):
+        crew_mcp.call("notes_append", {"scope": "communal", "name": "n", "text": "x"})
+    assert not (paths.COMMUNAL_DIR / "notes/n.md").exists()
+
+
+def test_a_lock_set_while_the_question_waits_still_refuses(monkeypatch):
+    settings(voiceAgents=[HAZEL])
+    notes.write("communal", "n", "text")
+    as_agent(monkeypatch, "codex", "jarvis-ajc")
+    monkeypatch.setattr(hook, "_settings", lambda: ("ask", None))
+    monkeypatch.setattr(hook, "granted", lambda s: False)
+    monkeypatch.setattr(crew_mcp, "GUARD", True)
+
+    def lock_then_allow(*a, **k):
+        notes.set_locked("communal", "n", True)
+        return ("allow", "")
+    monkeypatch.setattr(hook, "_ask", lock_then_allow)
+    with pytest.raises(ToolError, match="locked"):
+        crew_mcp.call("notes_append", {"scope": "communal", "name": "n", "text": "x"})
+    assert notes.read_note("communal", "n")["text"] == "text"
+
+
+@pytest.mark.parametrize("payload", [
+    {"tool_name": P + "notes_write", "tool_input": {"scope": "communal", "name": "n",
+                                                     "text": "x"}},
+    {"tool_name": P + "notes_append", "tool_input": "not an object"},
+    {"tool_name": P + "notes_append"},
+    "{ not json",
+])
+def test_the_real_hook_denies_a_write_nobody_answers(tmp_path, payload):
+    """main(), as Claude Code runs it: a valid write at Ask with nobody at
+    the screen, a malformed input, and a payload that is not JSON."""
+    env = {**os.environ, "AGENTVOICE_PERMISSION_TIMEOUT": "0.3",
+           "XDG_DATA_HOME": str(tmp_path / "xdg"), "XDG_CONFIG_HOME": str(tmp_path / "cfg"),
+           "XDG_RUNTIME_DIR": str(tmp_path / "run")}
+    p = subprocess.run([sys.executable, str(ROOT / "daemon/permission_hook.py"), "claude"],
+                       input=payload if isinstance(payload, str) else json.dumps(payload),
+                       capture_output=True, text=True, env=env, timeout=30)
+    out = json.loads(p.stdout)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_settings_that_say_two_things_deny(monkeypatch):
+    as_agent(monkeypatch)
+    runtime.SHELL_JSON.write_text(
+        '{"bar": {"layout": {"right": [{"id": "%s", "mainNotesWrite": "deny", '
+        '"mainNotesWrite": "allow"}]}}}' % runtime.PLUGIN_ID)
+    with pytest.raises(ToolError, match="aren't allowed"):
+        crew_mcp.call("notes_append", {"scope": "mine", "name": "n", "text": "x"})
+    # Another widget's slip is not a reason to doubt these settings.
+    runtime.SHELL_JSON.write_text(
+        '{"bar": {"layout": {"right": [{"id": "x", "a": 1, "a": 2}, {"id": "%s"}]}}}'
+        % runtime.PLUGIN_ID)
+    crew_mcp.call("notes_append", {"scope": "mine", "name": "n", "text": "x"})
+
+
+def test_a_broken_fallback_toml_denies(monkeypatch, tmp_path):
+    as_agent(monkeypatch)
+    runtime.SHELL_JSON.unlink()
+    toml = tmp_path / "agentvoice.toml"
+    toml.write_text('[agent]\nmain_notes_write = "deny"\n')
+    monkeypatch.setattr(runtime, "config_toml", lambda: toml)
+    with pytest.raises(ToolError, match="aren't allowed"):
+        crew_mcp.call("notes_append", {"scope": "mine", "name": "n", "text": "x"})
+    toml.write_text('[agent\nmain_notes_write = "deny"')
+    with pytest.raises(ToolError, match="aren't allowed"):
+        crew_mcp.call("notes_append", {"scope": "mine", "name": "n", "text": "x"})
+
+
+def test_an_agents_write_never_brings_back_a_trashed_folder(monkeypatch, data):
+    settings(voiceAgents=[SORA])
+    notes.write("sora", "keep", "x")
+    as_agent(monkeypatch, "claude", "sora")
+    agentfs.trash("sora", json.dumps(SORA))
+    with pytest.raises(ToolError, match="no folder"):
+        crew_mcp.call("notes_append", {"scope": "mine", "name": "n", "text": "x"})
+    assert not (data / "agents/sora").exists()
+    name = agentfs.trash_list()[0]["name"]
+    agentfs.restore(name)                              # Undo still has somewhere to go
+    assert notes.read_note("sora", "keep")["text"] == "x"
+
+
+def test_a_failed_save_never_costs_a_version(monkeypatch):
+    notes.write("communal", "h", "v1")
+    for i in range(2, 22):
+        notes.write("communal", "h", f"v{i}", base=i - 1)
+    before = [v["version"] for v in notes.history("communal", "h")]
+    assert len(before) == notes.HISTORY_KEEP
+
+    def broken(*a, **k):
+        raise OSError("disk full")
+    with monkeypatch.context() as m:
+        m.setattr(notes, "_save_meta", broken)
+        with pytest.raises(OSError):
+            notes.write("communal", "h", "v22", base=21)
+    assert [v["version"] for v in notes.history("communal", "h")] == before
+    got = notes.read_note("communal", "h")
+    assert (got["text"], got["rev"]) == ("v21", 21)          # the text was put back
+
+
+def test_an_id_with_a_number_is_not_read_as_a_second_version():
+    notes.write("communal", "h", "v1", author="sora-2", allowed=lambda: True)
+    notes.write("communal", "h", "v2", base=1)
+    assert notes.history("communal", "h")[0]["who"] == "sora-2"
+
+
+def test_tombstones_are_compacted_but_locks_kept(data, monkeypatch):
+    monkeypatch.setattr(notes, "TOMBSTONES_KEEP", 3)
+    d = Path(notes.folder("communal"))
+    notes.write("communal", "locked", "x")
+    notes.set_locked("communal", "locked", True)
+    (d / "locked.md").unlink()
+    for i in range(6):
+        notes.write("communal", f"n{i}", "x")
+        (d / f"n{i}.md").unlink()
+        notes.list_notes("communal")
+    meta = json.loads((d / ".meta.json").read_text())["notes"]
+    assert "locked" in meta and meta["locked"]["locked"]
+    assert len([n for n in meta if n.startswith("n")]) == 3
+
+
+def test_a_file_from_before_1970_does_not_lock_the_folder(data):
+    d = Path(notes.folder("communal"))
+    (d / "old.md").write_text("x")
+    os.utime(d / "old.md", (-100, -100))
+    assert not notes.list_notes("communal")["locked_all"]
+    assert not notes.list_notes("communal")["locked_all"]
+
+
+def test_the_person_making_a_note_whose_name_is_taken_gets_a_conflict():
+    notes.write("communal", "n", "theirs")
+    with pytest.raises(notes.Stale) as e:
+        notes.write("communal", "n", "mine")
+    assert e.value.current == 1
+
+
+def test_an_invalid_name_is_refused_before_any_question(monkeypatch, asked):
+    as_agent(monkeypatch, "codex")
+    monkeypatch.setattr(hook, "_settings", lambda: ("ask", None))
+    monkeypatch.setattr(crew_mcp, "GUARD", True)
+    with pytest.raises(ToolError, match="name"):
+        crew_mcp.call("notes_append", {"scope": "communal", "name": "../x", "text": "y"})
+    with pytest.raises(ToolError, match="base"):
+        crew_mcp.call("notes_write", {"scope": "communal", "name": "x", "text": "y",
+                                      "base": None})
+    assert asked == []
+
+
+def test_the_card_shows_the_words_about_to_be_written(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(hook, "TIMEOUT", 0.2)
+    monkeypatch.setattr(hook, "granted", lambda s: False)
+    monkeypatch.setattr(hook, "_settings", lambda: ("ask", None))
+    monkeypatch.setattr(sys, "argv", ["permission_hook.py", "claude"])
+    real = hook.PENDING
+
+    def grab():
+        import time as _t
+        end = _t.time() + 3
+        while _t.time() < end:
+            for r in real.glob("*.request"):
+                seen.update(json.loads(r.read_text()))
+                return
+            _t.sleep(0.01)
+    import threading
+    t = threading.Thread(target=grab, daemon=True)
+    t.start()
+    hook.decide(P + "notes_append", {"scope": "communal", "name": "n", "text": "Buy milk."})
+    t.join(3)
+    assert seen.get("summary") == "Buy milk."
+    assert "“n” in the communal notes" in seen.get("note", "")
+
+
+def test_the_audit_log_survives_concurrent_rotation(tmp_path):
+    env = {**os.environ, "XDG_DATA_HOME": str(tmp_path / "xdg")}
+    script = textwrap.dedent(f"""
+        import sys; sys.path.insert(0, {str(ROOT / 'daemon')!r})
+        import audit
+        audit.ROTATE_AT = 2000
+        for i in range(200):
+            audit.record("note_append", frm="sora", to="communal", note="n", after=i)
+    """)
+    procs = [subprocess.Popen([sys.executable, "-c", script], env=env) for _ in range(6)]
+    for p in procs:
+        assert p.wait(timeout=60) == 0
+    d = tmp_path / "xdg/agentvoice"
+    lines = [json.loads(l) for f in ("audit.log.1", "audit.log")
+             for l in (d / f).read_text().splitlines()]
+    assert all(l["kind"] == "note_append" for l in lines)    # no torn line
+    assert (d / "audit.log").stat().st_size < 2000 + 200
+
+
+def test_a_fifo_at_the_audit_path_never_hangs_a_write(data):
+    paths.private_dir(data)
+    os.mkfifo(audit.log_path())
+    assert audit.record("note_write", frm="sora", to="communal", note="n") is False
+    notes.write("communal", "n", "x")                 # and the write itself lands
+
+
+def test_an_outside_save_after_the_scan_is_not_overwritten(monkeypatch, data):
+    notes.write("communal", "n", "first")
+    real = notes._current
+
+    def then_an_editor_saves(*a, **k):
+        out = real(*a, **k)
+        (data / "communal/notes/n.md").write_text("saved by an editor meanwhile")
+        return out
+    monkeypatch.setattr(notes, "_current", then_an_editor_saves)
+    with pytest.raises(notes.Stale):
+        notes.write("communal", "n", "agent text", base=1, author="sora", allowed=lambda: True)
+    assert (data / "communal/notes/n.md").read_text() == "saved by an editor meanwhile"

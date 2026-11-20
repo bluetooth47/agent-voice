@@ -100,7 +100,10 @@ def extras(ad, cfg, named=""):
 #: "full" fills every budget with synthetic text -- rules, defaults,
 #: personality and instructions to their limits, and eight roster lines of
 #: 380 characters -- the most the folders can ever add.
-VARIANTS = ("none", "folders", "full", "skills")
+VARIANTS = ("none", "folders", "full", "skills", "nocrew")
+#: "nocrew" (Phase 14) is "folders" without the notes server, which since
+#: Phase 14 every Claude and Codex agent is started with: the Phase 13
+#: argv, to interleave against "folders" for the cost of one more server.
 #: "skills" (Phase 13 gate, A13-4) is "folders" plus three synthetic
 #: communal skills of a realistic size, beside whatever skills the agent
 #: already has: Claude is handed a plugin folder holding them all with the
@@ -188,7 +191,9 @@ def build(spec, cfg, cwd, variant="folders"):
         ad.level = level
     ad.instructions = spec["instructions"]
     extras(ad, cfg, spec["named"])
-    assign_parts(ad, spec, cfg, variant)
+    assign_parts(ad, spec, cfg, "folders" if variant == "nocrew" else variant)
+    if variant == "nocrew":
+        ad.crew_tools = False
     return ad
 
 

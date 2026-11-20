@@ -1862,7 +1862,8 @@ def _notes_cli(a) -> int:
                 + [f"{n['name']}  rev {n['rev']}  {n['author_label']}  {n['chars']} chars"
                    + ("  locked" if n["locked"] else "") + ("  web" if n["tainted"] else "")
                    for n in v["notes"]]
-                + [f"{f['name']}  ({f['kind']})" for f in v["files"]]) or "no notes")
+                + [f"{safe_for_terminal(f['name'])}  ({f['kind']})" for f in v["files"]])
+                or "no notes")
         elif a.action == "show":
             v = notes.read_note(a.target, need_name())
             v["author_label"] = notes.labels(Config()).get(v["author"], v["author"])

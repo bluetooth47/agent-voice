@@ -662,7 +662,9 @@ Column {
       fontFamily: page.s.fontFamily
       onToggled: function(open) { page.setOpen("tools:main", open) }
       onPicked: function(key, value) { page.putMainTool(key, value) }
-      notesWrite: String(page.s.setting("mainNotesWrite", "allow"))
+      // Exactly "allow" is allow; anything else is what the daemon reads as
+      // deny (runtime.notes_choice), so the switch never says more.
+      notesWrite: page.s.setting("mainNotesWrite", "allow") === "allow" ? "allow" : "deny"
       onNotesPicked: function(value) { page.s.put("mainNotesWrite", value) }
     }
 

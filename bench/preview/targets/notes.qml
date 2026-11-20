@@ -1,7 +1,10 @@
 // Notes (merged plan, Phase 14), driven by synthetic clicks through the real
 // settings store and the real `agentvoice agents notes`:
 //
-//   preview.sh --live-config --wait 70 --out /tmp/n notes
+//   preview.sh --live-config --wait 60 --out /tmp/n notes
+//
+// It stops when done (DONE in the log) rather than quitting, so the
+// harness's screenshot at --wait finds it still running.
 //   grep PREVIEW /tmp/n.log; cat /tmp/n.writes
 //
 // The notes knob on the main card and on Sora's (Read only, then May write,
@@ -233,7 +236,7 @@ ShellRoot {
           e = overlay.entry(p, "shared")
           overlay.check(e && e.locked, "its note shows locked")
           console.warn("PREVIEW DONE " + overlay.passed + " passed, " + overlay.failed + " failed")
-          Qt.quit()
+          running = false
           break
         }
       }

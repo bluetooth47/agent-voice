@@ -837,7 +837,10 @@ def _ask(tool_name: str, tool_input: dict, note: str = "",
                   or tool_input.get("path")
                   or tool_input.get("url")
                   or tool_input.get("action_summary")
-                  or tool_input.get("pattern") or "")
+                  or tool_input.get("pattern")
+                  # A note about to be written (Phase 14): the person sees
+                  # the words before they land, not "(no detail)".
+                  or tool_input.get("text") or "")
     # Truncated, but never silently. `echo ok` followed by 400 spaces and
     # `; rm -rf ~/work` displayed as `echo ok`, which is a prompt that lies
     # about what it is asking for.

@@ -69,7 +69,18 @@ Column {
       if (notesList[i].name === openName) return notesList[i]
     return null
   }
-  readonly property bool validName: /^[a-z0-9][a-z0-9-]{0,47}$/.test(nameField.text.trim())
+  // The new note's name, from the field (made afresh for every New note).
+  // `var`, so it is read as whatever the Loader made (Omarchy's TextField).
+  readonly property var nameInput: nameLoader.item
+  readonly property string newName: nameInput ? String(nameInput.text).trim() : ""
+  readonly property bool validName: /^[a-z0-9][a-z0-9-]{0,47}$/.test(newName)
+  // Bumped whenever the editor is given another note (or none), so a read
+  // or a save started for the previous one is ignored when it ends.
+  property int session: 0
+  // An edit committed while a save was still running: saved next, on the
+  // rev that save returns, rather than dropped.
+  property string queued: ""
+  property bool hasQueued: false
 
   width: parent ? parent.width : 400
   spacing: Style.space(10)
@@ -87,59 +98,77 @@ Column {
     lister.command = cli(["list", "--json"])
     lister.running = true
   }
+  // The editor, emptied for another note: nothing of the previous note's
+  // text or rev can be saved over this one (Phase 14 review).
+  function clearEditor() {
+    session++
+    np.forceActiveFocus()               // out of the box, so a read can land
+    noteText = ""; noteRev = -1; noteLoaded = false
+    holding = false; held = ""; conflictRev = -1; noteNote = ""; justSaved = false
+    hasQueued = false; queued = ""
+    showHistory = false; versions = []; viewing = ""; viewingText = ""
+    box.reset("")
+  }
   function open(name) {
     // Unsaved text goes first; the click that would have moved away is
     // then repeated by the person once it has saved.
     if (box.dirty) { box.commit(); return }
+    if (holding) { noteNote = "Save or reload this note first; what you typed is not saved."; return }
+    clearEditor()
     creating = false
     openName = name
-    holding = false; held = ""; conflictRev = -1; noteNote = ""; justSaved = false
-    showHistory = false; versions = []; viewing = ""; viewingText = ""
-    noteLoaded = false
     read()
   }
   function startNew() {
+    if (box.dirty) { box.commit(); return }
+    if (holding) { noteNote = "Save or reload this note first; what you typed is not saved."; return }
+    clearEditor()
     openName = ""
     creating = true
-    noteText = ""; noteRev = -1; noteLoaded = true
-    holding = false; held = ""; conflictRev = -1; noteNote = ""; justSaved = false
-    showHistory = false
-    box.reset("")
-    nameField.text = ""
-    nameField.forceActiveFocus()
+    noteLoaded = true
+    Qt.callLater(function() { if (np.nameInput) np.nameInput.forceActiveFocus() })
   }
   function close() {
-    openName = ""; creating = false; showHistory = false; viewing = ""
-    holding = false; held = ""; conflictRev = -1; noteNote = ""
+    if (box.dirty) { box.commit(); return }
+    clearEditor()
+    openName = ""; creating = false
   }
   function read() {
     if (openName === "") return
     if (reader.running) { reader.again = true; return }
     reader.forTarget = target
     reader.forName = openName
+    reader.session = session
     reader.command = cli(["show", openName, "--json"])
     reader.running = true
   }
   function save(t) {
-    var name = creating ? nameField.text.trim() : openName
-    if (name === "") { noteNote = "Give the note a name first."; held = t; holding = true; return }
+    var name = creating ? newName : openName
+    // Refusals before anything is sent leave the box's baseline alone, so
+    // the same text is saved by the next Ctrl+S or Save once fixed.
+    if (name === "") { noteNote = "Give the note a name first, then Save."; return }
     if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(name)) {
       noteNote = "A note's name is 1 to 48 characters of a–z, 0–9 and -, starting with a letter or digit."
-      held = t; holding = true
       return
     }
+    if (!creating && !noteLoaded) { noteNote = "Still reading the note; save again in a moment."; return }
     if (Array.from(t).length > 20000) {
       noteNote = "Not saved: " + Array.from(t).length + " characters, and a note holds at most 20000."
+      return
+    }
+    if (writer.running) {
+      queued = t; hasQueued = true
       held = t; holding = true
       return
     }
-    if (writer.running) return
     held = t; holding = true; noteNote = ""; justSaved = false
     var args = ["write", name, "--line", "--json"]
     // A new note has no rev: the CLI then refuses if one of that name exists.
     if (!creating && noteRev >= 0) args = args.concat(["--base", String(noteRev)])
     writer.forTarget = target
     writer.forName = name
+    writer.session = session
+    writer.creating = creating
     writer.text = t
     writer.answered = false
     writer.pending = JSON.stringify(t) + "\n"
@@ -148,13 +177,16 @@ Column {
   }
   function keepMine() {
     if (conflictRev < 0) return
+    if (creating) { openName = newName; creating = false }
     noteRev = conflictRev
-    creating = false
+    noteLoaded = true
     save(box.text)
   }
   function reloadTheirs() {
-    holding = false; held = ""; conflictRev = -1; noteNote = ""
-    if (creating) { creating = false; openName = nameField.text.trim() }
+    var name = creating ? newName : openName
+    clearEditor()
+    creating = false
+    openName = name
     read()
   }
   function setLock(name, on) {
@@ -166,6 +198,7 @@ Column {
   function loadHistory() {
     if (openName === "" || historian.running) return
     historian.forName = openName
+    historian.session = session
     historian.command = cli(["history", openName, "--json"])
     historian.running = true
   }
@@ -173,12 +206,15 @@ Column {
     if (versioner.running) return
     viewing = version
     viewingText = ""
+    versioner.session = session
+    versioner.version = version
     versioner.command = cli(["version", openName, version, "--json"])
     versioner.running = true
   }
   function restore(version) {
     if (restorer.running || noteRev < 0) return
     actionNote = ""
+    restorer.session = session
     restorer.command = cli(["restore", openName, version, "--base", String(noteRev), "--json"])
     restorer.running = true
   }
@@ -237,9 +273,11 @@ Column {
     property string forName: ""
     property bool again: false
     onRunningChanged: if (!running && again) { again = false; Qt.callLater(np.read) }
+    property int session: 0
     stdout: StdioCollector {
       onStreamFinished: {
-        if (reader.forTarget !== np.target || reader.forName !== np.openName) return
+        if (reader.session !== np.session || reader.forTarget !== np.target ||
+            reader.forName !== np.openName) return
         if (box.editing || np.holding) return
         var d
         try { d = JSON.parse(String(text)) } catch (e) { return }
@@ -266,6 +304,8 @@ Column {
     property string forName: ""
     property string text: ""
     property bool answered: false
+    property int session: 0
+    property bool creating: false
     stdinEnabled: true
     onStarted: { write(writer.pending); writer.pending = "" }
     // `running` going false, not onExited: a spawn that never started emits
@@ -277,14 +317,22 @@ Column {
         try { d = JSON.parse(String(text)) } catch (e) { return }
         if (!d || typeof d.rev !== "number") return
         writer.answered = true
-        if (writer.forTarget !== np.target) return
+        if (writer.session !== np.session || writer.forTarget !== np.target) return
         np.noteRev = d.rev
         np.noteText = writer.text
-        if (np.creating) np.openName = writer.forName
-        np.creating = false
-        np.holding = false; np.held = ""; np.conflictRev = -1; np.noteNote = ""
-        np.justSaved = true
+        np.noteLoaded = true
+        if (writer.creating) { np.openName = writer.forName; np.creating = false }
+        np.conflictRev = -1; np.noteNote = ""
         np.list()
+        if (np.hasQueued) {
+          // Typed and committed while this save ran: saved now, on its rev.
+          var next = np.queued
+          np.hasQueued = false; np.queued = ""
+          Qt.callLater(function() { np.save(next) })
+          return
+        }
+        np.holding = false; np.held = ""
+        np.justSaved = true
       }
     }
     stderr: StdioCollector {
@@ -292,11 +340,13 @@ Column {
         var t = String(text).trim()
         if (t === "") return
         writer.answered = true
-        if (writer.forTarget !== np.target) return
+        if (writer.session !== np.session || writer.forTarget !== np.target) return
+        // A queued edit is the newest text: it is what "Keep mine" saves.
+        if (np.hasQueued) { np.held = np.queued; np.hasQueued = false; np.queued = "" }
         var m = t.match(/current rev (\d+)/)
         if (t.indexOf("conflict:") === 0 && m) {
           np.conflictRev = parseInt(m[1])
-          np.noteNote = np.creating
+          np.noteNote = writer.creating
                         ? "A note called " + writer.forName + " already exists, so yours was not saved."
                         : "Changed since you opened it (by an agent, or by hand), so yours was not saved."
         } else {
@@ -324,9 +374,10 @@ Column {
   Process {
     id: historian
     property string forName: ""
+    property int session: 0
     stdout: StdioCollector {
       onStreamFinished: {
-        if (historian.forName !== np.openName) return
+        if (historian.session !== np.session || historian.forName !== np.openName) return
         var d
         try { d = JSON.parse(String(text)) } catch (e) { return }
         if (Array.isArray(d)) np.versions = d
@@ -335,8 +386,11 @@ Column {
   }
   Process {
     id: versioner
+    property int session: 0
+    property string version: ""
     stdout: StdioCollector {
       onStreamFinished: {
+        if (versioner.session !== np.session || versioner.version !== np.viewing) return
         var d
         try { d = JSON.parse(String(text)) } catch (e) { return }
         if (d && typeof d.text === "string") np.viewingText = d.text
@@ -345,11 +399,14 @@ Column {
   }
   Process {
     id: restorer
+    property int session: 0
+    property bool done: false
+    onStarted: done = false
     stdout: StdioCollector {
       onStreamFinished: {
         var d
         try { d = JSON.parse(String(text)) } catch (e) { return }
-        if (d && typeof d.rev === "number") { np.viewing = ""; np.actionNote = "Restored." }
+        if (d && typeof d.rev === "number") { restorer.done = true; np.viewing = ""; np.actionNote = "Restored." }
       }
     }
     stderr: StdioCollector {
@@ -361,7 +418,12 @@ Column {
                         : "Not restored: " + np.err(t)
       }
     }
-    onRunningChanged: if (!running) { np.holding = false; np.read(); np.list() }
+    // Only a restore that landed replaces the editor's text; a refused one
+    // leaves whatever was typed where it is.
+    onRunningChanged: if (!running) {
+      np.list()
+      if (restorer.done && restorer.session === np.session) { np.holding = false; np.held = ""; np.read() }
+    }
   }
   Process {
     id: folderer
@@ -566,17 +628,21 @@ Column {
       font.family: np.fontFamily
       font.pixelSize: Style.font.body
     }
-    TextField {
-      id: nameField
-      visible: np.creating
+    // Made afresh for every New note, so it always starts empty.
+    Loader {
+      id: nameLoader
+      active: np.creating
+      visible: active
       width: Math.min(parent.width, Style.space(320))
-      placeholderText: "name, like shopping-list"
-      foreground: np.foreground
-      font.family: np.fontFamily
+      sourceComponent: TextField {
+        placeholderText: "name, like shopping-list"
+        foreground: np.foreground
+        font.family: np.fontFamily
+      }
     }
     Text {
       width: parent.width
-      visible: np.creating && nameField.text.trim() !== "" && !np.validName
+      visible: np.creating && np.newName !== "" && !np.validName
       wrapMode: Text.WordWrap
       textFormat: Text.PlainText
       text: "Lowercase letters, digits and -, up to 48, starting with a letter or digit."
@@ -626,6 +692,15 @@ Column {
       width: parent.width
       spacing: Style.space(8)
       Button {
+        text: "Save"
+        bordered: true
+        focusable: true
+        enabled: !writer.running
+        foreground: np.foreground
+        fontFamily: np.fontFamily
+        onClicked: np.save(box.text.trim())
+      }
+      Button {
         visible: np.conflictRev >= 0
         text: "Keep mine"
         bordered: true
@@ -653,7 +728,8 @@ Column {
         onClicked: { np.showHistory = !np.showHistory; if (np.showHistory) np.loadHistory() }
       }
       Button {
-        text: "Close"
+        // What it does to unsaved text, said on the button.
+        text: np.holding ? "Discard and close" : "Close"
         bordered: true
         focusable: true
         foreground: np.foreground

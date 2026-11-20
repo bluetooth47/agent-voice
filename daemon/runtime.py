@@ -366,8 +366,9 @@ class Config:
         # Whether this widget's entry was found at all, even with nothing in
         # it: settings_readable() tells "read, all defaults" from "unread".
         self._entry_found = False
+        self._ambiguous = False
         try:
-            data = json.loads(SHELL_JSON.read_text())
+            data = json.loads(SHELL_JSON.read_text(), object_pairs_hook=self._pairs)
         except Exception:
             return {}
         layout = (data.get("bar") or {}).get("layout") or {}
@@ -378,10 +379,30 @@ class Config:
                     return {k: v for k, v in entry.items() if k != "id"}
         return {}
 
+    def _pairs(self, pairs):
+        """json's object hook: a key given twice is remembered, so a guard
+        can refuse a file that says two things (Phase 14 review: a second
+        `"mainNotesWrite": "allow"` after a deny would otherwise win)."""
+        out, twice = {}, False
+        for k, v in pairs:
+            twice |= k in out
+            out[k] = v
+        # Only this widget's own entry counts: another widget's slip is not
+        # a reason to doubt these settings.
+        if twice and out.get("id") == PLUGIN_ID:
+            self._ambiguous = True
+        return out
+
     def _from_toml(self) -> dict:
+        self._toml_broken = False
         try:
             raw = tomllib.loads(config_toml().read_text())
+        except FileNotFoundError:
+            return {}
         except Exception:
+            # There but unreadable: settings_readable() says so, so a guard
+            # reading a setting from it closes rather than takes the default.
+            self._toml_broken = config_toml().exists()
             return {}
         out = {}
         for key, (section, name) in TOML_ALIASES.items():
@@ -705,10 +726,14 @@ class Config:
 
     def settings_readable(self) -> bool:
         """False when shell.json exists and this widget's entry could not be
-        read from it, so the values in force are only the defaults. A guard
-        that reads a setting must then close, not take the default."""
+        read from it, when the fallback agentvoice.toml is there and cannot
+        be parsed, or when shell.json gives some key twice: the values in
+        force may then not be the person's. A guard that reads a setting
+        must then close, not take the default."""
         if self.source == "test":
             return True
+        if getattr(self, "_toml_broken", False) or getattr(self, "_ambiguous", False):
+            return False
         try:
             present = SHELL_JSON.exists()
         except OSError:

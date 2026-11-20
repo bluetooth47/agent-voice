@@ -64,9 +64,13 @@ SUFFIX = ".md"
 META = ".meta.json"
 #: Who wrote a note: an agent's external id, or "you" for the person.
 YOU = "you"
-#: A saved version: `<ns>-<who>[-<n>][.t].md`, `.t` when the text it holds
-#: was tainted, so restoring it brings the mark back (Phase 14 review).
-_VERSION = re.compile(r"(\d{19})-([a-z0-9][a-z0-9-]{0,47}?)(?:-(\d+))?(\.t)?\.md")
+#: A saved version: `<ns>-<who>[.t].md`, `.t` when the text it holds was
+#: tainted, so restoring it brings the mark back. Two in one nanosecond take
+#: the next one, never a suffix: "sora-2" is an id, not sora's second.
+_VERSION = re.compile(r"(\d{19})-([a-z0-9][a-z0-9-]{0,47})(\.t)?\.md")
+#: Tombstones (hand-deleted notes, unlocked) kept so a rev never restarts;
+#: past this many the oldest go, so the record stays well under its cap.
+TOMBSTONES_KEEP = 200
 _HASH = re.compile(r"[0-9a-f]{16}")
 _META_VERSION = 1
 
@@ -102,11 +106,18 @@ def _check_name(name) -> str:
     return name
 
 
-def notes_dir(target: str, create: bool = False) -> Path:
+def notes_dir(target: str, create: bool = False, make_folder: bool = True) -> Path:
     """`target`'s notes folder, every directory on the way checked for
-    links (agentfs refuses all of them), and made 0700 when `create`."""
+    links (agentfs refuses all of them), and made 0700 when `create`.
+
+    `make_folder` False makes `notes/` only inside an agent folder that is
+    already there: an agent's write must not bring back a folder that was
+    just moved to the trash, which would leave Undo nowhere to put it."""
     base = agentfs._base(target)
     chain = ([] if target == agentfs.COMMUNAL else [paths.AGENTS_DIR]) + [base, base / "notes"]
+    if create and not make_folder and target != agentfs.COMMUNAL and not base.is_dir():
+        raise NotesError("this agent has no folder now (it may have just been removed), so "
+                         "it has nowhere to keep notes", "not-configured")
     for d in chain:
         agentfs._no_link(d)
         if create:
@@ -180,6 +191,9 @@ def _load_meta(d: Path) -> dict | None:
 
 
 def _save_meta(d: Path, meta: dict) -> None:
+    tombs = sorted((e["at"], n) for n, e in meta.items() if e["hash"] == "" and not e["locked"])
+    for _, n in tombs[:max(0, len(tombs) - TOMBSTONES_KEEP)]:
+        del meta[n]
     data = json.dumps({"version": _META_VERSION, "notes": meta}, indent=1,
                       sort_keys=True).encode()
     agentfs._no_link(d / META)
@@ -229,10 +243,13 @@ def _decode(data: bytes) -> str:
 
 
 def _mtime(path: Path) -> float:
+    """When a file was changed, as the record keeps it: never before 1970
+    and never far in the future, which the record would then refuse."""
     try:
-        return os.lstat(path).st_mtime
+        t = os.lstat(path).st_mtime
     except OSError:
-        return time.time()
+        t = time.time()
+    return t if 0 <= t < 1e11 else time.time()
 
 
 def _seen(meta: dict, name: str, data: bytes | None, path: Path) -> bool:
@@ -258,12 +275,13 @@ def _seen(meta: dict, name: str, data: bytes | None, path: Path) -> bool:
     return False
 
 
-def _current(target: str, create: bool = False) -> tuple[Path, dict | None, dict]:
+def _current(target: str, create: bool = False,
+             make_folder: bool = True) -> tuple[Path, dict | None, dict]:
     """With the lock held: the folder, its record brought up to date (and
     saved when it moved and can be trusted), and each note's bytes as they
     were read for that, so what is returned and what was hashed are the
     same bytes. A note that cannot be read maps to its NotesError."""
-    d = notes_dir(target, create=create)
+    d = notes_dir(target, create=create, make_folder=make_folder)
     names = _note_names(d)
     meta = _load_meta(d)
     got: dict = {}
@@ -379,19 +397,23 @@ def _versions(d: Path, name: str) -> list[Path]:
     return sorted(found, key=lambda p: p.name, reverse=True)
 
 
-def _keep_version(d: Path, name: str, data: bytes, who: str, tainted: bool) -> None:
+def _keep_version(d: Path, name: str, data: bytes, who: str, tainted: bool) -> Path:
     """The text being replaced, saved under who wrote it and with its taint
-    mark. Twenty kept."""
+    mark, and its path. Pruning waits for _prune, after the write has
+    landed, so a write that fails never costs an older version."""
     hd = _history_dir(d, name, create=True)
     who = who if NAME.fullmatch(who or "") else YOU
     mark = ".t" if tainted else ""
-    stamp = f"{time.time_ns():019d}"
-    fname = f"{stamp}-{who}{mark}.md"
-    n = 1
-    while os.path.lexists(hd / fname):
-        fname = f"{stamp}-{who}-{n}{mark}.md"
-        n += 1
-    agentfs._atomic_write(hd / fname, data)
+    ns = time.time_ns()
+    while any(os.path.lexists(hd / f"{ns:019d}-{w}{m}.md")
+              for w in (who,) for m in ("", ".t")):
+        ns += 1
+    path = hd / f"{ns:019d}-{who}{mark}.md"
+    agentfs._atomic_write(path, data)
+    return path
+
+
+def _prune(d: Path, name: str) -> None:
     for old in _versions(d, name)[HISTORY_KEEP:]:
         with contextlib.suppress(OSError):
             old.unlink()
@@ -425,7 +447,7 @@ def _write(target: str, name: str, produce, *, author: str, allowed, base, kind:
         raise _refuse("a note's name is 1 to 48 characters of a-z, 0-9 and -, starting "
                       "with a letter or digit", "bad-name", author=author, target=target, name="")
     with agentfs._locked():
-        d, meta, got = _current(target, create=True)
+        d, meta, got = _current(target, create=True, make_folder=allowed is None)
         if meta is None:
             raise _refuse("the notes record here cannot be read, so every note is locked "
                           "until the person fixes it", "unreadable-record",
@@ -449,6 +471,10 @@ def _write(target: str, name: str, produce, *, author: str, allowed, base, kind:
         exists = old is not None
         rev = e["rev"] if e else 0
         if check_base:
+            if exists and base is None and author == YOU:
+                # From Settings: "a note called that already exists", with
+                # its rev, so the page can offer to keep theirs or replace it.
+                raise Stale(rev)
             if exists and (base is None or isinstance(base, bool) or not isinstance(base, int)):
                 raise _refuse(f"the note {name} already exists: read it first and pass its rev "
                               f"as base (it is at rev {rev}), or append to it", "stale",
@@ -468,15 +494,29 @@ def _write(target: str, name: str, produce, *, author: str, allowed, base, kind:
                           f"can; append to one or ask the person to clear some out",
                           "too-many", author=author, target=target, name=name)
         data = text.encode("utf-8")
-        if exists:
-            _keep_version(d, name, old, e["author"] if e else YOU, bool(e and e["tainted"]))
+        # Read once more just before replacing it: an editor that saved the
+        # note since the folder was read is not overwritten unseen. (A save
+        # in the instant between this and the rename still can be; the
+        # history keeps what this replaced.)
+        if exists and _read_note_bytes(path) != old:
+            raise Stale(rev)
+        kept = (_keep_version(d, name, old, e["author"] if e else YOU, bool(e and e["tainted"]))
+                if exists else None)
         try:
             # A new note is published only if nothing appeared there since
             # the folder was read: a hand-made file, or a FIFO the scan
             # skipped, is never replaced unseen.
             agentfs._atomic_write(path, data, exclusive=not exists)
         except agentfs.Conflict:
+            if kept is not None:
+                with contextlib.suppress(OSError):
+                    kept.unlink()
             raise Stale(rev) from None
+        except BaseException:
+            if kept is not None:
+                with contextlib.suppress(OSError):
+                    kept.unlink()
+            raise
         previous = dict(e) if e else None
         meta[name] = {"rev": rev + 1, "author": author, "at": time.time(), "hash": _hash(data),
                       "tainted": bool(tainted), "locked": bool(e and e["locked"])}
@@ -494,9 +534,14 @@ def _write(target: str, name: str, produce, *, author: str, allowed, base, kind:
                 meta.pop(name, None)
             else:
                 meta[name] = previous
+            if kept is not None:
+                with contextlib.suppress(OSError):
+                    kept.unlink()
             raise
-    old_size = len(old) if old is not None else None
-    audit.record(kind, frm=author, to=target, note=name, before=old_size, after=len(data))
+        _prune(d, name)
+        # Inside the lock, so the log's order is the order the writes landed.
+        old_size = len(old) if old is not None else None
+        audit.record(kind, frm=author, to=target, note=name, before=old_size, after=len(data))
     return {"name": name, "rev": rev + 1, "chars": len(text), "created": not exists}
 
 
@@ -568,7 +613,7 @@ def history(target: str, name: str) -> list[dict]:
         except NotesError:
             chars = -1
         out.append({"version": v.name, "at": int(m.group(1)) / 1e9, "who": m.group(2),
-                    "chars": chars, "tainted": bool(m.group(4))})
+                    "chars": chars, "tainted": bool(m.group(3))})
     return out
 
 
@@ -602,7 +647,7 @@ def restore(target: str, name: str, version: str, base: int | None = None) -> di
         data = _read_note_bytes(chosen)
         if data is None:
             raise NotesError(f"{name} has no version {version}")
-        return _decode(data), bool(_VERSION.fullmatch(chosen.name).group(4))
+        return _decode(data), bool(_VERSION.fullmatch(chosen.name).group(3))
     return _write(target, name, produce, author=YOU, allowed=None, base=base,
                   kind="note_restore", check_base=True)
 
@@ -620,7 +665,8 @@ def labels(cfg) -> dict[str, str]:
     try:
         out["main"] = cfg.main_label()
         for a in cfg.all_agents():
-            out[a["id"]] = a["label"]
+            if a["id"] != YOU:              # "you" is the person, always
+                out[a["id"]] = a["label"]
     except Exception:                   # noqa: BLE001 -- names are decoration
         pass
     return out

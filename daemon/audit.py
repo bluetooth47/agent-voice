@@ -31,6 +31,7 @@ import fcntl
 import json
 import os
 import re
+import stat
 import sys
 import time
 from pathlib import Path
@@ -109,9 +110,13 @@ def record(kind: str, *, frm: str, to: str, note: str = "", task: str = "",
         try:
             fcntl.flock(lock, fcntl.LOCK_EX)
             _rotate(path)
+            # O_NONBLOCK: a FIFO left at this path must not hang a note
+            # write forever; it is then refused as not a regular file.
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW
-                         | os.O_CLOEXEC, 0o600)
+                         | os.O_CLOEXEC | os.O_NONBLOCK, 0o600)
             try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    return False
                 os.write(fd, data)
             finally:
                 os.close(fd)
