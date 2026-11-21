@@ -1,0 +1,786 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent Voice: redesign sketches</title>
+<style>
+  :root{
+    --bg:#142620; --bg-dark:#0f1e19; --bg-darker:#0a1713; --bg-light:#203b31;
+    --fg:#dfede5; --fg-dim:#91ad9f; --fg-light:#bed6c9; --fg-bright:#f0faf4;
+    --accent:#8bcbb1; --sel:#2b5147; --muted:#64887b;
+    --red:#d88d91; --yellow:#c5cc91; --orange:#d2ab8d; --cyan:#86c7c5; --blue:#96b7d0; --magenta:#b7a1c8;
+    --r:6px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg-darker);color:var(--fg);font:13px/1.45 "JetBrainsMono Nerd Font","JetBrains Mono",monospace;display:flex;justify-content:center;padding:28px}
+  .win{width:1080px;min-height:760px;background:var(--bg);border:1px solid var(--sel);border-radius:10px;display:flex;overflow:hidden}
+  nav{width:200px;background:var(--bg-dark);border-right:1px solid var(--sel);padding:16px 0}
+  nav .brand{padding:0 18px 14px;color:var(--fg-bright);font-weight:bold}
+  nav .brand small{display:block;color:var(--muted);font-weight:normal}
+  nav a{display:block;padding:7px 18px;color:var(--fg-dim);cursor:pointer;border-left:3px solid transparent}
+  nav a:hover{color:var(--fg)}
+  nav a.on{color:var(--fg-bright);background:var(--bg);border-left-color:var(--accent)}
+  nav .sep{height:1px;background:var(--sel);margin:10px 18px}
+  nav .new{float:right;font-size:10px;color:var(--bg);background:var(--accent);border-radius:3px;padding:0 4px;margin-top:2px}
+  main{flex:1;padding:22px 26px;overflow:auto;max-height:820px}
+  h1{margin:0;font-size:18px;color:var(--fg-bright)}
+  .sub{color:var(--fg-dim);margin:2px 0 18px}
+  .page{display:none}.page.on{display:block}
+  .note{border:1px dashed var(--muted);color:var(--fg-dim);border-radius:var(--r);padding:8px 10px;margin-bottom:16px;font-size:12px}
+  .note b{color:var(--yellow)}
+
+  /* shared pieces */
+  .card{background:var(--bg-dark);border:1px solid var(--sel);border-radius:var(--r);padding:12px 14px}
+  .card h3{margin:0 0 8px;font-size:11px;letter-spacing:.08em;color:var(--accent);text-transform:uppercase;display:flex;justify-content:space-between}
+  .card h3 span{color:var(--muted);letter-spacing:0;text-transform:none;font-weight:normal}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .row{display:flex;align-items:center;gap:10px;margin:7px 0}
+  .row label{width:110px;color:var(--fg-dim);flex:none}
+  .hint{color:var(--muted);font-size:11px;cursor:help;border-bottom:1px dotted var(--muted)}
+  input.t,select{background:var(--bg-darker);border:1px solid var(--sel);color:var(--fg);border-radius:4px;padding:5px 8px;font:inherit}
+  input.t:focus{outline:1px solid var(--accent)}
+  .seg{display:inline-flex;border:1px solid var(--sel);border-radius:4px;overflow:hidden}
+  .seg b{font-weight:normal;padding:3px 9px;color:var(--fg-dim);cursor:pointer;border-right:1px solid var(--sel)}
+  .seg b:last-child{border-right:0}
+  .seg b.on{background:var(--sel);color:var(--fg-bright)}
+  .seg.mini b{padding:2px 6px;font-size:11px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{border:1px solid var(--sel);border-radius:12px;padding:2px 10px;color:var(--fg-dim);cursor:pointer;user-select:none}
+  .chip.on{border-color:var(--accent);color:var(--bg);background:var(--accent)}
+  .chip.on::before{content:"✓ "}
+  .sw{width:30px;height:16px;border-radius:8px;background:var(--sel);position:relative;cursor:pointer;flex:none}
+  .sw::after{content:"";position:absolute;width:12px;height:12px;border-radius:50%;background:var(--fg-dim);top:2px;left:2px;transition:.15s}
+  .sw.on{background:var(--accent)}.sw.on::after{left:16px;background:var(--bg)}
+  .btn{border:1px solid var(--sel);background:var(--bg-light);color:var(--fg);border-radius:4px;padding:4px 10px;cursor:pointer;font:inherit}
+  .btn.danger{border-color:var(--red);color:var(--red);background:transparent}
+  .btn.danger::before{content:"⚠ "}
+  .pill{font-size:11px;padding:1px 7px;border-radius:9px;background:var(--bg-light);color:var(--fg-light)}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent);margin-right:6px}
+  .dot.idle{background:var(--muted)}.dot.off{background:var(--red)}
+
+  /* agents */
+  .agent{border:1px solid var(--sel);border-radius:var(--r);margin-bottom:12px;background:var(--bg-dark)}
+  .strip{display:flex;align-items:center;gap:14px;padding:10px 14px;cursor:pointer}
+  .strip .name{color:var(--fg-bright);font-weight:bold;width:70px}
+  .strip .meta{display:flex;gap:8px;flex:1;flex-wrap:wrap}
+  .strip .caret{color:var(--muted)}
+  .agent .body{display:none;padding:0 14px 14px;border-top:1px solid var(--sel)}
+  .agent.open .body{display:block}
+  .agent.open .caret{transform:rotate(90deg)}
+  .modelbox{display:flex;align-items:center;gap:0;border:1px solid var(--sel);border-radius:4px;background:var(--bg-darker)}
+  .modelbox select{border:0;background:transparent}
+  .modelbox .seg{border:0;border-left:1px solid var(--sel);border-radius:0}
+
+  /* skills */
+  .lanes{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .lane{background:var(--bg-dark);border:1px solid var(--sel);border-radius:var(--r);padding:8px;min-height:220px}
+  .lane.over{border-color:var(--accent);background:var(--sel)}
+  .lane h4{margin:0 0 8px;color:var(--fg-light);font-size:12px;display:flex;justify-content:space-between}
+  .lane.unused{border-style:dashed}
+  .sk{background:var(--bg-light);border-radius:4px;padding:6px 8px;margin-bottom:6px;cursor:grab;border-left:3px solid var(--cyan)}
+  .sk small{display:block;color:var(--fg-dim);font-size:11px}
+  .sk.sys{border-left-color:var(--magenta)}
+  .toolrow{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--bg-light)}
+  .toolrow:last-child{border-bottom:0}
+  .toolrow .tn{flex:1}
+  .toolrow .src{font-size:11px;color:var(--muted)}
+
+  /* crew map */
+  .map{position:relative;height:430px;background:var(--bg-dark);border:1px solid var(--sel);border-radius:var(--r);overflow:hidden}
+  .map svg{position:absolute;inset:0}
+  .node{position:absolute;width:130px;padding:8px 10px;border:1px solid var(--accent);border-radius:var(--r);background:var(--bg);text-align:center}
+  .node b{color:var(--fg-bright);display:block}
+  .node small{color:var(--fg-dim)}
+  .quar{position:absolute;border:2px dashed var(--red);border-radius:10px;padding:26px 14px 14px}
+  .quar::before{content:"QUARANTINE";position:absolute;top:6px;left:12px;font-size:10px;letter-spacing:.1em;color:var(--red)}
+  .edge{cursor:pointer}
+  .edge:hover path{stroke-width:3}
+  .elabel{font-size:11px;fill:var(--fg-light)}
+  .inspector{margin-top:12px}
+
+  /* chats */
+  .chatwrap{display:grid;grid-template-columns:300px 1fr;gap:12px;height:560px}
+  .chatlist{background:var(--bg-dark);border:1px solid var(--sel);border-radius:var(--r);overflow:auto}
+  .chatlist .search{padding:8px;border-bottom:1px solid var(--sel)}
+  .chatlist .search input{width:100%}
+  .ci{padding:9px 11px;border-bottom:1px solid var(--bg-light);cursor:pointer}
+  .ci.on{background:var(--sel)}
+  .ci b{color:var(--fg-bright);display:block}
+  .ci small{color:var(--fg-dim)}
+  .ci .sum{color:var(--fg-light);font-size:11px;margin-top:2px}
+  .conv{background:var(--bg-dark);border:1px solid var(--sel);border-radius:var(--r);padding:14px;overflow:auto;display:flex;flex-direction:column;gap:10px}
+  .msg{max-width:72%;padding:8px 12px;border-radius:10px}
+  .msg small{display:block;font-size:10px;color:var(--fg-dim);margin-bottom:2px}
+  .msg.me{align-self:flex-end;background:var(--sel);border-bottom-right-radius:2px}
+  .msg.ag{align-self:flex-start;background:var(--bg-light);border-bottom-left-radius:2px;border-left:3px solid var(--accent)}
+  .msg.ag.sora{border-left-color:var(--magenta)}
+  .msg.tool{align-self:center;background:transparent;color:var(--muted);font-size:11px;padding:0}
+
+  /* pipeline */
+  .pipe{display:flex;flex-direction:column;gap:0}
+  .stage{display:grid;grid-template-columns:34px 1fr;gap:12px}
+  .stage .num{display:flex;flex-direction:column;align-items:center}
+  .stage .num i{font-style:normal;width:26px;height:26px;border-radius:50%;background:var(--sel);color:var(--fg-bright);display:flex;align-items:center;justify-content:center;font-weight:bold}
+  .stage .num .line{flex:1;width:2px;background:var(--sel);margin:4px 0}
+  .stage .card{margin-bottom:12px}
+  .meter{height:8px;border-radius:4px;background:var(--bg-light);position:relative;flex:1;max-width:260px}
+  .meter i{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:var(--accent)}
+  .meter u{position:absolute;top:-3px;width:2px;height:14px;background:var(--yellow)}
+  details summary{cursor:pointer;color:var(--fg-dim);margin-top:4px}
+
+  /* timeline */
+  .tl{display:flex;height:34px;border-radius:4px;overflow:hidden;margin:8px 0 4px}
+  .tl div{display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--bg)}
+  .tlk{display:flex;justify-content:space-between;color:var(--fg-dim);font-size:11px}
+  .cmds td{padding:3px 12px 3px 0;vertical-align:top}
+  .cmds td:first-child{color:var(--accent);white-space:nowrap}
+
+  /* overview */
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
+  .stat{background:var(--bg-dark);border:1px solid var(--sel);border-radius:var(--r);padding:10px 12px}
+  .stat .v{font-size:22px;color:var(--fg-bright)}
+  .stat .k{color:var(--fg-dim);font-size:11px}
+  .stat .d{color:var(--accent);font-size:11px}
+  .bars{display:flex;align-items:flex-end;gap:4px;height:70px}
+  .bars i{flex:1;background:var(--accent);border-radius:2px 2px 0 0;opacity:.85}
+  .bars i.r{background:var(--red)}
+
+  /* voice library */
+  .vl{width:100%;border-collapse:collapse}
+  .vl td{padding:6px 8px;border-bottom:1px solid var(--bg-light)}
+  .vl td.ic{width:28px;text-align:center;color:var(--red);cursor:pointer}
+  .vl td.nm{color:var(--fg-bright);width:200px}
+  .vl td.used{color:var(--accent);font-size:11px}
+
+  /* popup */
+  .popup{width:360px;background:var(--bg);border:1px solid var(--accent);border-radius:10px;padding:14px;box-shadow:0 10px 30px #0008}
+  .popup .top{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+  .popup .top b{flex:1;color:var(--fg-bright)}
+  .readout{background:var(--bg-dark);border-radius:var(--r);padding:10px;height:150px;display:flex;flex-direction:column;gap:8px;overflow:hidden}
+  .readout .last{color:var(--fg-dim);font-size:12px;border-left:3px solid var(--accent);padding-left:8px}
+  .readout .now{color:var(--fg-bright);border-left:3px solid var(--yellow);padding-left:8px}
+  .readout .now::after{content:"▍";color:var(--yellow);animation:bl 1s infinite}
+  @keyframes bl{50%{opacity:0}}
+  .popup .agents{display:flex;gap:6px;margin-top:10px}
+  .popup .agents span{flex:1;text-align:center;background:var(--bg-dark);border-radius:4px;padding:5px;font-size:12px}
+
+  /* crew map v2 */
+  .steps{display:flex;gap:10px;margin-bottom:12px}
+  .steps div{flex:1;background:var(--bg-dark);border:1px solid var(--sel);border-radius:var(--r);padding:8px 10px;color:var(--fg-dim);font-size:12px}
+  .steps i{font-style:normal;display:inline-flex;width:18px;height:18px;border-radius:50%;background:var(--sel);color:var(--fg-bright);align-items:center;justify-content:center;margin-right:6px;font-size:11px}
+  .steps b{color:var(--fg-bright);margin-right:4px}
+  .port-demo{color:var(--accent)}
+  .legend{font-size:11px;color:var(--fg-dim);display:inline-flex;align-items:center;gap:4px}
+  .legend i{width:14px;height:3px;border-radius:2px;display:inline-block}
+  .crewgrid{display:grid;grid-template-columns:1fr 280px;gap:12px}
+  #cmap{height:470px;user-select:none}
+  #csvg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  #csvg .hit{pointer-events:stroke;cursor:pointer}
+  .fence{position:absolute;right:12px;bottom:12px;width:250px;height:170px;border:2px dashed var(--red);border-radius:10px;background:#d88d9110}
+  .fence span{position:absolute;top:6px;left:10px;right:10px;font-size:10px;letter-spacing:.06em;color:var(--red)}
+  .fence.hot{background:#d88d9133}
+  .cnode{position:absolute;width:136px;padding:8px 10px;border:1px solid var(--c,var(--accent));border-radius:var(--r);background:var(--bg);cursor:grab;z-index:2}
+  .cnode:active{cursor:grabbing}
+  .cnode b{color:var(--fg-bright);display:block}
+  .cnode small{color:var(--fg-dim)}
+  .cnode.sel{box-shadow:0 0 0 2px var(--c,var(--accent))}
+  .cnode.q{border-style:dashed;border-color:var(--red)}
+  .cnode.q::after{content:"⛔ quarantined";position:absolute;top:-9px;left:8px;font-size:9px;background:var(--bg);color:var(--red);padding:0 4px}
+  .cport{position:absolute;right:-7px;top:50%;margin-top:-7px;width:14px;height:14px;border-radius:50%;background:var(--accent);border:2px solid var(--bg);cursor:crosshair}
+  .cnode.q .cport{background:var(--muted);cursor:not-allowed}
+  .cnode.drop{box-shadow:0 0 0 3px var(--yellow)}
+  .ctable table{width:100%;border-collapse:collapse;background:var(--bg-dark);border:1px solid var(--sel);border-radius:var(--r)}
+  .ctable td,.ctable th{padding:7px 10px;border-bottom:1px solid var(--bg-light);text-align:left}
+  .ctable th{color:var(--accent);font-size:11px;font-weight:normal;text-transform:uppercase;letter-spacing:.06em}
+  .ctable .chip{font-size:11px;padding:1px 8px}
+  .cinsp-list{margin:4px 0 10px;padding:0;list-style:none;font-size:12px;color:var(--fg-light)}
+  .cinsp-list li{padding:3px 0;border-bottom:1px solid var(--bg-light)}
+  .chip.dis{opacity:.35;cursor:not-allowed}
+  .warnbox{border:1px solid var(--orange);color:var(--orange);border-radius:4px;padding:6px 8px;font-size:11px;margin:8px 0}
+</style>
+</head>
+<body>
+<div class="win">
+  <nav>
+    <div class="brand">Agent Voice<small>Settings sketch · Esc to close</small></div>
+    <a data-p="overview">Overview</a>
+    <a data-p="agents" class="on">Agents</a>
+    <a data-p="details">Agent details</a>
+    <a data-p="communal">Communal</a>
+    <a data-p="crew">Crew map <span class="new">new</span></a>
+    <a data-p="chats">Chats <span class="new">new</span></a>
+    <div class="sep"></div>
+    <a data-p="listening">Listening</a>
+    <a data-p="conversation">Conversation</a>
+    <a data-p="voice">Voice</a>
+    <a data-p="other">Other settings</a>
+    <a data-p="about">About</a>
+    <div class="sep"></div>
+    <a data-p="popup">Bar popup <span class="new">view</span></a>
+  </nav>
+  <main>
+
+<!-- ============ AGENTS ============ -->
+<section class="page on" id="agents">
+  <h1>Agents</h1>
+  <div class="sub">Who answers, on what, and how they sound.</div>
+  <div class="note"><b>Sketch:</b> each agent is a header strip you can read at a glance; click it to unfold the settings, grouped into cards two across. Nothing is removed, only regrouped.</div>
+
+  <div class="agent open">
+    <div class="strip"><span class="caret">▶</span><span class="dot"></span><span class="name">Theo</span>
+      <div class="meta"><span class="pill">Claude Code · Opus</span><span class="pill">effort: medium</span><span class="pill">voice: theo · 115%</span><span class="pill">trusted</span></div>
+    </div>
+    <div class="body">
+      <div class="grid2" style="margin-top:12px">
+        <div class="card"><h3>Identity</h3>
+          <div class="row"><label>Name</label><input class="t" value="Theo" style="width:110px"><label style="width:auto">Wake</label><input class="t" value="theo" style="width:110px"></div>
+          <div class="row"><label>Runs on</label>
+            <div class="modelbox"><select><option>Claude Code</option><option>Codex</option></select></div>
+          </div>
+          <div class="row"><label>Model</label>
+            <div class="modelbox"><select><option>Opus</option><option>Sonnet</option><option>Haiku</option></select>
+              <div class="seg mini" data-seg><b>low</b><b class="on">med</b><b>high</b><b>xhigh</b><b>max</b></div></div>
+          </div>
+        </div>
+        <div class="card"><h3>Voice</h3>
+          <div class="row"><label>Voice</label><select><option>theo (en_US)</option></select><button class="btn">▶ Test</button></div>
+          <div class="row"><label>Speed</label><input type="range" value="115" min="70" max="150" style="flex:1"><span>115%</span></div>
+          <div class="row"><label>Speak replies</label><div class="sw on"></div></div>
+        </div>
+        <div class="card"><h3>Permissions <span class="hint" title="What this agent may change without asking.">what's this?</span></h3>
+          <div class="row"><label>Level</label><div class="seg" data-seg><b>ask</b><b>edits</b><b class="on">trusted</b></div></div>
+          <div class="row"><label>Project</label><input class="t" value="~/.config/omarchy/plugins/…" style="flex:1"></div>
+        </div>
+        <div class="card"><h3>Tools</h3>
+          <div class="chips"><span class="chip on">Desktop</span><span class="chip">Browser</span><span class="chip on">Omarchy skill</span><span class="chip on">Crew</span><span class="chip on">Notes</span></div>
+          <div class="sub" style="margin:8px 0 0">Role, personality & instructions → <a style="color:var(--accent);cursor:pointer">Agent details</a></div>
+        </div>
+        <div class="card"><h3>Collaboration & notes</h3>
+          <div class="row"><label>Talks to others</label><div class="seg mini" data-seg><b>off</b><b>ask me</b><b class="on">on</b></div></div>
+          <div class="row"><label>Accepts work</label><div class="sw on"></div></div>
+          <div class="row"><label>Writes notes</label><div class="seg mini" data-seg><b>deny</b><b>ask</b><b class="on">allow</b></div></div>
+        </div>
+        <div class="card"><h3>Agent <span>on / off and speaking</span></h3>
+          <div class="row"><label>On</label><div class="sw on"></div></div>
+          <div class="row"><label>Talk while working</label><div class="seg mini" data-seg><b class="on">same as main</b><b>off</b><b>brief</b><b>detailed</b></div></div>
+          <div class="row"><label>Wake model</label><select><option>theo.onnx (openWakeWord)</option></select></div>
+        </div>
+      </div>
+      <details style="margin-top:10px"><summary>Only when "Runs on" is an OpenAI-compatible endpoint</summary>
+        <div class="card" style="margin-top:8px">
+          <div class="row"><label>URL</label><input class="t" value="http://localhost:11434/v1" style="flex:1"></div>
+          <div class="row"><label>Model</label><input class="t" value="llama3.3" style="width:160px"><label style="width:auto">History turns</label><input class="t" value="8" style="width:50px"><label style="width:auto">Timeout</label><input class="t" value="0 s" style="width:60px"></div>
+          <div class="row"><label>Acts as agent</label><div class="sw"></div><span class="hint" title="Treat it as an agent that can use tools, not plain chat">tools, not plain chat</span></div>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <div class="agent">
+    <div class="strip"><span class="caret">▶</span><span class="dot idle"></span><span class="name">Sora</span>
+      <div class="meta"><span class="pill">Claude Code · Haiku</span><span class="pill">effort: low</span><span class="pill">voice: amy · 100%</span><span class="pill">ask</span></div>
+    </div><div class="body"><div class="sub" style="margin-top:10px">(same cards)</div></div>
+  </div>
+  <div class="agent">
+    <div class="strip"><span class="caret">▶</span><span class="dot idle"></span><span class="name">Hazel</span>
+      <div class="meta"><span class="pill">Codex · GPT-6.2-Sol</span><span class="pill">effort: medium</span><span class="pill">voice: cori · 100%</span><span class="pill">trusted</span></div>
+    </div><div class="body"><div class="sub" style="margin-top:10px">(same cards)</div></div>
+  </div>
+</section>
+
+<!-- ============ DETAILS ============ -->
+<section class="page" id="details">
+  <h1>Agent details</h1>
+  <div class="sub">What each agent is told, can use, and remembers.</div>
+  <div class="seg" data-seg style="margin-bottom:14px"><b class="on">Theo</b><b>Sora</b><b>Hazel</b></div>
+  <div class="note"><b>Sketch:</b> tabs replace the agent drop-down. Below: Tools & skills. Tools are toggles (found automatically); skills are cards you drag between agents, Communal and Unused. Hold Ctrl to copy.</div>
+
+  <div class="grid2">
+    <div class="card"><h3>Built-in tools</h3>
+      <div class="toolrow"><span class="tn">Desktop</span><span class="src">windows, apps, clipboard</span><div class="sw on"></div></div>
+      <div class="toolrow"><span class="tn">Browser</span><span class="src">test profile</span><div class="sw"></div></div>
+      <div class="toolrow"><span class="tn">Omarchy commands</span><span class="src">skill</span><div class="sw on"></div></div>
+      <div class="toolrow"><span class="tn">Crew</span><span class="src">see Crew map</span><div class="sw on"></div></div>
+    </div>
+    <div class="card"><h3>Found on this machine <span>scanned just now</span></h3>
+      <div class="toolrow"><span class="tn">Claude Docs</span><span class="src">MCP · claude.ai</span><div class="sw"></div></div>
+      <div class="toolrow"><span class="tn">desktop-control</span><span class="src">MCP · local</span><div class="sw"></div></div>
+      <div class="toolrow"><span class="tn">gh</span><span class="src">CLI</span><div class="sw on"></div></div>
+      <div class="toolrow"><span class="tn">ripgrep</span><span class="src">CLI</span><div class="sw on"></div></div>
+    </div>
+  </div>
+
+  <h3 style="color:var(--accent);font-size:11px;letter-spacing:.08em;margin:18px 0 8px">SKILLS · DRAG TO MOVE</h3>
+  <div class="lanes">
+    <div class="lane" data-lane><h4>Theo <span class="pill">2</span></h4>
+      <div class="sk" draggable="true">minecraft<small>play via bot or keys</small></div>
+      <div class="sk" draggable="true">omarchy-app<small>Qt app scaffold</small></div>
+    </div>
+    <div class="lane" data-lane><h4>Communal <span class="pill">1</span></h4>
+      <div class="sk" draggable="true">agentvoice<small>commands & settings ref</small></div>
+    </div>
+    <div class="lane" data-lane><h4>Sora <span class="pill">0</span></h4></div>
+    <div class="lane unused" data-lane><h4>Unused <span class="pill">2</span></h4>
+      <div class="sk sys" draggable="true">workmap-pages<small>found in ~/.claude</small></div>
+      <div class="sk sys" draggable="true">dataviz<small>found in ~/.claude</small></div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:14px"><button class="btn danger">Reset Theo to defaults</button><span class="hint">asks to confirm first</span></div>
+</section>
+
+<!-- ============ CREW MAP ============ -->
+<section class="page" id="crew">
+  <h1>Crew map</h1>
+  <div class="sub">Who may talk to whom, and what they may do. Anything without a line is not allowed.</div>
+  <div class="steps">
+    <div><i>1</i><b>Link</b> drag from an agent's <span class="port-demo">●</span> dot onto another agent</div>
+    <div><i>2</i><b>Edit</b> click a line to choose what it allows</div>
+    <div><i>3</i><b>Quarantine</b> drag an agent into the red zone, or click it and flip the switch</div>
+  </div>
+  <div class="row" style="margin:0 0 10px"><div class="seg" id="cview"><b class="on" data-v="map">Map</b><b data-v="table">Table</b></div>
+    <span style="flex:1"></span>
+    <span class="legend"><i style="background:var(--accent)"></i>ask</span><span class="legend"><i style="background:var(--blue)"></i>delegate</span><span class="legend"><i style="background:var(--magenta)"></i>message</span><span class="legend"><i style="background:var(--yellow)"></i>pass chat</span>
+    <button class="btn" id="creset">Reset sketch</button></div>
+  <div class="crewgrid">
+    <div>
+      <div class="map" id="cmap">
+        <div class="fence" id="cfence"><span>QUARANTINE · only lines drawn in · no outgoing</span></div>
+        <svg id="csvg"><defs>
+          <marker id="cm" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="#bed6c9"/></marker>
+          <marker id="cmq" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="#d88d91"/></marker>
+        </defs></svg>
+      </div>
+      <div class="ctable" id="ctable" style="display:none"></div>
+    </div>
+    <div class="card" id="cinsp"></div>
+  </div>
+</section>
+
+<!-- ============ CHATS ============ -->
+<section class="page" id="chats">
+  <h1>Chats</h1>
+  <div class="sub">Every saved conversation. Agents can search these too.</div>
+  <div class="card" style="margin-bottom:12px;display:flex;gap:22px;align-items:center;flex-wrap:wrap">
+    <div class="row" style="margin:0"><label style="width:auto">Save chats</label><div class="sw on"></div></div>
+    <div class="row" style="margin:0"><label style="width:auto">Keep</label><div class="seg mini" data-seg><b class="on">forever</b><b>90 days</b><b>30 days</b><b>last 100</b></div></div>
+    <div class="row" style="margin:0"><label style="width:auto">Keep this session</label><div class="sw on"></div></div>
+    <button class="btn danger">Delete all</button><span class="hint">412 MB · ~/.local/share/agentvoice/chats</span>
+  </div>
+  <div class="chatwrap">
+    <div class="chatlist">
+      <div class="search"><input class="t" placeholder="Search chats…  (agent:, before:, after:)"><div class="chips" style="margin-top:6px"><span class="chip on">All</span><span class="chip">Theo</span><span class="chip">Sora</span><span class="chip">Hazel</span></div></div>
+      <div class="ci on"><b>Settings redesign notes</b><small>Theo · today 00:25 · 74 turns</small><div class="sum">Walked every settings page; notes in agentvoice-notes.</div></div>
+      <div class="ci"><b>Wake word false triggers</b><small>Theo · Nov 19 · 22 turns</small><div class="sum">Second check, verifier mtime, threshold tuning.</div></div>
+      <div class="ci"><b>Phase 13 tools & skills</b><small>Theo + Sora · Nov 18 · 40 turns</small><div class="sum">Skills folder layout; Sora drafted the notes.</div></div>
+      <div class="ci"><b>Minecraft desert village</b><small>Theo · Nov 16 · 51 turns</small><div class="sum">Golem fight, stopped east of spawn.</div></div>
+    </div>
+    <div class="conv">
+      <div class="msg me"><small>You · 00:31</small>Next up is the Agents tab. It looks like one of the best tabs…</div>
+      <div class="msg ag"><small>Theo · 00:31</small>Got it: compress the name, wake phrase and model rows.</div>
+      <div class="msg tool">— Theo edited feedback-notes-2026-11-21.md —</div>
+      <div class="msg me"><small>You · 00:32</small>We're not trying to decrease the settings, just make it neater.</div>
+      <div class="msg ag"><small>Theo · 00:32</small>Fixed: keep every setting, organize them better, and put a compact effort selector next to the model.</div>
+      <div class="msg ag sora"><small>Sora · 00:33 · asked by Theo</small>The VS Code picker is a dropdown with a small segmented control beside it.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ LISTENING ============ -->
+<section class="page" id="listening">
+  <h1>Listening</h1>
+  <div class="sub">How a wake word gets from the microphone to an agent, in order.</div>
+  <div class="note"><b>Sketch:</b> one pipeline, top to bottom. Each stage is a block with only its own settings. Engine-specific settings (like openWakeWord's voice training) appear inside that engine's stage only.</div>
+  <div class="pipe">
+    <div class="stage"><div class="num"><i>1</i><div class="line"></div></div>
+      <div class="card"><h3>Microphone <span>input level live</span></h3>
+        <div class="row"><label>Device</label><select><option>USB headset</option></select></div>
+        <div class="row"><label>Level</label><div class="meter"><i style="width:42%"></i><u style="left:30%"></u></div><span class="hint" title="Yellow mark: the gate. Sound below it is ignored.">gate</span></div>
+        <div class="row"><label>Gate</label><div class="seg" data-seg><b>fixed</b><b class="on">dynamic</b></div><label style="width:auto">adapts</label><div class="seg mini" data-seg><b>slow</b><b class="on">normal</b><b>fast</b></div></div>
+        <details><summary>Gate fine-tuning</summary>
+          <div class="row"><label>Fixed level</label><input type="range" style="width:160px"><span>-27 dBFS</span></div>
+          <div class="row"><label>Dynamic margin</label><input type="range" style="width:160px"><span>10 dB</span></div>
+        </details>
+      </div></div>
+    <div class="stage"><div class="num"><i>2</i><div class="line"></div></div>
+      <div class="card"><h3>First listener</h3>
+        <div class="row"><label>Engine</label><select><option>openWakeWord</option><option>Vosk</option></select><label style="width:auto">sensitivity</label><input type="range" style="width:160px"></div>
+        <details><summary>openWakeWord: your voice (verifier)</summary><div class="row"><label>Verifier</label><div class="sw on"></div><button class="btn">Record samples</button></div></details>
+        <details><summary>Sherpa / Vosk tuning (shown when picked)</summary>
+          <div class="row"><label>Short-name boost</label><input type="range" style="width:160px"><span>+20%</span></div>
+          <div class="row"><label>Also sounds like</label><input class="t" value="theo: TH IY1 AH0" style="flex:1"></div>
+        </details>
+      </div></div>
+    <div class="stage"><div class="num"><i>3</i><div class="line"></div></div>
+      <div class="card"><h3>Second check</h3>
+        <div class="row"><label>On</label><div class="sw on"></div><label style="width:auto">engines</label><div class="chips"><span class="chip on">Vosk</span><span class="chip on">Whisper</span></div></div>
+        <details><summary>Check window and hints</summary>
+          <div class="row"><label>Window</label><input class="t" value="600" style="width:60px"><span>to</span><input class="t" value="2600" style="width:60px"><span>ms</span></div>
+          <div class="row"><label>Trailing words</label><div class="sw on"></div><span class="hint" title="Allow words said right after the wake phrase">"theo, what time…"</span></div>
+          <div class="row"><label>Whisper hint</label><input class="t" value="Theo, Sora, Hazel" style="flex:1"></div>
+        </details>
+      </div></div>
+    <div class="stage"><div class="num"><i>4</i></div>
+      <div class="card"><h3>Decision</h3>
+        <div class="row"><label>Wake counts if</label><div class="seg" data-seg><b>either</b><b class="on">both agree</b><b>first only</b></div></div>
+        <div class="row"><label>Confidence</label><input type="range" style="width:160px"><span>60%</span></div>
+        <div class="row"><label>Today</label><span>31 wakes · 4 rejected by stage 3</span></div>
+      </div></div>
+  </div>
+</section>
+
+<!-- ============ CONVERSATION ============ -->
+<section class="page" id="conversation">
+  <h1>Conversation</h1>
+  <div class="sub">When it starts and stops listening, and how you interrupt it.</div>
+  <div class="row" style="margin-bottom:12px"><label>Pace</label><div class="seg" data-seg><b>patient</b><b class="on">balanced</b><b>snappy</b><b>custom</b></div></div>
+  <div class="grid2" style="margin-bottom:12px">
+    <div class="card"><h3>Follow-ups</h3>
+      <div class="row"><label>Keep listening after a reply</label><div class="sw on"></div></div>
+      <div class="row"><label>Window</label><input type="range" style="width:140px"><span>6 s</span></div>
+    </div>
+    <div class="card"><h3>Open mic <span><span class="dot"></span>on · 4:12 left</span></h3>
+      <div class="row"><label>Closes after</label><input type="range" style="width:110px"><span>10 min</span><button class="btn">Turn off</button></div>
+      <div class="row"><label>Only if meant for it</label><div class="sw on"></div></div>
+      <div class="row"><label>After every wake</label><div class="sw"></div></div>
+    </div>
+    <div class="card"><h3>While it works</h3>
+      <div class="row"><label>Talk while working</label><div class="seg mini" data-seg><b>off</b><b class="on">brief</b><b>detailed</b></div></div>
+      <div class="row"><label>Quiet first</label><input type="range" style="width:140px"><span>7 s</span></div>
+    </div>
+    <div class="card"><h3>Talking over it</h3>
+      <div class="row"><label>"Full stop" anytime</label><div class="sw on"></div></div>
+      <div class="row"><label>Interrupt by talking</label><div class="chips"><span class="chip on">headset</span><span class="chip">speakers</span></div></div>
+      <div class="row"><label>Louder by</label><input type="range" style="width:110px"><span>×1.5</span></div>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:12px"><h3>A turn, start to end</h3>
+    <div class="tl"><div style="flex:1.5;background:var(--blue)">lead-in</div><div style="flex:8;background:var(--accent)">you talk (up to 90 s)</div><div style="flex:1.6;background:var(--yellow)">pause 1.6 s</div><div style="flex:2;background:var(--magenta)">reply</div></div>
+    <div class="tlk"><span>wake</span><span>longest turn: 90 s</span><span>turn ends</span></div>
+    <div class="note" style="margin:10px 0 0;border-color:var(--orange)"><b>3 turns today hit the limit.</b> <a style="color:var(--accent);cursor:pointer">Raise it →</a></div>
+    <details><summary>Advanced timings (6)</summary>
+      <div class="row"><label>Lead-in</label><input type="range" style="width:160px"><span>300 ms</span></div>
+      <div class="row"><label>Pause ends turn</label><input type="range" style="width:160px"><span>1.6 s</span></div>
+      <div class="row"><label>Quick end</label><input type="range" style="width:160px"><span>700 ms</span><span class="hint">when you sound finished</span></div>
+      <div class="row"><label>Shortest turn</label><input type="range" style="width:160px"><span>300 ms</span></div>
+      <div class="row"><label>Longest turn</label><input type="range" style="width:160px"><span>90 s</span></div>
+      <div class="row"><label>Deaf after speaking</label><input type="range" style="width:160px"><span>400 ms</span></div>
+    </details>
+  </div>
+  <div class="card"><h3>Voice commands</h3>
+    <table class="cmds">
+      <tr><td>"keep listening"</td><td>Open mic on: no wake word needed until it closes.</td></tr>
+      <tr><td>"stop listening"</td><td>Open mic off; back to the wake word.</td></tr>
+      <tr><td>"full stop"</td><td>Stops the reply and everything the agent started.</td></tr>
+      <tr><td>"new chat"</td><td>Starts a fresh conversation.</td></tr>
+      <tr><td>"continue the chat about …"</td><td>Reopens a saved chat.</td></tr>
+      <tr><td>"move this to the terminal"</td><td>Hands the chat to a terminal session.</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- ============ OVERVIEW ============ -->
+<section class="page" id="overview">
+  <h1>Overview</h1>
+  <div class="sub">How it's doing right now.</div>
+  <div class="stats">
+    <div class="stat"><div class="v">74</div><div class="k">turns today</div><div class="d">Theo 68 · Sora 4 · Hazel 2</div></div>
+    <div class="stat"><div class="v">1.6 s</div><div class="k">wake to first word (median)</div><div class="d">transcribe 1.1 s</div></div>
+    <div class="stat"><div class="v">31 / 4</div><div class="k">wakes / rejected</div><div class="d">11% caught by 2nd check</div></div>
+    <div class="stat"><div class="v">2 h 14 m</div><div class="k">service up</div><div class="d">612 MB memory</div></div>
+  </div>
+  <div class="grid2">
+    <div class="card"><h3>Agents</h3>
+      <div class="toolrow"><span class="dot"></span><span class="tn">Theo <span class="src">· speaking</span></span><a style="color:var(--accent);cursor:pointer">last chat →</a></div>
+      <div class="toolrow"><span class="dot idle"></span><span class="tn">Sora <span class="src">· idle</span></span><a style="color:var(--accent);cursor:pointer">last chat →</a></div>
+      <div class="toolrow"><span class="dot idle"></span><span class="tn">Hazel <span class="src">· idle</span></span><a style="color:var(--accent);cursor:pointer">last chat →</a></div>
+    </div>
+    <div class="card"><h3>Microphone</h3>
+      <div class="row"><label>Gain</label><input type="range" style="flex:1"><span>+4 dB</span></div>
+      <div class="row"><label>Level</label><div class="meter"><i style="width:38%"></i><u style="left:30%"></u></div></div>
+      <div class="row"><label>Mute</label><div class="sw"></div></div>
+    </div>
+    <div class="card" style="grid-column:span 2"><h3>Wakes per hour <span>green accepted · red rejected</span></h3>
+      <div class="bars"><i style="height:20%"></i><i style="height:35%"></i><i class="r" style="height:10%"></i><i style="height:60%"></i><i style="height:80%"></i><i style="height:45%"></i><i class="r" style="height:15%"></i><i style="height:90%"></i><i style="height:70%"></i><i style="height:30%"></i><i style="height:55%"></i><i style="height:65%"></i></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ COMMUNAL ============ -->
+<section class="page" id="communal">
+  <h1>Communal</h1>
+  <div class="sub">What every agent shares.</div>
+  <div class="seg" data-seg style="margin-bottom:14px"><b class="on">Rules & defaults</b><b>Tools</b><b>Skills</b><b>Notes</b></div>
+  <div class="grid2">
+    <div class="card"><h3>Rules <span>beat an agent's own instructions</span></h3>
+      <textarea class="t" style="width:100%;height:110px;background:var(--bg-darker);color:var(--fg);border:1px solid var(--sel);border-radius:4px;font:inherit;padding:6px">Never push to origin.</textarea>
+      <div class="row"><span class="hint">41 / 1500</span><span style="flex:1"></span><button class="btn">History</button><button class="btn">Undo</button></div>
+    </div>
+    <div class="card"><h3>Defaults <span>an agent's own instructions beat these</span></h3>
+      <textarea class="t" style="width:100%;height:110px;background:var(--bg-darker);color:var(--fg);border:1px solid var(--sel);border-radius:4px;font:inherit;padding:6px">Keep spoken replies short.</textarea>
+      <div class="row"><span class="hint">25 / 1500</span><span style="flex:1"></span><button class="btn">History</button><button class="btn">Undo</button></div>
+    </div>
+    <div class="card"><h3>Who gets communal</h3>
+      <div class="toolrow"><span class="tn">Theo</span><div class="sw on"></div></div>
+      <div class="toolrow"><span class="tn">Sora</span><div class="sw on"></div></div>
+      <div class="toolrow"><span class="tn">Hazel</span><span class="src">Codex: no skills</span><div class="sw on"></div></div>
+    </div>
+    <div class="card"><h3>Preview <span>what an agent ends up with</span></h3>
+      <div class="seg mini" data-seg><b class="on">Theo</b><b>Sora</b><b>Hazel</b></div>
+      <div class="sub" style="margin:8px 0">communal rules → agent role → personality → instructions → communal defaults · 7,088 chars</div>
+      <div class="row"><button class="btn">Import…</button><button class="btn">Export</button><button class="btn">Open folder</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ VOICE ============ -->
+<section class="page" id="voice">
+  <h1>Voice</h1>
+  <div class="sub">How replies sound.</div>
+  <div class="grid2" style="margin-bottom:12px">
+    <div class="card"><h3>Quick settings</h3>
+      <div class="row"><label>Speak replies</label><div class="sw on"></div></div>
+      <div class="row"><label>Chimes</label><div class="sw on"></div><span class="hint">listening / done sounds</span></div>
+    </div>
+    <div class="card"><h3>Each agent <span>change on Agents →</span></h3>
+      <div class="toolrow"><span class="tn">Theo</span><span class="src">theo · 115%</span><button class="btn">▶</button></div>
+      <div class="toolrow"><span class="tn">Sora</span><span class="src">amy · 100%</span><button class="btn">▶</button></div>
+      <div class="toolrow"><span class="tn">Hazel</span><span class="src">cori · 100%</span><button class="btn">▶</button></div>
+    </div>
+  </div>
+  <div class="card"><h3>Voice library</h3>
+    <div class="row"><input class="t" placeholder="Search voices…" style="flex:1"><select><option>Downloaded</option><option>All</option></select><select><option>Any accent</option><option>US</option><option>British</option></select><select><option>Any voice</option><option>Male</option><option>Female</option></select></div>
+    <table class="vl">
+      <tr><td class="ic">🗑</td><td class="nm">theo</td><td>en_US · male</td><td class="used">Used for Theo</td><td><button class="btn">▶ Test</button></td></tr>
+      <tr><td class="ic">🗑</td><td class="nm">amy-medium</td><td>en_US · female</td><td class="used">Used for Sora</td><td><button class="btn">▶ Test</button></td></tr>
+      <tr><td class="ic">🗑</td><td class="nm">en_GB-cori-high</td><td>en_GB · female</td><td class="used">Used for Hazel</td><td><button class="btn">▶ Test</button></td></tr>
+      <tr><td class="ic"></td><td class="nm">ryan-high</td><td>en_US · male</td><td class="used"></td><td><button class="btn">▶ Test</button></td></tr>
+    </table>
+    <div class="sub" style="margin:6px 0 0">The trash column is always there, so names and Test buttons line up.</div>
+  </div>
+  <details style="margin-top:12px"><summary>Advanced: hearing you (transcription)</summary>
+    <div class="card" style="margin-top:8px"><div class="row"><label>Model</label><div class="seg" data-seg><b>base.en</b><b class="on">small.en</b><b>medium.en</b></div></div>
+    <div class="row"><label>Live transcription</label><div class="sw on"></div></div>
+    <div class="sub" style="margin:0">Turns your speech into text on this machine before any agent sees it.</div></div>
+  </details>
+</section>
+
+<!-- ============ OTHER ============ -->
+<section class="page" id="other">
+  <h1>Other settings</h1>
+  <div class="sub">Everything that isn't about one stage of a conversation.</div>
+  <div class="grid2">
+    <div class="card"><h3>On-screen readout</h3>
+      <div class="row"><label>Show readout</label><div class="sw on"></div><button class="btn">Preview</button></div>
+      <div class="row"><label>Size</label><div class="seg" data-seg><b class="on">locked</b><b>dynamic</b></div></div>
+      <div class="row"><label>Keep last reply</label><div class="sw on"></div><span class="hint" title="Shows the agent's last answer above what you're saying now">while you talk</span></div>
+      <div class="row"><label>Position</label><div class="seg mini" data-seg><b>top</b><b class="on">bottom</b></div></div>
+      <div class="row"><label>Stays after</label><input type="range" style="width:120px"><span>4 s</span></div>
+      <div class="row"><label>Omarchy Agents panel</label><div class="sw on"></div></div>
+    </div>
+    <div class="card"><h3>Privacy</h3>
+      <div class="row"><label>Step aside</label><div class="sw on"></div><span class="hint">when another app records</span></div>
+      <div class="row"><label>⚠ Log speech</label><div class="sw"></div><span class="hint" title="Keeps what was said in the system journal for weeks">journal keeps weeks</span></div>
+      <div class="sub" style="margin:4px 0 0">The mic always closes while the screen is locked.</div>
+    </div>
+    <div class="card"><h3>Keys</h3>
+      <div class="toolrow"><span class="tn">Talk without wake word</span><span class="pill">hold F8</span></div>
+      <div class="toolrow"><span class="tn">Stop everything</span><span class="pill">Super+Ctrl+Space</span></div>
+      <div class="toolrow"><span class="tn">Release mic</span><span class="pill">Super+Alt+Space</span></div>
+    </div>
+    <div class="card"><h3>Maintenance</h3>
+      <div class="row"><button class="btn">Repair installation</button></div>
+      <div class="row"><button class="btn danger">Remove Agent Voice</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ABOUT ============ -->
+<section class="page" id="about">
+  <h1>About</h1>
+  <div class="sub">What's running and how to talk to it.</div>
+  <div class="grid2">
+    <div class="card"><h3>This install</h3>
+      <div class="toolrow"><span class="tn">Version</span><span class="src">0.17-dev · c47aae1 (phase-16)</span></div>
+      <div class="toolrow"><span class="tn">Installed</span><span class="src">Nov 21 00:12</span></div>
+      <div class="row"><button class="btn">Copy diagnostics</button><button class="btn">Check for updates</button><button class="btn">Changelog</button></div>
+    </div>
+    <div class="card"><h3>Runs here vs. goes out</h3>
+      <div class="toolrow"><span class="dot"></span><span class="tn">Wake word, transcription, voices</span><span class="src">on this machine</span></div>
+      <div class="toolrow"><span class="dot" style="background:var(--orange)"></span><span class="tn">Claude Code, Codex</span><span class="src">cloud AI</span></div>
+      <div class="toolrow"><span class="dot off"></span><span class="tn">Ollama / llama.cpp</span><span class="src">not found</span></div>
+    </div>
+    <div class="card" style="grid-column:span 2"><h3>Voice commands</h3>
+      <table class="cmds">
+        <tr><td>"theo" / "sora" / "hazel"</td><td>Wakes that agent.</td></tr>
+        <tr><td>"keep listening"</td><td>Open mic on: no wake word needed until it closes.</td></tr>
+        <tr><td>"stop listening"</td><td>Open mic off; back to the wake word.</td></tr>
+        <tr><td>"full stop"</td><td>Stops the reply and everything the agent started. Works without the wake word.</td></tr>
+        <tr><td>"new chat"</td><td>Starts a fresh conversation.</td></tr>
+        <tr><td>"continue the chat about …"</td><td>Reopens a saved chat.</td></tr>
+        <tr><td>"pass this to …"</td><td>Hands the conversation to another agent.</td></tr>
+        <tr><td>"move this to the terminal"</td><td>Continues the chat in a terminal session.</td></tr>
+        <tr><td>"goodbye"</td><td>Ends the conversation.</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ POPUP ============ -->
+<section class="page" id="popup">
+  <h1>Bar popup</h1>
+  <div class="sub">The panel from the bar icon. Old global permission section removed; readout locked to one size.</div>
+  <div style="display:flex;gap:30px;align-items:flex-start">
+    <div class="popup">
+      <div class="top"><span class="dot"></span><b>Agent Voice</b><span class="pill">open mic · 4:12</span></div>
+      <div class="readout">
+        <div class="last"><b style="color:var(--accent)">Theo:</b> The voice library defaults to downloaded, and the trash can moves to the front.</div>
+        <div class="now">Also want to make sure all those names stay lined up</div>
+      </div>
+      <div class="agents"><span><span class="dot"></span>Theo</span><span><span class="dot idle"></span>Sora</span><span><span class="dot idle"></span>Hazel</span></div>
+      <div class="row" style="margin-top:10px"><button class="btn" style="flex:1">Mute</button><button class="btn" style="flex:1;border-color:var(--red);color:var(--red)">Stop</button><button class="btn" style="flex:1">Settings</button></div>
+    </div>
+    <div class="note" style="max-width:340px">Readout is always the same height: your last reply on top (dim, green bar), what you're saying now below (bright, yellow bar). Nothing appears or disappears, so the window never bounces. "Dynamic" in Other settings brings back the grow and shrink.</div>
+  </div>
+</section>
+
+  </main>
+</div>
+<script>
+  document.querySelectorAll('nav a').forEach(a=>a.onclick=()=>{
+    document.querySelectorAll('nav a').forEach(x=>x.classList.toggle('on',x===a));
+    document.querySelectorAll('.page').forEach(p=>p.classList.toggle('on',p.id===a.dataset.p));
+  });
+  document.querySelectorAll('[data-seg]').forEach(s=>s.querySelectorAll('b').forEach(b=>b.onclick=()=>{s.querySelectorAll('b').forEach(x=>x.classList.toggle('on',x===b))}));
+  document.querySelectorAll('.chip').forEach(c=>c.onclick=()=>c.classList.toggle('on'));
+  document.querySelectorAll('.sw').forEach(c=>c.onclick=()=>c.classList.toggle('on'));
+  document.querySelectorAll('.strip').forEach(s=>s.onclick=()=>s.parentElement.classList.toggle('open'));
+  document.querySelectorAll('.btn.danger').forEach(b=>b.onclick=()=>confirm(b.textContent.trim()+"?\n\nThis can't be undone."));
+  document.querySelectorAll('.edge').forEach(e=>e.onclick=()=>document.getElementById('esel').textContent=e.dataset.e);
+  document.querySelectorAll('.ci').forEach(c=>c.onclick=()=>{document.querySelectorAll('.ci').forEach(x=>x.classList.toggle('on',x===c))});
+  let drag=null;
+  document.querySelectorAll('.sk').forEach(k=>k.addEventListener('dragstart',e=>{drag=k;e.dataTransfer.effectAllowed='copyMove'}));
+  document.querySelectorAll('[data-lane]').forEach(l=>{
+    l.addEventListener('dragover',e=>{e.preventDefault();l.classList.add('over')});
+    l.addEventListener('dragleave',()=>l.classList.remove('over'));
+    l.addEventListener('drop',e=>{e.preventDefault();l.classList.remove('over');if(!drag)return;
+      const n=e.ctrlKey?drag.cloneNode(true):drag; if(e.ctrlKey)n.addEventListener('dragstart',ev=>{drag=n});
+      l.appendChild(n);
+      document.querySelectorAll('[data-lane]').forEach(x=>x.querySelector('.pill').textContent=x.querySelectorAll('.sk').length);});
+  });
+</script>
+
+<script>
+(function(){
+  const ABIL=[['ask','var(--accent)','#8bcbb1','Ask a question, get an answer back'],['delegate','var(--blue)','#96b7d0','Hand over a task to do'],['message','var(--magenta)','#b7a1c8','Leave a message for later'],['pass','var(--yellow)','#c5cc91','Pass the whole conversation']];
+  const QOK=['ask','delegate']; // what a line into a quarantined agent may carry
+  const start=()=>({nodes:[
+    {id:'theo',name:'Theo',sub:'Opus · trusted',c:'var(--accent)',x:60,y:60,q:false},
+    {id:'sora',name:'Sora',sub:'Haiku · ask',c:'var(--magenta)',x:430,y:50,q:false},
+    {id:'hazel',name:'Hazel',sub:'Codex · trusted',c:'var(--blue)',x:120,y:300,q:false},
+    {id:'scout',name:'Scout',sub:'web research',c:'var(--cyan)',x:520,y:340,q:true}],
+   links:[
+    {f:'theo',t:'sora',a:['ask','delegate','pass'],ap:false},
+    {f:'sora',t:'theo',a:['ask','message'],ap:false},
+    {f:'theo',t:'hazel',a:['ask','delegate'],ap:true},
+    {f:'theo',t:'scout',a:['delegate'],ap:false}]});
+  let S=start(), sel=null; // sel = {kind:'node',id} | {kind:'link',i}
+  const map=document.getElementById('cmap'), svg=document.getElementById('csvg'), fence=document.getElementById('cfence'), insp=document.getElementById('cinsp');
+  const N=id=>S.nodes.find(n=>n.id===id);
+  const el=(t,a={},h='')=>{const e=document.createElement(t);for(const k in a)e.setAttribute(k,a[k]);e.innerHTML=h;return e};
+  const sv=(t,a)=>{const e=document.createElementNS('http://www.w3.org/2000/svg',t);for(const k in a)e.setAttribute(k,a[k]);return e};
+  function inFence(n){const m=map.getBoundingClientRect(),f=fence.getBoundingClientRect();const cx=m.left+n.x+68,cy=m.top+n.y+25;return cx>f.left&&cx<f.right&&cy>f.top&&cy<f.bottom}
+  function setQ(n,q){n.q=q; if(q){S.links=S.links.filter(l=>l.f!==n.id); S.links.filter(l=>l.t===n.id).forEach(l=>{l.a=l.a.filter(x=>QOK.includes(x)); if(!l.a.length)l.a=['delegate']})}}
+  function center(n){return [n.x+68,n.y+25]}
+  function draw(){
+    map.querySelectorAll('.cnode').forEach(e=>e.remove());
+    [...svg.querySelectorAll('g')].forEach(g=>g.remove());
+    S.links.forEach((l,i)=>{
+      const a=N(l.f),b=N(l.t); let [x1,y1]=center(a),[x2,y2]=center(b);
+      const two=S.links.some(o=>o.f===l.t&&o.t===l.f);
+      const dx=x2-x1,dy=y2-y1,len=Math.hypot(dx,dy)||1,ux=dx/len,uy=dy/len;
+      x1+=ux*72;y1+=uy*30;x2-=ux*74;y2-=uy*32;
+      const off=two?34:0, mx=(x1+x2)/2-uy*off, my=(y1+y2)/2+ux*off;
+      const g=sv('g',{}); const d=`M${x1},${y1} Q${mx},${my} ${x2},${y2}`;
+      const q=b.q, isSel=sel&&sel.kind==='link'&&sel.i===i;
+      const cols=l.a.map(x=>ABIL.find(z=>z[0]===x)[2]);
+      cols.forEach((c,k)=>g.appendChild(sv('path',{d,stroke:c,'stroke-width':isSel?4:2.5,fill:'none','stroke-dasharray':q?'6 4':'', 'stroke-dashoffset':k*3, opacity:.9, 'marker-end':k===cols.length-1?(q?'url(#cmq)':'url(#cm)'):''})));
+      const hit=sv('path',{d,stroke:'transparent','stroke-width':16,fill:'none',class:'hit'}); hit.onclick=e=>{e.stopPropagation();sel={kind:'link',i};draw()}; g.appendChild(hit);
+      const lx=(x1+2*mx+x2)/4, ly=(y1+2*my+y2)/4;
+      const t=sv('text',{x:lx,y:ly-6,'text-anchor':'middle','font-size':11,fill:'#bed6c9'}); t.textContent=l.a.join(' · ')+(l.ap?' 🔒':''); g.appendChild(t);
+      svg.appendChild(g);
+    });
+    S.nodes.forEach(n=>{
+      const e=el('div',{class:'cnode'+(n.q?' q':'')+(sel&&sel.kind==='node'&&sel.id===n.id?' sel':'')},`<b>${n.name}</b><small>${n.sub}</small><div class="cport" title="Drag onto another agent to link"></div>`);
+      e.style.left=n.x+'px';e.style.top=n.y+'px';e.style.setProperty('--c',n.c);e.dataset.id=n.id;
+      map.appendChild(e);
+      e.querySelector('.cport').addEventListener('pointerdown',ev=>startLink(ev,n));
+      e.addEventListener('pointerdown',ev=>{if(ev.target.classList.contains('cport'))return;startMove(ev,n,e)});
+    });
+    drawInsp(); drawTable();
+  }
+  function startMove(ev,n,e){
+    ev.preventDefault(); const sx=ev.clientX,sy=ev.clientY,ox=n.x,oy=n.y; let moved=false;
+    const mv=m=>{n.x=Math.max(0,Math.min(map.clientWidth-140,ox+m.clientX-sx));n.y=Math.max(0,Math.min(map.clientHeight-55,oy+m.clientY-sy));if(Math.abs(m.clientX-sx)+Math.abs(m.clientY-sy)>3)moved=true;e.style.left=n.x+'px';e.style.top=n.y+'px';fence.classList.toggle('hot',inFence(n));redrawLinksOnly()};
+    const up=()=>{removeEventListener('pointermove',mv);removeEventListener('pointerup',up);fence.classList.remove('hot');
+      if(moved){const q=inFence(n); if(q!==n.q)setQ(n,q)} sel={kind:'node',id:n.id}; draw()};
+    addEventListener('pointermove',mv);addEventListener('pointerup',up);
+  }
+  let rl=0; function redrawLinksOnly(){cancelAnimationFrame(rl);rl=requestAnimationFrame(()=>{const keep=sel;[...svg.querySelectorAll('g')].forEach(g=>g.remove());const nodes=[...map.querySelectorAll('.cnode')];draw();})}
+  function startLink(ev,n){
+    ev.preventDefault();ev.stopPropagation();
+    if(n.q){sel={kind:'node',id:n.id};draw();flash('A quarantined agent can\'t start links.');return}
+    const m=map.getBoundingClientRect(); const [x1,y1]=[n.x+136,n.y+25];
+    const tmp=sv('path',{stroke:'#c5cc91','stroke-width':2,'stroke-dasharray':'4 3',fill:'none'}); const g=sv('g',{}); g.appendChild(tmp); svg.appendChild(g);
+    let over=null;
+    const mv=e=>{tmp.setAttribute('d',`M${x1},${y1} L${e.clientX-m.left},${e.clientY-m.top}`);
+      map.querySelectorAll('.cnode').forEach(x=>x.classList.remove('drop'));
+      const t=document.elementFromPoint(e.clientX,e.clientY); const c=t&&t.closest('.cnode'); over=c&&c.dataset.id!==n.id?c.dataset.id:null; if(over)c.classList.add('drop')};
+    const up=()=>{removeEventListener('pointermove',mv);removeEventListener('pointerup',up);g.remove();
+      if(over){let i=S.links.findIndex(l=>l.f===n.id&&l.t===over);
+        if(i<0){S.links.push({f:n.id,t:over,a:['ask'],ap:false});i=S.links.length-1}
+        sel={kind:'link',i}} draw()};
+    addEventListener('pointermove',mv);addEventListener('pointerup',up);
+  }
+  let fl=''; function flash(t){fl=t;drawInsp();setTimeout(()=>{fl='';drawInsp()},2500)}
+  function drawInsp(){
+    let h='';
+    if(fl)h+=`<div class="warnbox">${fl}</div>`;
+    if(!sel){h+=`<h3>Nothing selected</h3><div class="sub" style="margin:0">Click an agent to see everything it can do, or a line to change what it allows.</div>
+      <ul class="cinsp-list" style="margin-top:12px">${ABIL.map(a=>`<li><span style="color:${a[1]}">■</span> <b>${a[0]}</b> · ${a[3]}</li>`).join('')}</ul>
+      <div class="sub" style="margin:0">🔒 = asks you before each use.</div>`}
+    else if(sel.kind==='node'){const n=N(sel.id); const out=S.links.filter(l=>l.f===n.id), inn=S.links.filter(l=>l.t===n.id);
+      h+=`<h3>${n.name} <span>${n.sub}</span></h3>
+      <div class="row"><label>Quarantined</label><div class="sw ${n.q?'on':''}" id="cq"></div></div>
+      ${n.q?`<div class="warnbox">Can't start anything. Lines into it carry only ask or delegate, with a short brief and no chat history.</div>`:''}
+      <div class="sub" style="margin:8px 0 2px">Can reach</div><ul class="cinsp-list">${out.map(l=>`<li>→ ${N(l.t).name}: ${l.a.join(', ')}${l.ap?' 🔒':''}</li>`).join('')||'<li style="color:var(--muted)">nobody</li>'}</ul>
+      <div class="sub" style="margin:0 0 2px">Reached by</div><ul class="cinsp-list">${inn.map(l=>`<li>← ${N(l.f).name}: ${l.a.join(', ')}${l.ap?' 🔒':''}</li>`).join('')||'<li style="color:var(--muted)">nobody</li>'}</ul>
+      <div class="sub" style="margin:0">Drag its <span class="port-demo">●</span> dot to add a line.</div>`}
+    else{const l=S.links[sel.i]; if(!l){sel=null;return drawInsp()} const a=N(l.f),b=N(l.t);
+      h+=`<h3>${a.name} → ${b.name} <span>one way</span></h3>
+      <div class="sub" style="margin:0 0 6px">What ${a.name} may do to ${b.name}:</div>
+      <div class="chips" style="flex-direction:column;align-items:flex-start">${ABIL.map(x=>{const dis=b.q&&!QOK.includes(x[0]);return `<span class="chip ${l.a.includes(x[0])?'on':''} ${dis?'dis':''}" data-ab="${x[0]}" title="${dis?'Not allowed into a quarantined agent':x[3]}">${x[0]} <small style="opacity:.7">· ${x[3]}</small></span>`}).join('')}</div>
+      <div class="row" style="margin-top:10px"><label>Ask me first</label><div class="sw ${l.ap?'on':''}" id="cap"></div></div>
+      <div class="row"><button class="btn" id="crev">${S.links.some(o=>o.f===l.t&&o.t===l.f)?'Edit the reverse line':'Also allow '+b.name+' → '+a.name}</button></div>
+      <div class="row"><button class="btn danger" id="cdel">Delete line</button></div>`}
+    insp.innerHTML=h;
+    const q=insp.querySelector('#cq'); if(q)q.onclick=()=>{setQ(N(sel.id),!N(sel.id).q);const n=N(sel.id); if(n.q){const f=fence.getBoundingClientRect(),m=map.getBoundingClientRect();n.x=f.left-m.left+50;n.y=f.top-m.top+70} else {n.x=Math.min(n.x,300);n.y=Math.min(n.y,200)} draw()};
+    insp.querySelectorAll('[data-ab]').forEach(c=>c.onclick=()=>{if(c.classList.contains('dis'))return;const l=S.links[sel.i],k=c.dataset.ab;l.a=l.a.includes(k)?l.a.filter(x=>x!==k):[...l.a,k];if(!l.a.length){flash('A line needs at least one ability. Delete it instead.');l.a=[k]}draw()});
+    const ap=insp.querySelector('#cap'); if(ap)ap.onclick=()=>{S.links[sel.i].ap=!S.links[sel.i].ap;draw()};
+    const rv=insp.querySelector('#crev'); if(rv)rv.onclick=()=>{const l=S.links[sel.i];if(N(l.t).q){flash('A quarantined agent can\'t start links.');return}let j=S.links.findIndex(o=>o.f===l.t&&o.t===l.f);if(j<0){S.links.push({f:l.t,t:l.f,a:['ask'],ap:false});j=S.links.length-1}sel={kind:'link',i:j};draw()};
+    const dl=insp.querySelector('#cdel'); if(dl)dl.onclick=()=>{if(confirm('Delete this line?\n\nThey will no longer be able to reach each other this way.')){S.links.splice(sel.i,1);sel=null;draw()}};
+  }
+  function drawTable(){
+    const t=document.getElementById('ctable');
+    t.innerHTML=`<table><tr><th>From</th><th>To</th><th>Allows</th><th>Ask first</th></tr>${S.links.map((l,i)=>`<tr data-i="${i}" style="cursor:pointer"><td>${N(l.f).name}</td><td>${N(l.t).name}${N(l.t).q?' ⛔':''}</td><td>${l.a.map(x=>`<span class="chip on">${x}</span>`).join(' ')}</td><td>${l.ap?'yes':'no'}</td></tr>`).join('')}</table><div class="sub" style="margin-top:6px">Same lines as the map. Click a row to edit it.</div>`;
+    t.querySelectorAll('tr[data-i]').forEach(r=>r.onclick=()=>{sel={kind:'link',i:+r.dataset.i};draw()});
+  }
+  map.addEventListener('pointerdown',e=>{if(e.target===map||e.target===fence||e.target.parentNode===fence){sel=null;draw()}});
+  document.querySelectorAll('#cview b').forEach(b=>b.onclick=()=>{document.querySelectorAll('#cview b').forEach(x=>x.classList.toggle('on',x===b));map.style.display=b.dataset.v==='map'?'':'none';document.getElementById('ctable').style.display=b.dataset.v==='table'?'':'none'});
+  document.getElementById('creset').onclick=()=>{S=start();sel=null;draw()};
+  // draw when the page first becomes visible (sizes are zero while hidden)
+  document.querySelector('nav a[data-p="crew"]').addEventListener('click',()=>setTimeout(draw,0));
+  draw();
+})();
+</script>
+</body>
+</html>

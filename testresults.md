@@ -16,6 +16,7 @@ Run started 2026-11-18 against build 9e1918f (`phase-g`). Plan: testplan.md.
 | 8 | Codex run | phase3notes.md says Codex chats are replayed, not resumed. Codex claims `remembers` and resumed across two real turns | doc | fixed in phase3notes.md |
 
 | 9 | D-01 | after 5 quick restarts systemd refuses starts, and `agentvoice start` / the panel switch fail until `systemctl --user reset-failed` | low | fixed e331d31 |
+| 10 | user, live 2026-11-19 | with the microphone muted, replies to turns typed in the Claude terminal are still spoken, but the HUD popup never appears; the panel's "last heard" stays on the last turn from before (`random`) and Theo's chip still reads "speaking". Expected: the popup shows whatever is being spoken, muted or not. Cause not looked into | medium | open |
 
 ## Results
 
