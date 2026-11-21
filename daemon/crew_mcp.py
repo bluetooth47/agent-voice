@@ -145,11 +145,14 @@ COLLAB = frozenset(t["name"] for t in COLLAB_TOOLS)
 def _card_s() -> float:
     """How long a card waits for an answer: the permission hook's own
     setting (AGENTVOICE_PERMISSION_TIMEOUT), so the waits below fit it."""
+    import math
     try:
         import permission_hook
-        return float(permission_hook.TIMEOUT)
+        value = float(permission_hook.TIMEOUT)
     except Exception:                   # noqa: BLE001
         return 45.0
+    # Finite and bounded, so the waits worked out from it are numbers.
+    return min(value, 600.0) if math.isfinite(value) else 600.0
 
 
 #: How long to wait for the daemon: the card (and the line said with it), a

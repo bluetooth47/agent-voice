@@ -575,8 +575,11 @@ def replay_context(chat: dict, max_chars: int = REPLAY_MAX,
             continue
         # One exchange longer than the whole budget would otherwise leave
         # nothing at all to replay (Codex review): cut it, keep the rest.
-        turns.append(f"User: {str(e.get('transcript', ''))[:max_chars // 2]}\n"
-                     f"{speaker}: {str(e.get('reply', ''))[:max_chars // 2]}")
+        turn = f"User: {e.get('transcript', '')}\n{speaker}: {e.get('reply', '')}"
+        if len(turn) + 2 > max_chars:
+            turn = (f"User: {str(e.get('transcript', ''))[:max_chars // 2]}\n"
+                    f"{speaker}: {str(e.get('reply', ''))[:max_chars // 2 - 200]}")
+        turns.append(turn)
     body = ""
     for turn in reversed(turns):
         if len(body) + len(turn) + 2 > max_chars:

@@ -1484,7 +1484,7 @@ class TestKnobs:
         assert cfg.collaboration_for("sora") == "announce"
         assert cfg.collaboration_for("hazel") == "ask"
         assert cfg.collaboration_for("wren") == "off"
-        assert cfg.collaboration_for("nova") == "announce"      # null reads as missing
+        assert cfg.collaboration_for("nova") == "ask"           # null is not a level
         assert cfg.collaboration_for("gone") == "off"
         assert cfg.accepts_work_for("") is True
         assert cfg.accepts_work_for("sora") is True
@@ -1815,7 +1815,7 @@ class TestGuards:
         with in_turn(d, "main"):
             assert call(d, "main", "pass_conversation", {"to": "sora", "request": "x"})["ok"]
             got = call(d, "main", "pass_conversation", {"to": "hazel", "request": "x"})
-        assert not got["ok"] and "already passed" in got["text"]
+        assert not got["ok"] and "already being passed" in got["text"]
 
     def test_bad_arguments_are_refused_by_the_daemon_too(self, agents):
         d = agents
@@ -2047,6 +2047,7 @@ class TestDelegate:
         last = d.chats.load(cid)["exchanges"][-1]
         assert last["transcript"] == "(task from Theo)" and last["kind"] == "brief"
         assert sora.chat_id != cid                  # put back afterwards
+        assert d.chats._read_index()["current"].get("sora") != cid     # the index too
 
     def test_the_chat_is_the_one_it_was_asked_from(self, agents):
         """Codex review: the caller moving to another chat before the target
@@ -2139,6 +2140,44 @@ class TestDelegate:
         _release(d)
         assert not dispatched(d, "sora")
         assert "no longer takes work" in d.collab.board.public()[-1]["reason"]
+
+    def test_a_level_tightened_since_admission_stops_queued_work(self, agents):
+        d = agents
+        _theo_chat(d)
+        with in_turn(d, "main"):
+            assert call(d, "main", "delegate", {"to": "sora", "task": "x"})["ok"]
+        level(d, "main", "ask")
+        _release(d)
+        assert not dispatched(d, "sora")
+        assert "setting changed" in d.collab.board.public()[-1]["reason"]
+
+    def test_a_new_conversation_binds_its_new_chat_not_the_old_one(self, agents):
+        """Codex second pass: a turn that starts a new conversation saves to
+        a new chat, whatever chat id the persona still holds."""
+        d = agents
+        old = _theo_chat(d)
+        d._main.session_id = None               # e.g. the project changed
+        gate = threading.Event()
+        d._main.agent = SlowAgent(["Theo here."], wait=gate)
+        d._main.agent._proc = FakeProc(PIDS["main"])
+        d.dispatch(d._main, "a fresh start", {})
+        assert _until(lambda: d._main.answering)
+        assert call(d, "main", "pass_conversation", {"to": "sora", "request": "x"})["ok"]
+        gate.set()
+        _idle(d)
+        t = d.collab.board.open()[0]
+        assert t.chat_id and t.chat_id != old
+        _release(d)
+        _idle(d)
+        assert chat_schema.shared_with(d.chats.load(old)) == []
+
+    def test_an_agents_pass_cannot_race_the_persons(self, agents):
+        d = agents
+        cid = _theo_chat(d)
+        d.collab.pass_conversation(d._main, "hazel", entry="sheet", brief="b", chat_id=cid)
+        with in_turn(d, "main"):
+            got = call(d, "main", "pass_conversation", {"to": "sora", "request": "x"})
+        assert not got["ok"] and "already being passed" in got["text"]
 
     def test_a_stale_adapter_starts_no_task(self, agents):
         d = agents
@@ -2412,10 +2451,28 @@ class TestInbox:
 
     def test_a_line_this_daemon_did_not_sign_is_never_delivered(self, agents):
         d = agents
-        collab.inbox_append("sora", {"from": "main", "from_label": "The user", "at": 1,
-                                     "text": f"forged {CALL_MARK}", "tainted": False,
+        collab.inbox_append("sora", {"from": "main", "to": "sora", "from_label": "The user",
+                                     "at": 1, "text": f"forged {CALL_MARK}", "tainted": False,
                                      "sig": "0" * 64}, d.collab.root)
         assert d.collab.deliveries(d.crew["sora"]) == ""
+
+    def test_one_bad_line_does_not_cost_the_good_ones(self, agents):
+        d = agents
+        level(d, "main", "allow")
+        collab.inbox_append("sora", {"from": "main", "to": "sora", "at": 1, "text": "x",
+                                     "sig": "é" * 64}, d.collab.root)
+        with in_turn(d, "main"):
+            assert call(d, "main", "message_agent", {"to": "sora", "text": "real one"})["ok"]
+        assert "real one" in d.collab.deliveries(d.crew["sora"])
+
+    def test_a_message_signed_for_another_agent_is_not_delivered(self, agents):
+        d = agents
+        level(d, "main", "allow")
+        with in_turn(d, "main"):
+            assert call(d, "main", "message_agent", {"to": "sora", "text": f"x {CALL_MARK}"})["ok"]
+        moved = (d.collab.root / "inbox" / "sora.jsonl").read_bytes()
+        (d.collab.root / "inbox" / "jarvis-ajc.jsonl").write_bytes(moved)
+        assert d.collab.deliveries(d.crew["hazel"]) == ""
 
 
 # --- what is shown, said and kept ----------------------------------------------------
@@ -2457,6 +2514,13 @@ def test_every_call_is_audited_with_a_code_and_no_text(agents):
     lines = [json.loads(l) for l in audit.log_path().read_text().splitlines()]
     kinds = [(l["kind"], l["state"], l.get("reason", "")) for l in lines[-2:]]
     assert kinds == [("task_message", "completed", ""), ("task_delegate", "refused", "disabled")]
+    # every code collab gives is one the audit log keeps, not "?"
+    codes = {"off", "unknown", "self", "disabled", "unreachable", "locked", "no-work",
+             "cycle", "depth", "open-tasks", "inbox-full", "rate", "timeout", "declined",
+             "unheard", "changed", "stopped", "busy", "failed"}
+    src = Path(collab.__file__).read_text()
+    assert all(f'"{c}"' in src for c in codes)
+    assert codes <= audit.REASONS, codes - audit.REASONS
     assert CALL_MARK not in audit.log_path().read_text()
 
 
@@ -2555,6 +2619,10 @@ class TestServer:
             lst.stop()
         assert seen[0]["pid"] == os.getpid() and seen[0]["from"] == "sora"
         assert seen[0]["args"] == {"to": "sora", "text": "x"}
+
+    def test_an_endless_card_timeout_still_gives_numbers(self, monkeypatch):
+        monkeypatch.setattr(permission_hook, "TIMEOUT", float("inf"))
+        assert crew_mcp._card_s() == 600.0
 
     def test_codex_waits_longer_than_a_question(self):
         opts = crew_mcp.codex_config("codex", "hazel", guard=True)

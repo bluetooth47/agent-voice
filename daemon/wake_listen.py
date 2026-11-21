@@ -3510,6 +3510,9 @@ class Daemon:
         # agent makes is accepted only from the turn it was made in (Phase 16).
         persona.turn_id = getattr(persona, "turn_id", 0) + 1
         persona.answering = True
+        # Whether this turn's exchange goes into a new chat (save_chat's own
+        # rule), so a task asked for now is not bound to an older one.
+        persona.turn_new_chat = not self.session_id and not persona.chat_continued
         t0 = time.time()
         clock["sent"] = t0
         # A turn sent without a session starts a conversation. The view draws

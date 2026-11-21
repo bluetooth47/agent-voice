@@ -65,7 +65,7 @@ REASONS = frozenset({"", "denied", "locked", "stale", "unreadable-record",
                      # (Phase 16): collab's codes, never its sentences.
                      "off", "unknown", "self", "disabled", "unreachable", "no-work",
                      "cycle", "depth", "open-tasks", "inbox-full", "rate", "timeout",
-                     "declined", "unheard", "stopped", "busy", "failed"})
+                     "declined", "unheard", "stopped", "busy", "failed", "changed"})
 
 
 def log_path() -> Path:

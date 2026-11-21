@@ -106,6 +106,7 @@ class Persona:
         #: call is taken only from the turn it was made in (Phase 16).
         self.turn_id = 0
         self.answering = False
+        self.turn_new_chat = False
 
     @property
     def main(self) -> bool:
