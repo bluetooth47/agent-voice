@@ -565,14 +565,18 @@ def replay_context(chat: dict, max_chars: int = REPLAY_MAX,
     for e in chat.get("exchanges") or []:
         speaker = e.get('agent_label') or who
         if e.get("kind") == "aside":
-            # A question one agent asked another (Phase 16): its words are
-            # that agent's, never the user's.
+            # A question one agent asked another (Phase 16): both halves are
+            # agents' words, fenced, so neither can pass for a "User:" line.
             asked = e.get("asked_label") or e.get("asked") or "another agent"
-            turns.append(f"({speaker} asked {asked}, not the user: "
-                         f"{e.get('transcript', '')})\n{asked}: {e.get('reply', '')}")
+            q = str(e.get("transcript", "")).replace(">>>", "> > >")[:max_chars // 4]
+            a = str(e.get("reply", "")).replace(">>>", "> > >")[:max_chars // 4]
+            turns.append(f"({speaker} asked {asked} a question; not the user's words:)\n"
+                         f"<<<\n{q}\n>>>\n({asked} answered:)\n<<<\n{a}\n>>>")
             continue
-        turns.append(f"User: {e.get('transcript', '')}\n"
-                     f"{speaker}: {e.get('reply', '')}")
+        # One exchange longer than the whole budget would otherwise leave
+        # nothing at all to replay (Codex review): cut it, keep the rest.
+        turns.append(f"User: {str(e.get('transcript', ''))[:max_chars // 2]}\n"
+                     f"{speaker}: {str(e.get('reply', ''))[:max_chars // 2]}")
     body = ""
     for turn in reversed(turns):
         if len(body) + len(turn) + 2 > max_chars:

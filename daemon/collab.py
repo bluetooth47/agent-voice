@@ -144,8 +144,9 @@ TOOL_KIND = {"ask_agent": "ask", "delegate": "delegate",
              "pass_conversation": "pass", "message_agent": "message"}
 #: The programs that take the crew server, and so can start collaboration.
 STARTERS = ("claude", "codex")
-#: Result files nobody collected (the calling process died) go after this.
-RESULT_STALE_S = 600.0
+#: How strict each level is: a level that tightens while a call waits (a
+#: card, a spoken line) refuses the call rather than finish it under the old.
+STRICTNESS = {"allow": 0, "announce": 1, "ask": 2, "off": 3}
 _CALL = re.compile(r"[0-9a-f]{16,32}")
 
 
@@ -198,6 +199,7 @@ class Task:
     parent: str = ""                # the task its caller was doing, if any
     report_back: bool = False       # the result goes to the caller's next turn
     wait_for: str = ""              # a pass waits for its caller's turn to end
+    turn: int = 0                   # the caller's turn it was asked for in
     code: str = ""                  # the refusal, as audit.REASONS has it
 
     def public(self, position: int = 0) -> dict:
@@ -319,16 +321,21 @@ class Board:
         with self._lock:
             # Down the chain too (Phase 16): a task started from inside one
             # that is cancelled goes with it, and so on down.
-            gone: set = set()
-            while True:
-                more = [t for t in self._tasks.values() if t.state in OPEN
-                        and (pick(t) or (t.parent and t.parent in gone))]
-                if not more:
-                    break
-                for t in more:
-                    if self.move(t.id, "cancelled", "stopped"):
-                        done.append(t)
-                    gone.add(t.id)
+            # Lineage runs through finished tasks too: a task that completed
+            # after starting one of its own still carries the stop down.
+            chosen = {t.id for t in self._tasks.values() if pick(t)}
+
+            def under(t) -> bool:
+                seen = 0
+                while t is not None and seen < 16:
+                    if t.id in chosen:
+                        return True
+                    t = self._tasks.get(t.parent) if t.parent else None
+                    seen += 1
+                return False
+            for t in list(self._tasks.values()):
+                if t.state in OPEN and under(t) and self.move(t.id, "cancelled", "stopped"):
+                    done.append(t)
         return done
 
     def public(self) -> list[dict]:
@@ -571,7 +578,10 @@ def answer_wrap(label: str, text: str, tainted: bool) -> str:
 def deliveries_text(messages: list, reports: list) -> str:
     """Put ahead of an agent's next turn: messages other agents left it and
     the results of tasks it delegated, each as information, source named.
-    Empty when there is nothing, so a turn with nothing waiting is unchanged."""
+    Empty when there is nothing, so a turn with nothing waiting is unchanged.
+    It ends with no heading of its own: what follows says whose words come
+    next (wake_listen.answer), so a task block is never put under "the user
+    now says" (Codex review)."""
     out = ""
     for r in reports:
         state = r.get("state") or "completed"
@@ -592,8 +602,6 @@ def deliveries_text(messages: list, reports: list) -> str:
         if m.get("tainted"):
             head += tainted_words(label)
         out += f"{head}\n{fenced(m.get('text', ''), MESSAGE_MAX)}\n\n"
-    if out:
-        out += "The user now says:\n"
     return out
 
 
@@ -652,42 +660,30 @@ def ask_note(kind: str, caller: str, target: str, host: str = "") -> str:
 
 
 # --- calls from the crew server (Phase 16) ------------------------------------------
+#
+# A call travels over a Unix socket in the runtime directory, not as a file:
+# the daemon reads the calling process's id from the kernel (SO_PEERCRED),
+# which no caller can choose, and checks that process descends from the CLI
+# of the agent the call names (Codex review of 8dcea3c: a pid written into a
+# file was only a claim). Calls are served on a thread of their own, so a
+# turn the run loop is running cannot leave its own calls unread.
 
-def calls_dir(root: Path | None = None) -> Path:
-    return (root or crew_dir()) / "calls"
-
-
-def _staged(d: Path, name: str, data: bytes) -> Path:
-    tmp = d / f".{name}.{os.getpid()}.tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-        os.replace(tmp, d / name)
-    except BaseException:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        raise
-    return d / name
+SOCKET_NAME = "calls.sock"
+CALL_MAX = 64 * 1024
 
 
-def write_call(call: dict, root: Path | None = None) -> Path:
-    """The crew server files one call: staged privately, then renamed, so
-    the daemon never reads half of one."""
-    d = _private(calls_dir(root))
-    return _staged(d, f"{call['id']}.call", json.dumps(call, ensure_ascii=False).encode())
+def socket_path(root: Path | None = None) -> Path:
+    return (root or crew_dir()) / SOCKET_NAME
 
 
-def parse_call(raw: bytes) -> dict | None:
-    """A call file's contents, each field checked, or None when it is not
-    one: exactly the five fields, each of its kind."""
+def parse_call(raw: bytes, pid: int) -> dict | None:
+    """A call as sent, each field checked, with the pid the kernel gave; or
+    None when it is not one: exactly the four fields, each of its kind."""
     try:
         data = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
+    except Exception:                   # noqa: BLE001 -- RecursionError too
         return None
-    if not isinstance(data, dict) or set(data) != {"id", "tool", "from", "pid", "args"}:
+    if not isinstance(data, dict) or set(data) != {"id", "tool", "from", "args"}:
         return None
     if not (isinstance(data["id"], str) and _CALL.fullmatch(data["id"])):
         return None
@@ -696,101 +692,142 @@ def parse_call(raw: bytes) -> dict | None:
     who = data["from"]
     if not (isinstance(who, str) and (who == "" or _AGENT.fullmatch(who))):
         return None
-    pid = data["pid"]
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 1:
         return None
-    return data
+    return {**data, "pid": pid}
 
 
-def take_calls(root: Path | None = None, limit: int = 8) -> list[dict]:
-    """Calls waiting for the daemon, each read once and removed. A link, a
-    folder or a malformed file is dropped unanswered: nothing that could not
-    have come from the crew server is acted on."""
-    d = calls_dir(root)
+def _read_line(conn, limit: int) -> bytes:
+    buf = b""
+    while b"\n" not in buf and len(buf) <= limit:
+        chunk = conn.recv(65536)
+        if not chunk:
+            break
+        buf += chunk
+    return buf.split(b"\n", 1)[0] if len(buf) <= limit else b""
+
+
+def send_call(call: dict, timeout: float, root: Path | None = None) -> dict | None:
+    """The crew server's side: send one call and wait for the daemon's
+    answer. None when the daemon cannot be reached or did not answer in
+    time; an answer that cannot be read is an error result, never a yes."""
+    import socket
     try:
-        names = sorted(e.name for e in os.scandir(d)
-                       if e.name.endswith(".call") and e.is_file(follow_symlinks=False))
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+            conn.settimeout(5.0)
+            conn.connect(str(socket_path(root)))
+            conn.sendall(json.dumps(call, ensure_ascii=False).encode() + b"\n")
+            conn.settimeout(timeout)
+            raw = _read_line(conn, 512 * 1024)
     except OSError:
-        return []
-    out = []
-    for name in names[:limit]:
-        path = d / name
-        try:
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-            with os.fdopen(fd, "rb") as f:
-                raw = f.read(64 * 1024)
-            path.unlink()
-        except OSError:
-            continue
-        call = parse_call(raw)
-        if call is not None and name == f"{call['id']}.call":
-            out.append(call)
-    return out
-
-
-def write_result(call_id: str, result: dict, root: Path | None = None) -> None:
-    """The daemon's answer to one call. Best effort: a caller that is gone
-    has nobody to read it, and the sweep removes it later."""
-    if not _CALL.fullmatch(call_id or ""):
-        return
+        return None
+    if not raw:
+        return None
     try:
-        d = _private(calls_dir(root))
-        _staged(d, f"{call_id}.result", json.dumps(result, ensure_ascii=False).encode())
-    except OSError:
-        pass
+        data = json.loads(raw.decode("utf-8"))
+    except Exception:                   # noqa: BLE001
+        data = None
+    if (isinstance(data, dict) and isinstance(data.get("ok"), bool)
+            and isinstance(data.get("text"), str)):
+        return data
+    return {"ok": False, "text": "Agent Voice's answer could not be read, so nothing is "
+                                 "known to have happened."}
 
 
-def wait_result(call_id: str, timeout: float, root: Path | None = None,
-                poll: float = 0.1) -> dict | None:
-    """The crew server waits for its answer. None when none came in time;
-    a result it cannot read is an error result, never an allow."""
-    path = calls_dir(root) / f"{call_id}.result"
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+class CallListener:
+    """The daemon's side of the socket: one thread accepting, and one short
+    reader per connection, handing each checked call to `accept(call,
+    reply)`. `reply(result)` answers it exactly once and closes it."""
+
+    def __init__(self, accept, root: Path | None = None) -> None:
+        self.accept = accept
+        self.root = root
+        self.sock = None
+
+    def start(self) -> bool:
+        import socket
+        path = socket_path(self.root)
         try:
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        except OSError:
-            time.sleep(poll)
-            continue
-        try:
-            with os.fdopen(fd, "rb") as f:
-                raw = f.read(256 * 1024)
-        finally:
+            _private(path.parent)
             try:
-                path.unlink()
+                path.unlink()               # a socket the last daemon left
+            except FileNotFoundError:
+                pass
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            old = os.umask(0o177)
+            try:
+                sock.bind(str(path))
+            finally:
+                os.umask(old)
+            os.chmod(path, 0o600)
+            sock.listen(16)
+        except OSError as e:
+            print(f"  collaboration calls: no socket ({type(e).__name__})", flush=True)
+            return False
+        self.sock = sock
+        threading.Thread(target=self._loop, name="crew-calls", daemon=True).start()
+        return True
+
+    def stop(self) -> None:
+        if self.sock is not None:
+            try:
+                self.sock.close()
             except OSError:
                 pass
-        try:
-            data = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, ValueError):
-            data = None
-        if (isinstance(data, dict) and isinstance(data.get("ok"), bool)
-                and isinstance(data.get("text"), str)):
-            return data
-        return {"ok": False, "text": "Agent Voice's answer could not be read, so nothing is "
-                                     "known to have happened."}
-    return None
+            self.sock = None
 
+    def _loop(self) -> None:
+        sock = self.sock
+        while sock is not None:
+            try:
+                conn, _ = sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._one, args=(conn,), daemon=True).start()
 
-def sweep_results(root: Path | None = None, now: float | None = None) -> None:
-    """Results and stray call files nobody collected, after RESULT_STALE_S."""
-    now = time.time() if now is None else now
-    try:
-        entries = list(os.scandir(calls_dir(root)))
-    except OSError:
-        return
-    for e in entries:
+    def _one(self, conn) -> None:
+        import socket
+        import struct
+        answered = threading.Event()
+
+        def reply(result: dict) -> None:
+            if answered.is_set():
+                return
+            answered.set()
+            try:
+                conn.sendall(json.dumps(result, ensure_ascii=False).encode() + b"\n")
+            except OSError:
+                pass
+            finally:
+                try:
+                    conn.close()
+                except OSError:
+                    pass
         try:
-            if now - e.stat(follow_symlinks=False).st_mtime > RESULT_STALE_S:
-                os.unlink(e.path)
-        except OSError:
-            pass
+            conn.settimeout(5.0)
+            creds = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                                    struct.calcsize("3i"))
+            pid, uid, _gid = struct.unpack("3i", creds)
+            if uid != os.getuid():
+                return reply({"ok": False, "text": "Not this user's agent."})
+            call = parse_call(_read_line(conn, CALL_MAX), pid)
+            if call is None:
+                return reply({"ok": False, "text": "That was not a call Agent Voice "
+                                                   "understands, so nothing was done."})
+            conn.settimeout(None)
+            self.accept(call, reply)
+        except Exception as e:          # noqa: BLE001 -- never the listener's end
+            reply({"ok": False, "text": f"Agent Voice could not read the call "
+                                        f"({type(e).__name__})."})
 
 
 def descends(pid: int, ancestor: int) -> bool:
-    """Whether process `pid` is `ancestor` or below it, read from /proc.
-    How the daemon knows which agent a call came from: the crew server is a
-    child of the agent's CLI, which is the daemon's child. Unsure is no."""
+    """Whether process `pid` is below `ancestor` (never `ancestor` itself),
+    read from /proc. How the daemon knows which agent a call came from: the
+    crew server is a child of the agent's CLI, which is the daemon's child,
+    and `pid` came from the kernel. Unsure is no."""
+    if ancestor <= 1 or pid == ancestor:
+        return False
     seen = 0
     try:
         while pid > 1 and seen < 64:
@@ -996,7 +1033,13 @@ class Runtime:
         self.side: dict[str, tuple] = {}
         #: When each agent made its recent acting calls, for RATE_PER_MIN.
         self._rate: dict[str, deque] = {}
-        self._swept = 0.0
+        #: Held from the last check to the task going on the board, so two
+        #: calls cannot both pass a limit before either counts.
+        self._admit = threading.Lock()
+        #: Signs each message this daemon leaves, so a line something else
+        #: wrote into an inbox is never delivered as an agent's.
+        self._key = secrets.token_bytes(32)
+        self.listener = None
 
     # --- who is who ---------------------------------------------------------
 
@@ -1195,14 +1238,10 @@ class Runtime:
             self.pass_conversation(source, req["to"], entry=req["entry"],
                                    brief=req["brief"], chat_id=req.get("chat"),
                                    task_id=req.get("id"), host=req.get("host", ""))
-        # Phase 16: calls from the agents' crew servers. Taken behind a lock
-        # too, so each is answered (with a refusal) rather than left hanging.
-        for call in take_calls(self.root):
-            self.accept_call(call)
+        # Phase 16: the agents' calls are served on the listener's own
+        # thread; the first poll opens it.
+        self.listen()
         now = time.time()
-        if now - self._swept > 60.0:
-            self._swept = now
-            sweep_results(self.root, now)
         with self._lock:
             text, until = self._flash
             expired = bool(text) and now >= until
@@ -1232,13 +1271,20 @@ class Runtime:
         why = self.refusal(task.to, task.frm)
         source = self.persona(task.frm)
         target = self.persona(task.to)
-        if task.entry == "agent" and not task.chat_id and not task.replay:
-            # An agent's task takes the caller's chat as it is now, at the
-            # turn boundary, when its first turn has been saved.
-            if d.cfg.get_bool("saveChats") and source is not None and source.chat_id:
-                task.chat_id = source.chat_id
-            else:
+        if task.entry == "agent":
+            # Bound when it was asked for (chat_saved fills a first turn's
+            # chat); never whatever chat the caller is in by now.
+            if not task.chat_id and not task.replay:
                 task.replay = self._memory_replay(source)
+            # Read again at the start: a caller switched off, or a target
+            # that stopped taking work, while it waited, stops it here.
+            if not why and self._level(task.frm) == "off":
+                why = f"{task.frm_label}'s collaboration was switched off, so it did not start."
+            if not why and not self._accepts(task.to):
+                why = f"{task.to_label} no longer takes work from other agents."
+            if not why and self._stale(task.to):
+                why = (f"{task.to_label}'s settings changed and haven't been applied yet, so "
+                       f"it did not start. Ask again in a moment.")
         if not why and target is not None and threading.current_thread() is threading.main_thread():
             # Caught up first: a rebuild inside dispatch() would start a new
             # session and undo the one chosen below, and the level and the
@@ -1438,6 +1484,11 @@ class Runtime:
         p.task = None
         p.task_heard = ""
         clear_origin(task.to, self.root)
+        if (task.kind == "delegate" and task.report_back and task.state == "active"):
+            # Kept before the state changes, so a caller whose next turn
+            # starts the moment this one ends does not miss it.
+            self._report(task, str((getattr(p, "last", None) or {}).get("reply") or ""),
+                         "cancelled" if stopped else "failed" if failed else "completed")
         if stopped:
             moved = self.board.move(task.id, "cancelled", "stopped")
         elif failed:
@@ -1446,9 +1497,6 @@ class Runtime:
             moved = self.board.move(task.id, "completed")
         if moved:
             self._audit(task)
-        if moved and task.kind == "delegate" and task.report_back:
-            # The result goes to the caller's next turn, as information.
-            self._report(task, str((getattr(p, "last", None) or {}).get("reply") or ""))
         if task.state == "cancelled":
             # A stop after the window was armed must not leave it open: the
             # next thing said in the room would go to it without a name.
@@ -1490,7 +1538,8 @@ class Runtime:
         with self._lock:
             self.held = [(q, t) for q, t in self.held if q is not p]
         self._stopped(self.board.cancel(
-            lambda t: t.frm == me or (t.to == me and t.state == "pending")))
+            lambda t: t.frm == me or (t.to == me and t.state == "pending")
+            or (t.to == me and t.kind == "ask")))
 
     def stop_all(self, from_signal: bool = False) -> None:
         """The global stop and `agentvoice interrupt`: everything, the
@@ -1519,7 +1568,7 @@ class Runtime:
             if t.started and p is not None and getattr(p, "task", None) is t:
                 p.stop()
             side = self.side.get(t.to)
-            if t.kind == "ask" and side is not None and side[0] is t:
+            if t.kind == "ask" and side is not None and side[0] is t and side[1] is not None:
                 try:
                     side[1].cancel()        # a question being answered
                 except Exception:
@@ -1531,54 +1580,108 @@ class Runtime:
 
     # --- calls from agents (Phase 16) -----------------------------------------------
 
+    def listen(self) -> None:
+        """Open the socket the crew servers call, once."""
+        if self.listener is None:
+            self.listener = CallListener(self.accept_call, self.root)
+            if not self.listener.start():
+                self.listener = None
+
     def _cfg(self):
         """The settings as they are on disk now: every knob a call depends on
-        is read fresh, so a change reaches a warm process at once."""
+        is read fresh, so a change reaches a warm process at once. None when
+        they cannot be read -- never the last good copy, which may say allow
+        where the person has since said ask."""
         make = getattr(self.d, "fresh_config", None)
-        if callable(make):
-            try:
-                return make()
-            except Exception:
-                pass
-        return self.d.cfg
-
-    def _level(self, agent: str, cfg=None) -> str:
+        if not callable(make):
+            return self.d.cfg
         try:
-            return (cfg or self._cfg()).collaboration_for(internal(agent))
+            return make()
+        except Exception:
+            return None
+
+    def _level(self, agent: str) -> str:
+        try:
+            cfg = self._cfg()
+            return cfg.collaboration_for(internal(agent)) if cfg is not None else "ask"
         except Exception:               # a level that cannot be read asks
             return "ask"
 
-    def accept_call(self, call: dict) -> None:
-        """From tick, on the run loop: who is calling is settled here, from
-        this daemon's own record (A16-4); the call is then judged and carried
-        out on a thread of its own -- a card waits 45 seconds and a question
-        two minutes -- and answered in its result file."""
+    def _accepts(self, agent: str) -> bool:
+        try:
+            cfg = self._cfg()
+            return cfg.accepts_work_for(internal(agent)) if cfg is not None else True
+        except Exception:
+            return True
+
+    def _stale(self, agent: str) -> bool:
+        """Whether `agent`'s running adapter no longer matches its settings
+        (a level, a folder): a new task or question must not start on it."""
+        check = getattr(self.d, "adapter_stale", None)
+        p = self.persona(agent)
+        if not callable(check) or p is None:
+            return False
+        try:
+            return bool(check(p, self._cfg()))
+        except Exception:
+            return True
+
+    def _live_turn(self, p, turn: int) -> bool:
+        """Whether `p` is still in the turn a call was made in: not stopped,
+        not finished, not a later turn that reused the persona."""
+        return (getattr(p, "turn_id", 0) == turn and getattr(p, "answering", False)
+                and not p.interrupt.is_set())
+
+    def accept_call(self, call: dict, reply) -> None:
+        """From the listener: who is calling is settled here, from this
+        daemon's own record (A16-4); acting calls are counted against the
+        rate before any work is spawned; then the call is judged and carried
+        out on a thread of its own -- a card waits, a question takes up to
+        two minutes -- and `reply` answers it."""
         caller, why = self._caller(call)
         if caller is None:
             print(f"  call {call['tool']} refused: {why}", flush=True)
-            write_result(call["id"], {"ok": False, "text": why}, self.root)
-            return
-        threading.Thread(target=self._run_call, args=(call, caller),
+            return reply({"ok": False, "text": why})
+        turn = getattr(caller, "turn_id", 0)
+        if call["tool"] in ACTING:
+            me = external(caller.id)
+            with self._lock:
+                recent = self._rate.setdefault(me, deque())
+                now = time.monotonic()
+                while recent and now - recent[0] > 60.0:
+                    recent.popleft()
+                over = len(recent) >= RATE_PER_MIN
+                if not over:
+                    recent.append(now)
+            if over:
+                kind = TOOL_KIND[call["tool"]]
+                task = Task(id=new_id(), kind=kind, frm=me, to="?", entry="agent",
+                            chain=[me], frm_label=caller.label or self.label(me))
+                ok, text = self._refused(task, f"You have made {RATE_PER_MIN} collaboration "
+                                               f"calls in the last minute; wait a moment.",
+                                         "rate")
+                return reply({"ok": ok, "text": text})
+        threading.Thread(target=self._run_call, args=(call, caller, turn, reply),
                          name=f"call-{call['tool']}", daemon=True).start()
 
     def _caller(self, call: dict):
         """(persona, "") for the agent whose running turn `call` came from, or
-        (None, why). The call's own `from` is only a claim: the calling
-        process must descend from that agent's running CLI, which is this
-        daemon's child, so one agent's server cannot speak for another, and
-        an agent not in the middle of a turn makes no calls at all."""
+        (None, why). The call's `from` is only a claim; its pid is the
+        kernel's, and must descend from that agent's running CLI, which is
+        this daemon's child -- so one agent's server cannot speak for
+        another, and an agent not in the middle of a turn makes no calls."""
         ext = call["from"] or "main"
         p = self.persona(ext)
         label = self.label(ext)
         if p is None or p.agent is None:
             return None, "No agent by that name is running here, so the call was refused."
         side = self.side.get(ext)
-        if side is not None and descends(call["pid"], pid_of(side[1])):
+        if side is not None and side[1] is not None and descends(call["pid"], pid_of(side[1])):
             return None, (f"You're answering a question for {side[0].frm_label}, and can't "
                           f"start other work from inside it.")
         if getattr(p.agent, "name", "") not in STARTERS:
             return None, f"{label}'s program can't start collaboration."
-        if not p.busy:
+        if not getattr(p, "answering", False):
             return None, (f"That call names {label}, but {label} isn't in the middle of a "
                           f"turn, so it was refused.")
         root = pid_of(p.agent)
@@ -1586,25 +1689,40 @@ class Runtime:
             return None, f"That call did not come from {label}'s running turn, so it was refused."
         return p, ""
 
-    def _run_call(self, call: dict, p) -> None:
+    def _run_call(self, call: dict, p, turn: int, reply) -> None:
         tool, args = call["tool"], call["args"]
+        done = threading.Event()
+
+        def keep_alive():
+            # The caller's stream is silent while it waits for this answer;
+            # its adapter's idle watchdog must not take that for a hang.
+            while not done.wait(5.0):
+                dog = getattr(getattr(p, "agent", None), "watchdog", None)
+                if dog is not None:
+                    try:
+                        dog.poke()
+                    except Exception:
+                        pass
+        threading.Thread(target=keep_alive, daemon=True).start()
         try:
             if tool == "list_agents":
                 ok, text = True, self._list_agents(p)
             elif tool in ("task_status", "cancel_task"):
                 ok, text = self._task_call(tool, args, p)
             else:
-                ok, text = self._act(tool, args, p)
+                ok, text = self._act(tool, args, p, turn)
         except Exception as e:          # noqa: BLE001 -- answered, never raised
             print(f"  call {tool} failed: {type(e).__name__}", flush=True)
             ok, text = False, (f"Agent Voice could not do that ({type(e).__name__}). Check "
                                f"task_status before trying again.")
-        write_result(call["id"], {"ok": ok, "text": text}, self.root)
+        finally:
+            done.set()
+        reply({"ok": ok, "text": text})
 
     @staticmethod
     def _arg(args: dict, key: str, limit: int, required: bool = True) -> str:
-        """One text argument, checked again here: a call file is only a
-        claim, whatever the server checked."""
+        """One text argument, checked again here: the server's checks are its
+        own, and this daemon does not lean on them."""
         v = args.get(key)
         if v is None and not required:
             return ""
@@ -1629,13 +1747,12 @@ class Runtime:
         t = getattr(p, "task", None)
         return list(t.chain) if t is not None else []
 
-    def _guard(self, p, kind: str, target: str, *, count: bool):
+    def _guard(self, p, kind: str, target: str):
         """Why `p` may not do `kind` to `target` now: (sentence, audit code),
-        or ("", "")."""
+        or ("", ""). Run before the level is applied and again after."""
         d = self.d
         me = external(p.id)
-        cfg = self._cfg()
-        if self._level(me, cfg) == "off":
+        if self._level(me) == "off":
             return ("Collaboration is switched off for you on your Agents card, so nothing "
                     "was sent."), "off"
         known = self._known()
@@ -1651,14 +1768,9 @@ class Runtime:
         if kind != "message" and not getattr(d, "may_speak", True):
             return ("The screen is locked or the microphone is lent out, so nothing new "
                     "starts until it can be heard."), "locked"
-        if kind in ("delegate", "pass"):
-            try:
-                takes = cfg.accepts_work_for(internal(target))
-            except Exception:
-                takes = True
-            if not takes:
-                return (f"{name} takes questions only from other agents, not tasks or "
-                        f"conversations."), "no-work"
+        if kind in ("delegate", "pass") and not self._accepts(target):
+            return (f"{name} takes questions only from other agents, not tasks or "
+                    f"conversations."), "no-work"
         if kind != "message":
             chain = self._chain_for(p) + [me]
             if target in chain:
@@ -1672,22 +1784,11 @@ class Runtime:
             if len(mine) >= OPEN_DELEGATIONS_MAX:
                 return (f"You already have {len(mine)} tasks open with other agents; wait "
                         f"for one to finish, or cancel one."), "open-tasks"
-        if kind == "pass" and any(t.frm == me and t.kind == "pass"
+        if kind == "pass" and any(t.frm == me and t.kind == "pass" and t.entry == "agent"
                                   for t in self.board.open()):
             return "You have already passed this conversation on.", "open-tasks"
         if kind == "message" and inbox_count(target, self.root) >= INBOX_MAX:
             return f"{name} already has {INBOX_MAX} messages waiting.", "inbox-full"
-        if not count:
-            return "", ""               # the re-check after a wait: counted once
-        with self._lock:
-            recent = self._rate.setdefault(me, deque())
-            now = time.time()
-            while recent and now - recent[0] > 60.0:
-                recent.popleft()
-            if len(recent) >= RATE_PER_MIN:
-                return (f"You have made {RATE_PER_MIN} collaboration calls in the last minute; "
-                        f"wait a moment."), "rate"
-            recent.append(now)
         return "", ""
 
     def _say(self, p, line: str) -> bool:
@@ -1699,21 +1800,22 @@ class Runtime:
             print(f"  could not say it: {type(e).__name__}", flush=True)
             return False
 
-    def _permit(self, p, task: Task, text: str):
-        """The caller's `collaboration` level, applied: (ok, why, code)."""
+    def _permit(self, p, task: Task, text: str, extra: str, turn: int):
+        """The caller's `collaboration` level, applied: (ok, why, code, level)."""
         d = self.d
         level = self._level(task.frm)
         if level == "ask":
             if not getattr(d, "may_speak", True):
                 return False, ("The screen is locked, so the user can't be asked; nothing was "
-                               "sent."), "locked"
+                               "sent."), "locked", level
             line = ask_line(task.kind, task.frm_label, task.to_label, text, task.host)
-            answer = self._card(p, task, text, line)
+            answer = self._card(p, task, text, extra, line,
+                                stop=lambda: not self._live_turn(p, turn))
             if answer is None:
-                return False, "Nobody answered on screen, so nothing was sent.", "timeout"
+                return False, "Nobody answered on screen, so nothing was sent.", "timeout", level
             if answer.get("allow") is not True:
-                return False, "The user said no, so nothing was sent.", "declined"
-            return True, "", ""
+                return False, "The user said no, so nothing was sent.", "declined", level
+            return True, "", "", level
         if task.kind in ("delegate", "pass") and (level == "announce" or task.host):
             # announce, and an endpoint at every level: one fixed sentence in
             # the caller's voice, then CANCEL_WINDOW_S in which stop cancels.
@@ -1722,30 +1824,34 @@ class Runtime:
             if not self._say(p, announce_line(task.kind, task.to_label, task.host)):
                 return False, ("I couldn't say that out loud, so nothing was sent. On the "
                                "Agents card, collaboration can be set to ask first or to go "
-                               "quietly."), "unheard"
+                               "quietly."), "unheard", level
             task.not_before = time.time() + CANCEL_WINDOW_S
-        return True, "", ""
+        return True, "", "", level
 
-    def _card(self, p, task: Task, text: str, line: str):
+    def _card(self, p, task: Task, text: str, extra: str, line: str, stop=None):
         """The permission card, through the hook's own file protocol, with the
-        question said out loud as it goes up. The answer dict, or None."""
+        question said out loud as it goes up. It shows everything that would
+        be sent -- the request and its context or summary, whole -- and who
+        to. The answer dict, or None."""
         import permission_hook
-        summary = str(text or "")
-        shown, cut = summary[:400], max(0, len(summary) - 400)
-        if cut:
-            shown += f"… (+{cut} more characters)"
+        tool = {v: k for k, v in TOOL_KIND.items()}[task.kind]
+        summary = f"To {task.to_label}:\n{text}"
+        if extra.strip():
+            what = "Context" if task.kind == "ask" else "Summary"
+            summary += f"\n\n{what}, sent with it:\n{extra}"
         mine = getattr(p, "task", None)
         fields = {
-            "tool": f"mcp__agentvoice-crew__{dict((v, k) for k, v in TOOL_KIND.items())[task.kind]}",
+            "tool": f"mcp__agentvoice-crew__{tool}",
             "who": internal(task.frm), "label": task.frm_label,
             "chain": chain_text([{"id": a, "label": self.label(a)} for a in mine.chain])
             if mine is not None else "",
-            "summary": shown, "truncated": cut, "length": len(summary),
+            "summary": summary, "truncated": 0, "length": len(summary),
             "note": ask_note(task.kind, task.frm_label, task.to_label, task.host),
-            "input": {"to": task.to, "text": summary[:4000]},
+            "input": {"to": task.to, "text": text, "extra": extra},
             "sessionWide": False, "announce": False,
         }
-        return permission_hook.ask_card(fields, on_posted=lambda: self._say(p, line))
+        return permission_hook.ask_card(fields, on_posted=lambda: self._say(p, line),
+                                        stop=stop)
 
     def _refused(self, task: Task, why: str, code: str):
         task.code = code
@@ -1756,7 +1862,7 @@ class Runtime:
             self.publish()
         return False, why
 
-    def _act(self, tool: str, args: dict, p):
+    def _act(self, tool: str, args: dict, p, turn: int):
         """ask_agent, delegate, pass_conversation or message_agent: the guards,
         the caller's level, the guards again after any wait, then the act."""
         kind = TOOL_KIND[tool]
@@ -1784,28 +1890,58 @@ class Runtime:
                     to_label=self.label(target) if target else "",
                     parent=mine.id if mine is not None else "",
                     report_back=report_back and kind == "delegate",
-                    wait_for=me if kind == "pass" else "")
+                    wait_for=me if kind == "pass" else "", turn=turn)
         if kind in ("delegate", "pass"):
             task.request, task.brief = text.strip(), extra.strip()
+            if self.d.cfg.get_bool("saveChats"):
+                # The chat it is asked from, bound now (Codex review): never
+                # whichever chat the caller is in when the target is free. A
+                # first turn's chat does not exist yet, so the task waits for
+                # the caller's turn to end and chat_saved fills it in.
+                task.chat_id = p.chat_id or ""
+                if not task.chat_id:
+                    task.wait_for = me
         task.host = self.host(target) if target else ""
-        why, code = self._guard(p, kind, target, count=True)
+        why, code = self._guard(p, kind, target)
         if why:
             return self._refused(task, why, code)
-        ok, why, code = self._permit(p, task, text)
+        ok, why, code, used = self._permit(p, task, text, extra, turn)
         if not ok:
             return self._refused(task, why, code)
-        # Again after any wait: a card or a spoken line takes seconds, in
-        # which the target may have been switched off or the caller stopped.
-        why, code = self._guard(p, kind, target, count=False)
-        if not why and (p.interrupt.is_set() or not p.busy):
-            why, code = "Your turn was stopped, so nothing was sent.", "stopped"
-        if why:
-            return self._refused(task, why, code)
+        with self._admit:
+            # Again after any wait, and held to the board: a card or a spoken
+            # line takes seconds, in which the target may have been switched
+            # off, the caller stopped or its setting tightened.
+            why, code = self._guard(p, kind, target)
+            if not why and STRICTNESS.get(self._level(me), 2) > STRICTNESS.get(used, 2):
+                why, code = ("Your collaboration setting changed while this waited, so "
+                             "nothing was sent."), "changed"
+            if not why and not self._live_turn(p, turn):
+                why, code = "Your turn was stopped, so nothing was sent.", "stopped"
+            if not why and host_key(self.host(target)) != host_key(task.host):
+                why, code = (f"{task.to_label}'s endpoint changed while this waited, so "
+                             f"nothing was sent."), "changed"
+            if why:
+                return self._refused(task, why, code)
+            if kind in ("delegate", "pass"):
+                return self._hand(p, task)
+            if kind == "ask":
+                # The side turn is reserved here, under the same lock.
+                self.board.add(task)
         if kind == "ask":
-            return self._ask(p, task, text, extra)
-        if kind == "message":
-            return self._message(p, task, text)
-        return self._hand(p, task)
+            return self._ask(p, task, text, extra, turn)
+        return self._message(p, task, text)
+
+    def chat_saved(self, p, chat_id: str) -> None:
+        """From save_chat: the chat `p`'s turn was just saved into binds any
+        task that turn asked for before the chat existed."""
+        if not chat_id:
+            return
+        me, turn = external(p.id), getattr(p, "turn_id", 0)
+        for t in self.board.open():
+            if (t.entry == "agent" and t.frm == me and t.turn == turn
+                    and t.kind in ("delegate", "pass") and not t.chat_id):
+                t.chat_id = chat_id
 
     def _hand(self, p, task: Task):
         """A delegation or a pass, onto the board: the Phase 15 machinery
@@ -1834,12 +1970,19 @@ class Runtime:
             out += " The result will reach you at the start of your next turn."
         return True, out + " task_status tells you where it is."
 
+    def _sign(self, m: dict) -> str:
+        import hashlib
+        import hmac
+        body = json.dumps({k: m.get(k) for k in ("from", "at", "text", "tainted")},
+                          sort_keys=True, ensure_ascii=False).encode()
+        return hmac.new(self._key, body, hashlib.sha256).hexdigest()
+
     def _message(self, p, task: Task, text: str):
-        tainted = self._could_browse(task.frm)
+        m = {"from": task.frm, "at": round(time.time(), 1), "text": text,
+             "tainted": self._could_browse(task.frm)}
+        m["sig"] = self._sign(m)
         try:
-            n = inbox_append(task.to, {"from": task.frm, "from_label": task.frm_label,
-                                       "at": round(time.time(), 1), "text": text,
-                                       "tainted": tainted}, self.root)
+            n = inbox_append(task.to, m, self.root)
         except InboxFull:
             return self._refused(task, f"{task.to_label} already has {INBOX_MAX} messages "
                                        f"waiting.", "inbox-full")
@@ -1861,54 +2004,88 @@ class Runtime:
         return True, (f"Left for {task.to_label}, who will read it at the start of "
                       f"{task.to_label}'s next turn.")
 
-    def _ask(self, p, task: Task, question: str, context: str):
+    def _ask(self, p, task: Task, question: str, context: str, turn: int):
         """A quiet side turn (merged plan, Phase 16): the target answers in
         text only, in a fresh session on an adapter of its own that is thrown
         away afterwards, at its own level, with its prompts naming the chain.
         Waits for a busy target up to QUESTION_TIMEOUT_S, which covers the
-        answer too."""
+        answer too; the target is reserved before the adapter is built, so
+        two questions never share one."""
         d = self.d
         deadline = time.monotonic() + QUESTION_TIMEOUT_S
         target = self.persona(task.to)
-        self.board.add(task)
         self.publish()
         T = task.to_label
-        while True:
-            if task.state != "pending" or p.interrupt.is_set():
-                if self.board.move(task.id, "cancelled", "stopped"):
-                    self._audit(task)
-                return False, "The question was stopped."
-            busy = (target is None or target.busy or self.board.active_for(task.to)
-                    or task.to in self.side)
-            if not busy:
-                break
-            if time.monotonic() >= deadline:
-                task.code = "busy"
-                if self.board.move(task.id, "refused",
-                                   f"{T} is busy and didn't get to it in time."):
-                    self._audit(task)
-                self.publish()
-                return False, (f"{T} is busy and didn't get to your question within "
-                               f"{QUESTION_TIMEOUT_S:.0f} seconds.")
-            time.sleep(0.25)
-        maker = getattr(d, "side_adapter", None)
-        side = maker(target) if callable(maker) else None
-        if side is None or not self.board.move(task.id, "active"):
-            if self.board.move(task.id, "failed", f"{T} could not start."):
+
+        def give_up(state: str, why: str, code: str, said: str):
+            task.code = code
+            if self.board.move(task.id, state, why):
                 self._audit(task)
             self.publish()
-            return False, f"{T} couldn't start to answer."
-        self.side[task.to] = (task, side)
+            return False, said
+        while True:
+            if task.state != "pending" or not self._live_turn(p, turn):
+                if self.board.move(task.id, "cancelled", "stopped"):
+                    self._audit(task)
+                self.publish()
+                return False, "The question was stopped."
+            with self._lock:
+                free = not (target is None or target.busy or self.board.active_for(task.to)
+                            or task.to in self.side)
+                if free:
+                    self.side[task.to] = (task, None)       # reserved
+            if free:
+                break
+            if time.monotonic() >= deadline:
+                return give_up("refused", f"{T} is busy and didn't get to it in time.", "busy",
+                               f"{T} is busy and didn't get to your question within "
+                               f"{QUESTION_TIMEOUT_S:.0f} seconds.")
+            time.sleep(0.25)
+
+        def release():
+            with self._lock:
+                if self.side.get(task.to, (None,))[0] is task:
+                    del self.side[task.to]
+        # Checked once more at the moment it would start: a lock, a settings
+        # change or a new endpoint in the wait stops it here.
+        why, code = "", ""
+        if not getattr(d, "may_speak", True):
+            why, code = "The screen was locked, so the question was not asked.", "locked"
+        elif host_key(self.host(task.to)) != host_key(task.host):
+            why, code = f"{T}'s endpoint changed, so the question was not sent.", "changed"
+        elif self._stale(task.to):
+            why, code = (f"{T}'s settings changed and haven't been applied yet; ask again in "
+                         f"a moment."), "changed"
+        if why:
+            release()
+            return give_up("refused", why, code, why)
+        maker = getattr(d, "side_adapter", None)
+        side = None
+        try:
+            side = maker(target) if callable(maker) else None
+        except Exception:
+            side = None
+        if side is None or not self.board.move(task.id, "active"):
+            release()
+            return give_up("failed", f"{T} could not start.", "failed",
+                           f"{T} couldn't start to answer.")
+        with self._lock:
+            self.side[task.to] = (task, side)
         write_origin(task.to, task, {a: self.label(a) for a in task.chain}, self.root)
         self.publish()
         parts, error = [], ""
         t0 = time.monotonic()
-        timer = threading.Timer(max(1.0, deadline - t0), side.cancel)
+        late = threading.Event()
+
+        def expire():
+            late.set()
+            side.cancel()
+        timer = threading.Timer(max(1.0, deadline - t0), expire)
         timer.daemon = True
         timer.start()
         try:
             for chunk in side.send(question_prompt(task.frm_label, T, question, context), None):
-                if task.state != "active":
+                if task.state != "active" or late.is_set():
                     break
                 if getattr(chunk, "text", ""):
                     parts.append(chunk.text)
@@ -1922,33 +2099,34 @@ class Runtime:
                 side.cancel()               # thrown away: no process left behind
             except Exception:
                 pass
-            if self.side.get(task.to, (None,))[0] is task:
-                del self.side[task.to]
+            release()
             clear_origin(task.to, self.root)
         took = time.monotonic() - t0
         answer = "".join(parts).strip()
         print(f"  ask {task.id}: {T} answered {task.frm_label} in {took:.1f}s "
-              f"({len(answer)} chars{', ' + error if error else ''})", flush=True)
-        if task.state == "cancelled":
-            self.publish()
-            return False, "The question was stopped."
-        if not answer:
-            timed_out = time.monotonic() >= deadline - 0.5
-            task.code = "timeout" if timed_out else "failed"
-            if self.board.move(task.id, "failed", f"{T} gave no answer."):
+              f"({len(answer)} chars{', ' + error if error else ''}"
+              f"{', too late' if late.is_set() else ''})", flush=True)
+        if task.state == "cancelled" or not self._live_turn(p, turn):
+            if self.board.move(task.id, "cancelled", "stopped"):
                 self._audit(task)
             self.publish()
-            return False, (f"{T} didn't answer within {QUESTION_TIMEOUT_S:.0f} seconds."
-                           if timed_out else f"{T} gave no answer.")
+            return False, "The question was stopped."
+        if late.is_set():
+            # A half-written answer after the time ran out is not an answer.
+            return give_up("failed", f"{T} took too long.", "timeout",
+                           f"{T} didn't answer within {QUESTION_TIMEOUT_S:.0f} seconds.")
+        if not answer:
+            return give_up("failed", f"{T} gave no answer.", "failed", f"{T} gave no answer.")
         task.brief = answer[:ANSWER_MAX]    # sized for the audit line only
         if self.board.move(task.id, "completed"):
             self._audit(task)
         task.brief = ""
         with self._lock:
-            # For the caller's saved chat, as a collapsed "Theo asked Sora";
-            # recorded with its own exchange, and only when chats are saved.
+            # For the caller's saved chat, as a collapsed "Theo asked Sora",
+            # with the turn that asked it: recorded with that turn's own
+            # exchange, only when chats are saved, never a later turn's.
             self.asides.setdefault(task.frm, []).append(
-                {"asked": task.to, "asked_label": T, "question": question,
+                {"turn": turn, "asked": task.to, "asked_label": T, "question": question,
                  "answer": answer[:ANSWER_MAX]})
             del self.asides[task.frm][:-8]
         self.publish()
@@ -1960,27 +2138,44 @@ class Runtime:
         try:
             p = self.persona(agent)
             program = getattr(getattr(p, "agent", None), "name", "")
-            return program == "claude" and bool(self._cfg().tools_for(internal(agent))["browser"])
+            cfg = self._cfg()
+            if cfg is None:
+                return True
+            return program == "claude" and bool(cfg.tools_for(internal(agent))["browser"])
         except Exception:
             return True
 
-    def _report(self, task: Task, reply: str) -> None:
+    def _report(self, task: Task, reply: str, state: str) -> None:
         rep = {"task": task.id, "from": task.to, "label": task.to_label,
-               "state": task.state, "text": reply[:REPORT_MAX],
+               "state": state, "text": reply[:REPORT_MAX],
                "tainted": self._could_browse(task.to)}
         with self._lock:
             waiting = self.reports.setdefault(task.frm, [])
             waiting.append(rep)
+            dropped = len(waiting) - 5
             del waiting[:-5]
         print(f"  delegate {task.id}: result kept for {task.frm_label} "
-              f"({task.state}, {len(reply)} chars)", flush=True)
+              f"({state}, {len(reply)} chars"
+              f"{f', {dropped} older dropped' if dropped > 0 else ''})", flush=True)
 
     def deliveries(self, p) -> str:
         """For the start of `p`'s turn: the messages left for it and the
-        results of tasks it delegated, each taken once, as information.
-        Empty when nothing waits."""
+        results of tasks it delegated, each taken once, as information. A
+        message whose signature is not this daemon's is dropped: something
+        else wrote it. Who it is from is the daemon's own name for the
+        sender, never a label from the file. Empty when nothing waits."""
         me = external(p.id)
-        messages = inbox_take(me, self.root)
+        messages = []
+        for m in inbox_take(me, self.root):
+            sig = m.get("sig")
+            if (isinstance(sig, str) and isinstance(m.get("from"), str)
+                    and _AGENT.fullmatch(m["from"])):
+                import hmac
+                if hmac.compare_digest(sig, self._sign(m)):
+                    messages.append({**m, "from_label": self.label(m["from"])})
+                    continue
+            print(f"  {p.label or me}: a message not left by this daemon was dropped",
+                  flush=True)
         with self._lock:
             reports = self.reports.pop(me, [])
         if messages or reports:
@@ -1989,14 +2184,20 @@ class Runtime:
         return deliveries_text(messages, reports)
 
     def take_asides(self, p) -> list:
+        """The questions `p` asked in the turn now ending; any left from an
+        earlier turn are dropped, never recorded into this turn's chat."""
+        turn = getattr(p, "turn_id", 0)
         with self._lock:
-            return self.asides.pop(external(p.id), [])
+            mine = self.asides.pop(external(p.id), [])
+        return [a for a in mine if a.get("turn") == turn]
 
     def _task_call(self, tool: str, args: dict, p):
         me = external(p.id)
         tid = args.get("id")
         t = self.board.get(tid) if isinstance(tid, str) and _TASK.fullmatch(tid) else None
-        if t is None or t.frm != me:
+        # Only tasks this agent started itself: a pass the person started
+        # from its conversation is the person's, not the agent's to cancel.
+        if t is None or t.frm != me or t.entry != "agent":
             return False, f"No task {str(tid)[:40]!r} that you started."
         if tool == "cancel_task":
             if t.state not in OPEN:
@@ -2016,7 +2217,7 @@ class Runtime:
         """The live roster with what each can use and whether it is busy
         (Phase 16): one JSON object a line, every field someone's free text
         escaped, under a header saying they are information."""
-        cfg = self._cfg()
+        cfg = self._cfg() or self.d.cfg
         me = external(p.id)
         live = self._live()
         off = self._disabled()
@@ -2039,15 +2240,11 @@ class Runtime:
             else:
                 busy = bool(q is not None and q.busy) or bool(self.board.active_for(agent)) \
                     or agent in self.side
-                try:
-                    takes = cfg.accepts_work_for(internal(agent))
-                except Exception:
-                    takes = True
                 row.update(reachable=True, wake_phrase=a.get("phrase", ""),
                            role=a.get("role", ""), program=program,
                            busy=busy, tools=a.get("tools", []),
-                           can_start=program in STARTERS and self._level(agent, cfg) != "off",
-                           takes_work=takes, endpoint=self.host(agent) or None)
+                           can_start=program in STARTERS and self._level(agent) != "off",
+                           takes_work=self._accepts(agent), endpoint=self.host(agent) or None)
             lines.append(json.dumps(row, ensure_ascii=False))
         return "\n".join(lines)
 

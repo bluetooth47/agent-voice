@@ -94,11 +94,13 @@ COLLAB_CHOICES = ("off", "ask", "announce", "allow")
 
 
 def collab_choice(holder: dict, key: str) -> str:
-    """`collaboration` as written: a missing key is "announce" (the user's
+    """`collaboration` as written: a missing (or null) key is "announce" (the user's
     decision, Phase 8, question 1), and a value that is there but is none of
     the four is "ask" -- somebody meant to say something, and the setting
     that cannot be read asks rather than acts quietly."""
-    if not isinstance(holder, dict) or key not in holder:
+    if not isinstance(holder, dict) or holder.get(key) is None:
+        # null reads as missing, as the settings store reads it, so the page
+        # and the daemon agree on what an entry nobody set says.
         return "announce"
     value = holder.get(key)
     return value if value in COLLAB_CHOICES else "ask"

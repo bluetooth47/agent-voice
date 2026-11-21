@@ -44,7 +44,6 @@ asks: one question, not two.
 from __future__ import annotations
 
 import json
-import os
 import secrets
 import sys
 import time
@@ -143,11 +142,22 @@ COLLAB_TOOLS = [
 #: The collaboration tools, by name. Kept in step with permission_hook's
 #: CREW_SELF_ASKED and collab.CALL_TOOLS by a test.
 COLLAB = frozenset(t["name"] for t in COLLAB_TOOLS)
-#: How long to wait for the daemon: the card, a question's two minutes, and
-#: room to spare. Kept below the tool timeout Codex is given (codex_config).
-CARD_S = 45.0
-WAIT_S = {"ask_agent": CARD_S + 120.0 + 20.0}
-WAIT_DEFAULT_S = CARD_S + 30.0
+def _card_s() -> float:
+    """How long a card waits for an answer: the permission hook's own
+    setting (AGENTVOICE_PERMISSION_TIMEOUT), so the waits below fit it."""
+    try:
+        import permission_hook
+        return float(permission_hook.TIMEOUT)
+    except Exception:                   # noqa: BLE001
+        return 45.0
+
+
+#: How long to wait for the daemon: the card (and the line said with it), a
+#: question's two minutes, and room to spare. Below the tool timeout Codex is
+#: given (codex_config), which is worked out from these.
+CARD_S = _card_s()
+WAIT_S = {"ask_agent": CARD_S + 120.0 + 30.0}
+WAIT_DEFAULT_S = CARD_S + 40.0
 
 #: Allowed by the permission hook at every level, like Read.
 READ_ONLY = frozenset({"notes_list", "notes_read"})
@@ -237,10 +247,20 @@ def collaboration() -> str:
         return "ask"
 
 
+def others() -> bool:
+    """Whether there is anyone else to work with: at least one extra agent
+    switched on. With the main agent alone the tools would offer nothing
+    but refusals."""
+    try:
+        return bool(_config().agents())
+    except Exception:                   # noqa: BLE001
+        return True
+
+
 def listed_tools() -> list:
     """What tools/list offers: the notes tools always, the collaboration
-    tools unless this agent's collaboration is off."""
-    return TOOLS + (COLLAB_TOOLS if collaboration() != "off" else [])
+    tools unless this agent's collaboration is off or it is alone."""
+    return TOOLS + (COLLAB_TOOLS if collaboration() != "off" and others() else [])
 
 
 def collaborate(name: str, args: dict) -> str:
@@ -250,16 +270,13 @@ def collaborate(name: str, args: dict) -> str:
     if collaboration() == "off":
         raise ToolError("Collaboration is switched off for you on your Agents card, so nothing "
                         "was sent.")
-    call_id = secrets.token_hex(12)
-    try:
-        collab.write_call({"id": call_id, "tool": name, "from": named(), "pid": os.getpid(),
-                           "args": args})
-    except OSError as e:
-        raise ToolError(f"Could not reach Agent Voice ({type(e).__name__}); nothing was sent.")
-    got = collab.wait_result(call_id, WAIT_S.get(name, WAIT_DEFAULT_S))
+    # Over the daemon's socket, which learns this process's id from the
+    # kernel: who is asking is never something this server says.
+    got = collab.send_call({"id": secrets.token_hex(12), "tool": name, "from": named(),
+                            "args": args}, WAIT_S.get(name, WAIT_DEFAULT_S))
     if got is None:
-        raise ToolError("Agent Voice did not answer in time. Use task_status before trying "
-                        "again, in case it went ahead.")
+        raise ToolError("Agent Voice did not answer (is it running?). Use task_status before "
+                        "trying again, in case it went ahead.")
     if not got["ok"]:
         raise ToolError(got["text"])
     return got["text"]
@@ -520,7 +537,7 @@ def codex_config(program_name: str, agent: str = "", guard: bool = True) -> list
             "-c", f"{key}.env_vars={json.dumps(list(CODEX_ENV))}",
             "-c", f'{key}.default_tools_approval_mode="approve"',
             # Above the longest wait for the daemon (WAIT_S): a question.
-            "-c", f"{key}.tool_timeout_sec=200"]
+            "-c", f"{key}.tool_timeout_sec={int(max(WAIT_S.values())) + 15}"]
 
 
 if __name__ == "__main__":

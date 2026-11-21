@@ -761,9 +761,9 @@ def test_the_server_speaks_mcp_over_stdio(tmp_path):
     replies = [json.loads(l) for l in out.stdout.splitlines()]
     assert [r["id"] for r in replies] == [1, 2, 3, 4]
     assert replies[0]["result"]["serverInfo"]["name"] == "agentvoice-crew"
-    # the notes tools, and (collaboration is "announce" by default) the seven
-    # collaboration tools of Phase 16
-    assert len(replies[1]["result"]["tools"]) == 4 + 7
+    # the notes tools only: with no other agent switched on, the Phase 16
+    # collaboration tools are not offered (there is nobody to work with)
+    assert len(replies[1]["result"]["tools"]) == 4
     assert not replies[2]["result"].get("isError"), replies[2]
     assert "hello" in replies[3]["result"]["content"][0]["text"]
 

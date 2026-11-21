@@ -512,6 +512,12 @@ def _is_secret(path: str) -> bool:
         return True
     if p.name in SECRET_NAMES or p.suffix in SECRET_SUFFIXES:
         return True
+    # The agents' messages, calls and who-works-for-whom (Phase 16), and the
+    # questions on screen: another agent's business, asked about below
+    # Trusted like any credential (Codex review of 8dcea3c).
+    for private in (RUNTIME_DIR / "crew", PENDING):
+        if _under(p, private):
+            return True
     return p.name.startswith(".env")
 
 
@@ -905,7 +911,19 @@ def _ask(tool_name: str, tool_input: dict, note: str = "",
     return "deny", str(answer.get("reason") or "Denied at the desktop.")
 
 
-def ask_card(fields: dict, timeout: float | None = None, on_posted=None) -> dict | None:
+def _strict(pairs):
+    """json's object hook for an answer: a key given twice is an answer
+    that says two things, so it is no answer at all."""
+    out = {}
+    for k, v in pairs:
+        if k in out:
+            raise ValueError("a key given twice")
+        out[k] = v
+    return out
+
+
+def ask_card(fields: dict, timeout: float | None = None, on_posted=None,
+             stop=None) -> dict | None:
     """Put one question on screen and wait for its answer: the file protocol
     the overlay reads, shared by the hook, the desktop server's screenshot
     and the daemon's collaboration questions (Phase 16).
@@ -914,7 +932,8 @@ def ask_card(fields: dict, timeout: float | None = None, on_posted=None) -> dict
     which every caller treats as a no -- or None when nobody answered within
     `timeout`. Only `answer.get("allow") is True` is a yes. `on_posted` runs
     once the card is up (the daemon says the question out loud then); it
-    cannot change the answer."""
+    cannot change the answer. `stop()` true ends the wait early as None (the
+    caller's turn was stopped), and takes the card down."""
     timeout = TIMEOUT if timeout is None else timeout
     # 0o700: the request holds whatever the agent is about to run, and the
     # response is the word "yes". Neither is anyone else's business, and a
@@ -958,10 +977,16 @@ def ask_card(fields: dict, timeout: float | None = None, on_posted=None) -> dict
         while time.time() < deadline:
             if response.exists():
                 try:
-                    answer = json.loads(response.read_text())
+                    answer = json.loads(response.read_text(), object_pairs_hook=_strict)
                 except Exception:
                     answer = {}
                 return answer if isinstance(answer, dict) else {}
+            if stop is not None:
+                try:
+                    if stop():
+                        return None
+                except Exception:
+                    return None
             time.sleep(0.1)
         return None
     finally:

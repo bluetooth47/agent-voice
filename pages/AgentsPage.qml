@@ -1107,7 +1107,7 @@ Column {
         notesWrite: card.modelData.notesWrite === undefined || card.modelData.notesWrite === "allow"
                     ? "allow" : "deny"
         onNotesPicked: function(value) { page.putAgentNotes(card.index, value) }
-        collaboration: card.modelData.collaboration === undefined ? "announce" : String(card.modelData.collaboration)
+        collaboration: (card.modelData.collaboration === undefined || card.modelData.collaboration === null) ? "announce" : String(card.modelData.collaboration)
         onCollaborationPicked: function(value) { page.putAgentCollab(card.index, value) }
         acceptsWork: card.modelData.acceptsWork !== false
         onAcceptsWorkPicked: function(value) { page.putAgentAccepts(card.index, value) }

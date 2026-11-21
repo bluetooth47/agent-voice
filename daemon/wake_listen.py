@@ -3506,6 +3506,10 @@ class Daemon:
             return
 
         out.publish("thinking", **last)
+        # collab: this turn, by number, and that it is under way: a call an
+        # agent makes is accepted only from the turn it was made in (Phase 16).
+        persona.turn_id = getattr(persona, "turn_id", 0) + 1
+        persona.answering = True
         t0 = time.time()
         clock["sent"] = t0
         # A turn sent without a session starts a conversation. The view draws
@@ -3517,8 +3521,13 @@ class Daemon:
         prompt = persona.replay + text if persona.replay else text
         # collab: messages other agents left it, and the results of tasks it
         # delegated, ahead of everything else, as information (Phase 16).
+        # A replay or a task block says whose words follow it; with neither,
+        # the request is the user's and is headed so.
         try:
-            prompt = self.collab.deliveries(persona) + prompt
+            waiting = self.collab.deliveries(persona)
+            if waiting:
+                prompt = waiting + (prompt if persona.replay
+                                    else "The user now says:\n" + prompt)
         except Exception as e:
             print(f"  {YEL}deliveries not read: {type(e).__name__}{OFF}", flush=True)
         if open_turn:
@@ -3661,6 +3670,8 @@ class Daemon:
                             unsaid.append(sentence)     # collab: said after the unlock
         except Exception as e:                  # a broken agent must not end the loop
             error = f"{type(e).__name__}: {e}"
+        finally:
+            persona.answering = False           # collab: no calls after this
 
         if skipped:
             # The open microphone heard something not meant for it. Silence
@@ -3810,6 +3821,8 @@ class Daemon:
                           **({"kind": "brief", "for": p.task.frm}
                              if p.task is not None else {})})
             p.chat_continued = False
+            # collab: a task this turn asked for before its chat existed.
+            self.collab.chat_saved(p, p.chat_id)
             # collab: the questions it asked other agents this turn, each a
             # collapsed "Theo asked Sora" entry after its own (Phase 16).
             for aside in asides:
@@ -4052,6 +4065,32 @@ class Daemon:
         knobs, read fresh on every call (merged plan 3.4)."""
         return Config()
 
+    def adapter_stale(self, p: Persona, cfg) -> bool:
+        """collab: whether `p`'s running adapter no longer matches what the
+        settings now say about how it may act -- its permission level (hook
+        or none) and its folder. A task or a question must not start on an
+        adapter the idle poll has not yet rebuilt (Codex review: one lowered
+        from Trusted to Ask while busy kept its unhooked process). True when
+        the settings cannot be read."""
+        if cfg is None:
+            return True
+        have = self.agent if p is self._main else p.agent
+        if have is None or hasattr(have, "base_url"):
+            return False                    # an endpoint runs nothing here
+        if p is self._main:
+            level = cfg.level_for(getattr(have, "name", "") or "")
+            folder = cfg.get_str("projectDir")
+        else:
+            spec = cfg.agent_by_id(p.id)
+            if spec is None:
+                return True
+            level, folder = spec["level"], spec["projectDir"]
+        want_ask = level != "trusted"
+        if getattr(have, "ask_permission", want_ask) != want_ask:
+            return True
+        cwd = getattr(have, "cwd", None)
+        return bool(cwd) and str(cwd) != str(project_dir(folder))
+
     def side_adapter(self, p: Persona):
         """collab: a fresh adapter for `p`'s program, for a quiet side turn
         (Phase 16, `ask_agent`): text only, no spoken style, a new session,
@@ -4081,6 +4120,9 @@ class Daemon:
         if side is None:
             return None
         side.spoken = False
+        # No session written to disk by the CLI: the question is not kept in
+        # its own history (Claude --no-session-persistence, Codex --ephemeral).
+        side.ephemeral = True
         side.parts = getattr(have, "parts", None)
         for attr in ("skill_text",):
             if hasattr(have, attr):

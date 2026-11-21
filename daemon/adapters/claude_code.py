@@ -328,6 +328,9 @@ class ClaudeCode(Adapter):
             # refused outright, from browserTools (plan 12d).
             "--chrome" if self.browser_tools else "--no-chrome",
         ]
+        if getattr(self, "ephemeral", False):
+            # A quiet side turn (Phase 16, ask_agent): nothing kept on disk.
+            argv.append("--no-session-persistence")
         head = self.preamble()
         if head == SPOKEN_STYLE:
             # A constant this file ships, so argv is no leak.
@@ -498,6 +501,9 @@ class ClaudeCode(Adapter):
                     return
 
             dog = Watchdog(proc, self.idle_timeout_s)
+            #: For the daemon to poke while a tool call of this turn waits
+            #: on it (a collaboration question, Phase 16).
+            self.watchdog = dog
             # readline, not iteration: the stream does not end at the end of a
             # turn any more -- the process waits for the next one -- so the
             # turn ends at `result` and nothing past it may be read here.

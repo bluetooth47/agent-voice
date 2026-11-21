@@ -203,6 +203,9 @@ class Codex(Adapter):
 
     def _argv(self, text: str, session_id: str | None) -> list[str]:
         argv = ["codex", "exec", "--json", "--skip-git-repo-check"]
+        if getattr(self, "ephemeral", False):
+            # A quiet side turn (Phase 16, ask_agent): no session file kept.
+            argv.append("--ephemeral")
         if self.model:
             argv += ["-m", self.model]
         if self.effort and self.effort in self.efforts():
@@ -290,6 +293,9 @@ class Codex(Adapter):
         with self._lock:
             self._proc = proc
         dog = Watchdog(proc, self.idle_timeout_s)
+        #: For the daemon to poke while a tool call of this turn waits on it
+        #: (a collaboration question, Phase 16).
+        self.watchdog = dog
 
         spoken_any = False
         incomplete = ""

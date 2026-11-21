@@ -102,6 +102,10 @@ class Persona:
         self.saved_conversation = None
         #: The failure kind of its last turn, "" when it answered.
         self.turn_error = ""
+        #: Its turns, counted, and whether one is under way: a collaboration
+        #: call is taken only from the turn it was made in (Phase 16).
+        self.turn_id = 0
+        self.answering = False
 
     @property
     def main(self) -> bool:
