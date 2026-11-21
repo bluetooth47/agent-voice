@@ -126,6 +126,9 @@ BROWSER_PREFIX = "mcp__claude-in-chrome__"
 #: The hook's matcher for an agent that is otherwise trusted: only the
 #: browser, so nothing else pays for a process per tool call.
 BROWSER_MATCHER = "mcp__claude-in-chrome__.*"
+#: The hook's matcher for a trusted agent: the browser, plus the tools that
+#: can write a file, so a write to what the agents are told is still asked.
+TRUSTED_MATCHER = BROWSER_MATCHER + "|Bash|Write|Edit|MultiEdit|NotebookEdit"
 #: `computer` actions that do something on the page, as opposed to looking.
 BROWSER_ACTING = {"left_click", "right_click", "double_click", "triple_click",
                   "type", "key", "left_click_drag"}
@@ -270,6 +273,62 @@ def _sensitive(p: Path) -> bool:
                 or _under(p, DATA_DIR / "omarchy-skill"))
     except (OSError, ValueError, RuntimeError):
         return True
+
+
+def _orders_dirs() -> list[Path]:
+    """Where the agents' orders live: what every agent is told on every
+    turn, the skills they load, and the settings that set their levels."""
+    return [AGENTS_DIR, COMMUNAL_DIR, DATA_DIR / "agent-plugins",
+            DATA_DIR / "omarchy-skill", CONFIG_DIR,
+            Path.home() / ".config" / "omarchy" / "shell.json"]
+
+
+def _orders_spellings() -> list[str]:
+    """The ways a shell command can name those places: absolute, resolved,
+    and from the home folder on (which ~, $HOME and ${HOME} all end in)."""
+    home = str(Path.home())
+    out: set[str] = set()
+    for d in _orders_dirs():
+        for form in {str(d), str(d.resolve())}:
+            out.add(form)
+            if form.startswith(home + "/"):
+                out.add(form[len(home):])  # "/.local/share/agentvoice/communal"
+    out.add("bar set duaneoca.agentvoice")
+    return sorted(out)
+
+
+def orders_write(tool_name: str, tool_input) -> str:
+    """Why this call could change the agents' orders, or "".
+
+    Asked about at every level, Trusted and "allow all in this chat"
+    included (the Rule of Two, Phase 13): a web page that steers a trusted
+    agent should not be able to rewrite what the other agents are told.
+    For Bash this is a match on the command text, so a command built to
+    hide a path still gets past it; it catches the plain case, not a
+    determined one.
+    """
+    if not isinstance(tool_input, dict):
+        return ""
+    if tool_name in PATH_SCOPED:
+        target = _edit_target(tool_name, tool_input)
+        if not target:
+            return ""
+        try:
+            r = _resolved(target)
+            if any(_under(r, d) for d in _orders_dirs()):
+                return f"this changes what the agents are told ({target})"
+        except (OSError, ValueError, RuntimeError):
+            return "this may change what the agents are told"
+        return ""
+    if tool_name == "Bash":
+        cmd = tool_input.get("command")
+        if not isinstance(cmd, str):
+            return ""
+        for frag in _orders_spellings():
+            if frag in cmd:
+                return ("this command touches what the agents are told "
+                        f"({frag})")
+    return ""
 
 
 def _under(p: Path, base: Path) -> bool:
@@ -749,6 +808,9 @@ def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, st
     why = browser_consequence(tool_name, tool_input)
     if why:
         return _ask(tool_name, tool_input, note=why, announce=True)
+    why = orders_write(tool_name, tool_input)
+    if why:
+        return _ask(tool_name, tool_input, note=why, session="")
 
     desktop = tool_name[len(DESKTOP_PREFIX):] if tool_name.startswith(DESKTOP_PREFIX) else ""
     if desktop in DESKTOP_READ_ONLY or desktop in DESKTOP_SELF_ASKED:

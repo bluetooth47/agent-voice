@@ -574,12 +574,20 @@ def test_a_search_over_the_folders_asks_when_it_would_read_another_agents(hook_a
     assert hook.decide("Grep", {"pattern": "x", "path": str(paths.DATA_DIR)})[0] == "deny"
 
 
-def test_trusted_is_not_asked(hook_as):
+def test_trusted_reads_freely_but_a_write_to_the_orders_is_asked(hook_as):
+    # The orders guard: at Trusted a read is free, a write to what the
+    # agents are told is still asked (unanswered here, so denied).
     hook_as("sora", "trusted")
     agentfs.create("theo-x")
     other = paths.AGENTS_DIR / "theo-x" / "instructions.md"
     assert hook.decide("Read", {"file_path": str(other)})[0] == "allow"
-    assert hook.decide("Write", {"file_path": str(other), "content": "x"})[0] == "allow"
+    assert hook.decide("Write", {"file_path": str(other), "content": "x"})[0] == "deny"
+    rules = paths.COMMUNAL_DIR / "rules.md"
+    assert hook.decide("Bash", {"command": f"echo x >> {rules}"})[0] == "deny"
+    home_form = "~" + str(rules)[len(str(Path.home())):] if str(rules).startswith(str(Path.home())) else str(rules)
+    assert hook.decide("Bash", {"command": f"echo x >> {home_form}"})[0] == "deny"
+    assert hook.decide("Bash", {"command": "ls /tmp"})[0] == "allow"
+    assert hook.decide("Write", {"file_path": "/tmp/elsewhere.txt", "content": "x"})[0] == "allow"
 
 
 def test_a_yes_allows_and_a_corrupt_answer_denies(hook_as, monkeypatch):

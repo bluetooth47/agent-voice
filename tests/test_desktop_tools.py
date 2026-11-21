@@ -696,14 +696,16 @@ def test_claude_asks_for_the_browser_or_refuses_it():
     from adapters.claude_code import ClaudeCode
     a = ClaudeCode(ask_permission=False)
     argv = a._argv("", None)
-    assert "--no-chrome" in argv and "--chrome" not in argv and "--settings" not in argv
+    assert "--no-chrome" in argv and "--chrome" not in argv
+    # The only hook at Trusted is the orders guard, which leaves the browser out.
+    assert "claude-in-chrome" not in argv[argv.index("--settings") + 1]
     a.browser_tools = True
     argv = a._argv("", None)
     assert "--chrome" in argv
     # Trusted with the browser: a hook on the browser's tools alone.
     settings = json.loads(argv[argv.index("--settings") + 1])
     (entry,) = settings["hooks"]["PreToolUse"]
-    assert entry["matcher"] == hook.BROWSER_MATCHER
+    assert entry["matcher"] == hook.TRUSTED_MATCHER
 
 
 def test_below_trusted_the_whole_hook_still_guards_the_browser():

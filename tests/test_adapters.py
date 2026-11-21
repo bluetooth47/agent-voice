@@ -82,8 +82,13 @@ class TestPermissionPosture:
     def test_claude_adds_the_hook_when_asked_to(self):
         assert "--settings" in ClaudeCode(ask_permission=True)._argv("x", None)
 
-    def test_claude_omits_it_when_told_not_to(self):
-        assert "--settings" not in ClaudeCode(ask_permission=False)._argv("x", None)
+    def test_trusted_hooks_only_the_writing_tools(self):
+        # The orders guard: Trusted still hooks the tools that can write,
+        # not reads, and not the browser when the browser is off.
+        import json
+        argv = ClaudeCode(ask_permission=False)._argv("x", None)
+        (entry,) = json.loads(argv[argv.index("--settings") + 1])["hooks"]["PreToolUse"]
+        assert entry["matcher"] == "Bash|Write|Edit|MultiEdit|NotebookEdit"
 
     def test_the_hook_sees_every_tool(self):
         """The matcher is the limit of what the permission system can see, so

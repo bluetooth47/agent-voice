@@ -340,12 +340,15 @@ class ClaudeCode(Adapter):
             argv += ["--append-system-prompt-file", prompt_file(head)]
         if self.ask_permission:
             argv += ["--settings", self._hook_settings(self.named)]
-        elif self.browser_tools:
+        else:
             # Trusted, but a click in a signed-in browser can still buy or
-            # post, and that is asked about at every level: a hook on the
-            # browser's tools alone, so nothing else is slowed.
-            from permission_hook import BROWSER_MATCHER
-            argv += ["--settings", self._hook_settings(self.named, BROWSER_MATCHER)]
+            # post, and a write to the agents' orders (the communal rules,
+            # skills, instructions, settings) is still asked: a hook on the
+            # browser and the writing tools, not on reads.
+            from permission_hook import BROWSER_MATCHER, TRUSTED_MATCHER
+            matcher = TRUSTED_MATCHER if self.browser_tools else \
+                TRUSTED_MATCHER[len(BROWSER_MATCHER) + 1:]
+            argv += ["--settings", self._hook_settings(self.named, matcher)]
         servers: dict = {}
         if self.desktop_tools:
             # Agent Voice's desktop tools (plan 12a), as this agent: the
