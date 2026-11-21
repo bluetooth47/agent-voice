@@ -1515,3 +1515,34 @@ case: a new session, a cold CLI for Codex). §33's cold rows are that floor.
 The wrong first versions of the bench read the previous turn's reply still in
 the state file (0.00s rows) and then timed the follow-up window; both are
 fixed in the script and none of their numbers are used here.
+
+## 39. Phase 16: what a side question costs (A16-6)
+
+Measured 2026-11-20 on the i7-1185G7 against the installed build (7300d9e
+for the first, c47aae1 for the rest), from the daemon's own structural line
+`ask <id>: <target> answered <caller> in <s>`: from the moment the side
+adapter is built to the end of its answer, so it includes the CLI starting
+cold (a fresh adapter, a new session, `--no-session-persistence` /
+`--ephemeral`) and the whole answer, not only the first text. Questions were
+one-number arithmetic, synthetic, asked by Theo through `ask_agent` in typed
+turns.
+
+| Target | n | side turn, each | median |
+|---|---|---|---|
+| Sora (Claude Haiku, low, Ask) | 4 | 2.7, 2.7, 2.7, 3.0s | 2.7s |
+| Hazel (Codex gpt-6.2-sol, medium, Trusted) | 2 | 5.5, 7.2s | 6.4s |
+
+**A side question costs about what §33 says a cold start costs, plus the
+answer**: Haiku's cold first text is 1.76s and the whole one-word answer
+lands at 2.7s; Codex's fresh first text is 3.33s and its answer 5.5–7.2s.
+Over 5s for Codex, which is the plan's line for considering a warm side
+process. **Not done, on purpose**: a warm side process would keep a second
+Codex/Claude process alive per agent for questions that are rare, and Codex
+has no warm path in this adapter at all (§33: every turn is a new `codex
+exec`), so for Codex there is nothing to keep warm. The caller waits in
+silence for this, its watchdog kept alive by the daemon; the time is spent
+inside the caller's own turn, which in these runs took 13s (one question)
+to about 25s (three).
+
+Small numbers: n=4 and n=2, from one evening. Enough to place the cost
+against §33's floor, not to gate anything.

@@ -2659,3 +2659,36 @@ def test_a_stale_adapter_is_noticed(daemon, cfg_factory):
     p.agent.cwd = "/somewhere/else"
     assert d.adapter_stale(p, d.cfg)
     assert d.adapter_stale(p, None)
+
+
+# --- a recorded real session, replayed ------------------------------------------
+
+RECORDED = json.loads((Path(__file__).parent / "fixtures" / "collab" /
+                       "recorded-session.json").read_text())["calls"]
+
+
+@pytest.mark.parametrize("entry", RECORDED, ids=lambda e: e["tool_name"].split("__")[-1])
+def test_a_recorded_real_session_replays_the_same(agents, monkeypatch, entry):
+    """Each call Theo's real Claude Code made in the live checklist -- the
+    exact tool name and arguments the CLI sent -- is accepted by the server's
+    schema, and replayed into the daemon at the level it was made at gives
+    the same outcome as it did live: an error where it was one (the card was
+    refused), and the same kind of answer where it went through."""
+    d = agents
+    tool = entry["tool_name"].removeprefix("mcp__agentvoice-crew__")
+    args = crew_mcp._checked(tool, entry["input"])
+    # the real machine's Hazel has the id jarvis-ajc; the fixture's is hazel
+    if args.get("to") == "jarvis-ajc":
+        args = {**args, "to": "hazel"}
+    _theo_chat(d)
+    level(d, "main", entry["level"])
+    monkeypatch.setattr(permission_hook, "ask_card", _card(d, {"allow": False}))
+    with in_turn(d, "main"):
+        got = call(d, "main", tool, args)
+    want = entry["recorded"]
+    assert got["ok"] is not want["is_error"], (got, want)
+    head = want["text"].split(".")[0]
+    if tool == "delegate":
+        assert got["text"].startswith("Task ") and want["text"].startswith("Task ")
+    else:
+        assert got["text"].split(".")[0].split(":")[0] == head.split(":")[0], (got, want)

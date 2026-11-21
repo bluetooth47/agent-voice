@@ -1185,6 +1185,22 @@ recorded real two-agent session.
 - **Measure** the side-turn cost of `ask_agent` (a cold CLI start), in
   seconds, into FINDINGS. Over 5 s: consider a warm side process.
 
+**Built (2026-11-20)**, record `phase16notes.md`, FINDINGS §39: the seven
+tools in `crew_mcp.py` (listed unless `collaboration` is off or the agent
+is alone); calls over a Unix socket, the caller taken from the kernel's
+pid and the running turn it descends from (A16-4); the guards, the four
+levels, the card for `ask` (shown and said, answered on screen), the
+spoken line and 3 s window for `announce`, endpoints announced at every
+level; side questions on a fresh, non-persisting adapter; signed messages
+on tmpfs; results to the caller's next turn; the two knobs on the Agents
+card and the effective result on Agent details. A side question costs
+2.7 s for Haiku, 5.5–7.2 s for Codex (no warm process: Codex has none to
+keep). Codex reviewed it twice (21 findings, then 11 new); fixed but the
+items in the notes. Live (typed turns): every checklist item but a Gemini
+target. **Still open:** voice yes/no for the card (not built: the
+follow-up window hears without a wake word or verifier), a bare "stop"
+during an agent's announcement, a Gemini target live.
+
 ---
 
 ## Phase 17: Full verification sweep and release decision
