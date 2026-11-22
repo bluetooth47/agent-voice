@@ -1069,12 +1069,18 @@ Item {
   }
 
   function permitReplied(cid, text) {
-    if (cid !== answerFor || answerVerdict === "deny") return
+    if (cid !== answerFor) return
     var d = {}
     try { d = JSON.parse(String(text).trim() || "{}") || {} } catch (e) { d = {} }
+    if (answerVerdict === "deny") {
+      // Already gone from the screen; any other question still waiting comes next.
+      nextCard(cid)
+      return
+    }
     if (d.ok === true) {
       answerNote = ""
       if (opened && mode === "permission") hideCard()
+      nextCard(cid)
       return
     }
     answerFailed = true
@@ -1115,13 +1121,41 @@ Item {
   // The daemon holds the card and the summon names only its id; ask it for
   // the rest. This call -- started by the shell itself, its stdout a pipe
   // back to it -- is the one the daemon gives the card's nonce to (M7).
-  function probeReplied(seq, text) {
-    if (seq !== probeSeq || mode !== "permission") return
+  // After an answer, the next question still waiting, if there is one: a
+  // second card summoned while the first was being looked up replaced it
+  // on screen, and the first was left to time out unseen (Codex review of
+  // M7, pass 2). Not while locked, and only while the card just answered
+  // is still the one on screen -- a newer summons already has the overlay.
+  function nextCard(after) {
+    if (vState === "locked" || answerFor !== after) return
+    probeSeq += 1
+    var probe = probeProc.createObject(root, { seq: probeSeq, after: after,
+                                               command: ["agentvoice", "pending"] })
+    if (probe) probe.running = true
+  }
+
+  function probeReplied(seq, text, after) {
+    if (seq !== probeSeq) return
     var d = {}
     try { d = JSON.parse(String(text).trim() || "{}") || {} } catch (e) { d = {} }
+    if (after !== "") {
+      // A look for the next question: open it, unless the overlay has since
+      // been put to another use or nothing else is waiting.
+      if (d.id && d.id !== after && vState !== "locked" && answerFor === after &&
+          (!opened || mode === "permission"))
+        open(JSON.stringify({ mode: "permission", id: String(d.id) }))
+      return
+    }
+    if (mode !== "permission") return
     request = d
-    if (request && request.timeout)
-      secondsLeft = Math.round(request.timeout)
+    // The time left, not the whole timeout: a card that waited behind
+    // another (nextCard) has less than it started with, and a countdown
+    // promising more than remains is the thing a consent prompt must not do.
+    if (request && request.timeout) {
+      var waited = Number(request.asked_at) > 0
+          ? Math.max(0, Date.now() / 1000 - Number(request.asked_at)) : 0
+      secondsLeft = Math.max(1, Math.round(Number(request.timeout) - waited))
+    }
     // Nothing is waiting under that id -- answered, expired, withdrawn: the
     // card has nothing to ask, so it goes rather than sit empty.
     if (!request || !request.id) hideCard()
@@ -1131,9 +1165,10 @@ Item {
     Process {
       id: probe
       property int seq: 0
+      property string after: ""
       onRunningChanged: if (!running) probe.destroy(2000)
       stdout: StdioCollector {
-        onStreamFinished: root.probeReplied(probe.seq, String(text))
+        onStreamFinished: root.probeReplied(probe.seq, String(text), probe.after)
       }
     }
   }

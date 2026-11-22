@@ -1091,7 +1091,19 @@ def ask_card(fields: dict, timeout: float | None = None, on_posted=None,
     desk = cards.LOCAL_DESK
     if desk is not None:
         return desk.post(fields, timeout, on_posted=on_posted, stop=stop)
-    return cards.ask(fields, timeout, stop=stop, on_sent=on_posted)
+    # In the hook, the whole run must end inside Claude Code's 60 s, counted
+    # from when it started, not from when it asked (Codex review of M7,
+    # pass 2). The desktop and crew servers are long-lived and set no start.
+    not_after = (_HOOK_STARTED + HOOK_BUDGET_S) if _HOOK_STARTED is not None else None
+    return cards.ask(fields, timeout, stop=stop, on_sent=on_posted, not_after=not_after)
+
+
+#: When this hook run began (main()), for the budget above. None outside
+#: the hook.
+_HOOK_STARTED: float | None = None
+#: Claude Code stops a hook at 60 s; this leaves room for its own start and
+#: the decision on the way out.
+HOOK_BUDGET_S = 55.0
 
 
 def _die_cleanly() -> None:
@@ -1137,6 +1149,8 @@ def main() -> int:
     it is "the guard was not there". Every path out of here is a denial that
     names itself.
     """
+    global _HOOK_STARTED
+    _HOOK_STARTED = time.monotonic()
     _die_cleanly()
     try:
         try:

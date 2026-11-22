@@ -7,6 +7,10 @@
 //     --shots 2 --size 620x560 --arg verified card       # pending, then refused
 //   bench/preview/preview.sh --wait 2.5 --size 620x560 --arg unverified card
 //   bench/preview/preview.sh --wait 2.5 --gap 2.5 --shots 2 --arg allow card
+//   bench/preview/preview.sh --wait 2.5 --gap 2.5 --shots 2 --arg next card
+//
+// `next`: a second card is waiting when the first is answered, and comes up
+// next (Codex review of M7, pass 2), rather than being left to time out.
 //
 // It writes the card to <out>.card, which the stubbed `agentvoice pending`
 // hands the overlay as the daemon would. The stub logs the verdict to
@@ -99,6 +103,18 @@ ShellRoot {
       onTriggered: {
         var b = overlay.button("Allow once")
         if (!b) { console.warn("PREVIEW miss Allow once"); return }
+        if (overlay.scenario === "next") {
+          // The second question, waiting under its own id by the time the
+          // first is answered.
+          var second = JSON.parse(JSON.stringify(overlay.card))
+          second.id = "f6e5d4c3b2a1"
+          second.who = "jarvis-ajc"; second.label = "Hazel"
+          second.summary = "rm -rf build/ && make"
+          second.length = second.summary.length
+          nextWriter.command = ["sh", "-c", 'printf "%s\\n" "$1" > "$2"', "sh",
+                                JSON.stringify(second), overlay.cardPath]
+          nextWriter.running = true
+        }
         console.warn("PREVIEW click Allow once")
         input.mouseClick(b, b.width / 2, b.height / 2, Qt.LeftButton, Qt.NoModifier, -1)
       }
@@ -108,6 +124,7 @@ ShellRoot {
       running: overlay.scenario !== "unverified"
       onTriggered: { overlay.report("answered"); stdinCheck.running = true }
     }
+    Process { id: nextWriter }
     Process {
       id: stdinCheck
       command: ["sh", "-c", 'printf "argv: "; cat "$1"; printf "stdin: "; cat "$2"',

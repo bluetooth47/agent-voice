@@ -680,10 +680,11 @@ class TestReviewPass1:
         assert not ok and "withdrawn" in text
         assert out["a"] is None
 
-    @pytest.mark.parametrize("fresh, allowed", [(True, False), (None, True), (False, True),
+    @pytest.mark.parametrize("fresh, allowed", [(True, False), (None, False), (False, True),
                                                 (RuntimeError, False)])
     def test_an_allow_asks_the_lock_afresh(self, fresh, allowed):
-        """The daemon's flag can be two seconds behind a lock."""
+        """The daemon's flag can be two seconds behind a lock. Only a plain
+        "unlocked" lets an allow through; "cannot tell" refuses (pass 2)."""
         def locked_now():
             if fresh is RuntimeError:
                 raise RuntimeError("no compositor")
@@ -734,3 +735,110 @@ class TestReviewPass1:
         assert desk.pending()[0]["input"]["content"] == "x" * 100000
         desk.answer(card["id"], "deny")
         t.join(5)
+
+
+# --- Codex review of M7, pass 2 -----------------------------------------------------------
+
+class TestReviewPass2:
+    def test_the_hook_budget_counts_from_its_own_start(self, monkeypatch):
+        """Time spent before asking -- a content search's checks -- counts:
+        with too little left, the hook says no at once rather than wait into
+        Claude's cutoff."""
+        monkeypatch.setattr(cards, "LOCAL_DESK", None)
+        monkeypatch.setattr(hook, "HOOK_BUDGET_S", 4.0)
+        monkeypatch.setattr(hook, "_HOOK_STARTED", time.monotonic() - 1.0)
+        t0 = time.monotonic()
+        got = hook.ask_card({"tool": "Bash"}, timeout=45)
+        assert got == {"allow": False, "reason": cards.NO_TIME}
+        assert time.monotonic() - t0 < 0.5
+
+    def test_a_silent_daemon_cannot_hold_the_hook_past_its_budget(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cards, "LOCAL_DESK", None)
+        root = tmp_path / "cards"
+        root.mkdir()
+        monkeypatch.setattr(cards, "SOCKET_DIR", root)
+        srv = socket.socket(socket.AF_UNIX)
+        srv.bind(str(root / cards.SOCKET_NAME))
+        srv.listen(1)
+        sent = []
+
+        def take():
+            c, _ = srv.accept()
+            sent.append(c.recv(65536))
+            time.sleep(10)                      # and never answer
+        threading.Thread(target=take, daemon=True).start()
+        monkeypatch.setattr(hook, "HOOK_BUDGET_S", 5.0)
+        started = time.monotonic()
+        monkeypatch.setattr(hook, "_HOOK_STARTED", started)
+        try:
+            got = hook.ask_card({"tool": "Bash"}, timeout=45)
+        finally:
+            srv.close()
+        assert got is None and time.monotonic() - started < 5.5
+        # And the card's own countdown was cut to fit, so the overlay does
+        # not show 45 s for a question that ends in 2.
+        asked = json.loads(sent[0].split(b"\n")[0])
+        assert asked["timeout"] <= 5.0 - cards.GRACE_S
+
+    def test_main_starts_the_clock(self, monkeypatch, capsys):
+        import io
+        monkeypatch.setattr(hook, "_HOOK_STARTED", None)
+        monkeypatch.setattr("sys.stdin", io.StringIO('{"tool_name": "Read", "tool_input": {}}'))
+        assert hook.main() == 0
+        assert hook._HOOK_STARTED is not None
+        capsys.readouterr()
+
+    def test_servers_have_no_hook_budget(self, monkeypatch):
+        """The desktop and crew servers live for hours: a budget from their
+        start would refuse every card after the first minute. Only main()
+        starts the clock."""
+        seen = {}
+        monkeypatch.setattr(cards, "LOCAL_DESK", None)
+        monkeypatch.setattr(hook, "_HOOK_STARTED", None)
+        monkeypatch.setattr(cards, "ask", lambda *a, **k: seen.update(k) or None)
+        hook.ask_card({"tool": "Bash"}, timeout=1)
+        assert seen["not_after"] is None
+
+    def test_an_allow_whose_checks_run_past_the_deadline_is_refused(self):
+        """The lock probe is slow and the deadline passes during it: the
+        allow must not land after the deadline."""
+        now = {"t": 1000.0}
+
+        def slow_probe():
+            now["t"] += 5
+            return False
+        gate = threading.Event()
+        desk = cards.Desk(summon=lambda cid: gate.wait(10), clock=lambda: now["t"],
+                          locked_now=slow_probe)
+        t, card = cardhelp.post_async(desk, {"tool": "Bash"}, timeout=2)
+        s = _shown(desk, card["id"])
+        ok, text = desk.answer(card["id"], "allow", s["nonce"], s["digest"], verified=True)
+        gate.set()
+        t.join(5)
+        assert not ok and "expired" in text
+        assert card["answer"]["allow"] is False
+
+    def test_a_reply_lost_after_sending_is_not_known_never_no(self, tmp_path):
+        """The daemon took the answer and the reply never came: the overlay
+        must not say the agent was told no."""
+        root = tmp_path / "agentvoice" / "cards"
+        root.mkdir(parents=True)
+        srv = socket.socket(socket.AF_UNIX)
+        srv.bind(str(root / cards.SOCKET_NAME))
+        srv.listen(1)
+
+        def take_and_hang_up():
+            c, _ = srv.accept()
+            c.recv(65536)
+            c.close()
+        threading.Thread(target=take_and_hang_up, daemon=True).start()
+        try:
+            r = cardhelp.cli(tmp_path, "permit", "abcdef012345", "allow", stdin="{}\n")
+        finally:
+            srv.close()
+        assert r.returncode == 1
+        assert json.loads(r.stdout)["ok"] is None
+
+    def test_no_daemon_at_all_is_still_a_plain_no(self, tmp_path):
+        r = cardhelp.cli(tmp_path, "permit", "abcdef012345", "deny")
+        assert r.returncode == 1 and json.loads(r.stdout)["ok"] is False

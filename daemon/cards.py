@@ -114,6 +114,8 @@ LOCKED_SINCE = "The screen locked before anyone answered, so this was denied."
 NO_SOCKET = ("Agent Voice could not open the socket its cards are answered "
              "through, so nobody could answer; nothing was run.")
 TOO_MANY = "Too many questions are already waiting, so this was denied."
+NO_TIME = ("There was no time left to ask before the agent's own limit, so "
+           "this was denied.")
 DENIED = {"allow": False, "reason": "Denied at the desktop."}
 
 
@@ -210,8 +212,9 @@ class Desk:
         self.is_locked = is_locked if is_locked is not None else (lambda: False)
         #: The lock asked afresh, for an allow: `is_locked` is the daemon's
         #: flag, which its 2 s poll can leave behind a lock that just landed
-        #: (Codex review of M7). True, False, or None for "cannot tell",
-        #: which keeps the flag's answer, as the daemon's own poll does.
+        #: (Codex review of M7). Only False lets an allow through: "cannot
+        #: tell" (None) refuses it, as Try it does (pass 2). The overlay
+        #: needs the compositor running anyway, so that is rare.
         self.locked_now = locked_now
         self.log = log if log is not None else (lambda line: None)
         self.clock = clock
@@ -232,14 +235,19 @@ class Desk:
         if self.locked_now is None:
             return False
         try:
-            return self.locked_now() is True
+            return self.locked_now() is not False
         except Exception:               # noqa: BLE001 -- unsure is locked
             return True
 
-    def _finish(self, card: _Card, answer: dict | None) -> bool:
-        """Settle `card` with `answer`, once. True if this call settled it."""
+    def _finish(self, card: _Card, answer: dict | None, in_time: bool = False) -> bool:
+        """Settle `card` with `answer`, once. True if this call settled it.
+        `in_time`: only before its deadline, checked here under the lock,
+        so an allow whose checks (a lock probe, the asker's stop) ran past
+        the deadline cannot land after it (Codex review of M7, pass 2)."""
         with self._lock:
             if self._cards.get(card.id) is not card or card.done.is_set():
+                return False
+            if in_time and self.clock() >= card.deadline:
                 return False
             card.answer = answer
             card.done.set()
@@ -382,8 +390,11 @@ class Desk:
         result = {"allow": True}
         if verdict == "allow-session":
             result["session"] = True
-        if not self._finish(card, result):
-            return False, f"no question {card_id} is waiting"
+        if not self._finish(card, result, in_time=True):
+            # Too late after all: whatever settles it now is a no.
+            self._finish(card, {"allow": False, "reason": "The answer came after the question "
+                                                          "expired, so this was denied."})
+            return False, "the question had expired"
         self.log(f"card {card.id}: allowed{' for the chat' if verdict == 'allow-session' else ''}")
         return True, "allowed"
 
@@ -780,11 +791,20 @@ def _peer(conn) -> tuple[int, int]:
 
 
 def ask(fields: dict, timeout: float, stop=None, root: Path | None = None,
-        on_sent=None) -> dict | None:
+        on_sent=None, not_after: float | None = None) -> dict | None:
     """The hook's and the servers' side: post a card and wait for the answer.
     None when nobody answered in time or `stop()` turned true; a denial with
     its reason for everything that went wrong on the way. `on_sent` runs
-    once the question is with the daemon. Never raises."""
+    once the question is with the daemon. `not_after` (time.monotonic()) is
+    when the caller must have its answer whatever happens: the hook passes
+    its own start plus its budget, so time spent before asking -- a content
+    search's checks -- counts too (Codex review of M7, pass 2). The card's
+    own timeout is cut to fit. Never raises."""
+    if not_after is not None:
+        left = not_after - time.monotonic() - GRACE_S
+        if left < 1.0:
+            return {"allow": False, "reason": NO_TIME}
+        timeout = min(timeout, left)
     try:
         conn = _connect(root)
     except OSError:
@@ -808,7 +828,9 @@ def ask(fields: dict, timeout: float, stop=None, root: Path | None = None,
                 pass
         conn.settimeout(0.1)
         raw = _read_line(conn, LINE_MAX, stop=stop,
-                         deadline=time.monotonic() + min(timeout + GRACE_S, ASK_BUDGET_S))
+                         deadline=min(time.monotonic() + timeout + GRACE_S,
+                                      not_after if not_after is not None
+                                      else time.monotonic() + ASK_BUDGET_S))
         if raw is None:
             return None
         msg = _parse(raw)
@@ -829,19 +851,24 @@ def ask(fields: dict, timeout: float, stop=None, root: Path | None = None,
             pass
 
 
-def _request(msg: dict, root: Path | None = None) -> dict | None:
-    """One request to the daemon and its one-line reply, or None."""
+def _request(msg: dict, root: Path | None = None) -> tuple[bool, dict | None]:
+    """One request to the daemon: (sent, its one-line reply or None). Sent
+    with no reply is not the same as never sent: the daemon may have acted
+    on it (Codex review of M7, pass 2)."""
+    sent = False
+    raw = None
     try:
         with _connect(root) as conn:
             pid, uid = _peer(conn)
             if uid != os.getuid():
-                return None
+                return False, None
             conn.sendall(json.dumps(msg).encode("utf-8") + b"\n")
-            raw = _read_line(conn, ASK_MAX, deadline=time.monotonic() + 10.0)
+            sent = True
+            raw = _read_line(conn, ASK_MAX, deadline=time.monotonic() + 15.0)
     except OSError:
-        return None
+        pass
     reply = _parse(raw) if raw is not None else None
-    return reply if isinstance(reply, dict) else None
+    return sent, reply if isinstance(reply, dict) else None
 
 
 def _stdin_line(wait: float = 2.0) -> str:
@@ -867,7 +894,7 @@ def main(argv: list[str]) -> int:
         if cid and not CARD_ID.fullmatch(cid):
             print("{}")
             return 0
-        reply = _request({"op": "show", "id": cid})
+        _sent, reply = _request({"op": "show", "id": cid})
         # ASCII, as the request file was: a C1 control character in a card
         # would otherwise reach the terminal of whoever runs `pending`.
         print(json.dumps(reply if reply is not None else {}))
@@ -881,18 +908,21 @@ def main(argv: list[str]) -> int:
         sent = _parse(_stdin_line().strip().encode("utf-8")) or {}
         if not isinstance(sent, dict):
             sent = {}
-        reply = _request({"op": "answer", "id": cid, "verdict": verdict,
+        sent, reply = _request({"op": "answer", "id": cid, "verdict": verdict,
                           "nonce": sent.get("nonce", "") if isinstance(sent.get("nonce"), str) else "",
                           "digest": sent.get("digest", "") if isinstance(sent.get("digest"), str) else ""})
-        if reply is None:
+        if reply is None and not sent:
             out = {"ok": False, "text": "Agent Voice is not running, so nothing was answered"}
+        elif reply is None or not isinstance(reply.get("ok"), bool):
+            # `ok: null`: the answer reached the daemon and nothing came back,
+            # so whether it was taken is not known -- never "told no".
+            out = {"ok": None, "text": "no reply came back from Agent Voice"}
         else:
-            out = {"ok": reply.get("ok") is True,
-                   "text": str(reply.get("text") or "no answer from Agent Voice")}
+            out = {"ok": reply["ok"], "text": str(reply.get("text") or "")}
         print(json.dumps({"ok": out["ok"], "text": safe_for_terminal(out["text"])}))
-        if not out["ok"]:
+        if out["ok"] is not True:
             print(f"agentvoice: {safe_for_terminal(out['text'])}", file=sys.stderr)
-        return 0 if out["ok"] else 1
+        return 0 if out["ok"] is True else 1
     print("usage: cards.py show [ID] | answer ID allow|allow-session|deny", file=sys.stderr)
     return 2
 

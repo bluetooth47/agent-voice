@@ -207,3 +207,28 @@ class TestReviewPass1Overlay:
         body = body[:body.index("\n  }")]
         no = body[body.index("d.ok === false"):]
         assert no.index("told no") < no.index("is not known")
+
+
+class TestReviewPass2Overlay:
+    """Codex review of M7, pass 2: the overlay's side."""
+
+    def test_after_an_answer_the_next_waiting_card_is_shown(self):
+        body = SETTINGS[SETTINGS.index("function permitReplied("):]
+        body = body[:body.index("\n  }")]
+        assert body.count("nextCard(cid)") == 2          # after a deny, after an allow
+        nxt = SETTINGS[SETTINGS.index("function nextCard("):]
+        nxt = nxt[:nxt.index("\n  }")]
+        assert 'vState === "locked"' in nxt and "answerFor !== after" in nxt
+        assert '["agentvoice", "pending"]' in nxt
+
+    def test_the_next_card_never_takes_over_a_newer_one(self):
+        reply = SETTINGS[SETTINGS.index("function probeReplied("):]
+        reply = reply[:reply.index("\n  }")]
+        nxt = reply[reply.index('if (after !== "")'):]
+        assert "d.id !== after" in nxt and "answerFor === after" in nxt
+        assert 'vState !== "locked"' in nxt
+
+    def test_the_countdown_shows_the_time_left(self):
+        reply = SETTINGS[SETTINGS.index("function probeReplied("):]
+        reply = reply[:reply.index("\n  }")]
+        assert "request.asked_at" in reply and "Date.now() / 1000" in reply
