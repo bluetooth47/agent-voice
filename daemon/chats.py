@@ -377,6 +377,46 @@ class ChatStore:
         return self._change(chat_id, lambda c: c.update(
             shared_with=[a for a in shared_with(c) if a != agent]))
 
+    def detach(self, agent: str) -> int:
+        """Phase M8: `agent` (external id) has just been quarantined. Every
+        chat it does not own stops being shared with it, and every chat --
+        its own included -- forgets its session there, so nothing replays
+        or resumes into it what it could see before. Releasing it later
+        puts none of this back. Its own chats stay its own; who spoke in a
+        chat is history and stays. Returns how many chats changed. Every
+        chat file is read, not the index, which is only a listing."""
+        agent = str(agent or "")
+        if not _AGENT.fullmatch(agent) or not self.root.is_dir():
+            return 0
+        changed = 0
+        with self._locked():
+            index = self._read_index()
+            for path in sorted(self.root.glob("*.json")):
+                if path.name == INDEX:
+                    continue
+                chat = self.load(path.stem)
+                if chat is None:
+                    continue
+                touched = False
+                if agent in shared_with(chat):
+                    chat["shared_with"] = [a for a in shared_with(chat) if a != agent]
+                    touched = True
+                raw = chat.get("sessions")
+                if isinstance(raw, dict) and agent in raw:
+                    del raw[agent]
+                    touched = True
+                if owner_of(chat) == agent and chat.get("session_id"):
+                    # An older chat keeps its owner's session at the top.
+                    chat["session_id"] = ""
+                    touched = True
+                if touched:
+                    self._write_json(path, chat)
+                    self._upsert(index, chat)
+                    changed += 1
+            index["current"].pop(internal(agent), None)
+            self._save_index(index)
+        return changed
+
     def set_current(self, agent_id: str, chat_id: str | None) -> None:
         with self._locked():
             index = self._read_index()
@@ -591,6 +631,22 @@ def replay_context(chat: dict, max_chars: int = REPLAY_MAX,
             "context:\n\n" + body.rstrip() + "\n\n" + tail)
 
 
+def quarantine_refusal(agent: str) -> str:
+    """Why a chat may not be shared with `agent` (external id): it is
+    quarantined (phase M8), or the settings cannot say. "" when it may."""
+    try:
+        from runtime import Config
+        q = Config().quarantined()
+    except Exception:                   # noqa: BLE001 -- a guard closes
+        q = None
+    if q is None:
+        return ("The crew settings can't be read, so a chat is not shared with any agent "
+                "until they can. Check the Crew map.")
+    if agent in q:
+        return f"{agent} is quarantined. Release it on the Crew map first."
+    return ""
+
+
 def refusal(chat: dict, agent: str) -> str:
     """Why `agent` may not carry `chat` on, in words a person can act on."""
     return (f"That chat isn't shared with {agent}: it has no session in it and "
@@ -627,6 +683,11 @@ def main(argv: list[str]) -> int:
             ok = store.delete(rest[0])
         elif verb in ("share", "unshare") and len(rest) == 2:
             # By external id ("main" for the main agent).
+            if verb == "share":
+                why = quarantine_refusal(rest[1])
+                if why:
+                    print(why, file=sys.stderr)
+                    return 1
             ok = (store.share if verb == "share" else store.unshare)(rest[0], rest[1])
         elif verb == "may-continue" and len(rest) == 2:
             # Whether AGENT may carry chat ID on; asked by `agentvoice chats
@@ -635,6 +696,12 @@ def main(argv: list[str]) -> int:
             chat = store.load(rest[0])
             if chat is None:
                 raise LookupError
+            if owner_of(chat) != rest[1]:
+                # Phase M8: a quarantined agent carries on only its own.
+                why = quarantine_refusal(rest[1])
+                if why:
+                    print(why, file=sys.stderr)
+                    return 1
             if may_continue(chat, rest[1]):
                 return 0
             print(refusal(chat, rest[1]), file=sys.stderr)

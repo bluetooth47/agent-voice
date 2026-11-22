@@ -2441,12 +2441,22 @@ class Daemon:
             if (p.agent is not None and p.id and p.id in wanted
                     and (not heard or wanted[p.id] in heard)):
                 live.append({"id": p.id, "label": p.label, "phrase": p.name})
+        # Phase M8: each agent's roster names only the agents the crew links
+        # let it reach -- none for a quarantined one, none while the links
+        # cannot be read -- so its prompt never offers it someone list_agents
+        # would not. A link changed reaches it on the next idle poll.
+        try:
+            crew = self.cfg.crew()
+        except Exception:
+            crew = None
         for p in [main, *self.crew.values()]:
             agent = p.agent
             if agent is None or p.busy or not hasattr(agent, "preamble"):
                 continue
             fid = "main" if p is main else p.id
-            want = agentfs.parts_from(texts, fid, p.label or p.name, live)
+            reach = crew.reach(fid) if crew is not None else {}
+            mine = [a for a in live if a["id"] == fid or a["id"] in reach]
+            want = agentfs.parts_from(texts, fid, p.label or p.name, mine)
             if getattr(agent, "parts", None) == want:
                 continue
             try:
@@ -3246,12 +3256,14 @@ class Daemon:
                 agent.skill_text, changed = want, True
         if getattr(agent, "crew_tools", False):
             # collab: the crew server lists the collaboration tools unless
-            # this agent's collaboration is off, when its process starts; a
-            # change between off and on lets the idle process go (Phase 16).
+            # this agent's collaboration is off or it is quarantined (M8),
+            # when its process starts; a change lets the idle process go
+            # (Phase 16).
             try:
-                want = self.cfg.collaboration_for(getattr(p, "id", "") or "") != "off"
+                import crew_mcp
+                want = crew_mcp.offers_collab(self.cfg, getattr(p, "id", "") or "")
             except Exception:
-                want = True
+                want = False
             if getattr(agent, "collab_listed", None) is None:
                 agent.collab_listed = want
             elif agent.collab_listed != want:
@@ -4337,6 +4349,15 @@ class Daemon:
         "replayed", when the chat is put ahead of the next request."""
         agent = p.agent
         here = str(getattr(agent, "cwd", "") or "")
+        # Phase M8: a quarantined agent carries on only its own chats. Its
+        # shares were revoked and its sessions detached when it was
+        # quarantined; this holds it for a share or a session that came back
+        # by hand since, and for unreadable settings.
+        if (chat_schema.owner_of(chat) != collab.external(p.id)
+                and self.collab.is_quarantined(collab.external(p.id))):
+            print(f"  {YEL}agent “{p.label or 'main'}” is quarantined: it carries on only "
+                  f"its own chats{OFF}", flush=True)
+            return "refused"
         # Its own session in the chat (Phase 15: each speaker has one); an
         # older chat's top-level session is its owner's.
         mine = chat_schema.sessions_of(chat).get(collab.external(p.id), {})

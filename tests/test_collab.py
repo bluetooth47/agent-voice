@@ -483,8 +483,13 @@ def crew(daemon, tmp_path):
     from crew import Persona
     log: list = []
     d = daemon
+    # Phase M8: everyone linked to everyone, as collaboration was before
+    # crew links -- what "Link everyone as before" writes. The link and
+    # quarantine cases themselves are in the M8 section at the end.
+    import crew_links
     d.cfg._values.update(voiceAgents=AGENTS, saveChats=True, mainName="Theo",
-                         keepHistory=True)
+                         keepHistory=True,
+                         crewLinks=crew_links.everyone(["main"] + [a["id"] for a in AGENTS]))
     d.enabled, d.locked, d.yielded = True, False, False
     d._frames = queue.Queue()
     d.pipe = type("P", (), {"conversation": False, "phrase": "theo",
@@ -2698,3 +2703,561 @@ def test_a_recorded_real_session_replays_the_same(agents, monkeypatch, entry):
         assert got["text"].startswith("Task ") and want["text"].startswith("Task ")
     else:
         assert got["text"].split(".")[0].split(":")[0] == head.split(":")[0], (got, want)
+
+
+# === Phase M8: crew links and quarantine, enforced ==================================
+#
+# What has to hold, against the real call path (the socket, the daemon's own
+# record of who is calling, the board and the poll):
+#
+# - a call runs only along a link that lists its ability, in its direction;
+#   no link, an unreadable list, a quarantined caller, and anything but ask
+#   or delegate into quarantine are refused, each with its own code;
+# - checked at the request, after the approval, when queued work starts and
+#   when its result is delivered; queued work whose link changed is refused
+#   and running work cancelled by the poll;
+# - askFirst puts the card up at `allow`; a delegation into quarantine
+#   carries a capped brief and nothing of the chat; what a quarantined agent
+#   answers comes back marked; quarantine detaches its sessions and shares,
+#   and release grants nothing back;
+# - a pass the person starts needs no link but never goes into quarantine.
+
+import crew_links  # noqa: E402
+
+ALL = ["main", "sora", "hazel", "nova", "wren"]
+M8_ARGS = {"ask_agent": {"question": f"what time {CALL_MARK}"},
+           "delegate": {"task": f"rename {CALL_MARK}"},
+           "pass_conversation": {"request": f"take it {CALL_MARK}"},
+           "message_agent": {"text": f"hello {CALL_MARK}"}}
+
+
+def links(d, value):
+    d.cfg._values["crewLinks"] = value
+
+
+def quarantine(d, ids):
+    d.cfg._values["crewQuarantine"] = list(ids)
+
+
+def act(d, frm, to, tool, **extra):
+    with in_turn(d, frm):
+        return call(d, frm, tool, {"to": to, **M8_ARGS[tool], **extra})
+
+
+def last_task(d):
+    return d.collab.board.get(d.collab.board.public()[-1]["id"])
+
+
+@pytest.fixture
+def m8(agents):
+    """The crew with every level at allow (quiet: what is under test is the
+    links), the main agent's chat saved, and nobody linked."""
+    d = agents
+    for ext in ("main", "sora", "hazel"):
+        level(d, ext, "allow")
+    _theo_chat(d)
+    links(d, [])
+    return d
+
+
+class TestMatrix:
+    """Both directions × four abilities × the link missing, unreadable,
+    revoked or present × nobody, the target or the caller quarantined."""
+
+    @pytest.mark.parametrize("quar", ["none", "target", "caller"])
+    @pytest.mark.parametrize("state", ["missing", "invalid", "revoked", "present"])
+    @pytest.mark.parametrize("tool", sorted(M8_ARGS))
+    @pytest.mark.parametrize("frm,to", [("main", "sora"), ("sora", "main")])
+    def test_the_matrix(self, m8, frm, to, tool, state, quar):
+        d = m8
+        ability = crew_links.TOOL_ABILITY[tool]
+        others = [a for a in crew_links.ABILITIES if a != ability]
+        if state == "missing":
+            # Linked the other way, with everything: it is not this way.
+            links(d, [{"from": to, "to": frm, "allow": list(crew_links.ABILITIES)}])
+        elif state == "invalid":
+            links(d, [{"from": frm, "to": to, "allow": [ability]}, {"from": frm}])
+        elif state == "revoked":
+            links(d, [{"from": frm, "to": to, "allow": others}])
+        else:
+            links(d, [{"from": frm, "to": to, "allow": [ability]}])
+        quarantine(d, {"none": [], "target": [to], "caller": [frm]}[quar])
+        got = act(d, frm, to, tool)
+        if state == "invalid":
+            want = "crew-unreadable"
+        elif quar == "caller":
+            want = "quarantined"
+        elif (quar == "target" and ability not in crew_links.INTO_QUARANTINE
+              and state in ("revoked", "present")):
+            # A link into quarantine that does not carry it: the sentence
+            # says why it never could, which "no link" would not.
+            want = "quarantined"
+        elif state != "present":
+            want = "no-link"
+        else:
+            want = ""
+        if want:
+            assert not got["ok"], got
+            assert refused_code(d) == want, (got, refused_code(d))
+            assert not dispatched(d, to) and not d.sides
+        else:
+            assert got["ok"], got
+
+
+class TestChecks:
+    def test_a_change_takes_effect_on_the_next_call_of_a_warm_client(self, m8):
+        """One crew server, two calls: the link is read fresh for each."""
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        with in_turn(d, "main"):
+            assert call(d, "main", "message_agent", {"to": "sora", "text": "one"})["ok"]
+            links(d, [])
+            got = call(d, "main", "message_agent", {"to": "sora", "text": "two"})
+        assert not got["ok"] and "no link from you to Sora" in got["text"]
+        assert refused_code(d) == "no-link"
+
+    def test_the_second_check_after_the_card(self, m8, monkeypatch):
+        """A link deleted while the card was up: the yes sends nothing."""
+        d = m8
+        links(d, [{"from": "main", "to": "sora", "allow": ["delegate"], "askFirst": True}])
+
+        def ask_card(fields, timeout=None, on_posted=None, stop=None):
+            d.cards.append(fields)
+            links(d, [])
+            return {"allow": True}
+        monkeypatch.setattr(permission_hook, "ask_card", ask_card)
+        got = act(d, "main", "sora", "delegate")
+        assert d.cards and not got["ok"] and refused_code(d) == "no-link"
+        assert not d.collab.board.open()
+
+    def test_ask_first_puts_the_card_up_at_allow(self, m8, monkeypatch):
+        d = m8
+        links(d, [{"from": "main", "to": "sora", "allow": ["message"], "askFirst": True}])
+        monkeypatch.setattr(permission_hook, "ask_card", _card(d, {"allow": False}))
+        got = act(d, "main", "sora", "message_agent")
+        assert not got["ok"] and refused_code(d) == "declined"
+        assert "The link from Theo to Sora asks you first." in d.cards[-1]["note"]
+        monkeypatch.setattr(permission_hook, "ask_card", _card(d, {"allow": True}))
+        assert act(d, "main", "sora", "message_agent")["ok"]
+        assert len(d.cards) == 2
+
+    def test_ask_first_does_not_lift_off(self, m8, monkeypatch):
+        d = m8
+        level(d, "main", "off")
+        links(d, [{"from": "main", "to": "sora", "allow": ["message"], "askFirst": True}])
+        monkeypatch.setattr(permission_hook, "ask_card", _card(d, {"allow": True}))
+        got = act(d, "main", "sora", "message_agent")
+        assert not got["ok"] and refused_code(d) == "off" and not d.cards
+
+    def test_ask_first_gained_while_queued_stops_it(self, m8):
+        d = m8
+        links(d, [{"from": "main", "to": "sora", "allow": ["delegate"]}])
+        with in_turn(d, "sora"):
+            assert act(d, "main", "sora", "delegate")["ok"]
+            links(d, [{"from": "main", "to": "sora", "allow": ["delegate"], "askFirst": True}])
+        _release(d)
+        _idle(d)
+        assert not dispatched(d, "sora")
+        assert last_task(d).state == "refused" and "setting changed" in last_task(d).reason
+
+    def test_a_queued_job_is_refused_after_its_link_is_deleted(self, m8):
+        """Sora is busy, so the task queues; its link goes; the poll refuses
+        it -- not when Sora is free, at once."""
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        with in_turn(d, "sora"):
+            assert act(d, "main", "sora", "delegate")["ok"]
+            t = last_task(d)
+            assert t.state == "pending"
+            links(d, [])
+            d.collab.tick()
+            assert t.state == "refused" and t.code == "no-link"
+        _release(d)
+        _idle(d)
+        assert not dispatched(d, "sora")
+
+    def test_the_third_check_when_it_starts(self, m8, monkeypatch):
+        """Even with no poll in between, start() reads the link again."""
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        assert act(d, "main", "sora", "delegate")["ok"]
+        t = last_task(d)
+        links(d, [])
+        monkeypatch.setattr(d.collab, "sweep", lambda: None)
+        _release(d)
+        _idle(d)
+        assert t.state == "refused" and t.code == "no-link" and not dispatched(d, "sora")
+
+    def test_running_work_is_cancelled_when_its_link_goes(self, m8):
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        gate = threading.Event()
+        d.crew["sora"].agent.wait = gate
+        assert act(d, "main", "sora", "delegate")["ok"]
+        _release(d)
+        t = last_task(d)
+        assert _until(lambda: t.state == "active")
+        links(d, [])
+        d.collab.tick()
+        gate.set()
+        _idle(d)
+        assert t.state == "cancelled" and t.code == "no-link"
+        assert d.crew["sora"].task is None
+
+    def test_a_question_whose_link_goes_while_it_is_answered_is_not_handed_on(self, m8):
+        """The fourth check: delivery."""
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        real = d.side_adapter
+
+        def side(p):
+            a = real(p)
+            send = a.send
+
+            def sending(text, session_id=None):
+                links(d, [])                # deleted while it answers
+                yield from send(text, session_id)
+            a.send = sending
+            return a
+        d.side_adapter = side
+        got = act(d, "main", "sora", "ask_agent")
+        assert not got["ok"] and "not passed on" in got["text"]
+        assert CALL_MARK not in got["text"]
+        assert last_task(d).code == "no-link"
+
+    def test_a_question_waiting_for_a_busy_agent_is_checked_before_it_starts(self, m8,
+                                                                             monkeypatch):
+        """The third check, for a question: the link deleted while it waited
+        for Sora, and no side turn is even built (the poll is held off, so
+        this check alone stands between them)."""
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        monkeypatch.setattr(d.collab, "sweep", lambda: None)
+        out = {}
+        with in_turn(d, "sora"):
+            th = threading.Thread(target=lambda: out.update(got=act(d, "main", "sora", "ask_agent")))
+            th.start()
+            assert _until(lambda: any(t.kind == "ask" for t in d.collab.board.open()))
+            links(d, [])
+        th.join(10)
+        assert not out["got"]["ok"] and "no link" in out["got"]["text"]
+        assert d.sides == []
+
+    def test_a_message_is_judged_again_when_it_is_delivered(self, m8):
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        assert act(d, "main", "sora", "message_agent")["ok"]
+        links(d, [{"from": "sora", "to": "main", "allow": ["message"]}])
+        assert d.collab.deliveries(d.crew["sora"]) == ""
+        assert collab.inbox_count("sora", d.collab.root) == 0     # gone, not kept
+
+    def test_a_result_is_withheld_when_the_link_goes_before_delivery(self, m8):
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        assert act(d, "main", "sora", "delegate", report_back=True)["ok"]
+        _release(d)
+        _idle(d)
+        links(d, [])
+        text = d.collab.deliveries(d._main)
+        assert "was withheld" in text and "Sora here." not in text
+
+    def test_list_agents_names_only_whom_the_caller_may_reach(self, m8):
+        d = m8
+        links(d, [{"from": "main", "to": "sora", "allow": ["ask"], "askFirst": True},
+                  {"from": "hazel", "to": "main", "allow": ["delegate"]}])
+        with in_turn(d, "main"):
+            got = call(d, "main", "list_agents", {})
+        rows = [json.loads(r) for r in got["text"].splitlines()[1:]]
+        assert {r["id"] for r in rows} == {"main", "sora"}
+        sora = next(r for r in rows if r["id"] == "sora")
+        assert sora["you_may"] == ["ask"] and sora["asks_the_person_first"] is True
+        assert sora["quarantined"] is False
+        links(d, [])
+        with in_turn(d, "main"):
+            got = call(d, "main", "list_agents", {})
+        assert "No agent is linked to you" in got["text"]
+        assert [json.loads(r)["id"] for r in got["text"].splitlines()[2:]] == ["main"]
+
+    def test_an_unreadable_list_refuses_everything_and_says_so_on_screen(self, m8):
+        d = m8
+        links(d, "everyone")
+        got = act(d, "main", "nobody-by-that-id", "delegate")
+        assert not got["ok"] and refused_code(d) == "crew-unreadable", "before any other reason"
+        assert "Crew links can't be read" in d.collab.line(), "said by the acting call itself"
+        for tool in M8_ARGS:
+            got = act(d, "main", "sora", tool)
+            assert not got["ok"] and "can't be read" in got["text"]
+        with in_turn(d, "main"):
+            assert not call(d, "main", "list_agents", {})["ok"]
+        assert "Crew links can't be read" in d.collab.line()
+
+    def test_crew_settings_that_will_not_load_refuse_every_call(self, m8):
+        """Never the last good copy, which may have the link the person has
+        since deleted."""
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+
+        def broken():
+            raise OSError("mid-write")
+        d.fresh_config = broken
+        got = act(d, "main", "sora", "message_agent")
+        assert not got["ok"] and refused_code(d) == "crew-unreadable"
+
+    def test_task_status_and_cancel_still_work_without_a_readable_list(self, m8):
+        """Cancelling only makes things safer."""
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        with in_turn(d, "sora"):
+            assert act(d, "main", "sora", "delegate")["ok"]
+            tid = last_task(d).id
+            links(d, "broken")
+            with in_turn(d, "main"):
+                assert call(d, "main", "cancel_task", {"id": tid})["ok"]
+
+
+class TestQuarantine:
+    def test_a_delegation_into_quarantine_carries_a_capped_brief_and_no_chat(self, m8):
+        d = m8
+        cid = d._main.chat_id
+        links(d, crew_links.everyone(["main", "sora"]))
+        quarantine(d, ["sora"])
+        d.collab.tick()                         # carried out: nothing yet to detach
+        got = act(d, "main", "sora", "delegate", task="rename " + "x" * 1500,
+                  summary="y" * 1500)
+        assert got["ok"] and "quarantined" in got["text"]
+        t = last_task(d)
+        assert t.into_quarantine and not t.chat_id
+        assert len(t.request) + len(t.brief) <= crew_links.QUARANTINE_BRIEF_MAX
+        _release(d)
+        _idle(d)
+        assert chat_schema.shared_with(d.chats.load(cid)) == []       # never shared
+        prompt, session = d.crew["sora"].agent.sent[-1]
+        assert session is None and "You are quarantined" in prompt
+        assert BRIEF_MARK not in prompt and "The plan is X" not in prompt
+        assert "x" * 1000 not in prompt and "y" not in prompt.split("x" * 900)[-1][:40]
+        assert "[cut: the agent is quarantined]" in prompt
+        # Its turn went into a chat of its own, never Theo's.
+        assert all(e.get("agent_id") != "sora" for e in d.chats.load(cid)["exchanges"])
+
+    def test_its_answers_come_back_marked(self, m8):
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        quarantine(d, ["sora"])
+        got = act(d, "main", "sora", "ask_agent")
+        assert got["ok"] and "from a quarantined agent" in got["text"]
+
+    def test_quarantine_detaches_its_sessions_and_shares_and_release_grants_nothing(self, m8):
+        d = m8
+        cid = d._main.chat_id
+        d.chats.share(cid, "sora")
+        sora = d.crew["sora"]
+        d.chats.record(chat_id=cid, agent_id="sora", agent_label="Sora", backend="claude",
+                       session_id="sora-in-theos-chat", project_dir="/p",
+                       exchange={"transcript": "hi", "reply": "hello"})
+        sora.session_id, sora.chat_id, sora.chat_continued = "sora-in-theos-chat", cid, True
+        let_go = []
+        sora.agent.cancel = lambda: let_go.append(1)
+        quarantine(d, ["sora"])
+        d.collab.tick()
+        chat = d.chats.load(cid)
+        assert "sora" not in chat_schema.shared_with(chat)
+        assert "sora" not in chat_schema.sessions_of(chat)
+        assert sora.session_id is None and sora.chat_id is None
+        assert let_go, "its warm process, and what it held, let go"
+        d.collab.tick()
+        assert len(let_go) == 1, "carried out once"
+        # Carrying on Theo's chat is refused while quarantined.
+        assert d.continue_chat(sora, chat) == "refused"
+        # Released: nothing comes back.
+        quarantine(d, [])
+        d.collab.tick()
+        chat = d.chats.load(cid)
+        assert "sora" not in chat_schema.shared_with(chat) and sora.session_id is None
+
+    def test_a_busy_agent_is_detached_when_its_turn_ends(self, m8):
+        """Not under a running turn, which keeps its session to the end; on
+        the first poll after it."""
+        d = m8
+        sora = d.crew["sora"]
+        sora.session_id = "old"
+        with in_turn(d, "sora"):
+            assert sora.busy
+            quarantine(d, ["sora"])
+            d.collab.tick()
+            assert sora.session_id == "old" and "sora" not in d.collab._q_applied
+        d.collab.tick()
+        assert sora.session_id is None and "sora" in d.collab._q_applied
+
+    def test_quarantine_while_queued_refuses_and_while_running_cancels(self, m8):
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        with in_turn(d, "sora"):
+            assert act(d, "main", "sora", "delegate")["ok"]
+            t = last_task(d)
+            quarantine(d, ["sora"])
+            d.collab.tick()
+            assert t.state == "refused" and t.code == "changed"
+
+    def test_quarantined_while_the_card_was_up_sends_nothing(self, m8, monkeypatch):
+        """The second check: a delegation admitted for a Sora not held apart
+        would carry the chat; quarantined during the card, it is refused."""
+        d = m8
+        links(d, [{"from": "main", "to": "sora", "allow": ["delegate"], "askFirst": True}])
+
+        def ask_card(fields, timeout=None, on_posted=None, stop=None):
+            quarantine(d, ["sora"])
+            return {"allow": True}
+        monkeypatch.setattr(permission_hook, "ask_card", ask_card)
+        got = act(d, "main", "sora", "delegate")
+        assert not got["ok"] and refused_code(d) == "changed" and "quarantine" in got["text"]
+        assert not d.collab.board.open()
+
+    def test_a_share_put_back_by_hand_is_not_carried_on(self, m8):
+        """continue_chat holds a quarantined agent to its own chats even when
+        the share revoked at quarantine came back."""
+        d = m8
+        cid = d._main.chat_id
+        quarantine(d, ["sora"])
+        d.collab.tick()
+        d.chats.share(cid, "sora")              # by hand, afterwards
+        assert d.continue_chat(d.crew["sora"], d.chats.load(cid)) == "refused"
+        quarantine(d, [])
+        assert d.continue_chat(d.crew["sora"], d.chats.load(cid)) != "refused"
+
+    def test_a_quarantine_lets_the_warm_process_go_to_re_list_the_tools(self, m8):
+        d = m8
+        sora = d.crew["sora"]
+        sora.agent.crew_tools = True
+        d.apply_extras(sora.agent, sora)
+        before = sora.agent.cancelled
+        quarantine(d, ["sora"])
+        assert d.apply_extras(sora.agent, sora) and sora.agent.cancelled > before
+        assert sora.agent.collab_listed is False
+        assert not d.apply_extras(sora.agent, sora)
+        quarantine(d, [])
+        assert d.apply_extras(sora.agent, sora) and sora.agent.collab_listed is True
+
+    def test_its_crew_server_hides_and_refuses_the_tools(self, m8, monkeypatch):
+        d = m8
+        quarantine(d, ["sora"])
+        monkeypatch.setattr(crew_mcp, "_config", lambda: d.cfg)
+        monkeypatch.setattr(crew_mcp, "named", lambda: "sora")
+        monkeypatch.setattr(crew_mcp, "program", lambda: "claude")
+        assert {t["name"] for t in crew_mcp.listed_tools()} == {t["name"] for t in crew_mcp.TOOLS}
+        with pytest.raises(crew_mcp.ToolError, match="quarantined"):
+            crew_mcp.collaborate("list_agents", {})
+        assert not crew_mcp.offers_collab(d.cfg, "sora") and crew_mcp.offers_collab(d.cfg, "")
+        quarantine(d, [])
+        assert {t["name"] for t in crew_mcp.listed_tools()} >= crew_mcp.COLLAB
+        d.cfg._values["crewQuarantine"] = "nobody"
+        assert {t["name"] for t in crew_mcp.listed_tools()} == {t["name"] for t in crew_mcp.TOOLS}
+
+    def test_the_daemon_refuses_a_quarantined_callers_every_tool(self, m8):
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        quarantine(d, ["sora"])
+        with in_turn(d, "sora"):
+            for tool, args in (("list_agents", {}), ("task_status", {"id": "a" * 16})):
+                got = call(d, "sora", tool, args)
+                assert not got["ok"] and "quarantined" in got["text"]
+
+    def test_no_communal_note_writes_but_its_own_are_fine(self, m8, monkeypatch):
+        import agentfs
+        import notes
+        d = m8
+        agentfs.create("sora")
+        quarantine(d, ["sora"])
+        monkeypatch.setattr(crew_mcp, "_config", lambda: d.cfg)
+        monkeypatch.setattr(crew_mcp, "named", lambda: "sora")
+        monkeypatch.setattr(crew_mcp, "program", lambda: "claude")
+        monkeypatch.setattr(crew_mcp, "GUARD", False)
+        with pytest.raises(crew_mcp.ToolError, match="quarantined"):
+            crew_mcp.call("notes_write", {"scope": "communal", "name": "plan", "text": "x"})
+        with pytest.raises(crew_mcp.ToolError, match="quarantined"):
+            crew_mcp.call("notes_append", {"scope": "communal", "name": "plan", "text": "x"})
+        assert "Made" in crew_mcp.call("notes_write", {"scope": "mine", "name": "plan", "text": "x"})
+        assert notes.list_notes("communal")["notes"] == []
+        d.cfg._values["crewQuarantine"] = {"not": "a list"}
+        with pytest.raises(crew_mcp.ToolError, match="quarantined"):
+            crew_mcp.call("notes_append", {"scope": "communal", "name": "plan", "text": "x"})
+
+
+class TestUserPasses:
+    def test_a_pass_the_person_starts_needs_no_link(self, m8):
+        d = m8
+        links(d, [])
+        d.collab.pass_conversation(d._main, "sora", entry="cli", brief="b")
+        _release(d)
+        _idle(d)
+        assert dispatched(d, "sora")
+
+    def test_a_pass_into_quarantine_is_refused_out_loud(self, m8):
+        d = m8
+        quarantine(d, ["sora"])
+        t = d.collab.pass_conversation(d._main, "sora", entry="voice")
+        assert t.state == "refused"
+        said = [e[2] for e in d.events if e[0] == "say"]
+        assert "Sora is quarantined. Release it on the Crew map first." in said
+        assert not dispatched(d, "sora")
+
+    def test_quarantined_while_queued_is_refused_when_it_would_start(self, m8):
+        d = m8
+        t = d.collab.pass_conversation(d._main, "sora", entry="cli", brief="b")
+        quarantine(d, ["sora"])
+        _release(d)
+        _idle(d)
+        assert t.state == "refused" and "quarantined" in t.reason and not dispatched(d, "sora")
+
+    def test_unreadable_settings_refuse_a_pass_too(self, m8):
+        d = m8
+        quarantine(d, ["sora"])
+        d.cfg._values["crewQuarantine"] = "x"
+        t = d.collab.pass_conversation(d._main, "sora", entry="cli", brief="b")
+        assert t.state == "refused" and "can't be read" in t.reason
+
+    def test_the_cli_refuses_a_pass_into_quarantine(self, tmp_path, cfg_factory):
+        cfg = cfg_factory(voiceAgents=AGENTS, crewQuarantine=["sora"])
+        err = io.StringIO()
+        assert collab.cli_pass(["sora"], io.StringIO("b"), err, cfg=cfg, root=tmp_path) == 1
+        assert "Sora is quarantined" in err.getvalue()
+        assert not (tmp_path / "requests").exists() or not list((tmp_path / "requests").iterdir())
+
+    def test_a_pass_out_of_quarantine_is_marked(self, m8):
+        d = m8
+        quarantine(d, ["sora"])
+        d.collab.tick()
+        sora = d.crew["sora"]
+        sora.last = {"transcript": "q", "reply": "a"}
+        d.collab.pass_conversation(sora, "main", entry="cli", brief="from sora")
+        _release(d)
+        _idle(d)
+        assert "from a quarantined agent" in d._main.agent.sent[-1][0]
+
+
+def test_sharing_a_chat_with_a_quarantined_agent_is_refused(monkeypatch, cfg_factory, capsys):
+    import runtime
+    monkeypatch.setattr(runtime, "Config", lambda: cfg_factory(crewQuarantine=["sora"]))
+    assert chat_schema.main(["share", "a" * 16, "sora"]) == 1
+    assert "quarantined" in capsys.readouterr().err
+    monkeypatch.setattr(runtime, "Config", lambda: cfg_factory(crewQuarantine="x"))
+    assert chat_schema.main(["share", "a" * 16, "hazel"]) == 1
+
+
+def test_the_link_check_costs_microseconds(m8):
+    """Measured, not asserted tight: the pure check on a nine-agent
+    everyone-list, and a fresh read of the settings, which is what every
+    call pays (the M8 notes record the numbers)."""
+    import time as _t
+    ids = ["main"] + [f"a{i}" for i in range(8)]
+    crew = crew_links.Crew.from_raw(crew_links.everyone(ids), ["a3"])
+    n = 2000
+    t0 = _t.perf_counter()
+    for _ in range(n):
+        crew_links.refusal(crew, "main", "a7", "delegate", "A7")
+    pure = (_t.perf_counter() - t0) / n * 1e6
+    t0 = _t.perf_counter()
+    for _ in range(200):
+        crew_links.Crew.from_raw(crew_links.everyone(ids), ["a3"])
+    parse = (_t.perf_counter() - t0) / 200 * 1e6
+    print(f"link check {pure:.1f} µs, parse of 72 links {parse:.1f} µs")
+    assert pure < 1000 and parse < 20000

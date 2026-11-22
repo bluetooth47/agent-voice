@@ -3,6 +3,7 @@ AgentDetailsPage 1.0 AgentDetailsPage.qml
 AgentsPage 1.0 AgentsPage.qml
 CommunalPage 1.0 CommunalPage.qml
 ConversationPage 1.0 ConversationPage.qml
+CrewMapPage 1.0 CrewMapPage.qml
 DisplayPage 1.0 DisplayPage.qml
 ListeningPage 1.0 ListeningPage.qml
 OverviewPage 1.0 OverviewPage.qml

@@ -130,7 +130,9 @@ OUTSIDE_WRITERS: dict[tuple[str, str], set[str]] = {
 }
 
 DEFAULTS_ONLY = {"agentEfforts", "agentModels", "mainTools", "permissions",
-                 "voiceAgents", "wakeAlsoSounds"}
+                 "voiceAgents", "wakeAlsoSounds",
+                 # Phase M8: two lists, written on the Crew map page.
+                 "crewLinks", "crewQuarantine"}
 
 
 def _defaults_only() -> set[str]:
@@ -196,7 +198,7 @@ def _field_writers() -> dict[str, set[str]]:
     return found
 
 
-def test_the_defaults_only_keys_are_the_six_this_file_knows():
+def test_the_defaults_only_keys_are_the_ones_this_file_knows():
     assert _defaults_only() == DEFAULTS_ONLY
 
 

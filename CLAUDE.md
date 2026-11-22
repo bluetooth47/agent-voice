@@ -236,7 +236,7 @@ reloads a model on every poll. Miss the third and the fix waits for something
 unrelated to be touched, which is how "switching engines and back" became
 folklore for "make it notice".
 
-## Seven ways this fails open, and the rules that close them
+## Eight ways this fails open, and the rules that close them
 
 Each of these was a real path from "somebody said something near the
 microphone" to "something ran". They are listed because every one of them is
@@ -310,6 +310,19 @@ can bind a socket at that path. What this cannot stop (a plugin dropped
 into the shell, injected input, a race on the overlay's pipes) is written
 in phaseM7notes.md, and it is why "ask me first" is advisory for Trusted
 agents.
+
+**A link that was there when the work was asked for is not a link now.**
+Since M8 an agent reaches another only along a link on the Crew map
+(`crew_links.py`), and the person can delete one, or quarantine an agent,
+while a card is up, while a task queues or while an answer is being
+written. So the links are judged four times, each against the settings
+read fresh (`Runtime._crew`, never the copy the daemon last loaded): at the
+request, after the approval, when queued work starts and when its result
+is delivered; and the poll (`Runtime.sweep`) refuses queued work and
+cancels running work whose link or quarantine moved. A new way for one
+agent to reach another -- chat search (M20), announcements (M27) -- calls
+`crew_links.refusal` at each of those points, and an unreadable list
+refuses it.
 
 **A transcript and a model reply are untrusted input to the UI.** Any `Text`
 showing one needs `textFormat: Text.PlainText`: `AutoText` renders anything

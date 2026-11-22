@@ -56,6 +56,19 @@ DESTRUCTIVE: dict[str, tuple[dict[str, list[str]], list[re.Pattern]]] = {
     # The session's conversation, from memory: a Process, started by
     # setting `running`, which only clearSession() does.
     "history clear": ({"Settings.qml": ["Process"]}, [call("clearSession"), start("clearHistory")]),
+    # Phase M8, the Crew map. A link deleted; every agent linked to every
+    # other (it widens rather than destroys, and is held the same way:
+    # question 2 asks for a confirm); an agent quarantined, which loses its
+    # links out, its sessions and its shared chats; and unreadable crew
+    # settings replaced with none, which loses whatever was written there.
+    # Each list is built by a helper only its one wrapper calls.
+    "link delete": ({"CrewMapPage.qml": ["removeLink"]},
+                    [call("removeLink"), call("withoutLink")]),
+    "link everyone": ({"CrewMapPage.qml": ["linkEveryone"]},
+                      [call("linkEveryone"), call("everyoneLinks")]),
+    "quarantine": ({"CrewMapPage.qml": ["quarantineAgent"]},
+                   [call("quarantineAgent"), call("linksQuarantining")]),
+    "crew reset": ({"CrewMapPage.qml": ["clearUnreadable"]}, [call("clearUnreadable")]),
 }
 
 # How each verb looks where it is built.
@@ -64,6 +77,10 @@ SPELLING = {
     "chats delete": '"chats", verb',
     "--uninstall": "--uninstall",
     "history clear": '"history", "clear"',
+    "link delete": '"link delete "',
+    "link everyone": '"link everyone"',
+    "quarantine": '"quarantine "',
+    "crew reset": '"crew reset"',
 }
 
 # Functions a call may sit in without a confirmation of its own, because
@@ -72,7 +89,10 @@ SPELLING = {
 # earns nothing (Codex review, M1).
 WRAPPERS = {("AgentFolders.qml", "function remove"), ("AgentFolders.qml", "function trashOrphan"),
             ("pages/AgentsPage.qml", "function removeAgent"),
-            ("Settings.qml", "function removeEverything"), ("Settings.qml", "function clearSession")}
+            ("Settings.qml", "function removeEverything"), ("Settings.qml", "function clearSession"),
+            ("pages/CrewMapPage.qml", "function removeLink"),
+            ("pages/CrewMapPage.qml", "function linkEveryone"),
+            ("pages/CrewMapPage.qml", "function quarantineAgent")}
 
 
 def _built_in(scanned, spelling):

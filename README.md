@@ -465,6 +465,40 @@ saved before names existed gets its old wake word as its id, which is what
 everything already called it, so nothing moves. Two agents may share a
 name, but never a wake phrase.
 
+### Agents working together, and the Crew map
+
+Claude Code and Codex agents can ask each other a question, give each other
+a task, pass one the conversation or leave one a message, and you can pass a
+conversation yourself ("pass this to Sora", or **Send to another agent**).
+Each agent's **Collaboration** setting says how you hear about what it
+starts: not at all (off), asking you first, announced out loud with a moment
+to say stop, or quietly.
+
+Settings → **Crew map** says who may do which of those to whom. An agent
+reaches another only along a link there that allows it, and a link goes one
+way: Theo → Sora lets Theo give Sora a task and nothing else. With no links
+nobody can reach anybody, which is how it starts on an upgrade; **Link
+everyone as before** puts back every agent able to do everything with every
+other, after a confirm. A link can also **Ask me first**, which puts the
+approval card up for every call over it whatever the caller's own setting
+says. That card is answered only from this screen, but an agent at Trust
+everything could run commands to answer its own, so for a Trusted agent it
+is advisory.
+
+**Quarantine** holds an agent apart: it starts nothing, other agents may
+only ask it a question or give it a task, a task reaches it as the brief
+alone (at most 1000 characters, never the chat), what it answers comes back
+marked as from a quarantined agent, and it writes no communal note.
+Quarantining it ends its sessions and the chats shared with it; releasing it
+gives none of that back. A pass you start yourself needs no link, but never
+goes into quarantine.
+
+The daemon enforces all of this, reading the list fresh for every call and
+again before queued work starts and before an answer is handed back. A list
+that cannot be read refuses every call an agent starts, and says so on
+screen. The page is only an editor of the list, and says when it was changed
+outside Settings.
+
 ### Endpoints for any agent
 
 An extra agent can run on an OpenAI-compatible endpoint of its own: choose

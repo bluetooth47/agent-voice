@@ -97,6 +97,7 @@ Item {
     { id: "agents",       label: "Agents",       icon: "\u{f06a9}", badge: agentProblems > 0 ? "!" : "" },
     { id: "agentdetails", label: "Agent details", icon: "\u{f0219}", badge: changedOutside("agents") > 0 ? "!" : "" },
     { id: "communal",     label: "Communal",     icon: "\u{f0849}", badge: changedOutside("communal") > 0 ? "!" : "" },
+    { id: "crew",         label: "Crew map",     icon: "\u{f0b58}", badge: crewUnreadable || crewOutsideAt !== "" ? "!" : "" },
     { id: "listening",    label: "Listening",    icon: "\u{f036c}" },
     { id: "conversation", label: "Conversation", icon: "\u{f0b79}" },
     { id: "voice",        label: "Voice",        icon: "\u{f057e}" },
@@ -819,7 +820,62 @@ Item {
     if (setting("conversationMode", true) === true && !vRemembers && serviceActive)
       out.push({ text: (mainAgent || "This agent") + " starts fresh every turn, so follow-ups have no memory.",
                  page: "conversation" })
+    if (crewProblem !== "")
+      out.push({ text: crewProblem, page: "crew" })
     return out
+  }
+
+  // --- the crew map (phase M8) ----------------------------------------------------
+  // What the Overview says about the two crew settings. The Crew map page
+  // reads them in full (and mirrors crew_links.py); this is only the two
+  // things worth a line on the Overview: a list that is not a list, and
+  // agents that cannot reach each other because nobody has linked them.
+  readonly property bool crewUnreadable: {
+    var l = cfg["crewLinks"], q = cfg["crewQuarantine"]
+    return (l !== undefined && !Array.isArray(l)) || (q !== undefined && !Array.isArray(q))
+  }
+  readonly property string crewProblem: {
+    var l = cfg["crewLinks"]
+    if (crewUnreadable)
+      return "The crew links can't be read, so agents can't reach each other."
+    if (voiceAgents.length > 0 && (l === undefined || l.length === 0))
+      return "No crew links yet, so agents can't ask, give work to or message each other."
+    return ""
+  }
+  // "Changed outside Settings at HH:MM" (master plan 7.4): the two lists
+  // changed, and not by a write from this overlay. Trusted Codex has no
+  // hook, and anything can run `omarchy bar set`, so the page says so
+  // rather than showing a list as if the person had made it. Tracked here,
+  // not on the page, because the overlay stays loaded and the page does not.
+  property string crewOutsideAt: ""
+  property var crewSeen: null
+  property var crewMine: []
+  function crewCanon(v) {
+    if (Array.isArray(v)) return "[" + v.map(crewCanon).join(",") + "]"
+    if (v && typeof v === "object")
+      return "{" + Object.keys(v).sort().map(function(k) { return JSON.stringify(k) + ":" + crewCanon(v[k]) }).join(",") + "}"
+    return JSON.stringify(v === undefined ? null : v)
+  }
+  function crewOwnWrite(links, quarantine) {
+    var mine = crewMine.slice(-14)
+    if (links !== null) mine.push("L" + crewCanon(links))
+    if (quarantine !== null) mine.push("Q" + crewCanon(quarantine))
+    crewMine = mine
+  }
+  function crewCheck() {
+    if (!store.loaded) return
+    var c = store.cfg || {}
+    var now = { L: "L" + crewCanon(c.crewLinks === undefined ? [] : c.crewLinks),
+                Q: "Q" + crewCanon(c.crewQuarantine === undefined ? [] : c.crewQuarantine) }
+    if (crewSeen !== null)
+      for (var k in now)
+        if (now[k] !== crewSeen[k] && crewMine.indexOf(now[k]) < 0)
+          crewOutsideAt = Qt.formatTime(new Date(), "HH:mm")
+    crewSeen = now
+  }
+  Connections {
+    target: store
+    function onCfgChanged() { root.crewCheck() }
   }
 
   // The folders and the trash as the pages show them, read every few
@@ -881,6 +937,17 @@ Item {
                                     /^(prompt|tools|notes|chats|advanced|rules|skills)$/.test(String(p.tab || "")) ? String(p.tab) : "")
       showPage(mode)
     }
+  }
+
+  // Which page a Ctrl+key goes to, by index in `pages`, or -1.
+  function pageForKey(key) {
+    if (key >= Qt.Key_1 && key <= Qt.Key_9) return key - Qt.Key_1
+    if (key === Qt.Key_0) return 9
+    var here = 0
+    for (var i = 0; i < pages.length; i++) if (pages[i].id === page) here = i
+    if (key === Qt.Key_PageUp) return Math.max(0, here - 1)
+    if (key === Qt.Key_PageDown) return Math.min(pages.length - 1, here + 1)
+    return -1
   }
 
   function goTo(pageId, agent, tab) {
@@ -1552,11 +1619,13 @@ Item {
       MouseArea { anchors.fill: parent }
 
       Keys.onEscapePressed: root.dismiss()
-      // Ctrl+1..9 jump to a page, from anywhere in the settings. Nine
-      // pages fill them; a tenth would need another way in.
+      // Ctrl+1..9 jump to the first nine pages in sidebar order, Ctrl+0 to
+      // the tenth (phase M8, the Crew map made ten), and Ctrl+PgUp/PgDn
+      // step to the page above or below, so a page past the tenth is still
+      // reachable from the keyboard.
       Keys.onPressed: function(e) {
         if (root.mode !== "settings" || !(e.modifiers & Qt.ControlModifier)) return
-        var n = e.key - Qt.Key_1
+        var n = root.pageForKey(e.key)
         if (n >= 0 && n < root.pages.length) {
           root.goTo(root.pages[n].id, "")
           e.accepted = true
@@ -1836,7 +1905,7 @@ Item {
             Text {
               width: parent.width
               wrapMode: Text.WordWrap
-              text: "ctrl+1–9 to switch pages"
+              text: "ctrl+1–9, 0 or pgup/pgdn to switch pages"
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -1885,6 +1954,7 @@ Item {
               sourceComponent: root.page === "agents" ? agentsPage
                              : root.page === "agentdetails" ? agentDetailsPage
                              : root.page === "communal" ? communalPage
+                             : root.page === "crew" ? crewPage
                              : root.page === "listening" ? listeningPage
                              : root.page === "conversation" ? conversationPage
                              : root.page === "voice" ? voicePage
@@ -1898,6 +1968,7 @@ Item {
           Component { id: agentsPage;       AgentsPage { s: root } }
           Component { id: agentDetailsPage; AgentDetailsPage { s: root } }
           Component { id: communalPage;     CommunalPage { s: root } }
+          Component { id: crewPage;         CrewMapPage { s: root } }
           Component { id: listeningPage;    ListeningPage { s: root } }
           Component { id: conversationPage; ConversationPage { s: root } }
           Component { id: voicePage;        VoicePage { s: root } }

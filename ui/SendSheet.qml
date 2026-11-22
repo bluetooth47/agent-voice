@@ -99,9 +99,25 @@ Rectangle {
     for (var i = 0; i < sheet.s.voiceAgents.length; i++) ids.push(sheet.s.agentId(sheet.s.voiceAgents[i]))
     for (var j = 0; j < ids.length; j++) {
       if (ids[j] === sheet.fromId || !sheet.reachable(ids[j])) continue
-      out.push({ label: sheet.nameOf(ids[j]), value: ids[j] })
+      out.push({ label: sheet.nameOf(ids[j]) + (sheet.quarantined(ids[j]) ? " (quarantined)" : ""),
+                 value: ids[j] })
     }
     return out
+  }
+  // Phase M8: a pass the person starts needs no crew link -- they are its
+  // approver -- but nothing goes into quarantine, and the daemon refuses it
+  // too. A quarantine list that cannot be read refuses every pass (the
+  // daemon cannot tell either), so it is said here before Send.
+  function quarantined(id) {
+    var q = sheet.s.cfg["crewQuarantine"]
+    if (q === undefined) return false
+    return !Array.isArray(q) || q.indexOf(id) >= 0
+  }
+  readonly property string denied: {
+    if (sheet.toId === "" || !sheet.quarantined(sheet.toId)) return ""
+    if (!Array.isArray(sheet.s.cfg["crewQuarantine"]))
+      return "The crew settings can't be read, so nothing can be passed until they are fixed on the Crew map."
+    return sheet.nameOf(sheet.toId) + " is quarantined. Release it on the Crew map first."
   }
   function hostOf(url) {
     // The scheme is optional: the settings may hold `localhost:11434`.
@@ -246,7 +262,7 @@ Rectangle {
   }
   Timer { id: closeLater; interval: 2500; onTriggered: sheet.close() }
   function send() {
-    if (sheet.sending || sheet.toId === "") return
+    if (sheet.sending || sheet.toId === "" || sheet.denied !== "") return
     sheet.note = ""
     sheet.sending = true
     sender.failed = false
@@ -355,6 +371,16 @@ Rectangle {
       font.pixelSize: Style.font.caption
     }
     Text {
+      visible: sheet.denied !== ""
+      width: parent.width
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: sheet.denied
+      color: sheet.s.urgent
+      font.family: sheet.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+    Text {
       visible: sheet.note !== ""
       width: parent.width
       wrapMode: Text.WordWrap
@@ -371,7 +397,8 @@ Rectangle {
         text: sheet.sending ? "Sending…" : "Send"
         bordered: true
         focusable: true
-        enabled: sheet.toId !== "" && sheet.loaded && !sheet.sending && !sheet.sent && sheet.s.serviceActive
+        enabled: sheet.toId !== "" && sheet.denied === "" && sheet.loaded && !sheet.sending && !sheet.sent
+                 && sheet.s.serviceActive
         fontFamily: sheet.s.fontFamily
         foreground: sheet.s.foreground
         onClicked: sheet.send()

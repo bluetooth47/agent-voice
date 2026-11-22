@@ -141,6 +141,21 @@ even if nothing malicious is ever hosted.
   guard asks about the plain forms of those at every level, and below
   Trusted every command is a question; a Trusted agent can get past it.
   A way to get a yes past the checks *without* one of those is a report.
+- **Crew links are enforced by the daemon; "ask me first" on one is only
+  as good as the card (M8).** An agent reaches another only along a link
+  on the Crew map that allows what it is doing, checked against the
+  settings read fresh at the request, after the approval, when queued work
+  starts and when its answer is delivered; an unreadable list refuses
+  every call. The list lives in `shell.json`, which an agent below Trusted
+  cannot write unasked (the orders guard asks at every level) and which
+  Trusted Codex, having no hook, can -- so the page says when it changed
+  outside Settings. A link's "ask me first" raises the M7 card, so for a
+  Trusted agent it is advisory, as the card is. Quarantine holds an agent's
+  calls, briefs, answers and communal notes apart; it does not sandbox the
+  agent's own tools, and a quarantined agent at Trusted can still read
+  whatever its program can read on disk. A downgrade to a build before M8
+  ignores both settings: all-to-all again and no quarantine (master plan
+  7.7 says what to do first).
 - **The protected-file list is names and locations.** A content search and a
   direct read now get the same answer for the same bytes, which is what the
   list is for. It will not recognise a `prod-dump.sql` full of passwords, and

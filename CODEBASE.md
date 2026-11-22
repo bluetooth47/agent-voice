@@ -4,9 +4,9 @@ Written 2026-11-21 against branch `orders-guard` at `92c71ff`. Read this
 first, then `CLAUDE.md` (the binding rules for working here), then the module
 you will touch. Every module in `daemon/` opens with a long docstring
 explaining why it exists. Read that docstring before changing the module.
-Where a docstring and the code disagree, the code wins (example: `collab.py`
-and `crew_mcp.py` docstrings still say crew calls travel as files; the code
-uses a Unix socket, see 4.4).
+Where a docstring and the code disagree, the code wins. (The `collab.py`
+and `crew_mcp.py` docstrings that said crew calls travel as files were
+corrected in M8: they use a Unix socket, see 4.4.)
 
 ---
 
@@ -240,7 +240,8 @@ This file is the entry point (`main()`), and its structure is:
 | `try_it.py` | M6: Try it. `refusal()` (locked, lent out, stale, unknown, no program, busy, `MIN_GAP_S` 10 s), the request and status files in `$RUNDIR/try/` (0600 in 0700; the draft on stdin, never argv), `draft_parts`, `first_sentence`, and the CLI's half (`try_it.py client AGENT`). The daemon's half is `Daemon.take_try` / `try_adapter` / `handle_try`: a throwaway adapter at level ask with `no_tools` (Claude: `--tools "" --strict-mcp-config`, recorded in `tests/fixtures/try/`), none of Agent Voice's tools, `ephemeral`; never a chat, never the readout; the journal gets timing and length only. |
 | `notes.py` | Notes store (Phase 14) under `agents/<id>/notes/` and `communal/notes/`: `.meta.json` (rev, author, hash, tainted, lock), 20 versions kept, base-rev conflict check, `append` without base, deny/lock checked inside the lock, corrupt meta locks everything, hand edits show as "you". |
 | `collab.py` | Collaboration (Phases 15–16): `Task` (kinds pass/delegate/ask/message; pending → active → completed/cancelled/failed/refused), the board, checks at request and at turn start, the pass order (tell the user first, then share the chat), per-chat target sessions, `crew/origin` files, the call socket server, limits (`DEPTH_MAX` 3, `OPEN_DELEGATIONS_MAX` 2, `RATE_PER_MIN` 6, `QUESTION_TIMEOUT_S` 120, `CANCEL_WINDOW_S` 3), wrapping of returned text as information. CLI: `collab.py pass|tasks`. |
-| `crew_mcp.py` | MCP stdio server `agentvoice-crew`, started for every Claude Code and Codex agent regardless of `desktopTools`. 11 tools: `notes_list/read/write/append`, `list_agents`, `ask_agent`, `delegate`, `pass_conversation`, `message_agent`, `task_status`, `cancel_task`. Collaboration tools hidden when the agent's `collaboration` is off. argv `crew_mcp.py <program> [<id>] [--guard]`; `--guard` = Codex below Trusted, which has no hook. |
+| `crew_mcp.py` | MCP stdio server `agentvoice-crew`, started for every Claude Code and Codex agent regardless of `desktopTools`. 11 tools: `notes_list/read/write/append`, `list_agents`, `ask_agent`, `delegate`, `pass_conversation`, `message_agent`, `task_status`, `cancel_task`. Collaboration tools hidden when the agent's `collaboration` is off or it is quarantined (`offers_collab`, shared with the daemon's warm-process check); a quarantined agent writes no communal note. argv `crew_mcp.py <program> [<id>] [--guard]`; `--guard` = Codex below Trusted, which has no hook. |
+| `crew_links.py` | M8: crew links and quarantine, pure. `parse_links`/`parse_quarantine` (unreadable → None and why), `Crew` (`abilities`, `allows`, `asks_first`, `reach`, `reached_by`; none out of quarantine, only ask/delegate into it), `everyone(ids)` for "Link everyone as before", `refusal()` with audit codes `no-link`, `quarantined`, `crew-unreadable`. `QUARANTINE_BRIEF_MAX` 1000. The Crew map page mirrors it; `test_crew_links.py` runs the page's JS against it in node. |
 | `audit.py` | `audit.record()` takes only typed fields (ids, names, integers); a bad value is written as "?". A test AST-walks every call. |
 | `speech_text.py` | Markdown → speakable prose, sentence boundaries, code blocks → "Code omitted", `safe_for_terminal`, `as_prompt`; `pass_command` ("pass/send this to NAME …") and `is_take_over`. Since M4 the **command table** (`COMMANDS`: id, phrases, effect, the positions it may sit at, the in-sentence phrases, CLI equivalent, the fixed sentence said when it fires inside a sentence) and **`find_command(text, mode, names)`**: the rules from before M4 first (`exact`), then a command at the start or end (`edges`) or in its own clause (`clause`), with the never-fires rules (an object after it, a negation, quoted or reported speech, a question, two commands). |
 | `voice_commands.py` | `agentvoice commands [--json]`: the table plus each enabled agent's wake phrase, from the settings. |
@@ -313,6 +314,26 @@ Notes and collaboration exist only for Claude Code and Codex
   always said aloud with its host.
 - Nothing one agent says is the user's approval; returned text is wrapped
   with its source and a web-taint warning when relevant.
+- **Crew links and quarantine** (M8, `crew_links.py`, `crewLinks` and
+  `crewQuarantine`): an agent-started call from A to B with ability X
+  (ask, delegate, message, pass) runs only along a link A → B listing X.
+  No link, or an empty list, is refused; an unreadable list refuses every
+  agent-started call (and flashes in the HUD). Checked against the
+  settings read fresh at the request (`_guard`), after the card or the
+  spoken line (`_act`), when queued work starts (`start`, `_ask`) and at
+  delivery (the answer in `_ask`, messages and results in `deliveries`);
+  `Runtime.sweep` on every poll refuses queued work and cancels running
+  work whose link or quarantine changed. `askFirst` makes the effective
+  level `ask` (the M7 card) short of `off`. A quarantined agent starts
+  nothing (tools hidden and refused), a link into it carries only ask and
+  delegate, a delegation into it is the brief alone (capped, never the
+  chat, a new session), its answers and results come back marked, and it
+  writes no communal note. When one is quarantined the daemon detaches
+  its sessions, lets its warm process go and revokes its shares
+  (`ChatStore.detach`); release restores nothing. A pass the person starts
+  needs no link but is refused into quarantine (voice, sheet, CLI). Each
+  agent's prompt roster names only whom it may reach; `list_agents` lists
+  only those, with `you_may`.
 
 ---
 
@@ -345,7 +366,11 @@ Notes and collaboration exist only for Claude Code and Codex
   `card` draws the permission card from a synthetic card the stubbed
   `agentvoice pending` serves (`--arg verified|unverified|allow`;
   `PREVIEW_PERMIT=refuse` makes the stubbed `permit` refuse), and checks
-  the nonce arrived on stdin, never argv. Options
+  the nonce arrived on stdin, never argv. Since M8 `crew` draws the Crew
+  map (`--arg empty|linked|clicks`, `:520` for the narrow card; configs
+  `crew3.json` and `agents8.json`); `clicks` drives Link everyone, a chip,
+  Ask me first, Delete, Add link, Quarantine and Release through real saves
+  and checks each list written. Options
   include `--state FILE`, `--theme`, `--live-config`, `--config FILE` (a
   synthetic shell.json from `bench/preview/configs/`, so nothing real is
   shown or written) and `--arg '{"page":…}'`. It never moves the real
@@ -359,6 +384,7 @@ Notes and collaboration exist only for Claude Code and Codex
 | `AgentsPage.qml` | One `AgentBlock` per agent, the main one included (M5): a `HeaderStrip` (state dot, name, wake phrase, pills for level, program · model, effort, voice · speed) that unfolds into a `CardGrid` of cards: Identity (name and wake phrase, runs on, `ModelPicker`), Endpoint (endpoint agents), Permissions, Voice (▶ Test plays the agent's voice at its speed), Tools (`ToolSwitches` part `tools`: chips with where each value comes from), Collaboration & notes (part `collab`), Agent (on/off, wake model, the folder summary linking to Agent details, remove). Every write goes through `writeField(index, field, value)`, which names each key and field; `test_agents_page.py` runs those functions in node. The tools for every agent are on Communal → Tools since M5 (bug E). |
 | `AgentDetailsPage.qml` | One agent's folder (Phase 12). Agents picked by `AgentTabs`, keyed by id, main first (M6). Tabs: Personality & instructions (role, personality, instructions editors, each with a one-line `Hint`, starters while empty and a meter; trait chips that rewrite the managed line through `agents traits apply` and save through the personality editor; ▶ Try it, `agentvoice try` with the draft on stdin; the prompt preview), Tools & skills, Notes, Chats, Advanced (open/export folder, remove, trash with restore). Writes no settings. |
 | `CommunalPage.qml` | Tabs: Rules & defaults, Tools (desktop tools, browser and Omarchy skill for every agent; moved from the Agents page in M5), Skills, Notes, Chats (multi-agent conversations). States plainly that rules are text, not enforcement. Writes only those three settings. |
+| `CrewMapPage.qml` | M8: who may do what to whom, as a table (M9 draws the map). The "no links yet" banner with **Link everyone as before** (a `DangerButton`), From / To / Allows (`ToggleChips`, ask delegate message pass; disabled with the reason into or out of quarantine) / Ask me first (advisory for Trusted agents) / Delete, Add link (allows ask), per agent Quarantine (confirm: what it loses) or Release, can reach / reached by, and the effective line ("Theo → Sora: delegate · asks you first (link) · announces (Theo's level)"). An unreadable list gets a banner and "Start again with no links". Writes `crewLinks` only in `writeLinks` and `crewQuarantine` only in `writeQuarantine`; quarantine is written before the links it trims. "Changed outside Settings at HH:MM" comes from the overlay (`crewOutsideAt`). Its reading of the lists mirrors `crew_links.py`, checked in node. |
 | `ListeningPage.qml` | Wake engine, thresholds, gate, Advanced wake tab. |
 | `VoicePage.qml` | Voice, speed, voice library. |
 | `ConversationPage.qml` | Turn timing, follow-up, open mic, narration, barge-in. |
@@ -461,6 +487,11 @@ Current keys, grouped:
   max 8), `endpointUrl`, `endpointModel`, `endpointIsAgent`,
   `endpointTimeoutS`, `endpointHistoryTurns`, `desktopTools`,
   `browserTools`, `omarchySkill`.
+- **Crew (M8):** `crewLinks` (list of `{from, to, allow, askFirst}` by
+  stable id; `[]` = nobody linked), `crewQuarantine` (list of ids). Both
+  defaults-only in the manifest (lists), written on the Crew map page.
+  Unreadable (not a list, a malformed link, `null`, settings unreadable)
+  = every agent-started call refused. No TOML alias.
 - **Main agent tools and collaboration (new):** `mainTools` (map
   desktop/browser/omarchySkill → inherit/on/off; in defaults but not in the
   schema list), `mainNotesWrite` (allow/deny, default allow),
@@ -647,8 +678,6 @@ Summarized from CLAUDE.md and merged-plan.md section 3; read the full text.
   stop", "take over"); inside a longer sentence they go to the agent as
   ordinary text.
 - **The popup resizes** as the last-heard line appears and disappears.
-- `collab.py` and `crew_mcp.py` docstrings still describe call files in
-  `$RUNDIR/crew/calls/`; the code uses `crew/calls.sock`.
 - The orders guard matches Bash on command text only.
 - Card answers (M7) are checked against what a same-user process can
   forge, not against one that sets out to: a plugin dropped into the

@@ -284,6 +284,13 @@ DEFAULTS = {
     # `acceptsWork`.
     "mainCollaboration": "announce",
     "mainAcceptsWork": True,
+    # Phase M8: who may do what to whom (crew_links.py), and who is held
+    # apart. Empty is nobody linked: no agent can reach another until the
+    # person links them on the Crew map. Lists Omarchy cannot draw a control
+    # for, so defaults-only in the manifest, like voiceAgents. No TOML
+    # alias: the fallback config has no page to link agents from.
+    "crewLinks": [],
+    "crewQuarantine": [],
     "conversationMode": True,
     "yieldToRecorders": True,
     "logSpeech": False,
@@ -854,6 +861,29 @@ class Config:
             return accepts_choice(self._values, "mainAcceptsWork")
         spec = next((a for a in self.all_agents() if a["id"] == agent_id), None)
         return bool(spec) and spec["acceptsWork"]
+
+    def crew(self):
+        """The crew links and the quarantine (phase M8) as one reading, a
+        crew_links.Crew: `ok` False, and every agent-started call refused,
+        when either list cannot be read or the settings themselves cannot
+        (settings_readable). Built from this Config's values, so a caller
+        that wants them fresh -- every collaboration call does -- reads a
+        fresh Config first."""
+        import crew_links
+        return crew_links.Crew.from_raw(self._values.get("crewLinks", []),
+                                        self._values.get("crewQuarantine", []),
+                                        readable=self.settings_readable())
+
+    def crew_links(self) -> list[dict] | None:
+        """`crewLinks`, checked and normalised, or None when it cannot be
+        read (then every agent-started call is refused)."""
+        crew = self.crew()
+        return crew.links if crew.ok else None
+
+    def quarantined(self) -> frozenset | None:
+        """The ids in `crewQuarantine`, or None when it cannot be read."""
+        crew = self.crew()
+        return crew.quarantined if crew.ok else None
 
     def main_endpoint(self) -> dict | None:
         """The main agent's endpoint, cleaned like an extra agent's, or None

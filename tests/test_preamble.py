@@ -230,6 +230,10 @@ def crew_daemon(daemon, monkeypatch, entries):
     # The settings say each is switched on, as reconcile_crew would have
     # found them: the roster lists only agents the settings still want.
     daemon.cfg._values["voiceAgents"] = [{"id": e["id"], "name": e["name"]} for e in entries]
+    # Phase M8: the roster names only the agents the crew links let each
+    # reach; everyone linked here, as before links existed.
+    import crew_links
+    daemon.cfg._values["crewLinks"] = crew_links.everyone(["main"] + [e["id"] for e in entries])
     for spec in entries:
         p = Persona(spec["name"], spec)
         p.agent = Agent() if spec.get("program", True) else None
@@ -268,6 +272,8 @@ def test_a_switched_off_agent_is_not_in_anyones_roster(daemon, monkeypatch):
     daemon.cfg._values["speakReplies"] = False
     daemon.cfg._values["voiceAgents"] = [{"id": "sora", "name": "sora"},
                                          {"id": "wren", "name": "wren", "enabled": False}]
+    import crew_links
+    daemon.cfg._values["crewLinks"] = crew_links.everyone(["main", "sora", "wren"])
     monkeypatch.setattr(daemon, "publish_agent", lambda: None)
     daemon.reconcile_agent_files()
     daemon._folder_texts = {}
@@ -427,6 +433,30 @@ def test_the_preview_names_the_commands_only_where_they_are_told(cfg_factory):
     assert "Omarchy commands and keybindings" not in labels("sora", cfg_off)
     ep_main = cfg_factory(phrase="theo", endpointUrl="http://127.0.0.1:9/v1", endpointModel="m")
     assert "Omarchy commands and keybindings" not in labels("main", ep_main)
+
+
+def test_the_roster_names_only_whom_the_crew_links_let_each_reach(daemon, monkeypatch):
+    """Phase M8: an agent's prompt never offers it someone list_agents would
+    not -- a one-way link shows on one side only, a quarantined agent's
+    roster is empty, and an unreadable list empties every roster. A change
+    reaches the next idle poll."""
+    crew_daemon(daemon, monkeypatch, [{"id": "sora", "name": "sora", "label": "Sora"},
+                                      {"id": "hazel", "name": "hazel", "label": "Hazel"}])
+    daemon._folder_texts = {}
+    daemon.cfg._values["crewLinks"] = [{"from": "main", "to": "sora", "allow": ["ask"]}]
+    daemon.reconcile_parts()
+    main, sora, hazel = (daemon._main.agent, daemon.crew["sora"].agent,
+                         daemon.crew["hazel"].agent)
+    assert main.parts["roster"] == [R("Sora", "sora")]
+    assert sora.parts["roster"] == [] and hazel.parts["roster"] == []
+    # Into quarantine a link still carries ask; out of it, nothing.
+    daemon.cfg._values["crewLinks"] += [{"from": "sora", "to": "main", "allow": ["ask"]}]
+    daemon.cfg._values["crewQuarantine"] = ["sora"]
+    daemon.reconcile_parts()
+    assert main.parts["roster"] == [R("Sora", "sora")] and sora.parts["roster"] == []
+    daemon.cfg._values["crewLinks"] = "not a list"
+    daemon.reconcile_parts()
+    assert main.parts["roster"] == [] and sora.parts["roster"] == []
 
 
 # --- Codex's review of Phase 11 ------------------------------------------------

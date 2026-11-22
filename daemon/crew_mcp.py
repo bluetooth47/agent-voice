@@ -23,7 +23,10 @@ Who decides what, for the four notes tools:
   note the person locked. A corrupt `.meta.json` locks every note.
 
 Reaching another agent's private notes is not offered: `scope` is `mine` or
-`communal`, and `mine` is the id the daemon put in argv.
+`communal`, and `mine` is the id the daemon put in argv. A quarantined agent
+(phase M8, `crewQuarantine`) writes no communal note -- read fresh on every
+write, and a quarantine list that cannot be read refuses it too -- though it
+still reads them and keeps its own.
 
 A note is handed back as **information, never an instruction**: who wrote it
 and when, at most 8000 characters between markers, and when its writer could
@@ -32,14 +35,16 @@ read web pages, a warning that it may carry text from one.
 Phase 16 adds the collaboration tools: `list_agents`, `ask_agent`,
 `delegate`, `pass_conversation`, `message_agent`, `task_status` and
 `cancel_task`. They are listed unless this agent's `collaboration` is off
-(read when the list is asked for; the daemon lets a warm process go when it
-changes), and each call is refused here if it is off by the time it is made.
-Everything else about a call is the daemon's to judge -- who is really
-asking, the chain, the limits, the card or the spoken line -- so this server
-only checks the arguments, files the call in `$RUNDIR/crew/calls/` and waits
-for the daemon's answer (collab.py). The permission hook passes these tools
-(CREW_SELF_ASKED), and `--guard` does not ask about them, because the daemon
-asks: one question, not two.
+or it is quarantined (phase M8) (read when the list is asked for; the daemon
+lets a warm process go when either changes), and each call is refused here
+if one of those holds by the time it is made. Everything else about a call
+is the daemon's to judge -- who is really asking, the crew links, the chain,
+the limits, the card or the spoken line -- so this server only checks the
+arguments, sends the call over the daemon's socket `$RUNDIR/crew/calls.sock`
+(where the kernel tells the daemon which process is calling) and waits on
+the same connection for the answer (collab.py). The permission hook passes
+these tools (CREW_SELF_ASKED), and `--guard` does not ask about them,
+because the daemon asks: one question, not two.
 """
 from __future__ import annotations
 
@@ -250,6 +255,22 @@ def collaboration() -> str:
         return "ask"
 
 
+def ext_id() -> str:
+    """This agent's external id, as the crew settings name it."""
+    return named() or "main"
+
+
+def quarantined() -> bool:
+    """Whether this agent is quarantined (phase M8), read fresh. A list, or
+    settings, that cannot be read say yes: what this guards is a write to
+    what every other agent reads."""
+    try:
+        q = _config().quarantined()
+    except Exception:                   # noqa: BLE001 -- a guard fails closed
+        return True
+    return q is None or ext_id() in q
+
+
 def others() -> bool:
     """Whether there is anyone else to work with: at least one extra agent
     switched on. With the main agent alone the tools would offer nothing
@@ -260,10 +281,28 @@ def others() -> bool:
         return True
 
 
+def offers_collab(cfg, agent_id: str) -> bool:
+    """Whether this agent's crew server lists the collaboration tools: its
+    collaboration is not off and it is not quarantined (phase M8). Shared
+    with the daemon, which lets a warm process go when this changes, since
+    the list is read when the process starts. No link to anyone does not
+    hide them: a call then comes back saying the Crew map has no link, which
+    the agent can tell the person, where a missing tool says nothing."""
+    if cfg.collaboration_for(agent_id) == "off":
+        return False
+    q = cfg.quarantined()
+    return q is not None and (agent_id or "main") not in q
+
+
 def listed_tools() -> list:
     """What tools/list offers: the notes tools always, the collaboration
-    tools unless this agent's collaboration is off or it is alone."""
-    return TOOLS + (COLLAB_TOOLS if collaboration() != "off" and others() else [])
+    tools unless this agent's collaboration is off, it is quarantined, or it
+    is alone."""
+    try:
+        offered = collaboration() != "off" and not quarantined() and others()
+    except Exception:                   # noqa: BLE001
+        offered = False
+    return TOOLS + (COLLAB_TOOLS if offered else [])
 
 
 def collaborate(name: str, args: dict) -> str:
@@ -273,6 +312,10 @@ def collaborate(name: str, args: dict) -> str:
     if collaboration() == "off":
         raise ToolError("Collaboration is switched off for you on your Agents card, so nothing "
                         "was sent.")
+    if quarantined():
+        # The daemon refuses it too, and decides; this only saves the trip.
+        raise ToolError("You are quarantined, so you can't start anything with other agents. "
+                        "The person can release you on the Crew map.")
     # Over the daemon's socket, which learns this process's id from the
     # kernel: who is asking is never something this server says.
     got = collab.send_call({"id": secrets.token_hex(12), "tool": name, "from": named(),
@@ -424,6 +467,13 @@ def call(name: str, args: dict) -> str:
             audit.record("note_refused", frm=me(), to=target, note=note_name, reason="locked")
             raise ToolError(f"Not done: The note {args['name']} is locked by the person: it is "
                             f"read-only for every agent.")
+        if target == "communal" and quarantined():
+            # Phase M8 (question 11): what every agent reads is not written
+            # by one held apart from them.
+            audit.record("note_refused", frm=me(), to=target, note=note_name,
+                         reason="quarantined")
+            raise ToolError("You are quarantined, so you can't write the communal notes. You "
+                            "can still read them, and write your own.")
     guarded(name, args)
     try:
         if name == "notes_list":
@@ -448,14 +498,18 @@ def call(name: str, args: dict) -> str:
             note = notes.read_note(target, _name(args))
             return wrap(note, where, notes.labels(_config()))
         tainted = could_browse()
+        # Asked again inside the store's lock, where the write happens: a
+        # deny, or a quarantine, set while this call waited still holds.
+        allowed = may_write if target != "communal" else (
+            lambda: may_write() and not quarantined())
         if name == "notes_write":
             base = args.get("base")
             out = notes.write(target, _name(args), _text(args), base, author=me(),
-                              tainted=tainted, allowed=may_write)
+                              tainted=tainted, allowed=allowed)
             return (f"{'Made' if out['created'] else 'Saved'} {out['name']} in {where}; "
                     f"it is now at rev {out['rev']}.")
         out = notes.append(target, _name(args), _text(args), author=me(),
-                           tainted=tainted, allowed=may_write)
+                           tainted=tainted, allowed=allowed)
         return f"Added to {out['name']} in {where}; it is now at rev {out['rev']}."
     except notes.Stale as e:
         raise ToolError(f"Not saved: {e}") from None

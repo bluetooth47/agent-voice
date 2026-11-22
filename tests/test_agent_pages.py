@@ -113,13 +113,18 @@ def test_text_from_files_is_never_rich():
 
 # --- the sidebar ------------------------------------------------------------------
 
-def test_nine_pages_fit_the_keys_with_the_new_two_after_agents():
+def test_every_page_has_a_key_with_the_new_ones_after_agents():
+    """Ctrl+1..9 for the first nine pages in sidebar order, Ctrl+0 for the
+    tenth (phase M8: the Crew map made ten), Ctrl+PgUp/PgDn to step."""
     s = text("Settings.qml")
-    ids = re.findall(r'\{ id: "(\w+)",\s+label:', s[s.index("readonly property var pages:"):])[:9]
-    assert ids == ["overview", "agents", "agentdetails", "communal", "listening",
+    ids = re.findall(r'\{ id: "(\w+)",\s+label:', s[s.index("readonly property var pages:"):])[:10]
+    assert ids == ["overview", "agents", "agentdetails", "communal", "crew", "listening",
                    "conversation", "voice", "display", "about"]
-    assert "ctrl+1–9 to switch pages" in s
+    assert "ctrl+1–9, 0 or pgup/pgdn to switch pages" in s
     assert "n >= 0 && n < root.pages.length" in s
+    keys = s[s.index("function pageForKey("):s.index("function goTo(")]
+    for want in ("key - Qt.Key_1", "key === Qt.Key_0) return 9", "Qt.Key_PageUp", "Qt.Key_PageDown"):
+        assert want in keys, want
     # A deep link picks the agent Agent details opens on.
     go = s[s.index("function goTo("):s.index("function showPage(")]
     assert 'if (page === "agentdetails")' in go and "detailsAgent = agent" in go
