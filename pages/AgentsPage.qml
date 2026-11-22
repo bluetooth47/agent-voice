@@ -119,6 +119,18 @@ Column {
   // --- the extra agents -------------------------------------------------------
   function saveAgents(list) { s.put("voiceAgents", list) }
 
+  // An entry as it was, every field its own property. Defined rather than
+  // assigned: a field named "__proto__" (JSON.parse makes it an ordinary
+  // field) would otherwise go through the prototype setter and vanish from
+  // the saved list (Codex review, M5).
+  function copyEntry(a) {
+    var copy = {}
+    var keys = Object.keys(a || {})
+    for (var k = 0; k < keys.length; k++)
+      Object.defineProperty(copy, keys[k], { value: a[keys[k]], enumerable: true, writable: true, configurable: true })
+    return copy
+  }
+
   // One field of one entry. Every other field of that entry, and every other
   // entry, is copied as it was -- including fields this build does not know,
   // so a newer build's settings survive an edit here (test_agents_page.py
@@ -126,9 +138,8 @@ Column {
   function updateAgent(index, key, value) {
     var list = []
     for (var i = 0; i < s.voiceAgents.length; i++) {
-      var copy = {}
       var a = s.voiceAgents[i] || {}
-      for (var k in a) copy[k] = a[k]
+      var copy = copyEntry(a)
       // Written down before anything changes, the wake phrase above all: an
       // entry from before ids existed is known by the one derived from it.
       copy.id = s.agentId(a)
@@ -153,9 +164,8 @@ Column {
       if (!taken[s.nameSuggestions[j]]) name = s.nameSuggestions[j]
     var list = []
     for (var n = 0; n < s.voiceAgents.length; n++) {
-      var copy = {}
       var a = s.voiceAgents[n] || {}
-      for (var k in a) copy[k] = a[k]
+      var copy = copyEntry(a)
       copy.id = s.agentId(a)
       list.push(copy)
     }
@@ -578,9 +588,17 @@ Column {
           visible: !blk.endpoint
           stacked: true
           label: "Model"
-          hint: blk.effort !== "" && blk.efforts.length > 0 && blk.efforts.indexOf(blk.effort) < 0
+          // An effort saved that the model in force does not take: the
+          // picker shows it as saved, so "Default" clears it, and when the
+          // model takes no effort at all the reset link does (Codex review,
+          // M5; the old Effort row had a reset of its own).
+          readonly property bool staleEffort: blk.effort !== "" && blk.efforts.indexOf(blk.effort) < 0
+                                              && (blk.efforts.length > 0 || blk.s.serviceActive)
+          hint: staleEffort
                 ? "⚠  The effort saved is not one this model takes, so the default is in use."
                 : "Only for voice. A new model starts a new conversation; effort keeps it."
+          changed: staleEffort
+          onReset: blk.write("effort", "")
           help: "Your other sessions keep their own model. Effort is how hard it thinks before answering."
           foreground: blk.s.foreground
           fontFamily: blk.s.fontFamily
@@ -588,11 +606,14 @@ Column {
             width: parent.width
             spacing: Style.space(6)
             ModelPicker {
+              // Never wider than the card: a long model name elides, and the
+              // effort half stays in reach.
+              width: Math.min(implicitWidth, parent.width)
               models: blk.s.agentModelChoices(blk.program, blk.model)
               model: blk.customModel ? "__other__" : blk.model
               modelReason: blk.modelProblem()
               efforts: blk.efforts.length > 0 ? blk.s.effortChoices(blk.efforts) : []
-              effort: blk.efforts.indexOf(blk.effort) >= 0 ? blk.effort : ""
+              effort: blk.effort
               effortReason: blk.efforts.length > 0 ? ""
                             : blk.s.serviceActive ? "This model takes no effort level."
                             : "Shown once the service is running, for a model that takes one."
@@ -812,7 +833,7 @@ Column {
             // About a minute of the voice it would speak in, at its own pace.
             Button {
               id: testButton
-              readonly property bool playing: blk.s.samplePlaying === blk.voiceHeard
+              readonly property bool playing: blk.s.samplePlaying === blk.voiceHeard && blk.s.samplePace === blk.speedHeard
               anchors.verticalCenter: parent.verticalCenter
               text: playing ? "■ Stop" : "▶ Test"
               bordered: true

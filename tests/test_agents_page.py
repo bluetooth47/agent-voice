@@ -51,7 +51,7 @@ def run_js(script: str):
     return json.loads(out.stdout)
 
 
-PAGE_FUNCTIONS = ["mapValue", "putMap", "setLevel", "setModel", "setEffort", "saveAgents",
+PAGE_FUNCTIONS = ["copyEntry", "mapValue", "putMap", "setLevel", "setModel", "setEffort", "saveAgents",
                   "updateAgent", "toolMap", "putMainTool", "putAgentTool", "putAgentNotes",
                   "putAgentCollab", "putAgentAccepts", "writeField", "writeTool",
                   "putMainEndpoint", "runOn"]
@@ -68,7 +68,7 @@ def harness(agents, settings, calls, replace: dict[str, str] | None = None) -> l
     script = f"""
 {agent_id}
 {chr(10).join(fns)}
-var AGENTS = {json.dumps(agents)};
+var AGENTS = JSON.parse({json.dumps(json.dumps(agents))});
 var SETTINGS = {json.dumps(settings)};
 var CALLS = {json.dumps(calls)};
 var s, page, results = [];
@@ -146,7 +146,8 @@ def _expect_one_field_changed(before: dict, after: dict, field: str, want) -> li
     return wrong
 
 
-def _check_extra_writes(results, calls) -> list[str]:
+def _check_extra_writes(results, calls, agents=None) -> list[str]:
+    AGENTS_ = AGENTS if agents is None else agents
     wrong = []
     for (index, (call, field, want)), r in zip(calls, results):
         puts = r["puts"]
@@ -154,10 +155,10 @@ def _check_extra_writes(results, calls) -> list[str]:
             wrong.append(f"{call} @ {index}: wrote {[k for k, _ in puts]}")
             continue
         saved = puts[0][1]
-        if len(saved) != len(AGENTS):
+        if len(saved) != len(AGENTS_):
             wrong.append(f"{call} @ {index}: {len(saved)} agents saved")
             continue
-        for j, (old, new) in enumerate(zip(AGENTS, saved)):
+        for j, (old, new) in enumerate(zip(AGENTS_, saved)):
             if j == index:
                 for w in _expect_one_field_changed(old, new, field, want):
                     wrong.append(f"{call} @ {index}: {w}")
@@ -189,15 +190,16 @@ def test_a_tool_switch_changes_one_key_of_one_agents_tools():
     results = harness(AGENTS, {}, [c for c, _ in cases])
     for (call, tools), r in zip(cases, results):
         index = int(call.split("(")[1].split(",")[0])
-        saved = r["puts"][0][1]
         assert [k for k, _ in r["puts"]] == ["voiceAgents"], call
-        assert saved[index]["tools"] == tools, call
-        for j, (old, new) in enumerate(zip(AGENTS, saved)):
-            if j != index:
-                assert json.dumps(old) == json.dumps(new), call
-            else:
-                assert {k: v for k, v in old.items() if k != "tools"} == \
-                       {k: v for k, v in new.items() if k != "tools"}, call
+        # The whole list, against a copy with only that change: a write that
+        # dropped an agent would pass a neighbour-by-neighbour zip (Codex
+        # review, M5).
+        want = json.loads(json.dumps(AGENTS))
+        if tools:
+            want[index]["tools"] = tools
+        else:
+            want[index]["tools"] = {}
+        assert json.dumps(r["puts"][0][1]) == json.dumps(want), call
 
 
 @needs_node
@@ -216,16 +218,16 @@ def test_the_guard_is_not_vacuous():
     """Mutation, inside the suite: an updateAgent that copies only the fields
     this build knows -- the obvious way to write it -- loses `futureField`,
     and the comparison above says so."""
+    copy = function_source(PAGE, "copyEntry")
+    mutated = ("function copyEntry(a) { var copy = {}; var known = ['id','name','label','agent','model',"
+               "'effort','voice','speed','narration','level','projectDir','tools','collaboration','notesWrite',"
+               "'acceptsWork','enabled','endpointUrl','endpointModel','endpointIsAgent','endpointTimeoutS',"
+               "'endpointHistoryTurns','instructions']; for (var q = 0; q < known.length; q++) "
+               "if (known[q] in a) copy[known[q]] = a[known[q]]; return copy }")
+    assert "Object.defineProperty" in copy
     src = function_source(PAGE, "updateAgent")
-    assert "for (var k in a) copy[k] = a[k]" in src
-    mutated = src.replace(
-        "for (var k in a) copy[k] = a[k]",
-        "var known = ['name','label','agent','model','effort','voice','speed','narration','level',"
-        "'projectDir','tools','collaboration','notesWrite','acceptsWork','enabled','endpointUrl',"
-        "'endpointModel','endpointIsAgent','endpointTimeoutS','endpointHistoryTurns','instructions'];"
-        " for (var q = 0; q < known.length; q++) if (known[q] in a) copy[known[q]] = a[known[q]]")
     calls = [(0, EXTRA_WRITES[2])]
-    results = harness(AGENTS, {}, ['writeField(0, "label", "Renamed")'], replace={"updateAgent": mutated})
+    results = harness(AGENTS, {}, ['writeField(0, "label", "Renamed")'], replace={"copyEntry": mutated})
     assert any("other fields changed" in w for w in _check_extra_writes(results, calls))
     # And one that touches the neighbours.
     neighbour = src.replace("if (i === index) {", "if (true) {")
@@ -408,3 +410,70 @@ console.log(JSON.stringify(out))
     assert got[0] == ["agentvoice", "voice", "sample", "amy-medium", "135"]
     assert got[1] == got[2] == got[3] == ["agentvoice", "voice", "sample", "amy-medium", "110"]
     assert got[4] == [], "only a real voice name reaches the command"
+
+
+@needs_node
+def test_a_field_named_proto_survives_an_edit_of_another_agent():
+    """JSON.parse makes "__proto__" an ordinary field; a copy that assigned
+    it would hand it to the prototype setter and the saved list would lose
+    it (Codex review, M5). The fixture goes through JSON.parse, as
+    shell.json does."""
+    agents = [{"id": "a", "name": "a", "__proto__": {"version": 2}, "zz": 1},
+              {"id": "b", "name": "b", "label": "B"}]
+    calls = [(1, ('writeField(I, "label", "Bee")', "label", "Bee")),
+             (0, ('writeField(I, "level", "edits")', "level", "edits"))]
+    results = harness(agents, {}, [c.replace("I", str(i), 1) for i, (c, _, _) in calls])
+    assert _check_extra_writes(results, calls, agents) == []
+    assert results[0]["puts"][0][1][0] == agents[0]
+
+
+def test_each_extra_agent_writes_through_its_own_index():
+    """The tests above call writeField with the index they mean. What hands
+    a block that index is the Repeater's delegate, and every write in the
+    block goes through it; `agentIndex: 0` there would make editing the
+    second agent overwrite the first (Codex review, M5)."""
+    s = scan(PAGE)
+    text = s.nocomment
+    rep = text[text.index("model: page.s.voiceAgents.length"):]
+    delegate = rep[:rep.index("\n  }\n")]
+    assert re.search(r"delegate: AgentBlock \{\s*required property int index\s*pg: page\s*agentIndex: index\s*\}", delegate)
+    assert "function write(field, value) { pg.writeField(agentIndex, field, value) }" in text
+    block = text[text.index("component AgentBlock:"):text.index("AgentBlock { pg: page }")]
+    for call in re.finditer(r"\b(?:updateAgent|removeAgent|writeTool|writeField)\(([^,)]*)", block):
+        assert call.group(1).strip() in ("blk.agentIndex", "agentIndex"), call.group(0)
+
+
+@needs_node
+def test_two_agents_sharing_a_voice_at_different_speeds_each_test_their_own():
+    play = function_source(ROOT / "Settings.qml", "playSample")
+    script = f"""
+var root = {{ setting: function(k, d) {{ return d }}, samplePlaying: "", samplePace: 0,
+             sampleNext: "", sampleNextPace: 0 }};
+var sampler = {{ running: false, command: [] }};
+{play}
+playSample("amy-medium", 100);
+sampler.running = true;
+playSample("amy-medium", 150);
+var queued = [root.sampleNext, root.sampleNextPace, sampler.running];
+root.sampleNext = ""; sampler.running = true; root.samplePlaying = "amy-medium"; root.samplePace = 150;
+playSample("amy-medium", 150);
+console.log(JSON.stringify([queued, [root.sampleNext, sampler.running]]))
+"""
+    queued, stopped = run_js(script)
+    assert queued == ["amy-medium", 150, False], "the other speed is queued, not taken as a stop"
+    assert stopped == ["", False], "the same voice at the same speed stops"
+
+
+def test_a_stale_effort_can_be_cleared_and_a_long_model_cannot_hide_effort():
+    """Read checks for two layout fixes from Codex's review (M5); the preview
+    shows them working. The picker is handed the effort as saved, so its
+    "Default" commits even when the model in force does not take it, and the
+    row has a reset for when the model takes none. The model half of the
+    picker is given what is left after effort, so a long name elides."""
+    text = scan(PAGE).nocomment
+    row = text[text.index('label: "Model"'):text.index("TextField {", text.index('label: "Model"'))]
+    assert 'onReset: blk.write("effort", "")' in row and "changed: staleEffort" in row
+    assert "effort: blk.effort\n" in row
+    assert "width: Math.min(implicitWidth, parent.width)" in row
+    picker = scan(ROOT / "ui" / "ModelPicker.qml").nocomment
+    assert "picker.width - 2 -" in picker and "effortSel.implicitWidth" in picker

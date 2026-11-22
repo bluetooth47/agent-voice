@@ -49,6 +49,10 @@ Rectangle {
     y: 1
     CompactSelector {
       id: modelSel
+      // The room left once effort has its natural width: a long model name
+      // elides here rather than pushing effort out of the picker.
+      width: Math.max(0, Math.min(implicitWidth, picker.width - 2 -
+                                  (effortSel.visible ? effortSel.implicitWidth + 1 : 0)))
       framed: false
       label: "Model"
       options: picker.models

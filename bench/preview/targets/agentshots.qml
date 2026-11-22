@@ -64,7 +64,17 @@ ShellRoot {
       if (id !== "") all[id] = true
       page.openCards = all
     }
+    // Scrolls once the page has laid out again: folding one agent and
+    // opening another moves everything below, so the position is read after.
+    property var scrollWanted: null
+    Timer { id: settle; interval: 400; onTriggered: overlay.scrollNow(overlay.scrollWanted[0], overlay.scrollWanted[1]) }
     function scrollTo(item, below) {
+      var id = item ? item.agentId : ""
+      scrollWanted = [id, below]
+      settle.restart()
+    }
+    function scrollNow(id, below) {
+      var item = id !== "" ? strip(id) : null
       var f = overlay.pageScroll
       if (!f) return
       var y = item ? item.mapToItem(f.contentItem, 0, 0).y : 0

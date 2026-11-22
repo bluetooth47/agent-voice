@@ -1174,18 +1174,22 @@ Item {
   property string samplePlaying: ""
   property string sampleNext: ""
   property int sampleNextPace: 0
+  // The pace of the sample playing: two agents can share a voice at
+  // different speeds, and each card's Test is its own (Codex review, M5).
+  property int samplePace: 0
   // `speed` (optional, 50-200): an agent's own pace, from its card's ▶ Test.
   function playSample(v, speed) {
     if (!/^([a-z]{2}_[A-Z]{2}-)?[a-z][a-z0-9_]*-(x_low|low|medium|high)$/.test(String(v))) return
     var pace = Math.round(Number(speed))
     if (!(pace >= 50 && pace <= 200)) pace = Number(root.setting("voiceSpeed", 100)) || 100
     if (sampler.running) {
-      root.sampleNext = root.samplePlaying === v ? "" : v
+      root.sampleNext = root.samplePlaying === v && root.samplePace === pace ? "" : v
       root.sampleNextPace = pace
       sampler.running = false
       return
     }
     root.samplePlaying = v
+    root.samplePace = pace
     sampler.command = ["agentvoice", "voice", "sample", v, String(pace)]
     sampler.running = true
   }
