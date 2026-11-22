@@ -581,7 +581,9 @@ def detected_refusal(tool_name: str) -> str:
         keys = tooldetect.switched_on_keys(cfg, named)
     except Exception:
         return "its tool switches cannot be read, so the tools found on this machine are off."
-    if any(tool_name.startswith(f"mcp__{k}__") for k in keys):
+    # Exact, never a prefix: a key never holds "__", so the first one after
+    # "mcp__" ends it (tooldetect.server_key; Codex review of M10).
+    if tooldetect.tool_server_key(tool_name) in keys:
         return ""
     return ("that tool server is switched off for this agent in Agent Voice "
             "(Agent details, Tools & skills).")

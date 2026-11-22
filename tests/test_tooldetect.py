@@ -221,6 +221,13 @@ def test_no_secret_value_is_in_what_a_scan_returns(tmp_path):
     (["API_TOKEN=abc"], "API_TOKEN=•••"),
     (["github_pat_ABCDEFGHIJKLMNOP"], "•••"),
     (["--port", "8080", "--verbose"], "--port 8080 --verbose"),
+    # Codex review of M10: a header or environment value, whatever it is called.
+    (["--header", "Authorization: Bearer PRIVATE"], "--header •••"),
+    (["-H", "X-Custom: PRIVATE"], "-H •••"),
+    (["-e", "ANYTHING=PRIVATE"], "-e •••"),
+    (["--env=FOO=PRIVATE"], "--env=•••"),
+    (["https://u:PRIVATE@h.example/x?k=PRIVATE"], "https://h.example/x?•••"),
+    (["Qx7dPRIVATE9a8b7c6d5e4f3"], "•••"),
 ])
 def test_arguments_that_look_like_keys_are_masked(args, shown):
     assert tooldetect.shown_command({"command": "srv", "args": args}) == "srv " + shown
@@ -578,3 +585,69 @@ def test_delivery_never_hands_over_a_name_of_ours_even_if_a_row_said_it_could(
     monkeypatch.setattr(tooldetect, "_usable", lambda *a, **k: (True, ""))
     got = tooldetect.delivery(cfg, "", "claude", "", result, tooldetect.definitions(r))
     assert got["servers"] == {}
+
+
+def test_a_plugin_cannot_point_outside_itself(tmp_path):
+    """Codex review of M10: "../servers.json" passed the old check, and a
+    linked .claude-plugin folder redirected the manifest read."""
+    r = roots_in(tmp_path)
+    plug = tmp_path / "plug"
+    write_json(tmp_path / "servers.json", {"mcpServers": {"outside": {"command": "x"}}})
+    write_json(plug / ".claude-plugin" / "plugin.json", {"name": "p", "mcpServers": "../servers.json"})
+    write_json(r.claude_dir / "plugins" / "installed_plugins.json",
+               {"version": 2, "plugins": {"p@m": [{"installPath": str(plug)}]}})
+    write_json(r.claude_dir / "settings.json", {"enabledPlugins": {"p@m": True}})
+    first = tooldetect._Reader()
+    assert tooldetect.definitions(r, reader=first) == []
+    assert not any(".." in t for t in first.tried), first.tried      # never even tried
+    # A plain name beside the manifest is fine...
+    write_json(plug / "servers.json", {"mcpServers": {"inside": {"command": "x"}}})
+    write_json(plug / ".claude-plugin" / "plugin.json", {"name": "p", "mcpServers": "./servers.json"})
+    assert [d["name"] for d in tooldetect.definitions(r)] == ["plugin:p:inside"]
+    # ...but not through a linked folder.
+    elsewhere = tmp_path / "elsewhere"
+    write_json(elsewhere / "plugin.json", {"name": "p", "mcpServers": {"sneaky": {"command": "x"}}})
+    import shutil as _sh
+    _sh.rmtree(plug / ".claude-plugin")
+    (plug / ".claude-plugin").symlink_to(elsewhere)
+    (plug / "servers.json").unlink()
+    reader = tooldetect._Reader()
+    assert tooldetect.definitions(r, reader=reader) == []
+    assert any("a link" in p for p in reader.problems)
+
+
+def test_an_oversized_tools_map_switches_nothing_on(cfg_factory, scanned):
+    """Codex review of M10: read only so far, an explicit off past the cut
+    was lost and the switch for every agent turned the tool on."""
+    result, proj, _ = scanned
+    fp = {t["id"]: t["fp"] for t in result["tools"]}
+    big = {f"cli:t{i}": "off" for i in range(runtime.MAX_DETECTED)}
+    big["mcp:github"] = "off"
+    cfg = cfg_factory(mainTools=big, sharedTools={"mcp:github": "on:" + fp["mcp:github"]})
+    assert runtime.detected_choices(big) is None
+    assert not rows_for(cfg, result, project=str(proj))["mcp:github"]["on"]
+    agents = [{"id": "sora", "name": "sora", "agent": "claude", "tools": big}]
+    cfg = cfg_factory(voiceAgents=agents, sharedTools={"mcp:github": "on:" + fp["mcp:github"]})
+    assert not rows_for(cfg, result, agent="sora", project=str(proj))["mcp:github"]["on"]
+    # sharedTools oversized: nothing for every agent.
+    shared = {f"cli:t{i}": "off" for i in range(runtime.MAX_DETECTED)}
+    shared["mcp:github"] = "on:" + fp["mcp:github"]
+    assert not rows_for(cfg_factory(sharedTools=shared), result, project=str(proj))["mcp:github"]["on"]
+
+
+def test_two_servers_whose_safe_names_clash_are_not_given(cfg_factory, tmp_path):
+    r = roots_in(tmp_path)
+    write_json(r.claude_json, {"mcpServers": {"a__b": {"command": "x"}, "a_b": {"command": "y"}}})
+    result = tooldetect.scan(r, path="", key=KEY)
+    rows = rows_for(cfg_factory(), result)
+    assert not rows["mcp:a__b"]["can"] and not rows["mcp:a_b"]["can"]
+    assert "comes out the same" in rows["mcp:a_b"]["why_not"]
+
+
+@pytest.mark.parametrize("ref,ok", [("servers.json", True), ("./mcp.json", True), ("../servers.json", False),
+                                    ("/etc/x.json", False), ("a/b.json", False), ("x.txt", False),
+                                    (".hidden.json", False)])
+def test_a_plugin_manifest_may_name_only_a_file_beside_it(ref, ok):
+    """The first of two layers (the open beneath the plugin's root is the
+    second): checked on its own, so neither stands in for the other."""
+    assert bool(tooldetect._PLUGIN_REF.fullmatch(ref) and ".." not in ref) is ok

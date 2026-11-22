@@ -3255,7 +3255,7 @@ class Daemon:
         Code, the config.toml servers Codex may start, and the CLIs it is
         told it may use and told are off. Anything that goes wrong hands it
         nothing, and says so once: a tool is off until it is shown to be on."""
-        empty = {"servers": {}, "mcp_on": [], "clis_on": [], "clis_off": []}
+        empty = {"servers": {}, "mcp_on": {}, "clis_on": [], "clis_off": []}
         program = getattr(agent, "name", "") or ""
         if not program:
             return empty
@@ -3268,11 +3268,7 @@ class Daemon:
                 project = str((getattr(p, "spec", None) or {}).get("projectDir") or "")
             scanned, defs = tooldetect.scan_cached(self.cfg, with_defs=True)
             got = tooldetect.delivery(self.cfg, agent_id, program, project, scanned, defs)
-            on: list = []
-            if program == "codex":
-                names = {d["name"] for d in defs if d["backend"] == "codex"}
-                on = sorted(names - set(got["codex_off"]))
-            return {"servers": got["servers"], "mcp_on": on,
+            return {"servers": got["servers"], "mcp_on": got["codex_on"] if program == "codex" else {},
                     "clis_on": got["clis_on"], "clis_off": got["clis_off"]}
         except Exception as e:      # never worth a turn; never a tool given on a guess
             who = getattr(p, "label", "") or "main"
@@ -3327,7 +3323,7 @@ class Daemon:
         got = self.detected_for(agent, p)
         for attr, want in (("detected_servers", got["servers"]),
                            ("clis_denied", tuple(got["clis_off"])),
-                           ("mcp_on", frozenset(got["mcp_on"]))):
+                           ("mcp_on", dict(got["mcp_on"]))):
             if hasattr(agent, attr) and getattr(agent, attr) != want:
                 setattr(agent, attr, want)
                 changed = True

@@ -140,26 +140,44 @@ def codex_models() -> list[dict]:
     return out
 
 
-def config_servers() -> list[str]:
-    """The MCP servers in Codex's own config.toml, by name, read now: only
-    the names `-c mcp_servers.<name>.enabled=false` can carry (others are
-    shown as not switchable on the Tools & skills tab). Bounded; a file
-    that cannot be read names none, and then Codex reads it no better."""
+class ConfigUnaccounted(Exception):
+    """Codex's config.toml exists but cannot be read whole (phase M10)."""
+
+
+#: How much of config.toml is read, and how many servers it may name.
+#: Past either, the file is not accounted for and no turn starts.
+CONFIG_MAX = 4 * 1024 * 1024
+CONFIG_SERVERS_MAX = 1000
+
+
+def config_servers() -> dict | None:
+    """The MCP servers in Codex's own config.toml, name -> definition, read
+    now: only the names `-c mcp_servers.<name>.enabled=false` can carry
+    (others are shown as not switchable on the Tools & skills tab, since
+    Codex starts them whatever happens here). No file is no servers. A file
+    that is there but cannot be read whole -- too large, too many servers,
+    not TOML, unreadable -- is None: some of its servers could not be named,
+    so the caller does not start Codex (Codex review of M10)."""
     import re
     import tomllib
     try:
         with open(_codex_home() / "config.toml", "rb") as f:
-            data = f.read(512 * 1024 + 1)
-        if len(data) > 512 * 1024:
-            return []
-        table = tomllib.loads(data.decode("utf-8")).get("mcp_servers")
-    except (OSError, ValueError, UnicodeDecodeError, RecursionError):
-        return []
-    if not isinstance(table, dict):
-        return []
-    return sorted(n for n, spec in table.items()
-                  if isinstance(n, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", n)
-                  and isinstance(spec, dict))[:200]
+            data = f.read(CONFIG_MAX + 1)
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        return None
+    if len(data) > CONFIG_MAX:
+        return None
+    try:
+        table = tomllib.loads(data.decode("utf-8")).get("mcp_servers", {})
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        return None
+    if not isinstance(table, dict) or len(table) > CONFIG_SERVERS_MAX:
+        return None
+    return {n: spec for n, spec in sorted(table.items())
+            if isinstance(n, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", n)
+            and isinstance(spec, dict)}
 
 
 def codex_default_model() -> str:
@@ -198,9 +216,11 @@ class Codex(Adapter):
         #: take an MCP server; guarded on this agent's own level.
         self.crew_tools = True
         #: The servers in Codex's own config.toml this agent is switched on
-        #: for (phase M10), by name, set by the daemon. Every other server
-        #: there is started with enabled=false: see _argv.
-        self.mcp_on: frozenset = frozenset()
+        #: for (phase M10): name -> the digest of the definition approved
+        #: (tooldetect.spec_digest), set by the daemon. Every other server
+        #: there, and one whose definition no longer matches, is started
+        #: with enabled=false: see _argv.
+        self.mcp_on: dict = {}
         self.effort = effort
         self.spoken = spoken
         self.cwd = cwd
@@ -250,14 +270,23 @@ class Codex(Adapter):
             # because in `exec` it cannot ask and refuses every change.
             from desktop_mcp import codex_config
             argv += codex_config(self.name, self.named, guard=not self.full_auto)
-        for name in config_servers():
-            if name not in self.mcp_on:
+        servers = config_servers()
+        if servers is None:
+            # Its servers cannot all be named, so some would start with
+            # their switch off: no turn rather than that (Codex review).
+            raise ConfigUnaccounted(
+                "Codex's config.toml cannot be read whole, so Agent Voice cannot switch its MCP "
+                "servers off; Codex was not started. Make the file smaller, or fix it.")
+        from tooldetect import spec_digest
+        for name, spec in servers.items():
+            if (self.mcp_on or {}).get(name) != spec_digest(spec):
                 # Found in the user's own config.toml and not switched on
-                # for this agent (phase M10): Codex would start it otherwise.
-                # Read now, not from the last scan, so a server added since
-                # is off from its first turn -- and only names that are
-                # there, because naming one that is not stops Codex from
-                # starting at all ("invalid transport"). Recorded in
+                # for this agent, or changed since it was (phase M10):
+                # Codex would start it otherwise. Read now, not from the
+                # last scan, so a server added or rewritten since is off
+                # from its first turn -- and only names that are there,
+                # because naming one that is not stops Codex from starting
+                # at all ("invalid transport"). Recorded in
                 # tests/fixtures/tools/codex-mcp-enabled.json.
                 argv += ["-c", f"mcp_servers.{name}.enabled=false"]
         if self.crew_tools:
@@ -309,7 +338,11 @@ class Codex(Adapter):
         return "codex is not signed in — run: codex login"
 
     def send(self, text: str, session_id: str | None = None) -> Iterator[Chunk]:
-        argv = self._argv(text, session_id)
+        try:
+            argv = self._argv(text, session_id)
+        except ConfigUnaccounted as e:
+            yield Chunk(error=str(e))
+            return
         prompt = self.with_preamble(text)
         try:
             # stdin carries the prompt and is then closed. Closing was always

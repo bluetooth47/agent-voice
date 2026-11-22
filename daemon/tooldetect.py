@@ -111,11 +111,18 @@ SCOPE_WORDS = {"local": "your Claude Code settings for this folder",
                "codex": "Codex's config.toml"}
 _PRECEDENCE = {"local": 0, "project": 1, "user": 2, "plugin": 3}
 
-_SECRET_WORD = r"(?:key|token|secret|passw(?:or)?d|auth|credential|bearer)"
-_SECRET_FLAG_EQ = re.compile(r"(?i)^(--?[a-z0-9_.-]*" + _SECRET_WORD + r"[a-z0-9_.-]*=)(.+)$")
-_SECRET_FLAG = re.compile(r"(?i)^--?[a-z0-9_.-]*" + _SECRET_WORD + r"[a-z0-9_.-]*$")
+_SECRET_WORD = r"(?:key|token|secret|passw(?:or)?d|auth|credential|bearer|cookie|session|signature)"
+#: Flags whose value is masked: anything named like a secret, and the ones
+#: that carry a header or an environment variable, whatever it is called
+#: (`--header "Authorization: Bearer …"`, `-e TOKEN=…`).
+_CARRIER = r"(?:header|headers|env|environment|cred|credentials)"
+_SECRET_FLAG_EQ = re.compile(r"(?i)^(--?[a-z0-9_.-]*(?:" + _SECRET_WORD + "|" + _CARRIER +
+                             r")[a-z0-9_.-]*=)(.+)$")
+_SECRET_FLAG = re.compile(r"(?i)^(?:--?[a-z0-9_.-]*(?:" + _SECRET_WORD + "|" + _CARRIER +
+                          r")[a-z0-9_.-]*|-H|-e)$")
 _SECRET_VALUE = re.compile(r"^(?:gh[pousr]_|github_pat_|sk-|xox[abprs]-|AKIA|glpat-|AIza)\S{8,}")
-_SECRET_ENV = re.compile(r"(?i)^([A-Z0-9_]*" + _SECRET_WORD + r"[A-Z0-9_]*=)(.+)$")
+#: A word that looks generated: long, letters and digits mixed, no path.
+_TOKENISH = re.compile(r"^(?=.*[0-9])(?=.*[A-Za-z])[A-Za-z0-9_+=-]{20,}$")
 
 
 @dataclass
@@ -165,20 +172,24 @@ class _Reader:
     read: int = 0
     problems: list = field(default_factory=list)
 
-    def raw(self, path: Path, limit: int, follow: bool) -> bytes | None:
+    def raw(self, path: Path, limit: int, follow: bool,
+            beneath: Path | None = None) -> bytes | None:
         """The file's bytes: a regular file at most `limit` bytes, opened
-        without following a final link unless `follow`. None if absent or
+        without following a final link unless `follow`. With `beneath`, the
+        path is opened one component at a time from that folder, following
+        no link at any level (a project's or a plugin's files: an agent can
+        put a link at any depth, not only at the end). None if absent or
         refused (refusals are noted)."""
         self.tried.append(str(path))
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
         if not follow:
             flags |= getattr(os, "O_NOFOLLOW", 0)
         try:
-            fd = os.open(path, flags)
+            fd = _open_beneath(beneath, path, flags) if beneath is not None else os.open(path, flags)
         except FileNotFoundError:
             return None
         except OSError as e:
-            if not follow and os.path.islink(path):
+            if not follow and _has_link(path, beneath):
                 self.problems.append(f"{path.name}: a link, not followed")
             else:
                 self.problems.append(f"{path.name}: cannot be read ({type(e).__name__})")
@@ -203,8 +214,9 @@ class _Reader:
         finally:
             os.close(fd)
 
-    def json(self, path: Path, limit: int | None = None, follow: bool = False):
-        data = self.raw(path, MAX_FILE if limit is None else limit, follow)
+    def json(self, path: Path, limit: int | None = None, follow: bool = False,
+             beneath: Path | None = None):
+        data = self.raw(path, MAX_FILE if limit is None else limit, follow, beneath)
         if data is None:
             return None
         try:
@@ -223,6 +235,48 @@ class _Reader:
         except (ValueError, UnicodeDecodeError, RecursionError):
             self.problems.append(f"{path.name}: not valid TOML")
             return None
+
+
+def _open_beneath(root: Path, path: Path, flags: int) -> int:
+    """os.open(path) where path is inside `root`, walking from root by
+    directory descriptors with O_NOFOLLOW at every step. The root itself
+    is followed: it is a folder the person configured (a project) or Claude
+    Code recorded (a plugin's install path)."""
+    import errno
+    rel = Path(path).relative_to(root).parts
+    if not rel or any(part in ("", ".", "..") for part in rel):
+        raise OSError(errno.EINVAL, "not beneath its root")
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    cloexec = getattr(os, "O_CLOEXEC", 0)
+    dfd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | cloexec)
+    try:
+        for part in rel[:-1]:
+            nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | nofollow | cloexec, dir_fd=dfd)
+            os.close(dfd)
+            dfd = nfd
+        return os.open(rel[-1], flags | nofollow, dir_fd=dfd)
+    finally:
+        os.close(dfd)
+
+
+def _has_link(path: Path, beneath: Path | None) -> bool:
+    """Whether `path`, or any folder between it and `beneath`, is a link."""
+    p = Path(path)
+    if os.path.islink(p):
+        return True
+    if beneath is None:
+        return False
+    for parent in p.parents:
+        if parent == Path(beneath) or len(parent.parts) <= len(Path(beneath).parts):
+            break
+        if os.path.islink(parent):
+            return True
+    return False
+
+
+#: A plugin manifest's own name for its MCP config: a file beside it, by a
+#: plain name, never a path out of the plugin.
+_PLUGIN_REF = re.compile(r"(?:\./)?[A-Za-z0-9][A-Za-z0-9._-]*\.json")
 
 
 # --- definitions -----------------------------------------------------------------
@@ -300,15 +354,15 @@ def _plugin_servers(roots: Roots, reader: _Reader) -> list[dict]:
         root = Path(entry["installPath"])
         plugin = key.split("@", 1)[0]
         table = {}
-        mcp = reader.json(root / ".mcp.json")
+        mcp = reader.json(root / ".mcp.json", beneath=root)
         if isinstance(mcp, dict):
             table.update(mcp.get("mcpServers") if isinstance(mcp.get("mcpServers"), dict) else mcp)
-        manifest = reader.json(root / ".claude-plugin" / "plugin.json")
+        manifest = reader.json(root / ".claude-plugin" / "plugin.json", beneath=root)
         inline = (manifest or {}).get("mcpServers") if isinstance(manifest, dict) else None
         if isinstance(inline, dict):
             table.update(inline)
-        elif isinstance(inline, str) and "/" not in inline.strip("./") and not inline.startswith("/"):
-            more = reader.json(root / inline)
+        elif isinstance(inline, str) and _PLUGIN_REF.fullmatch(inline) and ".." not in inline:
+            more = reader.json(root / inline.removeprefix("./"), beneath=root)
             if isinstance(more, dict):
                 table.update(more.get("mcpServers") if isinstance(more.get("mcpServers"), dict) else more)
         for name, spec in _servers_in(table, reader, root / ".mcp.json").items():
@@ -350,7 +404,7 @@ def definitions(roots: Roots, project_dirs=(), reader: _Reader | None = None) ->
                                 "project": roots.shown(proj), "spec": spec})
     for proj in projects:
         path = Path(proj) / ".mcp.json"
-        mcp = reader.json(path)
+        mcp = reader.json(path, beneath=Path(proj))
         if isinstance(mcp, dict):
             for name, spec in _servers_in(mcp.get("mcpServers"), reader, path).items():
                 out.append({"name": name, "backend": "claude", "scope": "project",
@@ -421,6 +475,12 @@ def fingerprint(parts, key: bytes | None) -> str:
 # --- showing a definition --------------------------------------------------------
 
 def _mask_args(args: list[str]) -> list[str]:
+    """Arguments as the confirm shows them. A display, so it leans wide: a
+    value after a secret-named, header or environment flag, a flag=value of
+    one, any argument with a secret's name in it, anything shaped like a
+    generated key, and a URL's query and password. A package that merely
+    has "key" in its name is masked too; that costs a word, a miss costs a
+    key on screen."""
     out, hide_next = [], False
     for a in args:
         if hide_next:
@@ -431,15 +491,17 @@ def _mask_args(args: list[str]) -> list[str]:
         if m:
             out.append(m.group(1) + "•••")
             continue
-        m = _SECRET_ENV.match(a)
-        if m:
-            out.append(m.group(1) + "•••")
-            continue
-        if _SECRET_VALUE.match(a):
-            out.append("•••")
-            continue
         if _SECRET_FLAG.match(a):
             hide_next = True
+            out.append(a)
+            continue
+        if "://" in a:
+            out.append(_shown_url(a))
+            continue
+        if re.search(_SECRET_WORD, a, re.I) or _SECRET_VALUE.match(a) or _TOKENISH.match(a):
+            eq = a.find("=")
+            out.append(a[:eq + 1] + "•••" if 0 < eq < 40 and re.fullmatch(r"[A-Za-z0-9_.-]+", a[:eq]) else "•••")
+            continue
         out.append(a)
     return out
 
@@ -465,8 +527,7 @@ def shown_command(spec: dict) -> str:
     import shlex
     if isinstance(spec.get("command"), str) and spec["command"].strip():
         words = [spec["command"]] + _mask_args(list(spec.get("args") or []))
-        text = " ".join(shlex.quote(w) if w != "•••" and not w.endswith("=•••") else w
-                        for w in words)
+        text = " ".join(w if "•••" in w else shlex.quote(w) for w in words)
     else:
         text = "connects to " + _shown_url(str(spec.get("url") or ""))
     env = spec.get("env") or {}
@@ -575,9 +636,30 @@ def scan(roots: Roots | None = None, project_dirs=(), extra_clis=(), path: str |
 def server_key(name: str) -> str:
     """The name a detected server gets in the config Agent Voice writes for
     Claude Code, and so in its tools' names (`mcp__<key>__<tool>`): the
-    server's own name with anything but letters, digits, - and _ made _.
-    The permission hook works the same name out from the tool id."""
-    return re.sub(r"[^A-Za-z0-9_-]", "_", name)[:64]
+    server's own name with anything but letters, digits, - and _ made _,
+    never two _ in a row and none at either end -- so the first "__" after
+    "mcp__" in a tool's name always ends the key, and the permission hook
+    reads the key exactly rather than by prefix (Codex review of M10: with
+    prefixes, approving "docs" let "docs__admin" through)."""
+    key = re.sub(r"_{2,}", "_", re.sub(r"[^A-Za-z0-9_-]", "_", name)).strip("_")[:64].rstrip("_")
+    return key or "server"
+
+
+def tool_server_key(tool_name: str) -> str:
+    """The server key in a Claude Code tool name `mcp__<key>__<tool>`, ""
+    when it is not one. Exact: keys never hold "__" (server_key)."""
+    if not tool_name.startswith("mcp__"):
+        return ""
+    return tool_name[5:].split("__", 1)[0]
+
+
+def spec_digest(spec) -> str:
+    """A plain digest of one definition as written, for a backend that reads
+    the user's own file at its turn (Codex): the daemon hands it the digest
+    of what was approved, and the adapter compares it with the file then, so
+    a definition changed since the scan is not started (Codex review)."""
+    body = json.dumps(spec, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
 # --- the cache -------------------------------------------------------------------
@@ -623,7 +705,7 @@ def settings_inputs(cfg) -> tuple[list[str], list[str]]:
                 dirs.append(a["projectDir"])
         from runtime import detected_choices
         for m in [cfg["sharedTools"], cfg["mainTools"]] + [a.get("detected") for a in agents]:
-            for k in detected_choices(m):
+            for k in detected_choices(m) or {}:
                 if k.startswith("cli:"):
                     names.add(k[4:])
     except Exception:
@@ -811,6 +893,10 @@ def rows(cfg, agent_id: str, program: str, level: str, project: str, scanned: di
     can use it and why not, whether it asks first, and, for a Claude agent,
     whether its last process said the server was running."""
     own, shared = cfg.tool_switches(agent_id)
+    keys: dict[str, int] = {}
+    for t in scanned.get("tools") or []:
+        if t["kind"] == "mcp":
+            keys[server_key(t["name"])] = keys.get(server_key(t["name"]), 0) + 1
     mine_live = {}
     for s in ((live or {}).get(agent_id or "main") or {}).get("servers") or []:
         mine_live[s.get("name")] = s.get("status")
@@ -823,6 +909,9 @@ def rows(cfg, agent_id: str, program: str, level: str, project: str, scanned: di
         approved = bool(fp) and approval == "on:" + fp
         changed = approval.startswith("on:") and not approved
         can, why = _usable(t, program, project)
+        if can and t["kind"] == "mcp" and program == "claude" and keys.get(server_key(t["name"]), 0) > 1:
+            can, why = False, (f"Another server's name comes out the same once made safe for "
+                               f"Claude Code ({server_key(t['name'])}); rename one of them.")
         status = ""
         if t["kind"] == "mcp" and program == "claude":
             status = mine_live.get(server_key(t["name"])) or ""
@@ -853,7 +942,7 @@ def delivery(cfg, agent_id: str, program: str, project: str, scanned: dict, defs
     * "clis_on" / "clis_off": the CLIs it is told it may use, and the
       detected ones it is told are switched off.
     Settings that cannot be read approve nothing."""
-    out = {"servers": {}, "codex_off": [], "clis_on": [], "clis_off": []}
+    out = {"servers": {}, "codex_off": [], "codex_on": {}, "clis_on": [], "clis_off": []}
     the_rows = rows(cfg, agent_id, program, "", project, scanned)
     approved = {r["id"] for r in the_rows if r["on"]}
     for r in the_rows:
@@ -875,6 +964,11 @@ def delivery(cfg, agent_id: str, program: str, project: str, scanned: dict, defs
     elif program == "codex":
         names = sorted({d["name"] for d in defs if d["backend"] == "codex"})
         out["codex_off"] = [n for n in names if CODEX_NAME.fullmatch(n) and "mcp:" + n not in approved]
+        # What each approved one was, so the adapter can tell at the turn
+        # whether the file still says the same.
+        out["codex_on"] = {d["name"]: spec_digest(d["spec"]) for d in defs
+                           if d["backend"] == "codex" and "mcp:" + d["name"] in approved
+                           and CODEX_NAME.fullmatch(d["name"])}
     return out
 
 

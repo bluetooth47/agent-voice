@@ -129,19 +129,24 @@ APPROVAL = re.compile(r"on:[0-9a-f]{32}")
 MAX_DETECTED = 256
 
 
-def detected_choices(raw) -> dict[str, str]:
+def detected_choices(raw) -> dict[str, str] | None:
     """The detected-tool switches in a tools map, cleaned: each key a tool
     id, each value "off" or "on:<fingerprint>". A value that is there but is
     neither reads as "off" -- somebody meant to say something, and a switch
     that cannot be read keeps the tool away. Keys that are no tool id (the
-    built-in switches among them) are left out."""
+    built-in switches among them) are left out.
+
+    None when the map holds more switches than anyone sets by hand: read
+    only so far, an "off" past the cut would be lost and a switch for every
+    agent would turn the tool on (Codex review of M10), so the whole map is
+    unreadable and its owner gets nothing."""
     out: dict[str, str] = {}
     if not isinstance(raw, dict):
         return out
     for key, value in raw.items():
-        if len(out) >= MAX_DETECTED:
-            break
         if isinstance(key, str) and DETECTED_KEY.fullmatch(key):
+            if len(out) >= MAX_DETECTED:
+                return None
             out[key] = value if isinstance(value, str) and APPROVAL.fullmatch(value) else "off"
     return out
 
@@ -847,13 +852,19 @@ class Config:
         it. Read fresh by whoever asks."""
         if not self.settings_readable():
             return {}, {}
-        shared = detected_choices(self["sharedTools"])
+        # An oversized map is unreadable: for every agent (sharedTools), or
+        # for its owner, who then follows nothing shared either.
+        shared = detected_choices(self["sharedTools"]) or {}
         if not agent_id or agent_id == "main":
-            return detected_choices(self["mainTools"]), shared
-        spec = next((a for a in self.all_agents() if a["id"] == agent_id), None)
-        if spec is None:
+            own = detected_choices(self["mainTools"])
+        else:
+            spec = next((a for a in self.all_agents() if a["id"] == agent_id), None)
+            if spec is None:
+                return {}, {}
+            own = spec.get("detected")
+        if own is None:
             return {}, {}
-        return dict(spec.get("detected") or {}), shared
+        return dict(own), shared
 
     def settings_readable(self) -> bool:
         """False when shell.json exists and this widget's entry could not be

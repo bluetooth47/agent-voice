@@ -179,7 +179,7 @@ def test_codex_starts_config_servers_not_switched_on_disabled(tmp_path, monkeypa
     assert "mcp_servers.node_repl.enabled=false" in flags
     assert "mcp_servers.github.enabled=false" in flags
     assert not any("has.dot" in f for f in flags)      # cannot be named: shown so on the page
-    c.mcp_on = frozenset({"github"})
+    c.mcp_on = {"github": tooldetect.spec_digest({"command": "y"})}
     flags = [w for w in c._argv("", None) if "enabled=false" in w]
     assert flags == ["mcp_servers.node_repl.enabled=false"]
     # Options stay before `resume`.
@@ -193,9 +193,36 @@ def test_codex_never_names_a_server_its_config_does_not_have(tmp_path, monkeypat
     from adapters.codex import Codex
     codex_home(tmp_path, monkeypatch, 'model = "m"\n')
     assert not any("enabled=false" in w for w in Codex()._argv("", None))
-    codex_home(tmp_path / "b", monkeypatch, "[[[ broken") if False else None
-    (tmp_path / "codex" / "config.toml").write_text("[[[ broken")
-    assert not any("enabled=false" in w for w in Codex()._argv("", None))
+    (tmp_path / "codex" / "config.toml").unlink()
+    assert not any("enabled=false" in w for w in Codex()._argv("", None))      # no file: none
+
+
+@pytest.mark.parametrize("text", ["[[[ broken",
+                                  "".join(f'[mcp_servers.s{i}]\ncommand = "x"\n' for i in range(1001))])
+def test_codex_does_not_start_when_its_servers_cannot_all_be_named(tmp_path, monkeypatch, text):
+    """A config.toml that cannot be read whole would leave some of its
+    servers on with every switch off (Codex review of M10): no turn."""
+    from adapters.codex import Codex, ConfigUnaccounted
+    codex_home(tmp_path, monkeypatch, text)
+    with pytest.raises(ConfigUnaccounted):
+        Codex()._argv("", None)
+    started = []
+    monkeypatch.setattr("adapters.codex.subprocess.Popen", lambda *a, **k: started.append(a))
+    chunks = list(Codex().send("hi"))
+    assert started == [] and chunks[0].error and "not started" in chunks[0].error
+
+
+def test_codex_does_not_start_an_approved_server_whose_definition_changed(tmp_path, monkeypatch):
+    """Between the scan and the turn the file can change under the same
+    name (Codex review of M10): the digest of what was approved is checked
+    at the turn."""
+    from adapters.codex import Codex
+    codex_home(tmp_path, monkeypatch, '[mcp_servers.github]\ncommand = "gh-mcp"\n')
+    c = Codex()
+    c.mcp_on = {"github": tooldetect.spec_digest({"command": "gh-mcp"})}
+    assert not any("enabled=false" in w for w in c._argv("", None))
+    (tmp_path / "codex" / "config.toml").write_text('[mcp_servers.github]\ncommand = "evil"\n')
+    assert "mcp_servers.github.enabled=false" in c._argv("", None)
 
 
 # --- the CLI line ----------------------------------------------------------------
@@ -258,7 +285,7 @@ def test_a_server_switched_on_is_asked_about_below_trusted(settings, monkeypatch
     assert seen["tool"] == "mcp__github__create_issue"
 
 
-@pytest.mark.parametrize("tool", ["mcp__nobody__x", "mcp__githubx__y", "mcp__git__hub__x"])
+@pytest.mark.parametrize("tool", ["mcp__nobody__x", "mcp__githubx__y", "mcp__git__hub__x", "mcp__github_admin__x"])
 def test_a_server_nobody_switched_on_is_refused(settings, monkeypatch, tool):
     as_agent(monkeypatch)
     monkeypatch.setattr(hook, "_settings", lambda: ("trusted", None))
@@ -392,7 +419,7 @@ def test_codex_and_an_endpoint_get_what_they_can_take(cfg_factory, monkeypatch):
     c = Codex()
     c.cancel = lambda: None
     d.apply_extras(c, P(main=True))
-    assert c.mcp_on == frozenset({"node_repl"}) and c.clis_off == ("gh",)
+    assert c.mcp_on == {"node_repl": tooldetect.spec_digest({"command": "n"})} and c.clis_off == ("gh",)
     e = OpenAICompatible(base_url="http://localhost:1/v1", model="m", is_agent=True)
     e.cancel = lambda: None
     d.apply_extras(e, P(main=True))
@@ -642,4 +669,25 @@ def test_a_server_switch_alone_lets_the_warm_process_go(cfg_factory, monkeypatch
     d.apply_extras(c, P(main=True))
     cancelled.clear()
     d.cfg = cfg_factory(mainTools={"mcp:node_repl": "off", "cli:gh": "off"})
-    assert d.apply_extras(c, P(main=True)) is True and c.mcp_on == frozenset()
+    assert d.apply_extras(c, P(main=True)) is True and c.mcp_on == {}
+
+
+def test_a_revoked_server_cannot_hide_behind_an_approved_ones_name(settings, monkeypatch):
+    """Codex review of M10: with prefix matching, approving "docs" let a
+    revoked "docs__admin" through. Keys never hold "__" now, and the hook
+    reads the key exactly."""
+    as_agent(monkeypatch)
+    monkeypatch.setattr(hook, "_settings", lambda: ("trusted", None))
+    settings(mainTools={"mcp:docs": "on:" + FP, "mcp:docs__admin": "off"})
+    assert tooldetect.server_key("docs__admin") == "docs_admin"
+    assert hook.decide("mcp__docs_admin__wipe", {})[0] == "deny"
+    assert hook.decide("mcp__docs__search", {})[0] == "allow"
+    assert hook.decide("mcp__docs__admin__wipe", {})[0] == "allow"      # docs's own tool "admin__wipe"
+
+
+@pytest.mark.parametrize("name,key", [("docs__admin", "docs_admin"), ("plugin:x:y", "plugin_x_y"),
+                                      ("_a__", "a"), ("a b.c", "a_b_c"), ("___", "server"),
+                                      ("ok-name_1", "ok-name_1")])
+def test_a_server_key_never_holds_a_double_underscore_or_an_edge_one(name, key):
+    got = tooldetect.server_key(name)
+    assert got == key and "__" not in got and not got.startswith("_") and not got.endswith("_")
