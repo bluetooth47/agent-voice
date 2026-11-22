@@ -62,7 +62,11 @@ def _timeout() -> float:
         value = float(os.environ.get("AGENTVOICE_PERMISSION_TIMEOUT", "45"))
     except (TypeError, ValueError):
         return 45.0
-    return value if value >= 0 else 45.0
+    if not value >= 0:                  # NaN too
+        return 45.0
+    # Never past 50 s: Claude Code stops a hook at 60, and the card's wait
+    # plus the ask's own margin has to end before that (Codex review of M7).
+    return min(value, 50.0)
 
 
 TIMEOUT = _timeout()

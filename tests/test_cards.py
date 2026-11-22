@@ -639,3 +639,98 @@ class TestOrdersGuard:
         monkeypatch.setattr(hook, "_ask", lambda *a, **k: pytest.fail("asked"))
         assert hook.decide("Bash", {"command": "agentvoice status"})[0] == "allow"
         assert hook.decide("Bash", {"command": "ls ~/Projects/agent-voice/daemon"})[0] == "allow"
+
+
+# --- Codex review of M7, pass 1 -----------------------------------------------------------
+
+class TestReviewPass1:
+    @staticmethod
+    def _held(desk_kw=None):
+        """A desk whose summon blocks until released, so post() is not yet
+        looking at its deadline or its stop: the window the review found."""
+        gate = threading.Event()
+        desk = cards.Desk(summon=lambda cid: gate.wait(10), **(desk_kw or {}))
+        return desk, gate
+
+    def test_an_allow_after_the_deadline_is_refused_while_post_is_busy(self):
+        now = {"t": 1000.0}
+        desk, gate = self._held({"clock": lambda: now["t"]})
+        t, card = cardhelp.post_async(desk, {"tool": "Bash"}, timeout=1)
+        s = _shown(desk, card["id"])
+        now["t"] += 5                      # past the deadline; post() is in summon
+        ok, text = desk.answer(card["id"], "allow", s["nonce"], s["digest"], verified=True)
+        gate.set()
+        t.join(5)
+        assert not ok and "expired" in text
+        assert card["answer"]["allow"] is False
+
+    def test_an_allow_for_a_stopped_turn_is_withdrawn_not_acknowledged(self):
+        stopped = {"now": False}
+        desk, gate = self._held()
+        out = {}
+        th = threading.Thread(target=lambda: out.update(
+            a=desk.post({"tool": "Bash"}, 10, stop=lambda: stopped["now"])))
+        th.start()
+        card = cardhelp.wait_card(desk)
+        s = _shown(desk, card["id"])
+        stopped["now"] = True
+        ok, text = desk.answer(card["id"], "allow", s["nonce"], s["digest"], verified=True)
+        gate.set()
+        th.join(5)
+        assert not ok and "withdrawn" in text
+        assert out["a"] is None
+
+    @pytest.mark.parametrize("fresh, allowed", [(True, False), (None, True), (False, True),
+                                                (RuntimeError, False)])
+    def test_an_allow_asks_the_lock_afresh(self, fresh, allowed):
+        """The daemon's flag can be two seconds behind a lock."""
+        def locked_now():
+            if fresh is RuntimeError:
+                raise RuntimeError("no compositor")
+            return fresh
+        desk = _desk(locked_now=locked_now)
+        t, card = cardhelp.post_async(desk, {"tool": "Bash"})
+        s = _shown(desk, card["id"])
+        ok, _text = desk.answer(card["id"], "allow", s["nonce"], s["digest"], verified=True)
+        t.join(5)
+        assert ok is allowed
+        assert card["answer"]["allow"] is allowed
+
+    def test_the_asker_never_waits_past_its_budget(self, tmp_path, monkeypatch):
+        """A timeout of 90 s handed to the asker must not outlive Claude's
+        60: the whole wait is capped."""
+        monkeypatch.setattr(cards, "LOCAL_DESK", None)
+        monkeypatch.setattr(cards, "ASK_BUDGET_S", 0.6)
+        root = tmp_path / "cards"
+        root.mkdir()
+        monkeypatch.setattr(cards, "SOCKET_DIR", root)
+        srv = socket.socket(socket.AF_UNIX)
+        srv.bind(str(root / cards.SOCKET_NAME))
+        srv.listen(1)
+        held = []
+        threading.Thread(target=lambda: held.append(srv.accept()), daemon=True).start()
+        t0 = time.monotonic()
+        try:
+            got = cards.ask({"tool": "Bash"}, 90)
+        finally:
+            srv.close()
+        assert got is None and time.monotonic() - t0 < 3
+
+    @pytest.mark.parametrize("raw, want", [("90", 50.0), ("50", 50.0), ("12", 12.0),
+                                           ("nan", 45.0), ("-1", 45.0), ("x", 45.0)])
+    def test_the_hook_timeout_is_held_under_claudes_limit(self, raw, want, monkeypatch):
+        monkeypatch.setenv("AGENTVOICE_PERMISSION_TIMEOUT", raw)
+        assert hook._timeout() == want
+
+    def test_the_overlay_is_handed_the_card_without_the_tool_call(self):
+        desk = _desk()
+        t, card = cardhelp.post_async(desk, {"tool": "Write", "summary": "/tmp/x",
+                                             "input": {"content": "x" * 100000}})
+        s = desk.show(card["id"], verified=True)
+        assert "input" not in s and s["summary"] == "/tmp/x"
+        assert s["digest"] == cards.digest_of({k: v for k, v in s.items()
+                                               if k not in ("digest", "verified", "nonce")})
+        # The daemon keeps it, for the browser question said out loud.
+        assert desk.pending()[0]["input"]["content"] == "x" * 100000
+        desk.answer(card["id"], "deny")
+        t.join(5)

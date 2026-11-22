@@ -89,6 +89,10 @@ LINE_MAX = 64 * 1024
 #: 60 s and reads that as a non-blocking error, which runs the tool. With the
 #: 45 s default the hook is done by 48 s.
 GRACE_S = 3.0
+#: And never longer than this in all, whatever timeout it was handed: a
+#: setting of 90 s would otherwise outlive Claude's 60 (Codex review of M7).
+#: The daemon takes the card down when the asker hangs up.
+ASK_BUDGET_S = 55.0
 
 DEFAULT_TIMEOUT = 45.0
 
@@ -161,17 +165,26 @@ def digest_of(card: dict) -> str:
     return hashlib.sha256(canonical(card)).hexdigest()
 
 
-class _Card:
-    __slots__ = ("id", "public", "digest", "nonce", "deadline", "done", "answer")
+def shown(public: dict) -> dict:
+    """What the overlay is handed and draws: the card less `input`, the
+    whole tool call -- for a Write the entire file -- which the card never
+    shows (its summary does) and which made a reply larger than an ask
+    (Codex review of M7). The daemon keeps `input` for itself."""
+    return {k: v for k, v in public.items() if k != "input"}
 
-    def __init__(self, public: dict, deadline: float) -> None:
+
+class _Card:
+    __slots__ = ("id", "public", "digest", "nonce", "deadline", "done", "answer", "stop")
+
+    def __init__(self, public: dict, deadline: float, stop=None) -> None:
         self.id = public["id"]
         self.public = public
-        self.digest = digest_of(public)
+        self.digest = digest_of(shown(public))
         self.nonce = secrets.token_hex(16)
         self.deadline = deadline
         self.done = threading.Event()
         self.answer: dict | None = None
+        self.stop = stop
 
 
 def summon_overlay(card_id: str) -> None:
@@ -190,11 +203,16 @@ class Desk:
     and the other is told the question is no longer waiting."""
 
     def __init__(self, summon=None, is_locked=None, log=None,
-                 clock=time.monotonic) -> None:
+                 clock=time.monotonic, locked_now=None) -> None:
         self._cards: dict[str, _Card] = {}
         self._lock = threading.Lock()
         self.summon = summon if summon is not None else summon_overlay
         self.is_locked = is_locked if is_locked is not None else (lambda: False)
+        #: The lock asked afresh, for an allow: `is_locked` is the daemon's
+        #: flag, which its 2 s poll can leave behind a lock that just landed
+        #: (Codex review of M7). True, False, or None for "cannot tell",
+        #: which keeps the flag's answer, as the daemon's own poll does.
+        self.locked_now = locked_now
         self.log = log if log is not None else (lambda line: None)
         self.clock = clock
         #: False when the socket could not be opened: nobody could answer,
@@ -204,6 +222,17 @@ class Desk:
     def _locked(self) -> bool:
         try:
             return self.is_locked() is not False
+        except Exception:               # noqa: BLE001 -- unsure is locked
+            return True
+
+    def _locked_fresh(self) -> bool:
+        """For an allow: the flag, then the compositor asked now."""
+        if self._locked():
+            return True
+        if self.locked_now is None:
+            return False
+        try:
+            return self.locked_now() is True
         except Exception:               # noqa: BLE001 -- unsure is locked
             return True
 
@@ -231,7 +260,7 @@ class Desk:
                   "asked_at": time.time(), "timeout": timeout}
         # The deadline is fixed before the summon, which can take seconds:
         # the hook's whole wait has to fit inside Claude Code's 60 s.
-        card = _Card(public, self.clock() + timeout)
+        card = _Card(public, self.clock() + timeout, stop)
         with self._lock:
             if len(self._cards) >= MAX_PENDING:
                 return {"allow": False, "reason": TOO_MANY}
@@ -289,7 +318,7 @@ class Desk:
                            key=lambda c: c.public["asked_at"], default=None)
         if card is None:
             return {}
-        out = {**card.public, "digest": card.digest, "verified": bool(verified)}
+        out = {**shown(card.public), "digest": card.digest, "verified": bool(verified)}
         if verified:
             out["nonce"] = card.nonce
         else:
@@ -318,7 +347,11 @@ class Desk:
             problem = "the answer was neither allow nor deny"
         elif not verified:
             problem = why or "the answer did not come from the Agent Voice panel"
-        elif self._locked():
+        elif self.clock() >= card.deadline:
+            # post() wakes every 0.1 s; an allow landing in between, after
+            # the deadline, was otherwise taken (Codex review of M7).
+            problem = "the question had expired"
+        elif self._locked_fresh():
             problem = "the screen is locked"
         elif not (isinstance(nonce, str) and NONCE.fullmatch(nonce)
                   and hmac.compare_digest(nonce, card.nonce)):
@@ -328,6 +361,17 @@ class Desk:
             problem = "the question shown was not the question asked"
         elif verdict == "allow-session" and card.public.get("sessionWide") is not True:
             problem = "this question cannot be allowed for the whole chat"
+        if not problem and card.stop is not None:
+            # The asker's turn was stopped: the question is withdrawn, and an
+            # allow must not be reported as taken for a turn that will not
+            # act on it (Codex review of M7).
+            try:
+                withdrawn = bool(card.stop())
+            except Exception:           # noqa: BLE001
+                withdrawn = True
+            if withdrawn:
+                self._finish(card, None)
+                return False, "the question was withdrawn: the turn that asked it was stopped"
         if problem:
             if self._finish(card, {"allow": False,
                                    "reason": f"An answer that could not be checked was "
@@ -705,11 +749,12 @@ class Listener:
                 pass
 
 
-def start_desk(is_locked, log=print, root: Path | None = None) -> Desk:
+def start_desk(is_locked, locked_now=None, log=print, root: Path | None = None) -> Desk:
     """The daemon's desk and its socket, made once at start. Also becomes
     LOCAL_DESK, so the daemon's own questions post to it in-process."""
     global LOCAL_DESK
-    desk = Desk(is_locked=is_locked, log=lambda line: log(f"  {line}", flush=True))
+    desk = Desk(is_locked=is_locked, locked_now=locked_now,
+                log=lambda line: log(f"  {line}", flush=True))
     Listener(desk, Verifier(), root).start()
     LOCAL_DESK = desk
     return desk
@@ -762,8 +807,8 @@ def ask(fields: dict, timeout: float, stop=None, root: Path | None = None,
             except Exception:           # noqa: BLE001 -- cannot change the answer
                 pass
         conn.settimeout(0.1)
-        raw = _read_line(conn, LINE_MAX, deadline=time.monotonic() + timeout + GRACE_S,
-                         stop=stop)
+        raw = _read_line(conn, LINE_MAX, stop=stop,
+                         deadline=time.monotonic() + min(timeout + GRACE_S, ASK_BUDGET_S))
         if raw is None:
             return None
         msg = _parse(raw)

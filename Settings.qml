@@ -71,6 +71,8 @@ Item {
   // and may refuse it. The card stays up until it says, so a refusal is
   // seen rather than an Allow that silently became a no.
   property string answerFor: ""
+  // Which summons the card on screen belongs to (see open()).
+  property int probeSeq: 0
   property string answerVerdict: ""
   property string answerNote: ""
   property bool answerFailed: false
@@ -863,9 +865,16 @@ Item {
       // about, and taking "the newest" instead meant that a second question
       // arriving first put the wrong command on screen above the wrong
       // Allow button.
-      pendingProbe.command = wanted ? ["agentvoice", "pending", wanted]
-                                    : ["agentvoice", "pending"]
-      pendingProbe.running = true
+      // One probe per summons, and only the latest one's answer is used:
+      // a second card summoned while the first probe ran was otherwise
+      // never looked up, and the first card was drawn above the second's
+      // buttons (Codex review of M7).
+      probeSeq += 1
+      var probe = probeProc.createObject(root, {
+        seq: probeSeq,
+        command: wanted ? ["agentvoice", "pending", wanted] : ["agentvoice", "pending"]
+      })
+      if (probe) probe.running = true
     } else {
       // A deep link: {"page": "agents", "agent": "sarah"} opens that card.
       if (mode === "settings") goTo(String(p.page || "overview"), String(p.agent || ""),
@@ -1069,8 +1078,11 @@ Item {
       return
     }
     answerFailed = true
-    answerNote = "Not allowed: " + String(d.text || "no answer came back from Agent Voice") +
-                 ". The agent was told no."
+    // "Told no" only when the daemon said so: a reply that never came may
+    // be an allow whose acknowledgement was lost (Codex review of M7).
+    answerNote = d.ok === false
+        ? "Not allowed: " + String(d.text || "refused") + ". The agent was told no."
+        : "No answer came back from Agent Voice, so whether this was allowed is not known."
   }
 
   function permitNeverRan(cid) {
@@ -1103,14 +1115,25 @@ Item {
   // The daemon holds the card and the summon names only its id; ask it for
   // the rest. This call -- started by the shell itself, its stdout a pipe
   // back to it -- is the one the daemon gives the card's nonce to (M7).
-  Process {
-    id: pendingProbe
-    stdout: StdioCollector {
-      onStreamFinished: {
-        try { root.request = JSON.parse(String(text).trim() || "{}") }
-        catch (e) { root.request = ({}) }
-        if (root.request && root.request.timeout)
-          root.secondsLeft = Math.round(root.request.timeout)
+  function probeReplied(seq, text) {
+    if (seq !== probeSeq || mode !== "permission") return
+    var d = {}
+    try { d = JSON.parse(String(text).trim() || "{}") || {} } catch (e) { d = {} }
+    request = d
+    if (request && request.timeout)
+      secondsLeft = Math.round(request.timeout)
+    // Nothing is waiting under that id -- answered, expired, withdrawn: the
+    // card has nothing to ask, so it goes rather than sit empty.
+    if (!request || !request.id) hideCard()
+  }
+  Component {
+    id: probeProc
+    Process {
+      id: probe
+      property int seq: 0
+      onRunningChanged: if (!running) probe.destroy(2000)
+      stdout: StdioCollector {
+        onStreamFinished: root.probeReplied(probe.seq, String(text))
       }
     }
   }
@@ -1118,7 +1141,10 @@ Item {
   // Silence is a denial, so the countdown is the honest thing to show.
   Timer {
     interval: 1000
-    running: root.opened && root.mode === "permission" && !root.answered
+    // From when the card arrives, not from when the overlay opened: a
+    // lookup slower than a second dismissed the empty overlay before the
+    // card was there to answer (Codex review of M7).
+    running: root.opened && root.mode === "permission" && !root.answered && !!root.request.id
     repeat: true
     onTriggered: {
       root.secondsLeft = Math.max(0, root.secondsLeft - 1)

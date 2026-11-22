@@ -6657,7 +6657,8 @@ def main() -> int:
         # on. Before any agent can ask; a lock is read from the daemon's own
         # flag, so a card cannot be answered over the lock screen.
         import cards
-        daemon.cards = cards.start_desk(is_locked=lambda: daemon.locked)
+        daemon.cards = cards.start_desk(is_locked=lambda: daemon.locked,
+                                        locked_now=session_locked)
         # Only for the live loop: a simulated turn has no room to chime into.
         # Built whether or not the setting is on, because it can be switched
         # on while running; rendering the three sounds costs a few ms.

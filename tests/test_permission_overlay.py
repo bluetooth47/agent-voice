@@ -179,3 +179,31 @@ class TestTheAnswerIsAuthenticated:
         timer = SETTINGS[SETTINGS.index("// Silence is a denial, so the countdown"):]
         timer = timer[:timer.index("repeat:")]
         assert "!root.answered" in timer
+
+
+class TestReviewPass1Overlay:
+    """Codex review of M7, pass 1: the overlay's side."""
+
+    def test_each_summons_gets_its_own_lookup_and_only_the_latest_counts(self):
+        body = SETTINGS[SETTINGS.index("function open("):]
+        body = body[:body.index("\n  }")]
+        assert "probeProc.createObject(" in body and "probeSeq += 1" in body
+        reply = SETTINGS[SETTINGS.index("function probeReplied("):]
+        reply = reply[:reply.index("\n  }")]
+        assert "seq !== probeSeq" in reply
+
+    def test_a_card_that_is_gone_takes_the_overlay_with_it(self):
+        reply = SETTINGS[SETTINGS.index("function probeReplied("):]
+        reply = reply[:reply.index("\n  }")]
+        assert "!request.id) hideCard()" in reply
+
+    def test_the_countdown_waits_for_the_card(self):
+        timer = SETTINGS[SETTINGS.index("// Silence is a denial, so the countdown"):]
+        timer = timer[:timer.index("repeat:")]
+        assert "!!root.request.id" in timer
+
+    def test_told_no_only_when_the_daemon_said_no(self):
+        body = SETTINGS[SETTINGS.index("function permitReplied("):]
+        body = body[:body.index("\n  }")]
+        no = body[body.index("d.ok === false"):]
+        assert no.index("told no") < no.index("is not known")
