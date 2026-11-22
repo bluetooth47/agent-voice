@@ -22,7 +22,7 @@ pytestmark = pytest.mark.skipif(
 MANIFEST = '{"id": "duaneoca.agentvoice"}\n'
 # Records which commit was checked, and from where.
 CHECK_STUB = ('#!/usr/bin/env bash\necho "$(git rev-parse HEAD) $PWD" >> "$HOME/checked"\n'
-              'exit "${STUB_CHECK_EXIT:-0}"\n')
+              'echo "$TMPDIR" > "$HOME/tmpdir"\nexit "${STUB_CHECK_EXIT:-0}"\n')
 INSTALL_STUB = '#!/usr/bin/env bash\necho "$PWD $(git rev-parse HEAD) $*" >> "$HOME/installed"\n'
 # `agentvoice status`: prints $HOME/state.json, or, while $HOME/busy-polls
 # counts down, a busy state; exits 1 if $HOME/status-fails exists.
@@ -132,6 +132,19 @@ def test_the_check_runs_on_that_commit_outside_the_clone_and_the_plugins(world):
     assert "/.config/omarchy/plugins" not in where
     assert not Path(where).exists()                       # the worktree is gone
     assert _git(world.clone, "worktree", "list", env=world.env).count("\n") == 0
+
+
+@pytest.mark.parametrize("where", ["outside", "inside"])
+def test_the_check_keeps_tmpdir_unless_it_is_inside_the_plugins_folder(world, where):
+    tmp = (world.tmp / "t") if where == "outside" else (world.plugin.parent / "tmp")
+    tmp.mkdir()
+    world.commit("notes.md", "two\n", "second")
+    assert world.deploy("--no-install", TMPDIR=str(tmp)).returncode == 0
+    [seen] = world.lines("tmpdir")
+    if where == "outside":
+        assert seen == str(tmp)
+    else:
+        assert "/.config/omarchy/plugins" not in seen and seen.startswith(str(world.home / ".cache"))
 
 
 def test_a_qml_change_asks_for_a_shell_restart_and_never_runs_it(world):

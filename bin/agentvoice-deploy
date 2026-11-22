@@ -27,8 +27,8 @@
 #      copies whole folders (daemon/, bin/, desktop/): they would be installed
 #      though no commit has them;
 #   4. runs ./bin/agentvoice-check on exactly that commit, in a fresh worktree
-#      outside the plugins folder, strict (no skipped tests, qmllint present),
-#      and refuses a red one;
+#      outside the plugins folder (and with TMPDIR outside it), strict (no
+#      skipped tests, qmllint present), and refuses a red one;
 #   5. takes a lock, checks again that the plugin folder has not moved or been
 #      edited meanwhile, fetches the commit into its repository (only .git/ is
 #      written, which the watcher ignores) and checks it out detached;
@@ -176,7 +176,12 @@ if [[ -z $py ]]; then   # the clone's interpreter; the worktree has no bench/.ve
     [[ -x $cand ]] && "$cand" -c "import pytest" 2>/dev/null && { py="$cand"; break; }
   done
 fi
-(cd "$wt" && TMPDIR="$wt.tmp" AGENTVOICE_STRICT=1 AGENTVOICE_PYTHON="$py" AGENTVOICE_BOX= \
+# The inherited TMPDIR, unless it is inside the plugins folder. Not always a
+# scratch one: some tests put their fixtures' paths under it into budgeted
+# text, so a long TMPDIR turns them red (test_tools_skills, found in M0).
+tmp="${TMPDIR:-/tmp}"
+inside "$tmp" "$PLUGINS" && tmp="$wt.tmp"
+(cd "$wt" && TMPDIR="$tmp" AGENTVOICE_STRICT=1 AGENTVOICE_PYTHON="$py" AGENTVOICE_BOX= \
    ./bin/agentvoice-check) || die "the check is red on ${sha:0:12}; nothing was deployed"
 cleanup; rm -rf "$wt.tmp"; trap - EXIT
 
