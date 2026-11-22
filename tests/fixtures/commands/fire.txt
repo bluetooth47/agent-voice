@@ -19,7 +19,6 @@ edges  | open_mic      | end    | No                                 | No, keep 
 edges  | open_mic      | end    | Draft the email                    | Draft the email, then leave the mic open.
 edges  | open_mic      | start  | Let's brainstorm names.            | Open the mic, let's brainstorm names.
 edges  | open_mic      | end    | Read me the list                   | Read me the list, and could you keep listening?
-edges  | open_mic      | end    | I'll take notes                    | I'll take notes and keep listening
 edges  | open_mic      | start  | I'll explain.                      | Keep listening then, I'll explain.
 edges  | open_mic      | end    | I heard you.                       | I heard you. Keep listening.
 clause | open_mic      | clause | Okay, I'm going to take notes, because I might pause. | Okay, I'm going to take notes, and keep listening, because I might pause.
@@ -46,3 +45,5 @@ edges  | open_mic      | end    | Is that right?                     | Is that r
 edges  | open_mic      | start  | -5 degrees is what I measured.     | Keep listening. -5 degrees is what I measured.
 edges  | open_mic      | end    | Write the email                    | Write the email, and keep listening.
 edges  | open_mic      | end    | Read me the list                   | Read me the list, and keep listening.
+edges  | open_mic      | start  | .5 litres is enough.               | Keep listening. .5 litres is enough.
+edges  | open_mic      | start  | Take notes                         | Keep listening and take notes

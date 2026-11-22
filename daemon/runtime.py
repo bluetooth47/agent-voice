@@ -479,7 +479,8 @@ class Config:
         if "wakeConfidence" in out and "wakeConfidencePct" not in out:
             try:
                 out["wakeConfidencePct"] = round(float(out["wakeConfidence"]) * 100)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
+                # `inf` is valid TOML and no confidence (Codex review of M4).
                 pass
         return out
 

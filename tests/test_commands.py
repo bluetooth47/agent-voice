@@ -854,10 +854,16 @@ def test_the_scan_prints_counts_and_never_a_word(sandbox, tmp_path):
 # --- the first review's findings (Codex, M4), each held -------------------------
 
 class TestReviewOne:
-    def test_heard_back_takes_either_spelling_but_not_a_short_word(self):
+    def test_heard_back_takes_either_spelling_but_only_whole_words(self):
         assert heard_back("good bye", "That's the answer, goodbye.")
         assert heard_back("goodbye", "That's it, good bye.")
         assert not heard_back("no", "I know, and not now.")
+        assert not heard_back("good night", "Those are goodnightmares.")
+        assert heard_back("no", "No, I can't.")
+
+    def test_undo_is_nothing_but_the_words(self):
+        assert not is_undo("No. 5")
+        assert not is_undo("no, 3 of them")
 
     def test_a_split_title_keeps_its_old_meaning(self):
         found = find_command("Continue the chat about Star Trek: Voyager", "edges")
@@ -1003,3 +1009,154 @@ def test_the_frame_loop_listens_a_moment_for_no_after_stop_listening(daemon,
     run("Remind me at five, and stop listening.", "What time is it?")
     assert sent == ["Remind me at five"], "not an undo: dropped, not sent"
     assert daemon.open_mic is None
+
+
+class TestReviewTwo:
+    def _close(self, d, text="Remind me at five, and stop listening."):
+        d.start_open_mic(d._main, say=False)
+        found = d.sentence_command(d._main, text, {}, heard_at=time.time())
+        d.undo_clock(found)
+        assert d.open_mic is None and d._undo is not None
+        return found
+
+    def test_an_explicit_off_supersedes_a_pending_undo(self, quiet_publish):
+        d = quiet_publish
+        self._close(d)
+        d.apply_open_mic_command("open-mic off")       # changes nothing
+        assert d._undo is None
+        assert d.take_undo("No.", time.time()) is False
+        assert d.open_mic is None
+
+    def test_not_while_muted(self, quiet_publish):
+        d = quiet_publish
+        self._close(d)
+        d.enabled = False
+        assert d.take_undo("No.", time.time()) is False
+        assert d.open_mic is None
+
+    @pytest.mark.parametrize("how", ["polled", "told"])
+    def test_a_lock_ends_the_chance(self, quiet_publish, monkeypatch, how):
+        """Locked and unlocked again within the three seconds: the "no"
+        after it puts nothing back."""
+        d = quiet_publish
+        self._close(d)
+        if how == "polled":
+            monkeypatch.setattr(wake_listen, "session_locked", lambda: True)
+            d.reconcile_lock()
+            monkeypatch.setattr(wake_listen, "session_locked", lambda: False)
+            d._lock_hold_until = 0.0
+            d.reconcile_lock()
+        else:
+            d.apply_lock_command("lock")
+            d.apply_lock_command("unlock")
+        assert not d.locked and d._undo is None
+        assert d.take_undo("No.", time.time()) is False
+        assert d.open_mic is None
+
+    def test_a_no_said_to_another_agent_is_theirs(self, quiet_publish):
+        d = quiet_publish
+        self._close(d)
+        other = object()
+        assert d.take_undo("No.", time.time(), capture_for=other) is False
+        assert d.open_mic is None
+
+    def test_no_undo_window_once_switched_to_alone(self, quiet_publish):
+        d = quiet_publish
+        self._close(d)
+        assert d.undo_due() > 0
+        d.cfg._values["commandsInSentences"] = "alone"
+        assert d.undo_due() == 0
+
+    def test_a_goodbye_takes_down_a_window_already_armed(self, quiet_publish):
+        d = quiet_publish
+        d._main.follow_up = True
+        d._send(d._main, "Fine, goodbye.", {"transcript": ""}, {}, heard_at=time.time())
+        assert d._main.follow_up is False
+
+    def test_a_goodbye_while_the_turn_finishes_still_wins(self, quiet_publish,
+                                                         monkeypatch):
+        d = quiet_publish
+        monkeypatch.setattr(d, "arm_follow_up", lambda: True)
+
+        def answer(*a, **k):
+            d._main.ends_pending = True     # said while this turn ran
+        monkeypatch.setattr(d, "answer", answer)
+        d._turn(d._main, "a request", {}, None)
+        assert d._main.follow_up is False and d._main.ends_pending is False
+
+    def test_a_goodbye_landing_after_the_window_was_worked_out(self, quiet_publish,
+                                                               monkeypatch):
+        """The narrowest of the races: the turn has decided to open a window,
+        and the goodbye is said before its thread is gone. Its last act puts
+        the window down again."""
+        d = quiet_publish
+        monkeypatch.setattr(d, "arm_follow_up", lambda: True)
+        monkeypatch.setattr(d, "answer", lambda *a, **k: None)
+
+        class Racing(type(d._main)):
+            @property
+            def follow_up(self):
+                return self.__dict__.get("_fu", False)
+
+            @follow_up.setter
+            def follow_up(self, value):
+                self.__dict__["_fu"] = value
+                if value:
+                    self.__dict__["ends_pending"] = True    # the hook, just then
+
+        d._main.__class__ = Racing
+        d._turn(d._main, "a request", {}, None)
+        assert d._main.follow_up is False
+
+    def test_a_new_turn_forgets_an_old_pending_goodbye(self, quiet_publish, monkeypatch):
+        d = quiet_publish
+        d._main.ends_pending = True
+        monkeypatch.setattr(d, "_turn", lambda *a, **k: None)
+        assert d.dispatch(d._main, "a request", {})
+        assert d._main.ends_pending is False
+
+    def test_an_infinite_confidence_in_toml_falls_back(self, sandbox, monkeypatch):
+        import runtime
+        toml = sandbox / "m4-inf.toml"
+        toml.write_text("[audio]\nwake_confidence = inf\n")
+        monkeypatch.setattr(runtime, "config_toml", lambda: toml)
+        monkeypatch.setattr(runtime, "SHELL_JSON", sandbox / "absent-m4.json")
+        runtime.Config()                # does not raise
+
+
+def test_the_undo_window_keeps_nothing_it_drops_and_lets_a_full_stop_through(
+        daemon, monkeypatch):
+    import frame_loop
+
+    monkeypatch.setattr(daemon, "publish_agent", lambda: None)
+    monkeypatch.setattr(daemon, "deafen", lambda tail_ms: None)
+    monkeypatch.setattr(daemon, "answer", lambda *a, **k: None)
+    stops = []
+    monkeypatch.setattr(daemon, "full_stop", lambda: stops.append(1))
+
+    def run(second):
+        class Pipe(frame_loop.Pipe):
+            def new_utterance(self):
+                said = ("Remind me at five, and stop listening.", second)
+                u = frame_loop.Utterance(said[min(len(self.utterances), 1)])
+                self.utterances.append(u)
+                return u
+        items = [lambda: daemon.start_open_mic(daemon._main, say=False)]
+        items += [frame_loop.LOUD] * 3 + [frame_loop.QUIET] * 4
+        items += [frame_loop.LOUD] * 2 + [frame_loop.QUIET] * 5 + [frame_loop.stop()]
+        return frame_loop.drive(daemon, monkeypatch, items, pipe=Pipe())
+
+    real_hear = daemon.hear
+
+    def hear(cap, utt, pcm, voiced):
+        real_hear(cap, utt, pcm, voiced)
+        # A live partial, for the second capture only: the undo's.
+        return "account number partial" if len(daemon.pipe.utterances) > 1 else ""
+    monkeypatch.setattr(daemon, "hear", hear)
+    payloads, _ = run("My account number is private.")
+    seen = json.dumps([d for _t, d in payloads])
+    assert "account number" not in seen, "dropped, and not left on screen"
+    assert daemon.open_mic is None
+    daemon.end_open_mic("test")
+    run("Full stop.")
+    assert stops == [1], "a full stop is still a full stop"

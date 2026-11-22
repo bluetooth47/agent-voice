@@ -1714,17 +1714,18 @@ Measured 2026-11-21 on phase-m4 with `speech_text.find_command`, which is
 pure: no microphone, no model. Two inputs.
 
 **The synthetic corpus** (`tests/fixtures/commands/`), written for the policy
-table: 38 sentences a command is meant to fire inside, 67 that hold a
+table: 39 sentences a command is meant to fire inside, 76 that hold a
 command's words and must not (an object after the verb, a negation, quoted
 or reported speech, a question, two commands, and ordinary sentences such
-as "there's an open mic night on Friday"). Ten of the 67 are the misfires
-the first Codex review found against the first version (each fired then).
+as "there's an open mic night on Friday"). Ten of the 76 are the misfires
+the first Codex review found against the first version, and eight more
+the second found against the fixes (each fired then).
 
 | mode | meant to fire, fired | must not fire, fired |
 |---|---|---|
-| alone | 0 / 38 | 0 / 67 |
-| edges | 35 / 38 | 0 / 67 |
-| clause | 38 / 38 | 0 / 67 |
+| alone | 0 / 39 | 0 / 76 |
+| edges | 36 / 39 | 0 / 76 |
+| clause | 39 / 39 | 0 / 76 |
 
 The three that need `clause` are the ones with the command mid-sentence,
 the user's own example among them. Written by the same hand as the

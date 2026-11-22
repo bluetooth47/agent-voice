@@ -1930,6 +1930,7 @@ class Daemon:
             return
         self.locked = locked
         if locked:
+            self._undo = None           # phase M4: a lock ends the chance
             # Mid-turn when it happens: the reply is being read aloud to
             # whoever is standing there, so it stops too.
             self.silence()
@@ -1993,6 +1994,7 @@ class Daemon:
             return False
         self.locked = cmd == "lock"
         if self.locked:
+            self._undo = None           # phase M4: a lock ends the chance
             self._lock_hold_until = time.time() + LOCK_HOLD_S
             self.silence()
         else:
@@ -4377,6 +4379,9 @@ class Daemon:
         """`agentvoice open-mic on|off [AGENT]`, from the popup's toggle."""
         if not cmd or not cmd.startswith("open-mic"):
             return False
+        # Phase M4: an explicit switch supersedes an undo still pending, even
+        # one that changes nothing (Codex review of M4).
+        self._undo = None
         parts = cmd.split()
         want = parts[1] if len(parts) > 1 else ""
         if want == "off":
@@ -4647,10 +4652,13 @@ class Daemon:
         else:
             if self.open_mic is not None:
                 self.end_open_mic("asked to" if cmd.id == "close_mic" else "goodbye")
-            if not found.rest and p.busy:
-                # A turn still working opens no window when it ends: the
-                # conversation was just ended over it (Codex review of M4).
-                p.ends_pending = True
+            if not found.rest:
+                # The conversation was just ended: no window after it, not
+                # one already armed nor one a turn still working would arm
+                # when it ends (Codex review of M4).
+                p.follow_up = False
+                if p.busy:
+                    p.ends_pending = True
         self.state.publish("speaking", **{**last, "reply": cmd.said})
         self._say_for(p, cmd.said)
         if cmd.id in ("open_mic", "close_mic") and self.open_mic is not before:
@@ -4678,13 +4686,16 @@ class Daemon:
         undo = getattr(self, "_undo", None)
         if undo is None or undo["command"] != "close_mic" or not self.listening:
             return 0.0
+        if self.cfg.commands_in_sentences() == "alone":
+            return 0.0
         if self.open_mic is not None or self._speaking or undo["until"] is None:
             return 0.0
         if undo.get("gen") != getattr(self, "_open_mic_gen", 0):
             return 0.0
         return max(0.0, (undo["until"] - time.time()) * 1000)
 
-    def take_undo(self, text: str, heard_at: float | None) -> bool:
+    def take_undo(self, text: str, heard_at: float | None,
+                  capture_for: Persona | None = None) -> bool:
         """"no" or "cancel that", said straight after an open-mic switch made
         from inside a sentence, puts it back and says so. Any finished
         transcript uses the chance up, undo or not.
@@ -4692,8 +4703,10 @@ class Daemon:
         True when that was all there was to it. "cancel that" is also a
         stop, so it is undone and then goes on to stop what was asked."""
         undo, self._undo = getattr(self, "_undo", None), None
-        if undo is None or not text or self.locked or not is_undo(text):
+        if undo is None or not text or not self.listening or not is_undo(text):
             return False
+        if capture_for is not None and capture_for is not undo["persona"]:
+            return False                # said to another agent: theirs
         if self.cfg.commands_in_sentences() == "alone":
             return False                # switched to alone since: as before M4
         if undo.get("gen") != getattr(self, "_open_mic_gen", 0):
@@ -5359,6 +5372,7 @@ class Daemon:
                 return False
         p.interrupt.clear()
         p.follow_up = False
+        p.ends_pending = False      # phase M4: about the turn before this one
         p.turn_error = ""           # collab: this turn's own, not the last one's
         turn = dict(last)
         p.last, p.state, p.started_at = turn, "thinking", time.time()
@@ -5400,6 +5414,8 @@ class Daemon:
                     self._floor_owner, self._floor_until = None, 0.0
                 self._floor.notify_all()
             self._recent = p
+            if getattr(p, "ends_pending", False):
+                p.follow_up = False     # said while this was finishing
             p.ends_pending = False
             if command is not None:
                 self.undo_clock(command)        # phase M4
@@ -5605,6 +5621,17 @@ class Daemon:
                 # listening" stayed up for up to ten minutes after "off".
                 # It closes now; a capture somebody is speaking into is
                 # left to finish, and goes to the agent as usual.
+                if (phase == "capture" and capture_kind == "undo"
+                        and not heard and self.undo_due() <= 0):
+                    # Phase M4: the popup, the CLI or a mode change took the
+                    # undo's chance away while nobody was speaking.
+                    if utt is not None:
+                        utt.abandon()
+                        utt = None
+                    phase, ptt, ptt_done = "wake", False, False
+                    self._capture_for = None
+                    self._publish(**last)
+                    continue
                 if (phase == "capture" and capture_kind == "open"
                         and not heard and self.open_mic is None):
                     if utt is not None:
@@ -5694,7 +5721,7 @@ class Daemon:
                     # A follow-up window nobody has spoken into yet closes
                     # when another agent starts its reply: the moment for
                     # a follow-up has passed, and our own voice is not one.
-                    if (phase == "capture" and capture_kind == "followup"
+                    if (phase == "capture" and capture_kind in ("followup", "undo")
                             and not heard and self._speaking):
                         if utt is not None:
                             utt.abandon()
@@ -5797,7 +5824,9 @@ class Daemon:
                     capture_for = undo_for if crew else None
                     capture_kind = "undo"
                     if crew:
-                        self._capture_for, self._recent = undo_for, None
+                        # Not `_recent`: three seconds of listening for "no"
+                        # must not take the last reply off the idle readout.
+                        self._capture_for = undo_for
                     phase, buf, cap = "capture", b"", self.pipe.new_capture()
                     utt = self.pipe.new_utterance()
                     woke_at = last_voice = spoke_at = time.time()
@@ -5945,6 +5974,10 @@ class Daemon:
                 # its pauses are, so a piece is never cut where the endpoint
                 # would have heard speech.
                 partial = self.hear(cap, utt, pcm, voiced)
+                if capture_kind == "undo":
+                    # Phase M4: what is said here is dropped unless it is
+                    # "no"; it is not shown while it is said either.
+                    partial = ""
                 if partial and partial != shown_partial:
                     shown_partial = partial
                     if speech_is_logged(self.cfg.get_bool("logSpeech")):
@@ -6106,15 +6139,20 @@ class Daemon:
                         stopped.clear()
                         print(f"  {DIM}(interrupted before sending){OFF}")
                         follow_up = False
-                    elif capture_kind == "undo":
+                    elif capture_kind == "undo" and not (
+                            text and is_stop_command(text)):
                         # Phase M4: only an undo is taken from these few
-                        # seconds; whatever else was said is not sent.
-                        if not (text and self.take_undo(text, spoke_at)) \
+                        # seconds -- and a stop, below. Whatever else was
+                        # said is not sent, and not kept on screen.
+                        if not (text and self.take_undo(text, spoke_at,
+                                                        capture_for)) \
                                 and self.open_mic is None:
                             print(f"  {DIM}(only \"no\" is taken here — "
                                   f"dropped){OFF}", flush=True)
+                            last = _empty_turn()
+                            shown_partial = ""
                         follow_up = False
-                    elif text and self.take_undo(text, spoke_at):
+                    elif text and self.take_undo(text, spoke_at, capture_for):
                         # "no", straight after an open-mic switch made
                         # inside a sentence: put back (phase M4).
                         follow_up = False

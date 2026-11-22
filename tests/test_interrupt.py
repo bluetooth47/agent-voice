@@ -246,7 +246,7 @@ def test_cancel_that_undoes_the_open_mic_and_is_still_a_stop(daemon, monkeypatch
     assert daemon.open_mic is None
     assert is_stop_command("Cancel that.")
     src = open(wake_listen_path()).read()
-    chain = src[src.index("elif text and self.take_undo(text, spoke_at):"):]
+    chain = src[src.index("elif text and self.take_undo(text, spoke_at, capture_for):"):]
     assert chain.index("is_full_stop(text)") < chain.index("is_stop_command(text)"), \
         "the undo comes first, the stop after it"
 
