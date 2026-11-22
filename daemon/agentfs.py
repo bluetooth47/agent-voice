@@ -481,9 +481,11 @@ def file_stamp(target: str, file: str) -> str:
 # --- writing -----------------------------------------------------------------
 
 @contextlib.contextmanager
-def _locked():
+def _locked(block: bool = True):
     """One lock for every folder, the pattern chats.py uses: writes are
-    rare and small, and one lock cannot be taken in the wrong order."""
+    rare and small, and one lock cannot be taken in the wrong order.
+    `block` False raises BlockingIOError at once when somebody holds it
+    (the daemon's poll, which would rather look again next time: M12)."""
     paths.private_dir(paths.DATA_DIR)
     try:
         fd = os.open(paths.DATA_DIR / ".agentfs.lock",
@@ -494,7 +496,7 @@ def _locked():
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise AgentFsError("the lock file is not a regular file")
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        fcntl.flock(fd, fcntl.LOCK_EX if block else fcntl.LOCK_EX | fcntl.LOCK_NB)
         yield
     finally:
         os.close(fd)

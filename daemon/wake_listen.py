@@ -1633,6 +1633,16 @@ class Daemon:
         #: Each agent's Claude plugin folder, by what it was built from
         #: (Phase 13): see plugin_dir_for.
         self._plugin_dirs: dict = {}
+        # A skill move or copy cut short by a crash (phase M12) is finished
+        # or rolled back first, before any agent is built, so neither side
+        # is ever shown to an adapter half-done.
+        try:
+            import transfer
+            for r in transfer.recover() or []:
+                print(f"  {YEL}skill transfer {r['op']}: {r['done']}{OFF}", flush=True)
+        except Exception as e:
+            print(f"  {YEL}skill transfers: could not be checked ({type(e).__name__}){OFF}",
+                  flush=True)
         # Plugin folders from an earlier run: nothing has them open now.
         try:
             import agentfs
@@ -3078,6 +3088,17 @@ class Daemon:
         rest of what it read to the agents. A failed read keeps the
         instructions it had, and the prompt parts it had (Phase 11).
         """
+        try:
+            # Phase M12: a transfer some other process left unfinished (it
+            # died holding the lock) is settled here too, without waiting on
+            # the lock: one held is a transfer under way, not a crash.
+            import transfer
+            if transfer.pending():
+                for r in transfer.recover(block=False) or []:
+                    print(f"  {YEL}skill transfer {r['op']}: {r['done']}{OFF}", flush=True)
+        except Exception as e:  # the idle poll must never stop on this
+            self.say_once("transfer-recover", f"  {YEL}skill transfers: could not be "
+                                              f"checked ({type(e).__name__}){OFF}")
         try:
             import agentfs
             now = agentfs.stamp()

@@ -642,6 +642,19 @@ one to an agent, or to Communal, and it gets a **checked copy** -- no links
 inside, no hooks, within the size limits -- after a question that says who
 gets it. Agent Voice never edits, moves or deletes a skill it did not make.
 
+**Moving a skill.** Drag a card from one lane to another to move it, or
+hold Ctrl to copy it; every card also has a **Move to…** button (Menu or
+Ctrl+M from the keyboard) that does both. Communal → Skills has the same
+lanes. Moving a skill into Communal asks first ("every agent will get this
+skill"), and so does moving one out of a quarantined agent. A name already
+taken where it would land is refused, with the reason. **Undo** is offered
+for ten seconds, and works only while neither side has changed since, so it
+never loses an edit; from a terminal, `agentvoice skills history` and
+`agentvoice skills undo OP` do the same at any time. A move is staged and
+published in one step, and one cut short by a crash is finished or put back
+before any agent sees either side. A skill found outside Agent Voice is
+only ever copied in, never moved.
+
 ### In Omarchy's Agents panel
 
 Each voice agent also gets a section in Omarchy's own Agents panel, the one

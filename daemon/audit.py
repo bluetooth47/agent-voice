@@ -52,6 +52,9 @@ KINDS = frozenset({
     # A skill found outside Agent Voice copied into an agent's folder or the
     # communal one, by the person (phase M11): the skill's name and size.
     "skill_import",
+    # A skill moved or copied between agents and Communal, or a move, copy or
+    # import undone, by the person (phase M12): ids, the name and its size.
+    "skill_move", "skill_copy", "skill_undo",
 })
 #: How a task ended: collab.DONE, kept here so this file imports nothing.
 STATES = frozenset({"completed", "cancelled", "failed", "refused"})

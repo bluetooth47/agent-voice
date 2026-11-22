@@ -135,7 +135,7 @@ ShellRoot {
           var big = unused.filter(function(x) { return x.name === "big-guide" })[0]
           overlay.check(big && big.copy_problem.indexOf("longer than") >= 0,
                         "big-guide is Unused now, and says it is too long to copy")
-          overlay.click(overlay.button(overlay.card(overlay.lane("unused"), "crash-notes").parent, "Give a copy to Sora…"),
+          overlay.click(overlay.button(overlay.card(overlay.lane("unused"), "crash-notes"), "Give a copy to Sora…"),
                         "crash-notes → Give a copy to Sora")
           break
         case 5:
@@ -156,7 +156,7 @@ ShellRoot {
           break
         case 8:
           overlay.check(probe.code === 1, "Cancel copied nothing")
-          overlay.click(overlay.button(overlay.card(overlay.lane("unused"), "crash-notes").parent, "Give a copy to Sora…"),
+          overlay.click(overlay.button(overlay.card(overlay.lane("unused"), "crash-notes"), "Give a copy to Sora…"),
                         "Give a copy to Sora, again")
           break
         case 9:

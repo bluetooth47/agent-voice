@@ -815,7 +815,10 @@ AUDIT_SAFE = {"author", "target", "name", "kind", "reason", "locked", "valid_nam
               # Phase 16: why a call was refused, a code from collab's fixed list.
               "code",
               # Phase M11: a skill copied in, by its size in bytes.
-              "copied_bytes"}
+              "copied_bytes",
+              # Phase M12 (transfer._audit): a transfer's ids, the skill's
+              # name, its size in bytes, and "outside" for an import.
+              "size", "OUTSIDE"}
 
 
 def _names_outside_len(node):

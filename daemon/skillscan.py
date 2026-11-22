@@ -33,7 +33,10 @@ together. An Agent Voice skill (own or communal) of the same name as one the
 CLI finds hides the CLI's, so an agent never has two of one name.
 
     python skillscan.py lanes [AGENT] [--json]
-    python skillscan.py import SOURCE_ID TO      # TO: an agent id or communal
+    python skillscan.py import SOURCE_ID|PATH TO [--confirm]   # TO: an agent id or communal
+    python skillscan.py move|copy FROM NAME TO [--confirm]      # phase M12, transfer.py
+    python skillscan.py undo OP
+    python skillscan.py history [--json]
 """
 from __future__ import annotations
 
@@ -523,9 +526,46 @@ def find(source_id: str) -> tuple[dict, Path]:
 
 def import_skill(source_id: str, target: str) -> dict:
     """Assign a skill from outside Agent Voice to an agent or Communal: a
-    verified copy (agentfs.import_skill). The original is never changed."""
+    verified copy (agentfs.import_skill). The original is never changed.
+    Since M12 the copy is recorded (transfer.record_import), so it can be
+    undone like any copy: the result carries its `op`."""
     entry, folder = find(source_id)
-    return agentfs.import_skill(target, entry["folder"], folder)
+    got = agentfs.import_skill(target, entry["folder"], folder)
+    return _recorded(got)
+
+
+def import_path(path: str, target: str) -> dict:
+    """The same, from a folder named by its path (master plan M12: `skills
+    import PATH TO`). Its name is the folder's; everything import_skill
+    checks is checked the same way."""
+    if not isinstance(path, str) or not path or "\x00" in path:
+        raise agentfs.AgentFsError("not a folder")
+    folder = Path(path).expanduser()
+    if not folder.is_absolute():
+        folder = Path.cwd() / folder
+    return _recorded(agentfs.import_skill(target, folder.name, folder))
+
+
+def _recorded(got: dict) -> dict:
+    import transfer
+    rec = transfer.record_import(got["target"], got["name"])
+    return {**got, "op": rec["op"] if rec else ""}
+
+
+def needs_confirm(cfg, frm: str, to: str) -> str:
+    """Why a move, copy or import must be confirmed, or "" (master plan,
+    section 7.3): into Communal (every agent gets it), or out of a
+    quarantined agent (what it wrote may not be what you meant to share).
+    A quarantine list that cannot be read counts every agent as in it."""
+    if to == agentfs.COMMUNAL:
+        return "every agent will get this skill"
+    if frm and frm not in (agentfs.COMMUNAL, "outside"):
+        q = cfg.quarantined()
+        if q is None:
+            return "the quarantine list cannot be read, so every agent counts as quarantined"
+        if frm in q:
+            return f"{frm} is quarantined"
+    return ""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -535,8 +575,22 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("lanes", help="every skill, in its owner's lane")
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("import", help="give an agent or Communal a copy of a skill found here")
-    p.add_argument("source", help="its id, from `lanes --json`")
+    p.add_argument("source", help="its id, from `lanes --json`, or a folder's path (with a /)")
     p.add_argument("to", help="an agent's folder id, or communal")
+    p.add_argument("--confirm", action="store_true", help="into Communal: you were asked")
+    # Phase M12: between Agent Voice's own folders, and back.
+    for verb, what in (("move", "move a skill to another agent or Communal"),
+                       ("copy", "copy a skill to another agent or Communal")):
+        p = sub.add_parser(verb, help=what)
+        p.add_argument("frm", metavar="FROM", help="an agent's folder id, or communal")
+        p.add_argument("name")
+        p.add_argument("to", metavar="TO", help="an agent's folder id, or communal")
+        p.add_argument("--confirm", action="store_true",
+                       help="into Communal, or out of a quarantined agent: you were asked")
+    p = sub.add_parser("undo", help="undo a move, copy or import, if nothing changed since")
+    p.add_argument("op", help="its id, from the move's output or `history`")
+    p = sub.add_parser("history", help="the moves, copies and imports recorded")
+    p.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     try:
         if a.cmd == "lanes":
@@ -559,7 +613,36 @@ def main(argv: list[str] | None = None) -> int:
                 for p in got["problems"]:
                     print(f"  ! {safe(p)}")
             return 0
-        got = import_skill(a.source, a.to)
+        import transfer
+        if a.cmd == "history":
+            got = transfer.history()
+            if a.json:
+                print(json.dumps(got))
+            else:
+                from speech_text import safe_for_terminal as safe
+                for r in got:
+                    where = (f"{r['from']} → {r['to']}" if r["action"] != "remove"
+                             else f"from {r['from']}")
+                    extra = (" (undone)" if r["state"] == "undone" else
+                             f" ({r['state']}: {r['problem']})" if r["state"] == "stuck" else
+                             " (undo)" if r["undo_of"] else "")
+                    print(safe(f"{r['op']}  {r['action']} {r['name']} {where}{extra}"))
+            return 0
+        if a.cmd == "undo":
+            print(json.dumps(transfer.undo(a.op)))
+            return 0
+        from runtime import Config
+        frm = "outside" if a.cmd == "import" else a.frm
+        why = needs_confirm(Config(), frm, a.to)
+        if why and not a.confirm:
+            raise agentfs.AgentFsError(f"{why}: run it again with --confirm once you are sure")
+        if a.cmd == "import":
+            got = (import_path(a.source, a.to) if "/" in a.source
+                   else import_skill(a.source, a.to))
+        elif a.cmd == "move":
+            got = transfer.move(a.frm, a.name, a.to)
+        else:
+            got = transfer.copy(a.frm, a.name, a.to)
         print(json.dumps(got))
         return 0
     except (agentfs.AgentFsError, SkillsUnknown) as e:

@@ -961,15 +961,33 @@ Column {
   // onConfirmed (tests/test_confirms.py).
   property string importing: ""
   property string importTo: ""
+  // The card being given (path, size), for the confirm (M12: one confirm
+  // for every way in: the Unused buttons, a drag, a card's Copy to…).
+  property var importEntry: null
+  function askImport(entry, to) {
+    skillNote = ""
+    importEntry = entry
+    importTo = to
+    importing = entry.id
+  }
   function importSkill(id, to) {
     if (skillImporter.running) return
     skillNote = ""
     importing = ""
-    skillImporter.command = ["agentvoice", "skills", "import", id, to]
+    // Into Communal the command wants to hear that you were asked (M12).
+    skillImporter.command = ["agentvoice", "skills", "import", id, to].concat(to === "communal" ? ["--confirm"] : [])
     skillImporter.running = true
   }
   Process {
     id: skillImporter
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var d
+        try { d = JSON.parse(String(text)) } catch (e) { return }
+        if (d && d.op) skillMover.offer({ op: d.op, action: "import", name: d.name, to: d.target },
+                                        "Gave " + page.skillLabel(d.target) + " a copy of " + d.name + ".")
+      }
+    }
     stderr: StdioCollector {
       onStreamFinished: {
         var t = String(text).trim()
@@ -977,6 +995,63 @@ Column {
       }
     }
     onRunningChanged: if (!running) { page.s.folders.refresh(); page.loadCatalog() }
+  }
+
+  // Phase M12: a skill card dropped on a lane, or sent there from its menu.
+  // A skill of Agent Voice's (this agent's, another's, Communal's) moves, or
+  // copies with Ctrl; one found outside it is only ever copied in, through
+  // the import's confirm. The refusal is said where it happens: on the lane
+  // while a card hovers, under the lanes after a menu pick.
+  function skillLabel(id) {
+    if (id === "communal") return "Communal"
+    if (id === page.target) return page.name
+    var l = toolsTab.otherLanes.filter(function(x) { return x.id === id })
+    return l.length > 0 ? l[0].label : id
+  }
+  function laneSkills(id) {
+    if (!toolsTab.c) return []
+    if (id === "communal") return toolsTab.sharedSkills
+    if (id === page.target) return toolsTab.mySkills.filter(function(x) { return x.native !== true })
+    var l = toolsTab.otherLanes.filter(function(x) { return x.id === id })
+    return l.length > 0 ? l[0].skills.filter(function(x) { return x.source === id }) : []
+  }
+  function skillPayload(x, laneId) {
+    var outside = x.native === true || x.family !== undefined
+    return { name: outside ? String(x.folder || x.name) : x.name, from: laneId, outside: outside,
+             entry: outside ? x : null, problem: x.problem || "", copyProblem: x.copy_problem || "" }
+  }
+  function skillRefusal(p, to) {
+    if (!p || !p.name) return "Not a skill."
+    if (to === "unused") return "Unused holds skills found outside Agent Voice. To stop giving a skill, switch it off."
+    if (p.outside && p.copyProblem !== "") return "Cannot be copied in: " + p.copyProblem
+    if (!p.outside && p.problem !== "") return "It has a problem, so it is not moved until it is fixed: " + p.problem
+    if (page.laneSkills(to).some(function(x) { return x.name === p.name }))
+      return page.skillLabel(to) + " already has a skill named " + p.name + "."
+    return ""
+  }
+  // Who keeps a skill of its own over this one in Communal.
+  function keepsOwn(name, to) {
+    if (to !== "communal") return []
+    var out = []
+    var mine = toolsTab.mySkills.some(function(x) { return x.native !== true && x.source === page.target && x.name === name })
+    if (mine) out.push(page.target)
+    toolsTab.otherLanes.forEach(function(l) {
+      if (l.skills.some(function(x) { return x.source === l.id && x.name === name })) out.push(l.id)
+    })
+    return out
+  }
+  function skillDropped(p, copy, from, to) {
+    var why = page.skillRefusal(p, to)
+    if (why !== "") { page.skillNote = why; return }
+    page.skillNote = ""
+    if (p.outside) { page.askImport(p.entry, to); return }
+    skillMover.request(p.name, from, to, copy, page.keepsOwn(p.name, to))
+  }
+  readonly property var skillLaneList: {
+    var out = [{ id: page.target, label: page.name }, { id: "communal", label: "Communal",
+                                                        reason: "Every agent will get it; asks first" }]
+    toolsTab.otherLanes.forEach(function(l) { out.push({ id: l.id, label: l.label }) })
+    return out
   }
 
   Column {
@@ -1408,7 +1483,8 @@ Column {
         emptyText: "None in " + page.name + "'s folder" +
                    (toolsTab.c && toolsTab.c.skills_note !== "" && toolsTab.nativeCount === 0
                     ? ", and none found for its program." : ".")
-        refuse: function() { return "Moving skills between lanes is not built yet: use Give a copy on an Unused one." }
+        refuse: function(p, copy, from) { return page.skillRefusal(p, page.target) }
+        onReceived: function(p, copy, from) { page.skillDropped(p, copy, from, page.target) }
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
         Repeater {
@@ -1416,6 +1492,12 @@ Column {
           SkillCard {
             required property var modelData
             width: parent.width
+            draggable: modelData.native !== true || (modelData.id || "") !== ""
+            canMove: modelData.native !== true
+            laneId: page.target
+            payload: page.skillPayload(modelData, page.target)
+            lanes: page.skillLaneList
+            onMoveRequested: function(to, copy) { page.skillDropped(payload, copy, page.target, to) }
             title: modelData.name
             subtitle: modelData.description
             badge: modelData.native === true ? modelData.source_label : ""
@@ -1450,8 +1532,9 @@ Column {
         title: "Communal"
         subtitle: "Every agent's. The switch is " + page.name + "'s alone."
         count: toolsTab.sharedSkills.length
-        emptyText: "None in the communal folder."
-        refuse: function() { return "Moving skills between lanes is not built yet: use Give a copy on an Unused one." }
+        emptyText: "None in the communal folder. Drag a skill here to give it to every agent."
+        refuse: function(p, copy, from) { return page.skillRefusal(p, "communal") }
+        onReceived: function(p, copy, from) { page.skillDropped(p, copy, from, "communal") }
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
         Repeater {
@@ -1459,6 +1542,11 @@ Column {
           SkillCard {
             required property var modelData
             width: parent.width
+            draggable: true
+            laneId: "communal"
+            payload: page.skillPayload(modelData, "communal")
+            lanes: page.skillLaneList
+            onMoveRequested: function(to, copy) { page.skillDropped(payload, copy, "communal", to) }
             title: modelData.name
             subtitle: modelData.description
             status: page.skillStatus(modelData)
@@ -1477,6 +1565,7 @@ Column {
       Repeater {
         model: toolsTab.otherLanes
         DropLane {
+          id: otherLane
           required property var modelData
           width: skillLanes.laneWidth
           laneId: modelData.id
@@ -1486,7 +1575,8 @@ Column {
                     ". Its switches are on its own Tools & skills tab."
           count: modelData.skills.length
           emptyText: "No skills."
-          refuse: function() { return "Moving skills between lanes is not built yet." }
+          refuse: function(p, copy, from) { return page.skillRefusal(p, laneId) }
+          onReceived: function(p, copy, from) { page.skillDropped(p, copy, from, laneId) }
           foreground: page.s.foreground
           fontFamily: page.s.fontFamily
           Repeater {
@@ -1494,6 +1584,12 @@ Column {
             SkillCard {
               required property var modelData
               width: parent.width
+              draggable: modelData.native !== true || (modelData.id || "") !== ""
+              canMove: modelData.native !== true
+              laneId: otherLane.laneId
+              payload: page.skillPayload(modelData, otherLane.laneId)
+              lanes: page.skillLaneList
+              onMoveRequested: function(to, copy) { page.skillDropped(payload, copy, otherLane.laneId, to) }
               title: modelData.name
               subtitle: modelData.description
               badge: modelData.native === true ? modelData.source_label : ""
@@ -1516,75 +1612,95 @@ Column {
         subtitle: "No agent gets these. Giving one makes a checked copy; the original stays."
         count: toolsTab.unused.length
         emptyText: "Every skill found on this machine is used by an agent."
-        refuse: function() { return "Moving skills between lanes is not built yet." }
+        refuse: function(p, copy, from) { return page.skillRefusal(p, "unused") }
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
         Repeater {
           model: toolsTab.unused
-          Column {
+          SkillCard {
             required property var modelData
             width: parent.width
-            spacing: Style.space(4)
-            SkillCard {
-              width: parent.width
-              title: modelData.name
-              subtitle: modelData.description
-              badge: modelData.source_label
-              status: modelData.problem !== "" ? modelData.problem
-                      : modelData.copy_problem !== "" ? "Cannot be copied in: " + modelData.copy_problem : ""
-              statusUrgent: modelData.problem !== ""
-              details: page.skillDetails(modelData, false)
+            draggable: true
+            canMove: false
+            laneId: "unused"
+            payload: page.skillPayload(modelData, "unused")
+            lanes: page.skillLaneList
+            onMoveRequested: function(to, copy) { page.skillDropped(payload, true, "unused", to) }
+            title: modelData.name
+            subtitle: modelData.description
+            badge: modelData.source_label
+            status: modelData.problem !== "" ? modelData.problem
+                    : modelData.copy_problem !== "" ? "Cannot be copied in: " + modelData.copy_problem : ""
+            statusUrgent: modelData.problem !== ""
+            details: page.skillDetails(modelData, false)
+            foreground: page.s.foreground
+            fontFamily: page.s.fontFamily
+            Button {
+              text: "Give a copy to " + page.name + "…"
+              bordered: true
+              focusable: true
+              enabled: modelData.copy_problem === "" && !skillImporter.running && page.target !== "communal"
               foreground: page.s.foreground
               fontFamily: page.s.fontFamily
-              Button {
-                text: "Give a copy to " + page.name + "…"
-                bordered: true
-                focusable: true
-                enabled: modelData.copy_problem === "" && !skillImporter.running && page.target !== "communal"
-                foreground: page.s.foreground
-                fontFamily: page.s.fontFamily
-                fontSize: Style.font.caption
-                tooltipText: modelData.copy_problem !== "" ? modelData.copy_problem
-                             : "Copies it into " + page.name + "'s skills folder, after asking."
-                onClicked: { page.importing = modelData.id; page.importTo = page.target }
-              }
-              Button {
-                text: "Give a copy to Communal…"
-                focusable: true
-                enabled: modelData.copy_problem === "" && !skillImporter.running
-                foreground: page.s.foreground
-                fontFamily: page.s.fontFamily
-                fontSize: Style.font.caption
-                tooltipText: modelData.copy_problem !== "" ? modelData.copy_problem
-                             : "Copies it into the communal skills folder, after asking."
-                onClicked: { page.importing = modelData.id; page.importTo = "communal" }
-              }
+              fontSize: Style.font.caption
+              tooltipText: modelData.copy_problem !== "" ? modelData.copy_problem
+                           : "Copies it into " + page.name + "'s skills folder, after asking."
+              onClicked: page.askImport(modelData, page.target)
             }
-            // Giving a skill widens what an agent is told, so it asks
-            // first, naming who gets it (master plan, section 7.3). The
-            // copy is made only from onConfirmed.
-            ToolConfirm {
-              visible: page.importing === modelData.id
-              title: page.importTo === "communal"
-                     ? "Give every agent a copy of " + modelData.name + "?"
-                     : "Give " + page.name + " a copy of " + modelData.name + "?"
-              lines: [{ label: "Copied from", value: modelData.path },
-                      { label: "Size", value: page.sizeText(modelData) },
-                      { label: "Who gets it", value: page.importTo === "communal"
-                        ? "Every agent whose program takes skills, unless it switches it off"
-                        : page.name + " only" }]
-              warning: "A skill tells an agent what to do, and its scripts run at the agent's own " +
-                       "permission level. The copy is checked (no links, no hooks, within the size " +
-                       "limits) and kept as it is now; later changes to the original are not copied."
-              confirmText: "Give a copy"
+            Button {
+              text: "Give a copy to Communal…"
+              focusable: true
+              enabled: modelData.copy_problem === "" && !skillImporter.running
               foreground: page.s.foreground
               fontFamily: page.s.fontFamily
-              onConfirmed: page.importSkill(modelData.id, page.importTo)
-              onCancelled: page.importing = ""
+              fontSize: Style.font.caption
+              tooltipText: modelData.copy_problem !== "" ? modelData.copy_problem
+                           : "Copies it into the communal skills folder, after asking."
+              onClicked: page.askImport(modelData, "communal")
             }
           }
         }
       }
+    }
+    // Giving a skill found outside Agent Voice widens what an agent is
+    // told, so it asks first, naming who gets it (master plan, section
+    // 7.3); since M12 one confirm for every way in. The copy is made only
+    // from onConfirmed.
+    ToolConfirm {
+      visible: page.importing !== "" && page.importEntry !== null && page.importEntry.id === page.importing
+      title: page.importEntry === null ? ""
+             : page.importTo === "communal" ? "Give every agent a copy of " + page.importEntry.name + "?"
+             : "Give " + page.skillLabel(page.importTo) + " a copy of " + page.importEntry.name + "?"
+      lines: page.importEntry === null ? [] :
+             [{ label: "Copied from", value: page.importEntry.path },
+              { label: "Size", value: page.sizeText(page.importEntry) },
+              { label: "Who gets it", value: page.importTo === "communal"
+                ? "Every agent whose program takes skills, unless it switches it off"
+                : page.skillLabel(page.importTo) + " only" }]
+      warning: "A skill tells an agent what to do, and its scripts run at the agent's own " +
+               "permission level. The copy is checked (no links, no hooks, within the size " +
+               "limits) and kept as it is now; later changes to the original are not copied."
+      confirmText: "Give a copy"
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onConfirmed: page.importSkill(page.importing, page.importTo)
+      onCancelled: page.importing = ""
+    }
+    // Phase M12: the move or copy itself, its confirm when it widens, and
+    // Undo.
+    SkillMover {
+      id: skillMover
+      width: parent.width
+      labels: {
+        var out = { communal: "Communal" }
+        out[page.target] = page.name
+        toolsTab.otherLanes.forEach(function(l) { out[l.id] = l.label })
+        return out
+      }
+      quarantined: page.s.setting("crewQuarantine", [])
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onChanged: { page.s.folders.refresh(); page.loadCatalog() }
     }
     Text {
       width: parent.width
@@ -1603,7 +1719,9 @@ Column {
             "“name:” (the folder's name) and “description:” (one line on when to use it, at most " +
             "300 characters), then ---, then the instructions. Scripts beside it are run by the " +
             "agent, never by Agent Voice. One in " + page.name + "'s folder beats a communal one " +
-            "of the same name, and an Agent Voice skill beats one its program finds by itself."
+            "of the same name, and an Agent Voice skill beats one its program finds by itself. " +
+            "Drag a card to another lane to move it (hold Ctrl to copy), or use its Move to…; " +
+            "Undo is offered for ten seconds. One found outside Agent Voice is only ever copied."
       textFormat: Text.PlainText
       color: page.s.dim
       font.family: page.s.fontFamily

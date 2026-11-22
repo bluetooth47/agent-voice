@@ -1930,3 +1930,23 @@ plugin settings), 0.93 ms for Codex.
 S on `sora` was not rerun: the index a Codex agent is told only ever
 shrinks under M11 (a skill switched off leaves it), and Claude's
 `--settings` grows by one small JSON key.
+
+## 46. M12: what moving a skill costs
+
+Measured 2026-11-22 on the i7-1185G7 (8 threads), `transfer.move` then
+`transfer.undo` 21 times each, in a scratch data folder on the home disk
+(btrfs: the fsyncs of each file, the stage folder, both skills folders and
+the journal record are real). The script lived in /tmp and is not kept; it
+is ten lines around those two calls.
+
+| skill | move, median (max) | undo, median |
+|---|---|---|
+| 2 files, 1 KB | 17.1 ms (24.6) | 19.7 ms |
+| 64 files, about 2 MB (the bound) | 114.5 ms (153.5) | 116.5 ms |
+
+The same on tmpfs: 3.2 ms and 25.3 ms, so most of a small move is the
+fsyncs. What the idle poll pays to see whether a transfer was left
+unfinished (`transfer.pending()`, one listing of `agents/.transfers`): 72 µs.
+A move publishes by one rename, so an agent's next turn sees the skill
+either where it was or where it went; the plugin folder for each side is
+rebuilt on that turn as for any skill change (§45: 18 ms with 20 skills).

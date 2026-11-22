@@ -332,7 +332,10 @@ CREW_WORDS = ("agentvoice pass", "collab.py pass", "agentvoice chats share", "ag
 #: Command text that copies a skill into an agent's folder or the communal
 #: one (phase M11): only the person assigns a skill (master plan, 7.3), so
 #: an agent running it is asked at every level. The same text match.
-SKILL_WORDS = ("agentvoice skills import", "skillscan.py import")
+SKILL_WORDS = ("agentvoice skills import", "skillscan.py import",
+               # Phase M12: only the person moves, copies or undoes a skill.
+               "agentvoice skills move", "agentvoice skills copy", "agentvoice skills undo",
+               "skillscan.py move", "skillscan.py copy", "skillscan.py undo", "transfer.py")
 
 
 def _spellings(dirs: list[Path]) -> list[str]:
@@ -402,7 +405,7 @@ def orders_write(tool_name: str, tool_input) -> str:
                         f"stepping round the Crew map ({frag})")
         for frag in SKILL_WORDS:
             if frag in cmd or frag in flat:
-                return f"this command gives an agent a skill, which only you do ({frag})"
+                return f"this command gives, moves or takes back a skill, which only you do ({frag})"
     return ""
 
 

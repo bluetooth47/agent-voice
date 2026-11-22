@@ -543,6 +543,44 @@ Column {
     }
     return out
   }
+  // Phase M12: Communal and each agent's own skills as lanes; a card dragged
+  // (Ctrl copies) or sent from its Move to… goes through the SkillMover,
+  // which asks first when it widens (into Communal, out of a quarantined
+  // agent) and offers Undo.
+  function ownSkills(l) { return (l.skills || []).filter(function(x) { return x.source === l.id }) }
+  function laneOf(id) {
+    if (id === "communal") return page.skillList || []
+    var l = page.skillLanes.filter(function(x) { return x.id === id })
+    return l.length > 0 ? page.ownSkills(l[0]) : []
+  }
+  function skillLabel(id) {
+    if (id === "communal") return "Communal"
+    var l = page.skillLanes.filter(function(x) { return x.id === id })
+    return l.length > 0 ? l[0].label : id
+  }
+  function skillRefusal(p, to) {
+    if (!p || !p.name) return "Not a skill."
+    if (p.problem !== "") return "It has a problem, so it is not moved until it is fixed: " + p.problem
+    if (page.laneOf(to).some(function(x) { return x.name === p.name }))
+      return page.skillLabel(to) + " already has a skill named " + p.name + "."
+    return ""
+  }
+  function keepsOwn(name, to) {
+    if (to !== "communal") return []
+    return page.skillLanes.filter(function(l) {
+      return page.ownSkills(l).some(function(x) { return x.name === name })
+    }).map(function(l) { return l.id })
+  }
+  function skillDropped(p, copy, from, to) {
+    var why = page.skillRefusal(p, to)
+    if (why !== "") { page.skillNote = why; return }
+    page.skillNote = ""
+    skillMover.request(p.name, from, to, copy, page.keepsOwn(p.name, to))
+  }
+  readonly property var skillLaneList: [{ id: "communal", label: "Communal",
+                                          reason: "Every agent will get it; asks first" }]
+                                       .concat(skillLanes.map(function(l) { return { id: l.id, label: l.label } }))
+
   property string skillNote: ""
   Process {
     id: skillKeeper
@@ -590,7 +628,8 @@ Column {
             "itself when a request needs it; Codex, Gemini, Antigravity and Copilot are told a list " +
             "and read a skill's file when they need it; an endpoint gets none. An agent with its " +
             "own skill of the same name gets its own instead, and any agent can switch one off " +
-            "on its Tools & skills tab."
+            "on its Tools & skills tab. Drag a card between lanes to move it (hold Ctrl to copy), " +
+            "or use its Move to…; Undo is offered for ten seconds."
       color: page.s.dim
       font.family: page.s.fontFamily
       font.pixelSize: Style.font.caption
@@ -626,34 +665,111 @@ Column {
       color: page.s.foreground
       font.family: page.s.fontFamily
     }
-    Repeater {
-      model: page.skillList || []
-      SettingRow {
-        required property var modelData
-        readonly property var missing: page.notGiven(modelData)
-        width: parent.width
-        label: modelData.name
-        hint: (modelData.problem !== "" ? "Not given to any agent: " + modelData.problem
-               : modelData.description +
-                 " Given to " + ((modelData.gets || []).length > 0 ? modelData.gets.join(", ") : "no agent") + "." +
-                 (missing.length > 0 ? " Not to " + missing.join(", ") + "." : "")) +
-              (modelData.changed_outside === true ? " Added or changed outside Settings." : "")
-        foreground: modelData.problem !== "" ? page.s.urgent : page.s.foreground
+    Flow {
+      id: communalLanes
+      width: parent.width
+      visible: page.skillList !== null
+      spacing: Style.space(10)
+      readonly property real laneWidth: width >= Style.space(760) ? (width - spacing) / 2 : width
+
+      DropLane {
+        width: communalLanes.laneWidth
+        laneId: "communal"
+        title: "Communal"
+        subtitle: "Every agent's, unless it has its own of the same name or switches it off."
+        count: (page.skillList || []).length
+        emptyText: "No shared skills yet. Drag one here from an agent's lane to give it to every agent."
+        refuse: function(p, copy, from) { return page.skillRefusal(p, "communal") }
+        onReceived: function(p, copy, from) { page.skillDropped(p, copy, from, "communal") }
+        foreground: page.s.foreground
         fontFamily: page.s.fontFamily
-        // Made or edited by hand (a skill always is): Keep saves this
-        // version, so the outside-change notice goes (Phase 13).
-        Button {
-          visible: modelData.changed_outside === true
-          text: "Keep"
-          focusable: true
-          enabled: !skillKeeper.running
-          foreground: page.s.foreground
-          fontFamily: page.s.fontFamily
-          fontSize: Style.font.caption
-          tooltipText: "It applies already. Keep saves this version, so the notice goes."
-          onClicked: page.keepSkill(modelData.name, modelData.stamp)
+        Repeater {
+          model: page.skillList || []
+          SkillCard {
+            required property var modelData
+            readonly property var missing: page.notGiven(modelData)
+            width: parent.width
+            draggable: true
+            laneId: "communal"
+            payload: ({ name: modelData.name, from: "communal", problem: modelData.problem || "" })
+            lanes: page.skillLaneList
+            onMoveRequested: function(to, copy) { page.skillDropped(payload, copy, "communal", to) }
+            title: modelData.name
+            subtitle: modelData.description
+            status: modelData.problem !== "" ? "Not given to any agent: " + modelData.problem
+                    : "Given to " + ((modelData.gets || []).length > 0 ? modelData.gets.join(", ") : "no agent") +
+                      "." + (missing.length > 0 ? " Not to " + missing.join(", ") + "." : "") +
+                      (modelData.changed_outside === true ? " Added or changed outside Settings." : "")
+            statusUrgent: modelData.problem !== ""
+            details: [{ label: "Where", value: modelData.path || "" }]
+            foreground: page.s.foreground
+            fontFamily: page.s.fontFamily
+            // Made or edited by hand (a skill always is): Keep saves this
+            // version, so the outside-change notice goes (Phase 13).
+            Button {
+              visible: modelData.changed_outside === true
+              text: "Keep"
+              focusable: true
+              enabled: !skillKeeper.running
+              foreground: page.s.foreground
+              fontFamily: page.s.fontFamily
+              fontSize: Style.font.caption
+              tooltipText: "It applies already. Keep saves this version, so the notice goes."
+              onClicked: page.keepSkill(modelData.name, modelData.stamp)
+            }
+          }
         }
       }
+
+      Repeater {
+        model: page.skillLanes
+        DropLane {
+          id: agentLane
+          required property var modelData
+          width: communalLanes.laneWidth
+          laneId: modelData.id
+          title: modelData.label
+          subtitle: "Its own skills folder. Its switches are on its own Tools & skills tab."
+          count: page.ownSkills(modelData).length
+          emptyText: "No skills of its own."
+          refuse: function(p, copy, from) { return page.skillRefusal(p, laneId) }
+          onReceived: function(p, copy, from) { page.skillDropped(p, copy, from, laneId) }
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          Repeater {
+            model: page.ownSkills(agentLane.modelData)
+            SkillCard {
+              required property var modelData
+              width: parent.width
+              draggable: true
+              laneId: agentLane.laneId
+              payload: ({ name: modelData.name, from: agentLane.laneId, problem: modelData.problem || "" })
+              lanes: page.skillLaneList
+              onMoveRequested: function(to, copy) { page.skillDropped(payload, copy, agentLane.laneId, to) }
+              title: modelData.name
+              subtitle: modelData.description
+              status: modelData.problem !== "" ? "Not given: " + modelData.problem : ""
+              statusUrgent: modelData.problem !== ""
+              details: [{ label: "Where", value: modelData.path || "" }]
+              foreground: page.s.foreground
+              fontFamily: page.s.fontFamily
+            }
+          }
+        }
+      }
+    }
+    SkillMover {
+      id: skillMover
+      width: parent.width
+      labels: {
+        var out = { communal: "Communal" }
+        page.skillLanes.forEach(function(l) { out[l.id] = l.label })
+        return out
+      }
+      quarantined: page.s.setting("crewQuarantine", [])
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onChanged: { page.s.folders.refresh(); page.loadSkills() }
     }
     Text {
       width: parent.width

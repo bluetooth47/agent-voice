@@ -503,6 +503,8 @@ def test_a_skill_is_copied_in_whole_and_the_original_is_unchanged(tmp_path, monk
     (src / "run.sh").chmod(0o755)
     before = digest(src)
     got = skillscan.import_skill("claude-user:weekly", "sora")
+    # Since M12 the copy is recorded, so it can be undone: its op id.
+    assert got.pop("op")
     assert got == {"target": "sora", "name": "weekly", "files": 2,
                    "bytes": sum(p.stat().st_size for p in src.iterdir())}
     assert digest(src) == before
