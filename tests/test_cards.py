@@ -842,3 +842,18 @@ class TestReviewPass2:
     def test_no_daemon_at_all_is_still_a_plain_no(self, tmp_path):
         r = cardhelp.cli(tmp_path, "permit", "abcdef012345", "deny")
         assert r.returncode == 1 and json.loads(r.stdout)["ok"] is False
+
+
+def test_the_journal_says_how_a_lookup_was_judged_and_nothing_of_the_card(tmp_path, decoy):
+    lines = []
+    with cardhelp.live_desk(tmp_path, _verifier(tmp_path, decoy)) as desk:
+        desk.log = lines.append
+        t, card = cardhelp.post_async(desk, {"tool": "Bash", "summary": "secret-canary-91"})
+        _fake_shell(tmp_path, {"id": card["id"]})
+        cardhelp.cli(tmp_path, "pending", card["id"])
+        desk.answer(card["id"], "deny")
+        t.join(5)
+    shown = [ln for ln in lines if " shown" in ln]
+    assert shown[0] == f"card {card['id']} shown to the panel"
+    assert shown[1].startswith(f"card {card['id']} shown, unchecked: ")
+    assert not any("secret-canary-91" in ln for ln in lines)

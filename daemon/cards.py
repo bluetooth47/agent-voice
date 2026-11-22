@@ -733,7 +733,14 @@ class Listener:
                 if cid is not None and not (isinstance(cid, str) and CARD_ID.fullmatch(cid)):
                     return self._send(conn, {})
                 ok, why = self.verifier.panel(pid, 1, pidfd)
-                return self._send(conn, self.desk.show(cid, ok, why))
+                card = self.desk.show(cid, ok, why)
+                # Structural, never the card's words: whether the overlay's
+                # own lookup passed the check is what explains an Allow
+                # greyed out or refused, read from the journal.
+                if card:
+                    self.desk.log(f"card {card['id']} shown"
+                                  + (" to the panel" if ok else f", unchecked: {why}"))
+                return self._send(conn, card)
             if op == "answer":
                 cid, verdict = msg.get("id"), msg.get("verdict")
                 if not (isinstance(cid, str) and CARD_ID.fullmatch(cid)):
