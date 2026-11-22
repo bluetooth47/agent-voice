@@ -12,7 +12,8 @@
 // agent in the trash and one folder no agent uses. "tab" picks the Agent
 // details tab, "saveChats": false turns saving chats off in the scratch
 // shell.json, "failSave" saves the defaults so the failure shows, and
-// "width" draws the card that many pixels wide.
+// "width" draws the card that many pixels wide. With --config (agents1 or
+// agents8), sora's personality has two trait chips chosen (M6).
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -43,7 +44,10 @@ ShellRoot {
         "rm -f \"$d/communal/defaults.md\"; ln -s /etc/hostname \"$d/communal/defaults.md\"; " +
         "agentvoice agents create spare-agent >/dev/null; " +
         "agentvoice agents trash spare-agent --line <<< '{\"id\":\"spare-agent\",\"name\":\"spare\",\"label\":\"Spare\"}' >/dev/null; " +
-        "agentvoice agents create stray-folder >/dev/null",
+        "agentvoice agents create stray-folder >/dev/null; " +
+        // M6: with --config, sora (agents1/agents8) has chips chosen.
+        "printf '%s' '\"Traits: warm, brief.\\n\\nSynthetic: keeps a lighthouse, speaks plainly.\"' | " +
+        "agentvoice agents write sora personality.md --line >/dev/null 2>&1 || true",
         "seed", Quickshell.env("PREVIEW_DATA")]
       onRunningChanged: if (!running) {
         overlay.folders.refresh()

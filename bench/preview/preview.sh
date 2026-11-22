@@ -216,6 +216,17 @@ case "\${1:-}" in
     # Clearing this session's conversation is real and has no undo; a
     # preview's Clear button only logs it (M1). Reading passes through.
     if [ "\${2:-}" = clear ]; then printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0; fi ;;
+  try)
+    # Try it (M6) runs a real turn on a real agent and speaks: a preview
+    # logs it, keeps the draft it was handed in <out>.try for a target to
+    # check, and answers with a fixed line -- or refuses, under
+    # PREVIEW_TRY=refuse -- having run nothing.
+    IFS= read -r draft || true
+    printf 'agentvoice %s\n' "\$*" >> '$out.writes'
+    printf '%s\n' "\$draft" >> '$out.try'
+    sleep "\${PREVIEW_TRY_DELAY:-0}"
+    if [ "\${PREVIEW_TRY:-}" = refuse ]; then echo "another agent is answering; try again when it has finished" >&2; exit 1; fi
+    echo "Hello from the preview: nothing was run."; exit 0 ;;
   start|stop|restart|toggle|enable|disable|mic|open-mic|interrupt|lock|unlock|type|talk|talk-end|permit|wake-test|calibrate|pass|tasks|hud-preview)
     printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0 ;;
 esac

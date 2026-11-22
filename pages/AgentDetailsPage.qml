@@ -24,19 +24,27 @@ Column {
 
   // --- which agent -----------------------------------------------------------
   // Remembered on the overlay for the session (s.detailsAgent), so leaving
-  // the page and coming back finds the same agent.
-  readonly property var choices: {
-    var out = [{ label: s.mainLabel + "  (main)", value: "main" }]
+  // the page and coming back finds the same agent. One tab each (phase M6,
+  // item 9), main first, keyed by the agent's id: a rename changes the
+  // label and keeps the selection.
+  readonly property var agentTabs: {
+    var out = [{ id: "main", label: s.mainLabel || "Main agent",
+                 tone: s.statusTone(s.agentStatus("")),
+                 tooltip: "The main agent · " + s.agentStatus("") }]
     for (var i = 0; i < s.voiceAgents.length; i++) {
       var a = s.voiceAgents[i] || {}
       var id = s.agentId(a)
       if (id === "") continue
-      out.push({ label: (s.agentLabel(a) || id) + (a.enabled === false ? "  (switched off)" : ""), value: id })
+      var on = a.enabled !== false
+      var st = s.agentStatus(id)
+      out.push({ id: id, label: s.agentLabel(a) || id,
+                 tone: on ? s.statusTone(st) : "idle",
+                 tooltip: on ? st : "Switched off" })
     }
     return out
   }
   readonly property string target: {
-    for (var i = 0; i < choices.length; i++) if (choices[i].value === s.detailsAgent) return s.detailsAgent
+    for (var i = 0; i < agentTabs.length; i++) if (agentTabs[i].id === s.detailsAgent) return s.detailsAgent
     return "main"
   }
   readonly property bool isMain: target === "main"
@@ -117,26 +125,19 @@ Column {
     fontFamily: page.s.fontFamily
   }
 
-  Dropdown {
+  // Bound, never assigned: a pick asks the overlay, and `current` follows
+  // the page's agent, so a removed agent's tab can never stay chosen while
+  // the editors show the main one (the Phase 12 review's drop-down bug).
+  AgentTabs {
     id: agentPicker
     width: parent.width
-    showLabel: false
-    options: page.choices
-    value: page.target
+    agents: page.agentTabs
+    current: page.target
     foreground: page.s.foreground
+    accent: page.s.accent
+    urgent: page.s.urgent
     fontFamily: page.s.fontFamily
-    // The Dropdown assigns its own value on a pick, which would cut it loose
-    // from the page: it then kept naming a removed agent while the editors
-    // showed the main one (Phase 12 review). The Binding below puts it back
-    // whenever the page's agent changes. (An assignment of Qt.binding here
-    // did the same, but qmllint stopped resolving the Dropdown's type once
-    // the page grew in Phase 13 and failed the check on it.)
-    onChanged: function(v) { page.s.detailsAgent = v }
-  }
-  Binding {
-    target: agentPicker
-    property: "value"
-    value: page.target
+    onPicked: function(id) { page.s.detailsAgent = id }
   }
 
   // The knobs, summarised, with the way to change them.
@@ -242,17 +243,36 @@ Column {
     spacing: Style.space(16)
     visible: page.tab === "prompt"
 
-    SettingRow {
+    // Each box: a name, one line on what it is for (the rest on hover),
+    // starters while it is empty, the editor and its meter (phase M6).
+    Column {
       width: parent.width
-      stacked: true
-      label: "Role"
-      hint: "What " + page.name + " is for, and when to pass it work. The other agents are told " +
-            "this about it; " + page.name + " is not."
-      help: "One or two lines, up to 300 characters, such as “Quick answers and lookups; hand " +
-            "anything that needs code to Theo.” Every other agent sees it in its list of agents " +
-            "here, as information about " + page.name + ", never as instructions to follow."
-      foreground: page.s.foreground
-      fontFamily: page.s.fontFamily
+      spacing: Style.space(4)
+      Text {
+        text: "Role"
+        textFormat: Text.PlainText
+        color: page.s.foreground
+        font.family: page.s.fontFamily
+        font.pixelSize: Style.font.body
+        font.bold: true
+      }
+      Hint {
+        width: parent.width
+        text: "What " + page.name + " is for. The other agents see it; " + page.name + " does not."
+        detail: "One or two lines, such as “Quick answers and lookups; hand anything that needs " +
+                "code to Theo.” Every other agent sees it in its list of agents here, as " +
+                "information about " + page.name + ", never as instructions to follow."
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+      }
+      StarterChips {
+        width: parent.width
+        visible: page.offerStarters(roleEditor)
+        starters: page.starters.role || []
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onPicked: function(t) { roleEditor.fill(t) }
+      }
       FileEditor {
         id: roleEditor
         target: page.folderTarget
@@ -267,18 +287,81 @@ Column {
       }
     }
 
-    SettingRow {
+    Column {
       width: parent.width
-      stacked: true
-      label: "Personality"
-      hint: "Who " + page.name + " is: manner, tone, how it talks. Told to it on every turn."
-      help: "Up to 1500 characters, told to " + page.name + " under “About you”. For what it " +
-            "should do or remember, use its instructions below; for how it sounds, its voice is on " +
-            "the Agents page.\n\nA change is told to it from its next turn, but a conversation " +
-            "already under way keeps its history, and it may go on answering as it has been. A new " +
-            "conversation starts with the change."
-      foreground: page.s.foreground
-      fontFamily: page.s.fontFamily
+      spacing: Style.space(4)
+      Text {
+        text: "Personality"
+        textFormat: Text.PlainText
+        color: page.s.foreground
+        font.family: page.s.fontFamily
+        font.pixelSize: Style.font.body
+        font.bold: true
+      }
+      Hint {
+        width: parent.width
+        text: "Who " + page.name + " is: manner and tone. Told to it on every turn."
+        detail: "Up to 1500 characters, told to " + page.name + " under “About you”. For what " +
+                "it should do or remember, use its instructions below; for how it sounds, its " +
+                "voice is on the Agents page.\n\nA change is told to it from its next turn, but " +
+                "a conversation already under way keeps its history, and it may go on answering " +
+                "as it has been. A new conversation starts with the change."
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+      }
+      // The trait chips: one managed line at the top of personality.md,
+      // rewritten by `agents traits apply` and saved by the editor below,
+      // so typed text is never touched and the save keeps its stamp check.
+      Repeater {
+        model: page.traitRows
+        Row {
+          required property var modelData
+          spacing: Style.space(8)
+          Text {
+            width: Style.space(76)
+            height: Style.spacing.controlHeight
+            verticalAlignment: Text.AlignVCenter
+            text: modelData.label
+            textFormat: Text.PlainText
+            color: page.s.dim
+            font.family: page.s.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+          ToggleChips {
+            width: Math.max(implicitWidth, Style.space(200))
+            options: modelData.values.map(function(v) {
+              return { value: v, label: v.charAt(0).toUpperCase() + v.slice(1),
+                       disabledReason: page.traitsWhyNot }
+            })
+            chipStates: page.chipStates(modelData.id)
+            foreground: page.s.foreground
+            accent: page.s.accent
+            urgent: page.s.urgent
+            fontFamily: page.s.fontFamily
+            onToggled: function(value, state) {
+              page.setTrait(modelData.id, state === "on" ? value : null)
+            }
+          }
+        }
+      }
+      Hint {
+        width: parent.width
+        text: page.traitsNote !== "" ? page.traitsNote
+              : "The chips write one line at the top: “Traits: warm, brief, casual.”"
+        tone: page.traitsNote !== "" ? "warn" : ""
+        detail: "Only that line changes; everything you type below it is kept as it is. A " +
+                "value you typed into the line yourself is kept too."
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+      }
+      StarterChips {
+        width: parent.width
+        visible: page.offerStarters(personalityEditor)
+        starters: page.starters.personality || []
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onPicked: function(t) { personalityEditor.fill(t) }
+      }
       FileEditor {
         id: personalityEditor
         target: page.folderTarget
@@ -290,18 +373,73 @@ Column {
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
       }
+      // Try it: one sentence in its voice from what is in the boxes now.
+      Flow {
+        width: parent.width
+        spacing: Style.space(10)
+        Button {
+          id: tryButton
+          text: tryer.running ? "Trying…" : "▶ Try it"
+          bordered: true
+          focusable: true
+          enabled: !tryer.running && !tryCooldown.running && !page.reserved
+          tooltipText: "Runs one short turn on " + page.name + "'s program, with no tools, and " +
+                       "says its first sentence aloud. Uses what is in the boxes now, saved or " +
+                       "not. Never saved to a chat. One try every 10 seconds."
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          onClicked: page.tryIt()
+        }
+        Hint {
+          width: Math.min(implicitWidth, parent.width)
+          height: tryButton.height
+          verticalAlignment: Text.AlignVCenter
+          text: tryCooldown.running && !tryer.running ? "One try every 10 seconds."
+                : "Hear one sentence in " + page.name + "'s voice. Costs a short turn."
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+        }
+      }
+      Text {
+        width: parent.width
+        visible: page.tryNote !== "" && page.tryFor === page.target
+        wrapMode: Text.WordWrap
+        textFormat: Text.PlainText
+        text: page.tryNote
+        color: page.trySaid ? page.s.foreground : page.s.urgent
+        font.family: page.s.fontFamily
+        font.pixelSize: Style.font.caption
+      }
     }
 
-    SettingRow {
+    Column {
       width: parent.width
-      stacked: true
-      label: "Standing instructions"
-      hint: "What " + page.name + " should always do or keep in mind. Changing them keeps the conversation."
-      help: "How to address you, what to keep in mind, how long to talk. They sit after the " +
-            "rule that replies are spoken, so asking for lists or code blocks will still be read out " +
-            "as speech. Up to 2000 characters."
-      foreground: page.s.foreground
-      fontFamily: page.s.fontFamily
+      spacing: Style.space(4)
+      Text {
+        text: "Standing instructions"
+        textFormat: Text.PlainText
+        color: page.s.foreground
+        font.family: page.s.fontFamily
+        font.pixelSize: Style.font.body
+        font.bold: true
+      }
+      Hint {
+        width: parent.width
+        text: "What " + page.name + " should always do or keep in mind."
+        detail: "How to address you, what to keep in mind, how long to talk. They sit after " +
+                "the rule that replies are spoken, so asking for lists or code blocks will still " +
+                "be read out as speech. Up to 2000 characters. Changing them keeps the conversation."
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+      }
+      StarterChips {
+        width: parent.width
+        visible: page.offerStarters(instructionsEditor)
+        starters: page.starters.instructions || []
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onPicked: function(t) { instructionsEditor.fill(t) }
+      }
       // The old setting (`agentInstructions`, or the entry's `instructions`)
       // only until instructions.md exists (Phase 10).
       FileEditor {
@@ -378,6 +516,174 @@ Column {
     }
   }
 
+  // --- starters, trait chips and Try it (phase M6, item 10) -------------------
+  // The starters, read once: they ship with the plugin.
+  property var starters: ({})
+  Process {
+    id: starterReader
+    command: ["agentvoice", "agents", "templates", "--json"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          var d = JSON.parse(String(text))
+          if (d && typeof d === "object") page.starters = d
+        } catch (e) { }
+      }
+    }
+  }
+  // Offered only for a box that is read, empty and not being typed in.
+  function offerStarters(ed) {
+    return !page.reserved && ed.loaded && !ed.holding && !ed.editing && ed.current.trim() === ""
+  }
+
+  // The chips' rows, in the order traits.py writes them.
+  readonly property var traitRows: [
+    { id: "tone", label: "Tone", values: ["warm", "dry", "playful"] },
+    { id: "length", label: "Length", values: ["brief", "detailed"] },
+    { id: "formality", label: "Formality", values: ["casual", "formal"] }
+  ]
+  // What the managed line in the personality box says now, from `agents
+  // traits apply` on the box's text: {traits: {tone, length, formality}, ...}.
+  property var traitsNow: null
+  property string traitsFor: ""
+  property string traitsNote: ""
+  readonly property string traitsWhyNot: page.reserved ? "this agent has no folder"
+                                         : !personalityEditor.loaded ? "reading its personality first"
+                                         : traitWriter.running ? "saving the last choice"
+                                         : ""
+  function chipStates(category) {
+    var out = {}
+    var now = page.traitsNow && page.traitsFor === page.target ? page.traitsNow.traits || {} : {}
+    for (var r of page.traitRows)
+      if (r.id === category)
+        for (var v of r.values) out[v] = now[category] === v ? "on" : "off"
+    return out
+  }
+  function readTraits() {
+    if (page.reserved || !personalityEditor.loaded) return
+    if (traitReader.running) { traitDelay.restart(); return }
+    traitReader.forTarget = page.target
+    traitReader.pending = JSON.stringify({ text: personalityEditor.current }) + "\n"
+    traitReader.running = true
+  }
+  // One choice: the box's text with its line rewritten, then saved by the
+  // editor on its own stamp, exactly as if it had been typed.
+  function setTrait(category, value) {
+    if (page.traitsWhyNot !== "" || traitWriter.running) return
+    var change = {}
+    change[category] = value
+    page.traitsNote = ""
+    traitWriter.forTarget = page.target
+    traitWriter.pending = JSON.stringify({ text: personalityEditor.current, traits: change }) + "\n"
+    traitWriter.running = true
+  }
+  Timer { id: traitDelay; interval: 300; onTriggered: page.readTraits() }
+  Connections {
+    target: personalityEditor
+    function onCurrentChanged() { traitDelay.restart() }
+    function onLoadedChanged() { traitDelay.restart() }
+  }
+  Process {
+    id: traitReader
+    property string forTarget: ""
+    property string pending: ""
+    command: ["agentvoice", "agents", "traits", "apply"]
+    stdinEnabled: true
+    onStarted: { write(traitReader.pending); traitReader.pending = "" }
+    stdout: StdioCollector {
+      onStreamFinished: {
+        if (traitReader.forTarget !== page.target) return
+        try {
+          var d = JSON.parse(String(text))
+          if (d && d.traits) { page.traitsNow = d; page.traitsFor = traitReader.forTarget }
+        } catch (e) { }
+      }
+    }
+  }
+  Process {
+    id: traitWriter
+    property string forTarget: ""
+    property string pending: ""
+    property string err: ""
+    command: ["agentvoice", "agents", "traits", "apply"]
+    stdinEnabled: true
+    onStarted: { traitWriter.err = ""; write(traitWriter.pending); traitWriter.pending = "" }
+    stdout: StdioCollector {
+      onStreamFinished: {
+        if (traitWriter.forTarget !== page.target) return
+        var d
+        try { d = JSON.parse(String(text)) } catch (e) { return }
+        if (!d || typeof d.text !== "string") return
+        page.traitsNow = d
+        page.traitsFor = traitWriter.forTarget
+        personalityEditor.fill(d.text)
+      }
+    }
+    stderr: StdioCollector {
+      onStreamFinished: {
+        var t = String(text).trim()
+        if (t !== "" && traitWriter.forTarget === page.target)
+          page.traitsNote = "Not changed: " + t.replace(/^agentvoice agents: /, "").split("\n").pop()
+      }
+    }
+  }
+
+  // Try it. The draft goes on stdin as one JSON line; the sentence comes
+  // back on stdout, or why not on stderr (the service off, the screen
+  // locked, an agent busy, the 10 s limit -- the daemon decides).
+  property string tryNote: ""
+  property string tryFor: ""
+  property bool trySaid: false
+  function tryIt() {
+    if (tryer.running || page.reserved) return
+    page.tryNote = ""
+    page.trySaid = false
+    tryer.forTarget = page.target
+    tryer.launched = false
+    tryer.answered = false
+    tryer.command = ["agentvoice", "try", page.target]
+    tryer.pending = JSON.stringify({ personality: personalityEditor.current,
+                                     instructions: instructionsEditor.current }) + "\n"
+    tryer.running = true
+    tryCooldown.restart()
+  }
+  Timer { id: tryCooldown; interval: 10000 }
+  Process {
+    id: tryer
+    property string forTarget: ""
+    property string pending: ""
+    property bool launched: false
+    property bool answered: false
+    stdinEnabled: true
+    onStarted: { tryer.launched = true; write(tryer.pending); tryer.pending = "" }
+    // `running` going false, not onExited: a spawn that never started emits
+    // no exit, and a press that did nothing must say so.
+    onRunningChanged: if (!running && !launched) {
+      page.tryFor = tryer.forTarget
+      page.trySaid = false
+      page.tryNote = "Not tried: the agentvoice command could not be run."
+    }
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var t = String(text).trim()
+        if (t === "") return
+        tryer.answered = true
+        page.tryFor = tryer.forTarget
+        page.trySaid = true
+        page.tryNote = "Said: “" + t + "”"
+      }
+    }
+    stderr: StdioCollector {
+      onStreamFinished: {
+        var t = String(text).trim()
+        if (t === "" || tryer.answered) return
+        page.tryFor = tryer.forTarget
+        page.trySaid = false
+        page.tryNote = "Not tried: " + t.split("\n").pop()
+      }
+    }
+  }
+
   property var previewParts: []
   property string previewError: ""
   // Everything the preview is built from: every folder (the other agents'
@@ -398,8 +704,11 @@ Column {
                                                          s.setting("mainProgram", ""),
                                                          s.mainAgent, s.usingEndpoint])
   onPreviewWatchChanged: { previewDelay.restart(); catalogDelay.restart() }
-  onTargetChanged: { previewParts = []; catalog = null; removeButton.disarm(); loadPreview(); loadCatalog() }
-  Component.onCompleted: { loadPreview(); loadCatalog() }
+  onTargetChanged: {
+    previewParts = []; catalog = null; removeButton.disarm(); loadPreview(); loadCatalog()
+    traitsNow = null; traitsNote = ""; traitDelay.restart()
+  }
+  Component.onCompleted: { loadPreview(); loadCatalog(); starterReader.running = true }
   Timer { id: previewDelay; interval: 250; onTriggered: page.loadPreview() }
 
   // A source path, in words.

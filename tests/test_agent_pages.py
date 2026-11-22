@@ -196,7 +196,8 @@ def test_an_edit_made_during_a_save_is_saved_next_not_dropped():
 
 def test_an_over_long_text_is_refused_whole_never_cut():
     save = BOX[BOX.index("function save("):BOX.index("function keepMine(")]
-    assert save.index("fe.chars(t) > fe.limit") < save.index("writer.running = true")
+    # Counted as the agent would be told it, since M6 (the meters).
+    assert save.index("fe.sentChars(t) > fe.limit") < save.index("writer.running = true")
     assert "cutOff: false" in BOX
     ibox = text("ui/InstructionsBox.qml")
     commit = ibox[ibox.index("function commit()"):]
@@ -256,11 +257,12 @@ def test_a_restored_entry_takes_the_id_its_folder_came_back_under():
 
 
 def test_the_picker_and_the_tab_stay_bound():
-    # A Binding element puts the picker back on the page's agent whenever it
-    # changes, after the Dropdown's own assignment cut it loose (Phase 13:
-    # the Qt.binding assignment it replaces upset qmllint).
+    # Since M6 the picker is AgentTabs: its `current` is bound to the page's
+    # agent and a pick only asks the overlay, so it can never stay on a
+    # removed agent the way the Dropdown's own assignment once did.
     import re
-    assert re.search(r'Binding \{\s*target: agentPicker\s*property: "value"\s*value: page\.target', DETAILS)
+    assert re.search(r'AgentTabs \{\s*id: agentPicker[^}]*current: page\.target', DETAILS)
+    assert not re.search(r"\bcurrent\s*=", DETAILS[DETAILS.index("AgentTabs {"):][:900])
     assert "readonly property string tab: s.detailsTab" in DETAILS
     assert "function pickTab(id) { s.detailsTab = id }" in DETAILS
 

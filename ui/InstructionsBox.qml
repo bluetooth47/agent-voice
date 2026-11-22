@@ -29,6 +29,8 @@ Item {
   property real minHeight: Style.space(84)
   // What the counter says while the box is being typed in.
   property string editingHint: "saved when you click away"
+  // Off for a caller that draws its own count (FileEditor's meter).
+  property bool showCounter: true
   property color foreground: Commons.Color.foreground
   property color accent: Commons.Color.accent
   property string fontFamily: Style.font.family
@@ -48,7 +50,7 @@ Item {
 
   width: parent ? parent.width : 300
   // No room kept for the counter while it has nothing to say.
-  implicitHeight: frame.height + (counter.text !== "" ? counter.height + Style.space(4) : 0)
+  implicitHeight: frame.height + (counter.visible ? counter.height + Style.space(4) : 0)
 
   onValueChanged: if (!area.activeFocus) area.text = value
   Component.onCompleted: area.text = value
@@ -123,6 +125,7 @@ Item {
 
   Text {
     id: counter
+    visible: box.showCounter && text !== ""
     anchors.top: frame.bottom
     anchors.topMargin: Style.space(4)
     anchors.right: parent.right

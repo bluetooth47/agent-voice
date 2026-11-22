@@ -414,6 +414,19 @@ Each is woken by its own name and has its own program, model, effort,
 voice, permission level and folder, and its own conversation. Say
 "computer" for the main agent and "jarvis" for the one called jarvis.
 
+Settings → **Agent details** holds what each agent is told, one tab per
+agent: its role (what the other agents are told about it), its personality
+and its standing instructions. Each box has a meter counting the characters
+the agent is actually told, against its budget (300, 1500 and 2000), and
+offers a few starters while it is empty. The tone, length and formality
+chips write one line at the top of the personality, `Traits: warm, brief,
+casual.`, and never touch what you typed below it. **▶ Try it** runs one
+short turn on the agent's program, with no tools and nothing saved, and
+says its first sentence aloud in the agent's voice, using what is in the
+boxes at that moment, saved or not. It is refused, with the reason, while
+the screen is locked, while an agent is busy, or within 10 seconds of the
+last try.
+
 They can work at the same time: while one is thinking or running tools the
 microphone keeps listening, so you can give a second agent something to do
 before the first has answered. Speaking is still one at a time, because

@@ -71,6 +71,7 @@ import collab  # noqa: E402
 import narration  # noqa: E402
 import omarchy_skill  # noqa: E402
 import readout  # noqa: E402
+import try_it  # noqa: E402
 import sessions  # noqa: E402
 from runtime import (  # noqa: E402
     REPLY_MAX, RUNTIME_DIR, Config, History, Speaker, StateFile, instructions_text, speed_pct,
@@ -2741,6 +2742,133 @@ class Daemon:
             # nothing else publishes -- so the readout stayed on "speaking"
             # until the microphone came back (phase M2, testresults #10).
             self._publish(**last)
+
+    # --- Try it (phase M6): one sentence on the draft personality -----------
+    # The rules and the request format are in try_it.py; this is the part
+    # that needs the daemon: who is busy, the agent's program and voice.
+
+    def take_try(self):
+        """The oldest `agentvoice try` request, as try_it.take() gives it."""
+        now = time.time()
+        if now - getattr(self, "_try_polled", 0.0) < 0.2:
+            return None
+        self._try_polled = now
+        return try_it.take(now)
+
+    def try_adapter(self, p: Persona, req: dict):
+        """A throwaway adapter for p's program that may only talk: lowest
+        level, none of the tools Agent Voice adds, no skills, no session kept,
+        and the draft personality and instructions in place of the saved ones
+        (absent from the request: the saved ones). None when p has none."""
+        have = p.agent
+        if have is None:
+            return None
+        program = getattr(have, "name", "") or None
+        endpoint = None
+        if hasattr(have, "base_url"):
+            endpoint = (self.cfg.main_endpoint() if p is self._main
+                        else (p.spec or {}).get("endpoint"))
+            if not endpoint:
+                return None
+            endpoint = {**endpoint, "key": endpoint_key(_host(endpoint["url"]))}
+            program = None
+        instructions = req.get("instructions")
+        side = load_adapter(name=program, endpoint=endpoint, spoken=True,
+                            level="ask", ask_permission=True,
+                            cwd=getattr(have, "cwd", None),
+                            model=getattr(have, "model", None),
+                            effort=getattr(have, "effort", None),
+                            instructions=(instructions if instructions is not None
+                                          else getattr(have, "instructions", "")),
+                            named=getattr(have, "named", "") or "")
+        if side is None:
+            return None
+        side.ephemeral = True
+        side.no_tools = True
+        for attr in ("desktop_tools", "browser_tools", "crew_tools"):
+            if hasattr(side, attr):
+                setattr(side, attr, False)
+        if hasattr(side, "skill_dir"):
+            side.skill_dir = None
+        side.skill_text = ""
+        side.parts = try_it.draft_parts(getattr(have, "parts", None), req.get("personality"))
+        return side
+
+    def handle_try(self, rid: str, req: dict | None) -> None:
+        """`agentvoice try AGENT`, between turns, from the run loop: refuse
+        with the reason, or run the side turn and say its first sentence in
+        the agent's voice. Never a chat, never the readout; the journal gets
+        the timing and the length, never the words."""
+        if req is None:
+            try_it.answer(rid, "refused", "the request could not be read")
+            return
+        if self.pipe is not None:
+            self.refresh()
+        p = self._persona_by_id("" if req["agent"] == "main" else req["agent"])
+        label = (p.label or p.name or req["agent"]) if p is not None else req["agent"]
+        why = try_it.refusal(
+            locked=self.locked, yielded=self.yielded, known=p is not None, label=label,
+            has_program=p is not None and p.agent is not None,
+            problem=(getattr(p, "problem", "") or "") if p is not None else "",
+            target_busy=p is not None and p.busy,
+            other_busy=any(q.busy for q in self.personas() if q is not p) or self._speaking,
+            since_last=time.monotonic() - getattr(self, "_try_at", -1e9),
+            stale=bool(req.get("stale")))
+        side = None
+        if not why:
+            try:
+                side = self.try_adapter(p, req)
+            except Exception as e:          # noqa: BLE001
+                print(f"  {YEL}try: could not build the agent ({type(e).__name__}){OFF}",
+                      flush=True)
+            if side is None:
+                why = f"{label}'s program could not be started"
+        if why:
+            print(f"  {DIM}(try for {req['agent']} refused){OFF}", flush=True)
+            try_it.answer(rid, "refused", why)
+            return
+        self._try_at = time.monotonic()
+        try_it.answer(rid, "accepted")
+        t0 = time.monotonic()
+        timer = threading.Timer(try_it.TURN_TIMEOUT_S, side.cancel)
+        timer.daemon = True
+        timer.start()
+        sentence, crash = "", ""
+        try:
+            sentence = try_it.first_sentence(side.send(try_it.PROMPT, None))
+        except Exception as e:              # noqa: BLE001
+            crash = type(e).__name__
+        finally:
+            timer.cancel()
+            try:
+                side.cancel()               # thrown away: no process left behind
+            except Exception:
+                pass
+        took = time.monotonic() - t0
+        # The length and the exception's class name: never the words.
+        size = len(sentence)
+        print(f"  try: {req['agent']} answered in {took:.1f}s ({size} chars"
+              f"{', ' + crash if crash else ''})", flush=True)
+        if not sentence:
+            self.deafen(0)                  # what the microphone queued meanwhile
+            try_it.answer(rid, "failed", "it took too long" if took >= try_it.TURN_TIMEOUT_S
+                          else f"{label} gave no answer")
+            return
+        # Said the way a typed reply is: through speak(), which checks the
+        # lock and a lent microphone itself before and during the sentence;
+        # `typed` lets it speak while muted, as a typed turn does.
+        was = getattr(self._here, "typed", False)
+        self._here.typed = True
+        try:
+            said = self._say_for(p, sentence)
+        finally:
+            self._here.typed = was
+        if said:
+            try_it.answer(rid, "said", text=sentence)
+        else:
+            try_it.answer(rid, "failed", "the screen locked" if self.locked
+                          else "the microphone was lent to a call" if self.yielded
+                          else "it was stopped before the end")
 
     def _publish(self, **extra):
         # "locked" is its own state rather than "off": the panel should be
@@ -5652,6 +5780,11 @@ class Daemon:
                     typed = self.take_typed()
                     if typed is not None:
                         self.handle_typed(*typed, crew)
+                        continue
+                    # phase M6: Agent details' Try it, between captures too.
+                    trial = self.take_try()
+                    if trial is not None:
+                        self.handle_try(*trial)
                         continue
                     # collab: pass requests from the CLI and the sheet, and
                     # tasks whose cancel window or queue has cleared.

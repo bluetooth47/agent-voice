@@ -234,7 +234,9 @@ This file is the entry point (`main()`), and its structure is:
 |---|---|
 | `runtime.py` | `Config`: precedence shell.json → TOML → `DEFAULTS`, reloaded by mtime stamp, with per-agent getters `level_for`, `model_for`, `effort_for`, `agents()`, `all_agents()` (switched-off ones too), `tools_for`, `notes_write_for`, `collaboration_for`, `accepts_work_for`. `settings_readable()` is False when the entry is missing, the TOML is broken or shell.json repeats a key; guards then close. Also `StateFile`, `History`, `Speaker` (Piper TTS). Helpers: `agent_id_for`, `display_name`, `instructions_text`, `speed_pct`, `tool_choices`, `notes_choice`, `collab_choice`. |
 | `paths.py` | Every path, plus `scope_root` (the project root for permission scoping; returns `None` rather than HOME on purpose). |
-| `agentfs.py` | **Owns the agent and communal folders** (Phase 9): fixed file names and budgets (role 300, personality 1500, instructions 2000, rules/defaults 1500, skill 20000 chars), refuses every symlink, reads never fail a turn, every write saved to `.history/` (10 kept) and detects outside edits (Keep = `ack`, Revert). Also create/trash/restore/export, skills parsing + index + `plugin_dir` (Phase 13), `catalog` (which tools a program can use), roster lines, `parts`/`preview` (prompt pieces), and `migrate` (Phase 10). CLI behind `agentvoice agents`. |
+| `agentfs.py` | **Owns the agent and communal folders** (Phase 9): fixed file names and budgets (role 300, personality 1500, instructions 2000, rules/defaults 1500, skill 20000 chars), refuses every symlink, reads never fail a turn, every write saved to `.history/` (10 kept) and detects outside edits (Keep = `ack`, Revert). Also create/trash/restore/export, skills parsing + index + `plugin_dir` (Phase 13), `catalog` (which tools a program can use), roster lines, `parts`/`preview` (prompt pieces), and `migrate` (Phase 10). Since M6, `starters()` (the templates offered for an empty box, `templates/{role,personality,instructions}/*.md`, first line a label comment) and the `traits get|set|apply` and `templates` verbs. CLI behind `agentvoice agents`. |
+| `traits.py` | M6: the trait chips' one managed line at the top of `personality.md` (`Traits: warm, brief, casual.`), after any leading comment. `parse`, `apply`: free text is returned byte for byte, unknown hand-typed values are kept, a category holds one value. Pure. |
+| `try_it.py` | M6: Try it. `refusal()` (locked, lent out, stale, unknown, no program, busy, `MIN_GAP_S` 10 s), the request and status files in `$RUNDIR/try/` (0600 in 0700; the draft on stdin, never argv), `draft_parts`, `first_sentence`, and the CLI's half (`try_it.py client AGENT`). The daemon's half is `Daemon.take_try` / `try_adapter` / `handle_try`: a throwaway adapter at level ask with `no_tools` (Claude: `--tools "" --strict-mcp-config`, recorded in `tests/fixtures/try/`), none of Agent Voice's tools, `ephemeral`; never a chat, never the readout; the journal gets timing and length only. |
 | `notes.py` | Notes store (Phase 14) under `agents/<id>/notes/` and `communal/notes/`: `.meta.json` (rev, author, hash, tainted, lock), 20 versions kept, base-rev conflict check, `append` without base, deny/lock checked inside the lock, corrupt meta locks everything, hand edits show as "you". |
 | `collab.py` | Collaboration (Phases 15–16): `Task` (kinds pass/delegate/ask/message; pending → active → completed/cancelled/failed/refused), the board, checks at request and at turn start, the pass order (tell the user first, then share the chat), per-chat target sessions, `crew/origin` files, the call socket server, limits (`DEPTH_MAX` 3, `OPEN_DELEGATIONS_MAX` 2, `RATE_PER_MIN` 6, `QUESTION_TIMEOUT_S` 120, `CANCEL_WINDOW_S` 3), wrapping of returned text as information. CLI: `collab.py pass|tasks`. |
 | `crew_mcp.py` | MCP stdio server `agentvoice-crew`, started for every Claude Code and Codex agent regardless of `desktopTools`. 11 tools: `notes_list/read/write/append`, `list_agents`, `ask_agent`, `delegate`, `pass_conversation`, `message_agent`, `task_status`, `cancel_task`. Collaboration tools hidden when the agent's `collaboration` is off. argv `crew_mcp.py <program> [<id>] [--guard]`; `--guard` = Codex below Trusted, which has no hook. |
@@ -333,7 +335,11 @@ Notes and collaboration exist only for Claude Code and Codex
   detailshots, folders, notes, shared, tools, persist, and since M5
   agentclicks (the same actions on the old and new Agents page, to diff the
   writes) and agentshots (one scene per shot; `--arg '{"width":560}'` draws
-  the narrow layout, `'{"keys":true}'` walks the page by keyboard). Options
+  the narrow layout, `'{"keys":true}'` walks the page by keyboard). Since
+  M6 `details` also walks the agent tabs, a rename, a starter, the trait
+  chips, the meter and Try it (`agentvoice try` is a stub that logs the
+  draft to `<out>.try`; `PREVIEW_TRY=refuse` makes it refuse), and
+  `detailshots` with `--config` gives sora two chips chosen. Options
   include `--state FILE`, `--theme`, `--live-config`, `--config FILE` (a
   synthetic shell.json from `bench/preview/configs/`, so nothing real is
   shown or written) and `--arg '{"page":…}'`. It never moves the real
@@ -345,7 +351,7 @@ Notes and collaboration exist only for Claude Code and Codex
 |---|---|
 | `OverviewPage.qml` | Status and quick links. |
 | `AgentsPage.qml` | One `AgentBlock` per agent, the main one included (M5): a `HeaderStrip` (state dot, name, wake phrase, pills for level, program · model, effort, voice · speed) that unfolds into a `CardGrid` of cards: Identity (name and wake phrase, runs on, `ModelPicker`), Endpoint (endpoint agents), Permissions, Voice (▶ Test plays the agent's voice at its speed), Tools (`ToolSwitches` part `tools`: chips with where each value comes from), Collaboration & notes (part `collab`), Agent (on/off, wake model, the folder summary linking to Agent details, remove). Every write goes through `writeField(index, field, value)`, which names each key and field; `test_agents_page.py` runs those functions in node. The tools for every agent are on Communal → Tools since M5 (bug E). |
-| `AgentDetailsPage.qml` | One agent's folder (Phase 12). Tabs: Personality & instructions (role, personality, instructions editors + prompt preview), Tools & skills, Notes, Chats, Advanced (open/export folder, remove, trash with restore). Writes no settings. |
+| `AgentDetailsPage.qml` | One agent's folder (Phase 12). Agents picked by `AgentTabs`, keyed by id, main first (M6). Tabs: Personality & instructions (role, personality, instructions editors, each with a one-line `Hint`, starters while empty and a meter; trait chips that rewrite the managed line through `agents traits apply` and save through the personality editor; ▶ Try it, `agentvoice try` with the draft on stdin; the prompt preview), Tools & skills, Notes, Chats, Advanced (open/export folder, remove, trash with restore). Writes no settings. |
 | `CommunalPage.qml` | Tabs: Rules & defaults, Tools (desktop tools, browser and Omarchy skill for every agent; moved from the Agents page in M5), Skills, Notes, Chats (multi-agent conversations). States plainly that rules are text, not enforcement. Writes only those three settings. |
 | `ListeningPage.qml` | Wake engine, thresholds, gate, Advanced wake tab. |
 | `VoicePage.qml` | Voice, speed, voice library. |
@@ -374,7 +380,9 @@ Notes and collaboration exist only for Claude Code and Codex
 | `ToggleChips.qml` | Row of on/off (optionally inherit) chips; a disabled chip says why. |
 | `EndpointEditor.qml` | Endpoint URL/model/key/test editor. |
 | `ExchangeItem.qml` | One exchange in the conversation view; agent-to-agent questions folded to one line. |
-| `FileEditor.qml` | The one editor for each folder file; Keep/Revert for outside edits, base-stamp conflicts. |
+| `FileEditor.qml` | The one editor for each folder file; Keep/Revert for outside edits, base-stamp conflicts. Since M6: `sentChars` (agentfs.clean's count, checked against it in node), a `BudgetMeter`, `current` (the draft) and `fill(text)` (a starter or the chips' text, saved like typing). |
+| `BudgetMeter.qml` | M6: a thin bar and "used / limit", toned from 85% and past the budget. |
+| `StarterChips.qml` | M6: "Start from:" and one button per template; hands the text up. |
 | `InstructionsBox.qml` | Free-text box that saves on focus loss. |
 | `LevelMeter.qml` | Mic level meter. |
 | `NotesPanel.qml` | One notes folder: list, editor, history with View/Restore, lock, Open folder. |
@@ -487,6 +495,8 @@ an unknown agent id gets deny / off.
 | `pass TO [--from ID] [--chat ID] < brief` | Pass the conversation to another agent (collab.py). |
 | `tasks [--json]`, `tasks cancel ID` | Collaboration tasks; cancel sends `task-cancel`. |
 | `agents list\|show\|create\|trash\|restore\|trash-list\|write\|history\|revert\|ack\|preview\|export\|skills\|catalog\|migrate …` | Agent folders (agentfs.py); text on stdin. |
+| `agents traits get ID\|set ID [--base S]\|apply`, `agents templates` | M6: the trait chips' line (choices and text on stdin as JSON); the starters. |
+| `try AGENT < draft.json` | M6: Try it. One sentence in AGENT's voice from a no-tools side turn on the draft; refused with the reason. |
 | `agents notes TARGET list\|show\|write\|lock\|unlock\|history\|version\|restore\|folder` | Notes (notes.py via agentfs). |
 | `endpoint clean\|models\|test\|key` | The endpoint editor. |
 | `status` (JSON), `is-active` | Status for scripts and the bar. |

@@ -1,7 +1,8 @@
 AdvancedSection 1.0 AdvancedSection.qml
 AgentTabs 1.0 AgentTabs.qml
-CardGrid 1.0 CardGrid.qml
+BudgetMeter 1.0 BudgetMeter.qml
 Card 1.0 Card.qml
+CardGrid 1.0 CardGrid.qml
 ChatBubble 1.0 ChatBubble.qml
 CompactSelector 1.0 CompactSelector.qml
 DangerButton 1.0 DangerButton.qml
@@ -29,6 +30,7 @@ SettingRow 1.0 SettingRow.qml
 SettingsStore 1.0 SettingsStore.qml
 SidebarNav 1.0 SidebarNav.qml
 StageBlock 1.0 StageBlock.qml
+StarterChips 1.0 StarterChips.qml
 StatTile 1.0 StatTile.qml
 StatusCard 1.0 StatusCard.qml
 TabStrip 1.0 TabStrip.qml

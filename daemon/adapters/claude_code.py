@@ -330,8 +330,13 @@ class ClaudeCode(Adapter):
             # Print mode leaves Claude in Chrome off even when it is the
             # default in the user's own settings, so it is asked for or
             # refused outright, from browserTools (plan 12d).
-            "--chrome" if self.browser_tools else "--no-chrome",
+            "--chrome" if self.browser_tools and not self.no_tools else "--no-chrome",
         ]
+        if self.no_tools:
+            # Try it (phase M6): a sentence and nothing else. No built-in
+            # tool, and no MCP server -- not even the user's own, which
+            # `claude -p` otherwise loads from their settings.
+            argv += ["--tools", "", "--strict-mcp-config"]
         if getattr(self, "ephemeral", False):
             # A quiet side turn (Phase 16, ask_agent): nothing kept on disk.
             argv.append("--no-session-persistence")
@@ -354,20 +359,20 @@ class ClaudeCode(Adapter):
                 TRUSTED_MATCHER[len(BROWSER_MATCHER) + 1:]
             argv += ["--settings", self._hook_settings(self.named, matcher)]
         servers: dict = {}
-        if self.desktop_tools:
+        if self.desktop_tools and not self.no_tools:
             # Agent Voice's desktop tools (plan 12a), as this agent: the
             # server files a screenshot question under the same id the hook
             # uses. Added to the user's own MCP servers, not instead of them.
             import desktop_mcp
             servers.update(desktop_mcp.servers(self.name, self.named))
-        if self.crew_tools:
+        if self.crew_tools and not self.no_tools:
             # The notes tools (Phase 14), as this agent, on its own
             # condition: never the desktop tools'. One config for both.
             import crew_mcp
             servers.update(crew_mcp.servers(self.name, self.named, browser=self.browser_tools))
         if servers:
             argv += ["--mcp-config", json.dumps({"mcpServers": servers})]
-        if self.skill_dir:
+        if self.skill_dir and not self.no_tools:
             # The Omarchy skill (plan 12b), loaded as a plugin for this
             # process only: nothing is written into ~/.claude.
             argv += ["--plugin-dir", self.skill_dir]

@@ -1,0 +1,24 @@
+{
+ "recorded": "2026-11-22, claude 2.1.330, synthetic personality and prompt (phase M6)",
+ "flags": [
+  "--tools",
+  "",
+  "--strict-mcp-config",
+  "--no-chrome",
+  "--no-session-persistence"
+ ],
+ "asked": "the Try it prompt, plus: list the files in this folder using a tool if you have one",
+ "init": {
+  "tools": [],
+  "mcp_servers": [],
+  "permissionMode": "auto"
+ },
+ "tool_uses": [],
+ "text": [
+  "Ahoy there, friend, the lamp is lit and the sea is calm, so what shall we set sail on today?"
+ ],
+ "result": {
+  "subtype": "success",
+  "is_error": false
+ }
+}

@@ -94,6 +94,9 @@ Column {
   readonly property string shown: exists ? saved : fallback.trim()
   readonly property bool busy: reader.running || writer.running || fixer.running
   readonly property alias editing: box.editing
+  // What is in the box now, saved or not: the draft Try it speaks from, and
+  // the text the trait chips rewrite (phase M6).
+  readonly property alias current: box.text
 
   // One line under the box saying where it stands.
   readonly property string status: {
@@ -116,6 +119,31 @@ Column {
 
   // Characters as the daemon counts them (code points, not UTF-16 units).
   function chars(t) { return Array.from(String(t)).length }
+  // What the agent is actually told of `t`, counted: agentfs.clean() --
+  // BOMs, line endings, tabs, control characters, leading comments and the
+  // ends trimmed -- then code points (phase M6, the meters). Python's idea
+  // of whitespace, not JavaScript's: \u0085 is space there, \ufeff is not.
+  // test_personality.py runs this against clean() itself.
+  function sentChars(t) {
+    var ws = "[\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+    var x = String(t).replace(/^\uFEFF+/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+    x = x.replace(/\t/g, " ").replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "")
+    var lead = new RegExp("^" + ws + "*<!--[\\s\\S]*?-->")
+    for (;;) {
+      var m = x.match(lead)
+      if (!m) break
+      x = x.slice(m[0].length)
+    }
+    x = x.replace(new RegExp("^" + ws + "+"), "").replace(new RegExp(ws + "+$"), "")
+    return Array.from(x).length
+  }
+  // Put `t` in the box and save it, as if it had been typed: a starter, or
+  // the text the trait chips rewrote. The same stamp, conflict check and
+  // budget as typing, so nothing else in the overlay writes these files.
+  function fill(t) {
+    box.reset(String(t))
+    save(String(t).trim())
+  }
 
   function reload() {
     if (box.editing) { reloadWanted = true; return }
@@ -146,8 +174,9 @@ Column {
     fe.justSaved = false
     fe.conflictStamp = ""
     // Never cut to fit: the text stays in the box and the count says why.
-    if (fe.chars(t) > fe.limit) {
-      fe.note = "Not saved: " + fe.chars(t) + " characters, and at most " + fe.limit +
+    // Counted as it would be told, which is what the budget is about.
+    if (fe.sentChars(t) > fe.limit) {
+      fe.note = "Not saved: " + fe.sentChars(t) + " characters, and at most " + fe.limit +
                 " are told to the agent. Shorten it, then save again."
       return
     }
@@ -437,6 +466,8 @@ Column {
     value: fe.holding ? fe.unsaved : fe.shown
     maxLength: fe.limit
     cutOff: false
+    // The meter below counts instead, as the agent is told it.
+    showCounter: false
     minHeight: fe.minHeight
     editingHint: "Ctrl+S or click away saves"
     placeholder: fe.placeholder
@@ -451,6 +482,14 @@ Column {
         Qt.callLater(fe.reload)
       }
     }
+  }
+
+  BudgetMeter {
+    width: parent.width
+    used: fe.sentChars(box.text)
+    limit: fe.limit
+    foreground: fe.foreground
+    fontFamily: fe.fontFamily
   }
 
   Text {

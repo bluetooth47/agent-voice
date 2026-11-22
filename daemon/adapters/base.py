@@ -291,6 +291,12 @@ class Adapter(ABC):
     #: by test_adapters.py (phase M2, bug I; see sessions.py).
     carries_session_across: frozenset = frozenset()
 
+    #: Try it (phase M6): a turn that may only talk. Claude Code is started
+    #: with no built-in tool and no MCP server; a backend with no such switch
+    #: is held at its lowest level instead, which the daemon sets. The tools
+    #: Agent Voice adds (desktop, browser, notes, skills) are off either way.
+    no_tools: bool = False
+
     #: Seconds of silence before this backend is presumed hung.
     idle_timeout_s: float = IDLE_TIMEOUT_S
 

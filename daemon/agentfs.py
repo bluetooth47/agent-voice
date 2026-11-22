@@ -712,6 +712,92 @@ def _templates(kind: str) -> dict[str, str]:
     return out
 
 
+#: Agent Details offers starters for an empty box (phase M6, item 10): one
+#: folder per file, `templates/<kind>/<id>.md`, whose first line is a
+#: comment holding the label and whose rest is the text put in the box.
+STARTER_KINDS = {"role": "role.md", "personality": "personality.md",
+                 "instructions": "instructions.md"}
+_STARTER_LABEL = re.compile(r"\A<!--\s*(.*?)\s*-->[ \t]*\n?", re.S)
+
+
+def starters() -> dict[str, list[dict]]:
+    """{kind: [{"id", "label", "text"}]} for the starter templates, sorted
+    by id. A starter that is unreadable, unlabelled or over its file's budget
+    is left out rather than offered and then refused on save."""
+    out: dict[str, list[dict]] = {}
+    for kind, file in STARTER_KINDS.items():
+        items = []
+        try:
+            names = sorted(p for p in (TEMPLATES / kind).glob("*.md") if p.is_file())
+        except OSError:
+            names = []
+        for p in names:
+            try:
+                raw = p.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            m = _STARTER_LABEL.match(raw)
+            text = clean(raw[m.end():]) if m else ""
+            if not m or not m.group(1) or not text or len(text) > AGENT_FILES[file]:
+                continue
+            items.append({"id": p.stem, "label": m.group(1), "text": text})
+        out[kind] = items
+    return out
+
+
+def _traits_cli(a) -> int:
+    """`agents traits get ID | set ID [--base S] | apply` (phase M6). Choices
+    and text arrive on stdin as one JSON line, never as arguments."""
+    import traits
+
+    def stdin_json() -> dict:
+        raw = sys.stdin.buffer.readline(6 * WRITE_CAP + 2)
+        try:
+            d = json.loads(raw.decode("utf-8") or "{}")
+        except (UnicodeDecodeError, ValueError):
+            raise AgentFsError("stdin is not one line of JSON") from None
+        if not isinstance(d, dict):
+            raise AgentFsError("stdin must hold a JSON object")
+        return d
+
+    def choices(d: dict) -> dict:
+        try:
+            return traits.check(d.get("traits", {}))
+        except ValueError as e:
+            raise AgentFsError(str(e)) from None
+
+    if a.action == "apply":
+        d = stdin_json()
+        text = d.get("text", "")
+        if not isinstance(text, str):
+            raise AgentFsError("text must be a string")
+        new = traits.apply(text, choices(d))
+        _print({"text": new, **traits.parse(new), "chars": len(clean(new))}, True, "")
+        return 0
+    if not a.id:
+        raise AgentFsError("which agent? agents traits get|set ID")
+    if a.id == COMMUNAL:
+        raise AgentFsError("the communal folder has no personality")
+    path, _ = _resolve(a.id, "personality.md")
+    got = _bytes_or_none(path)
+    raw = "" if got is None else _decode(*got)
+    stamp = "missing" if got is None else _stamp_from(got[0], path)
+    if a.action == "get":
+        v = {**traits.parse(raw), "stamp": stamp}
+        _print(v, a.json, line_of(v))
+        return 0
+    new = traits.apply(raw, choices(stdin_json()))
+    # On the stamp the caller read, or on the one just read when it gave
+    # none: a hand edit between this read and the write is never lost.
+    print(write(a.id, "personality.md", new, base=a.base or stamp))
+    return 0
+
+
+def line_of(parsed: dict) -> str:
+    import traits
+    return traits.line(parsed["traits"], parsed["unknown"]) or "no traits"
+
+
 def create(agent_id: str) -> list[str]:
     """A new agent's folder from the template. Refused when it exists."""
     if agent_id == COMMUNAL:
@@ -2012,6 +2098,14 @@ def main(argv=None) -> int:
     p.add_argument("--line", action="store_true",
                    help="the text is one line holding a JSON string")
     p.add_argument("--json", action="store_true")
+    p = sub.add_parser("traits", help="the trait chips' line in personality.md "
+                                      "(choices on stdin as JSON)")
+    p.add_argument("action", choices=("get", "set", "apply"))
+    p.add_argument("id", nargs="?")
+    p.add_argument("--base", help="set: only if personality.md still has this stamp")
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("templates", help="the starters offered for an empty box")
+    p.add_argument("--json", action="store_true")
     sub.add_parser("ensure-communal")
     p = sub.add_parser("migrate", help="make the folders, copy the old instructions in")
     p.add_argument("--dry-run", action="store_true", help="say what it would do; change nothing")
@@ -2108,6 +2202,12 @@ def main(argv=None) -> int:
             _print(v, a.json, "\n".join(lines))
         elif a.cmd == "notes":
             return _notes_cli(a)
+        elif a.cmd == "traits":
+            return _traits_cli(a)
+        elif a.cmd == "templates":
+            t = starters()
+            _print(t, a.json, "\n".join(f"{k}/{x['id']}: {x['label']}"
+                                        for k, v in t.items() for x in v))
         elif a.cmd == "ensure-communal":
             print("\n".join(ensure_communal()))
         elif a.cmd == "preview":
@@ -2124,7 +2224,8 @@ def main(argv=None) -> int:
             if r["problems"]:
                 return 1
     except Conflict as e:
-        print(f"conflict: {a.file} changed since it was read; current stamp {e.current}",
+        print(f"conflict: {getattr(a, 'file', None) or 'personality.md'} changed since it "
+              f"was read; current stamp {e.current}",
               file=sys.stderr)
         return 3
     except AgentFsError as e:

@@ -28,6 +28,8 @@
 #   agentvoice pass TO [--from ID] < brief   pass the conversation to agent TO
 #   agentvoice tasks [cancel ID]   collaboration tasks between agents
 #   agentvoice commands [--json]   every spoken command, and the wake phrases
+#   agentvoice try AGENT < draft   one sentence in AGENT's voice, on a draft
+#                                  personality (Agent details' Try it)
 set -euo pipefail
 
 UNIT=agentvoice.service
@@ -248,6 +250,21 @@ case "${1:-status}" in
       printf '%s\n%s' "$agent" "$text" > "$RUNDIR/typed/$name.tmp" &&
         mv -f "$RUNDIR/typed/$name.tmp" "$RUNDIR/typed/$name.msg" )
     ;;
+  try)
+    # Agent details' Try it (phase M6): one sentence in AGENT's voice from a
+    # quiet side turn with no tools, on the draft personality and
+    # instructions, which arrive on stdin as one JSON line -- never argv.
+    # Prints the sentence; says why not on stderr and exits 1.
+    #   agentvoice try AGENT < {"personality": "...", "instructions": "..."}
+    agent="${2:-}"
+    [[ $agent =~ ^[a-z0-9][a-z0-9-]{0,47}$ ]] || { echo "usage: agentvoice try AGENT < draft.json" >&2; exit 2; }
+    active || { echo "Agent Voice is off; switch it on to try a voice" >&2; exit 1; }
+    [[ "$(vstate)" != locked ]] || { echo "the screen is locked" >&2; exit 1; }
+    REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+    PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+    [[ -x $PY ]] || { echo "no agentvoice Python at $PY; run install.sh" >&2; exit 1; }
+    exec "$PY" "$REPO/daemon/try_it.py" client "$agent"
+    ;;
   talk-end)
     # The key coming back up ends the turn. Ignored by the daemon unless a
     # push-to-talk capture is actually open.
@@ -415,6 +432,9 @@ case "${1:-status}" in
     #   agentvoice agents revert TARGET FILE [VERSION] | ack TARGET FILE
     #   agentvoice agents notes TARGET list|show|write|lock|unlock|history|
     #                              version|restore|folder [NAME [VERSION]]
+    #   agentvoice agents traits get ID | set ID [--base STAMP] | apply
+    #                              the trait chips' line (JSON on stdin)
+    #   agentvoice agents templates [--json]   starters for an empty box
     REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
     PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
     shift
@@ -470,7 +490,7 @@ case "${1:-status}" in
     active && echo yes || echo no
     ;;
   *)
-    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|interrupt|hud-preview|monitor|calibrate|voice|permit|pending|history|chats|pass|tasks|agents|endpoint|open-mic|commands|wake-test|status|is-active]" >&2
+    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|try|interrupt|hud-preview|monitor|calibrate|voice|permit|pending|history|chats|pass|tasks|agents|endpoint|open-mic|commands|wake-test|status|is-active]" >&2
     exit 2
     ;;
 esac

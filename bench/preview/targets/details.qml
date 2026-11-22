@@ -236,22 +236,22 @@ ShellRoot {
           overlay.check(p && p.target === overlay.made && p.tab === "prompt", "the deep link opens its details")
           e = overlay.editor("instructions.md")
           overlay.check(e && e.target === overlay.made && e.loaded, "its editors read its own folder")
-          // As the Dropdown does on a pick: assigns its own value, which
-          // cuts its binding to the page.
-          var dd = overlay.find(overlay.content(), function(i) { return i.options === p.choices && i.value !== undefined })
-          if (dd) dd.value = overlay.made
+          // Since M6 the agent picker is a row of tabs, keyed by id.
+          var tb = overlay.tabs()
+          overlay.check(tb && tb.current === overlay.made, "its tab is the chosen one (" + (tb ? tb.current : "none") + ")")
           p.pickTab("advanced")
           break
         case 24:
-          var rm = overlay.button("Remove")
-          overlay.click(rm, "Remove")
-          overlay.click(overlay.button("Remove " + p.name + "?"), "Remove, confirmed")
+          // A DangerButton since M1: armed, then confirmed (the clicks
+          // themselves are driven by the confirms target).
+          overlay.danger("Remove", "Remove, armed and confirmed")
           break
         case 25:
           overlay.check(overlay.indexOf(overlay.made) < 0 && overlay.folders.trashed !== null, "Remove took it off the list, into the trash")
           overlay.check(p.target === "main", "and the page fell back to the main agent")
-          var dd2 = overlay.find(overlay.content(), function(i) { return i.options === p.choices && i.value !== undefined })
-          overlay.check(dd2 && dd2.value === "main", "and so did the agent picker (" + (dd2 ? dd2.value : "none") + ")")
+          var tb2 = overlay.tabs()
+          overlay.check(tb2 && tb2.current === "main" && tb2.agents.every(function(a) { return a.id !== overlay.made }),
+                        "and so did the agent tabs, without its tab (" + (tb2 ? tb2.current : "none") + ")")
           overlay.click(overlay.button("Undo"), "Undo")
           break
         case 26:
@@ -277,7 +277,7 @@ ShellRoot {
         case 31:
           overlay.check(overlay.folders.orphans.indexOf("stray-preview") >= 0, "a folder no agent uses is listed")
           var before = overlay.voiceAgents.length
-          overlay.click(overlay.button("Move to trash"), "Move to trash")
+          overlay.danger("Move to trash", "Move to trash, armed and confirmed")
           overlay.made = String(before)
           break
         case 32:
@@ -321,8 +321,117 @@ ShellRoot {
           e = overlay.editor("personality.md")
           overlay.check(e && e.saved === "Typed for the main agent, then the agent changed." && overlay.folders.note === "",
                         "and that typing was saved under the main agent (" + (e ? e.saved : "") + overlay.folders.note + ")")
+          // --- M6: tabs, starters, trait chips, meters, Try it -------------
+          // The agent removed and restored above: its files are still the
+          // templates, so every box reads empty.
+          overlay.made = overlay.agentId(overlay.voiceAgents[overlay.voiceAgents.length - 1] || {})
+          tb = overlay.tabs()
+          overlay.check(tb && tb.agents.length >= 2 && tb.agents[0].id === "main", "the tabs list the main agent first (" +
+                        (tb ? tb.agents.map(function(a) { return a.id }).join(",") : "none") + ")")
+          overlay.click(overlay.find(tb, function(i) { return i.text === overlay.labelOf(overlay.made) && i.clicked !== undefined }),
+                        "the restored agent's tab")
+          break
+        case 38:
+          overlay.check(p.target === overlay.made, "a click on a tab opens that agent (" + p.target + ")")
+          // Renamed on the Agents page: same id, new label.
+          var list = JSON.parse(JSON.stringify(overlay.voiceAgents))
+          list[overlay.indexOf(overlay.made)].label = "Renamed In Preview"
+          overlay.put("voiceAgents", list)
+          break
+        case 39:
+          tb = overlay.tabs()
+          overlay.check(p.target === overlay.made && tb.current === overlay.made &&
+                        overlay.find(tb, function(i) { return i.text === "Renamed In Preview" }) !== null,
+                        "a rename keeps the selection and relabels the tab")
+          e = overlay.editor("role.md")
+          var st = overlay.find(overlay.content(), function(i) { return i.starters !== undefined && i.picked !== undefined })
+          overlay.check(e && e.loaded && e.current === "" && st !== null && st.starters.length >= 3,
+                        "an empty role offers starters (" + (st ? st.starters.length : 0) + ")")
+          overlay.click(overlay.find(st, function(i) { return i.text === "Quick answers" && i.clicked !== undefined }), "a starter")
+          break
+        case 40:
+          e = overlay.editor("role.md")
+          overlay.check(e && e.saved.indexOf("Quick answers and lookups") === 0 && !e.holding,
+                        "the starter filled the box and was saved (" + (e ? e.saved.slice(0, 30) : "") + ")")
+          var first = overlay.find(overlay.content(), function(i) { return i.starters !== undefined && i.picked !== undefined })
+          overlay.check(!first || first.starters.every(function(x) { return x.label !== "Quick answers" }),
+                        "and the role's starters went away")
+          overlay.click(overlay.button("Warm"), "the Warm chip")
+          break
+        case 41:
+          e = overlay.editor("personality.md")
+          overlay.check(e && e.saved === "Traits: warm." && !e.holding, "Warm wrote the managed line (" + (e ? JSON.stringify(e.saved) : "") + ")")
+          overlay.check(p.chipStates("tone").warm === "on", "and reads back as on")
+          var parea2 = overlay.find(e, function(i) { return i.placeholderText !== undefined && i.textFormat !== undefined })
+          parea2.forceActiveFocus()
+          parea2.text = "Traits: warm.\n\nFree words, typed by hand.\nTraits: not this line."
+          overlay.pageScroll.forceActiveFocus()
+          break
+        case 42:
+          overlay.click(overlay.button("Brief"), "the Brief chip")
+          break
+        case 43:
+          e = overlay.editor("personality.md")
+          overlay.check(e && e.saved === "Traits: warm, brief.\n\nFree words, typed by hand.\nTraits: not this line.",
+                        "Brief changed only the line (" + (e ? JSON.stringify(e.saved) : "") + ")")
+          overlay.click(overlay.button("Warm"), "Warm again, to clear it")
+          break
+        case 44:
+          e = overlay.editor("personality.md")
+          overlay.check(e && e.saved === "Traits: brief.\n\nFree words, typed by hand.\nTraits: not this line.",
+                        "clearing Warm kept the rest (" + (e ? JSON.stringify(e.saved) : "") + ")")
+          var meter = overlay.find(e, function(i) { return i.limit !== undefined && i.used !== undefined && i.ratio !== undefined })
+          overlay.check(meter && meter.limit === 1500 && meter.used === e.sentChars(e.saved) && meter.used === e.saved.length,
+                        "the meter counts what is told, the line included (" + (meter ? meter.used + "/" + meter.limit : "none") + ")")
+          // Unsaved typing in the instructions: Try it sends the draft.
+          var iarea = overlay.find(overlay.editor("instructions.md"), function(i) { return i.placeholderText !== undefined && i.textFormat !== undefined })
+          iarea.text = "Draft instruction, not saved yet."
+          overlay.click(overlay.button("▶ Try it"), "Try it")
+          break
+        case 45:
+          var refusing = Quickshell.env("PREVIEW_TRY") === "refuse"
+          overlay.check(p.tryNote === (refusing ? "Not tried: another agent is answering; try again when it has finished"
+                                                : "Said: “Hello from the preview: nothing was run.”"),
+                        "Try it shows what came back (" + p.tryNote + ")")
+          var tbtn = overlay.find(overlay.content(), function(i) { return i.text === "▶ Try it" && i.clicked !== undefined })
+          overlay.check(tbtn && !tbtn.enabled, "and waits ten seconds before another")
+          tryLog.running = true
+          break
+        case 46:
+          var d = null
+          try { d = JSON.parse(overlay.tryDraft) } catch (err) { }
+          overlay.check(d && d.personality === "Traits: brief.\n\nFree words, typed by hand.\nTraits: not this line." &&
+                        d.instructions === "Draft instruction, not saved yet.",
+                        "the draft went on stdin, unsaved typing included (" + overlay.tryDraft.slice(0, 80) + ")")
+          overlay.check(overlay.tryArgs.indexOf("agentvoice try " + overlay.made) >= 0 &&
+                        overlay.tryArgs.indexOf("Draft instruction") < 0,
+                        "argv named only the agent (" + overlay.tryArgs.trim() + ")")
           console.warn("PREVIEW DONE " + overlay.passed + " passed, " + overlay.failed + " failed")
           break
+        }
+      }
+    }
+    function danger(label, what) {
+      var b = find(content(), function(i) { return i.text === label && i.arm !== undefined && i.confirm !== undefined })
+      check(b !== null, "found " + what)
+      if (b) { b.arm(); b.confirm() }
+    }
+    function tabs() { return find(content(), function(i) { return i.agents !== undefined && i.picked !== undefined && i.scrollAt !== undefined }) }
+    function labelOf(id) {
+      var i = indexOf(id)
+      return i >= 0 ? overlay.agentLabel(overlay.voiceAgents[i]) : ""
+    }
+    property string tryDraft: ""
+    property string tryArgs: ""
+    Process {
+      id: tryLog
+      command: ["bash", "-c", "tail -n 1 \"${1%.writes}.try\"; echo ---; grep '^agentvoice try' \"$1\" || true",
+                "try", Quickshell.env("PREVIEW_WRITES")]
+      stdout: StdioCollector {
+        onStreamFinished: {
+          var parts = String(text).split("\n---\n")
+          overlay.tryDraft = parts[0] || ""
+          overlay.tryArgs = parts[1] || ""
         }
       }
     }
