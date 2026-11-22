@@ -125,10 +125,15 @@ case "${1:-status}" in
     # The push-to-talk key going down. Mid-reply that means "stop talking";
     # otherwise it means "listen to me now", skipping the wake word.
     # The readout's preview publishes `speaking` with "preview": true; that
-    # is sample text, not a reply to stop (phase M3, Codex review).
-    case "$(vstate)" in
+    # is sample text, not a reply to stop (phase M3, Codex review). The state
+    # and the flag come from one read of the file: two reads could straddle
+    # the preview's end and interrupt an idle daemon.
+    snap='{"state":"off"}'
+    if active && [[ -r $STATE ]]; then snap=$(<"$STATE"); fi
+    st=$(printf '%s' "$snap" | sed -n 's/^{"state"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p')
+    case "$st" in
       off)                 echo "daemon not running" >&2; exit 1 ;;
-      speaking)            if grep -q '"preview": true' "$STATE" 2>/dev/null; then
+      speaking)            if [[ $snap == *'"preview": true'* ]]; then
                              send_command talk
                            else exec "$0" interrupt; fi ;;
       thinking)            exec "$0" interrupt ;;

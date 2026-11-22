@@ -349,21 +349,6 @@ def test_a_signal_publishing_inside_compose_does_not_deadlock(r):
     assert done.is_set(), "compose() deadlocked on its own lock"
 
 
-def test_a_stale_copy_of_cleared_words_never_replaces_newer_ones(r):
-    """Single agent: answer, lock, unlock, type a new question -- then the
-    run loop's level update republishes its own copy of the old turn."""
-    answered(r)
-    r.lock()
-    r.compose("listening", {"level_db": -50})
-    _, extra = r.compose("thinking", {"transcript": "Typed question", "reply": ""})
-    assert extra["transcript"] == "Typed question"
-    _, extra = r.compose("listening", {"transcript": "What time is it?", "reply": "Nine.",
-                                       "level_db": -45})
-    assert "transcript" not in extra and "reply" not in extra, \
-        "the old exchange came back over the new one"
-    assert extra["level_db"] == -45
-
-
 def test_a_change_of_owner_clears_words_the_payload_does_not_replace(r):
     """A lent microphone after Theo answered: `yielded`, no `who`, no text.
     The label went and Theo's words stayed."""
@@ -400,8 +385,6 @@ def test_the_end_of_a_preview_says_the_real_words_outright(r, clock):
     state, extra = r.compose("off", {})
     assert state == "off"
     assert extra["transcript"] == "What time is it?" and extra["reply"] == "Nine."
-    _, extra = r.compose("off", {})
-    assert extra == {}, "once is enough"
 
 
 def test_expiry_is_polled_above_the_listening_gate():
@@ -427,7 +410,7 @@ def test_expire_readout_republishes_when_it_clears(daemon, clock):
 def test_a_rebuild_that_ends_the_chat_clears_the_screen_too():
     src = (ROOT / "daemon" / "wake_listen.py").read_text()
     body = src[src.index("    def carry_session("):src.index("    def flags_moved(")]
-    assert 'self.readout_for().forget(p.id or "", clear=True)' in body
+    assert "self.forget_readout(p, clear=True)" in body
 
 
 def test_recompose_reads_its_snapshot_under_the_state_files_lock(daemon):
@@ -489,3 +472,99 @@ def test_neither_surface_offers_stop_during_a_preview():
 def test_the_overlay_forgets_the_exchange_on_lock():
     settings = (ROOT / "Settings.qml").read_text()
     assert 'if (root.vState === "locked") { root.lastTranscript = ""; root.lastReply = "" }' in settings
+
+
+# --- Codex review of M3, pass 2 -------------------------------------------------
+
+def test_the_daemons_readout_shares_the_state_files_lock(daemon):
+    """Two locks taken in opposite orders by the main thread (expire) and a
+    worker (publish -> compose), with SIGUSR1 publishing from the main
+    thread, deadlocked; one re-entrant lock cannot."""
+    assert daemon.readout_for()._lock is daemon.state._lock
+
+
+def test_a_new_turn_worded_like_a_cleared_one_is_shown(r):
+    """Once new words have arrived the filter stops: the daemon's caches of
+    the old turn were emptied at the clear, and "What time is it?" asked
+    again after an unlock is a question like any other."""
+    answered(r)
+    r.lock()
+    r.compose("thinking", {"transcript": "Is it raining?", "reply": ""})
+    _, extra = r.compose("speaking", {"transcript": "What time is it?", "reply": "Nine."})
+    assert extra["transcript"] == "What time is it?" and extra["reply"] == "Nine."
+
+
+def test_every_clear_bumps_the_generation_and_tells_the_daemon(clock):
+    told = []
+    r = Readout(clock=clock, on_clear=lambda: told.append(r.generation))
+    answered(r)
+    r.lock()
+    r.forget("", clear=True)
+    assert r.generation == 2 and told == [1, 2]
+
+
+def test_the_run_loop_drops_its_copy_of_the_turn_after_a_clear():
+    src = (ROOT / "daemon" / "wake_listen.py").read_text()
+    loop = src[src.index("readout_seen = self.readout_for().generation"):]
+    loop = loop[:loop.index("cmd = self.take_command()")]
+    assert "if self.readout_for().generation != readout_seen:" in loop
+    assert 'if k not in ("transcript", "reply")' in loop
+
+
+def test_a_cleared_agents_cached_turn_is_not_merged_back(daemon, monkeypatch):
+    """Crew mode merges the last agent spoken to into every idle payload.
+    After a clear its cached turn stays cached (collaboration reads it for
+    a pass's brief) but its words do not reach the screen again."""
+    import wake_listen
+    monkeypatch.setattr(wake_listen.Daemon, "crew_mode", property(lambda self: True))
+    p = daemon._main
+    p.last = {"transcript": "What time is it?", "reply": "Nine.", "ms": 1}
+    daemon._recent = p
+    _, extra = daemon._compose_line("listening", {"level_db": -40})
+    assert extra["reply"] == "Nine."
+    # Off screen: another agent's capture is what the readout shows, so
+    # the readout itself clears nothing -- the cached turn is marked anyway.
+    daemon.readout_for().compose("capture", empty(who="sora", who_label="Sora"))
+    daemon.forget_readout(p, clear=True)
+    _, extra = daemon._compose_line("listening", {"level_db": -40})
+    assert "reply" not in extra and "transcript" not in extra
+    assert p.last["reply"] == "Nine.", "the brief for a pass still has it"
+    # A new turn's record is a new dict, and is shown.
+    p.last = {"transcript": "And now?", "reply": "Ten."}
+    _, extra = daemon._compose_line("listening", {"level_db": -40})
+    assert extra["reply"] == "Ten."
+
+
+def test_the_main_agent_and_nobody_are_different_owners(r):
+    """Both are "" to the daemon in crew mode; the label tells them apart."""
+    r.compose("speaking", {"transcript": "Hi", "reply": "Hello.", "who": "",
+                           "who_label": "Computer"})
+    _, extra = r.compose("yielded", {"who": "", "who_label": ""})
+    assert extra["transcript"] == "" and extra["reply"] == ""
+    # And forget("") still finds the main agent's kept answer.
+    r.compose("speaking", {"transcript": "Hi", "reply": "Hello.", "who": "",
+                           "who_label": "Computer"})
+    r.forget("")
+    _, extra = r.compose("capture", empty(who="", who_label="Computer"))
+    assert "last_reply" not in extra
+
+
+def test_the_real_words_follow_a_preview_until_a_payload_carries_them(r, clock):
+    answered(r)
+    r.preview()
+    r.compose("off", {})
+    clock.t += PREVIEW_S + 0.1
+    for _ in range(3):                     # a watcher may miss any one of them
+        _, extra = r.compose("off", {})
+        assert extra["reply"] == "Nine."
+    r.compose("listening", {"transcript": "What time is it?", "reply": "Nine."})
+    _, extra = r.compose("off", {})
+    assert extra == {}
+
+
+def test_push_to_talk_reads_the_state_once():
+    cli = (ROOT / "bin" / "agentvoice").read_text()
+    talk = cli[cli.index("  talk)"):]
+    talk = talk[:talk.index("    ;;\n")]
+    assert "$(vstate)" not in talk and 'grep -q' not in talk
+    assert 'snap=$(<"$STATE")' in talk

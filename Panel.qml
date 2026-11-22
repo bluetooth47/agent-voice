@@ -975,9 +975,9 @@ Panel {
             // "idle" turning into "transcribing" never rewraps the row of
             // chips onto another line. Elided past the popup's width; the
             // full name is in the tooltip.
-            // Measured bold, as a busy chip draws, plus a little room for
-            // the busy icon (Codex review: a proportional font near the
-            // wrap could still add a row when a turn began).
+            // Measured bold, as a busy chip draws, with a fixed allowance
+            // for the icon, the same in every state (Codex review: a
+            // proportional font near the wrap could still add a row).
             TextMetrics {
               id: chipNow
               font.family: voice.fontFamily
@@ -993,8 +993,8 @@ Panel {
               text: chip.name + "  ·  transcribing"
             }
             width: voice.readoutLocked
-                   ? Math.min(chips.width, implicitWidth + Math.max(0, chipWidest.width - chipNow.width)
-                                           + (chip.busyNow ? 0 : Style.space(4)))
+                   ? Math.min(chips.width, implicitWidth - chipNow.width + chipWidest.width
+                                           + Style.space(4))
                    : Math.min(chips.width, implicitWidth)
             iconText: busyNow ? "\u{f0e4e}" : "\u{f06a9}"
             bordered: true

@@ -1734,7 +1734,11 @@ class Daemon:
         self._notices: dict[str, tuple[str, int, float]] = {}
         #: phase M3: the readout's kept reply, when its lines clear, and the
         #: Display page's preview. See readout.py.
-        self.readout = readout.Readout()
+        self.readout = readout.Readout(lock=getattr(state, "_lock", None),
+                                       on_clear=self._readout_cleared)
+        #: Agents' cached turns (Persona.last) as they were at the last
+        #: readout clear: not merged into the screen again (phase M3).
+        self._stale_lasts: list[dict] = []
         #: The permission level the main agent's conversation last ran
         #: under. Compared as a level, not as the hook-or-not flag: Ask and
         #: Edits share the flag, and lowering Edits to Ask must still
@@ -1989,8 +1993,29 @@ class Daemon:
         daemons built with Daemon.__new__ never ran __init__."""
         r = getattr(self, "readout", None)
         if r is None:
-            r = self.readout = readout.Readout()
+            r = self.readout = readout.Readout(lock=getattr(self.state, "_lock", None),
+                                               on_clear=self._readout_cleared)
         return r
+
+    def forget_readout(self, p: Persona, clear: bool = False) -> None:
+        """`p`'s conversation changed (readout.Readout.forget). With
+        `clear`, its cached turn is marked too, even when another agent is
+        on screen: idle payloads would otherwise merge its old words back
+        the next time it is the one shown (Codex review of M3)."""
+        self.readout_for().forget(p.id or "", clear=clear)
+        if clear and getattr(p, "last", None):
+            self._stale_lasts = [*getattr(self, "_stale_lasts", []), p.last]
+
+    def _readout_cleared(self) -> None:
+        """Both readout lines were cleared (a lock, an expiry, a switch): the
+        agents' cached turns, which crew mode merges into every idle
+        payload, must not bring the words back. Marked rather than emptied,
+        because collaboration reads Persona.last for a pass's brief."""
+        try:
+            self._stale_lasts = [p.last for p in self.personas()
+                                 if getattr(p, "last", None)]
+        except Exception:              # a readout aid must never stop a publish
+            self._stale_lasts = []
 
     def expire_readout(self) -> None:
         """Ten minutes with nothing new on the readout: both lines clear
@@ -2292,7 +2317,7 @@ class Daemon:
         # phase M3: the reply kept for the readout was the old chat's, and
         # so are the words on screen: cleared, or the recompose below would
         # read the old answer back and keep it again (Codex review).
-        self.readout_for().forget(p.id or "", clear=True)
+        self.forget_readout(p, clear=True)
         self._recompose()
         return False
 
@@ -4241,7 +4266,7 @@ class Daemon:
             elif self.continue_chat(p, chat) != "refused":
                 # phase M3: switched from the conversation view, so no turn
                 # follows to replace the old chat's words on screen.
-                self.readout_for().forget(p.id or "", clear=True)
+                self.forget_readout(p, clear=True)
                 self._recompose()
             return True
         if verb == "task-cancel":
@@ -4253,7 +4278,7 @@ class Daemon:
             p = self._persona_by_id("" if arg in ("", "main") else arg)
             if p is not None and not p.busy:
                 self.new_chat(p)
-                self.readout_for().forget(p.id or "", clear=True)
+                self.forget_readout(p, clear=True)
                 self._recompose()
                 print(f"  {CYA}agent “{p.label or 'main'}”: new chat{OFF}", flush=True)
             return True
@@ -4960,7 +4985,12 @@ class Daemon:
                 return shown.state, merged
             recent = self._recent
             if recent is not None:
-                return state, {**extra, **recent.last, "who": recent.id,
+                cached = recent.last or {}
+                if any(cached is d for d in getattr(self, "_stale_lasts", ())):
+                    # Cleared from the readout since (phase M3).
+                    cached = {k: v for k, v in cached.items()
+                              if k not in ("transcript", "reply")}
+                return state, {**extra, **cached, "who": recent.id,
                                "who_label": recent.label, "live": live}
         capturing = self._capture_for is not None and state in (
             "capture", "transcribing", "followup")
@@ -5269,8 +5299,17 @@ class Daemon:
             # opened -- "wake", "talk", "barge" or "followup". See crew.py.
             capture_for: Persona | None = None
             capture_kind = ""
+            readout_seen = self.readout_for().generation
             while True:
                 crew = self.crew_mode
+                # phase M3: the readout was cleared (a lock, an expiry, a
+                # switch) since this loop last looked: its copy of the last
+                # turn loses the words, or the next level update would put
+                # them back on screen. A turn under way starts its own.
+                if self.readout_for().generation != readout_seen:
+                    readout_seen = self.readout_for().generation
+                    last = {k: v for k, v in last.items()
+                            if k not in ("transcript", "reply")}
                 # Beside running turns the loop never blocks on the queue:
                 # it has to keep polling the lock and the commands while an
                 # agent speaks, when the microphone is the reply's.

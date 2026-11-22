@@ -22,11 +22,10 @@ daemon so they can be tested on their own:
   finds the screen blank, and the exchange before it would otherwise come
   straight back, because crew mode re-merges `Persona.last` into every idle
   payload, and the run loop republishes its own copy of the last turn with
-  every level update. Until new words arrive both fields are sent as "";
-  after, a field that still holds cleared words is left out, so the screen
-  keeps the newer exchange it has (Codex review of M3). The set outlives
-  the first new words for that reason; a new turn worded exactly like a
-  cleared one shows its answer but not its question.
+  every level update. Until new words arrive both fields are sent as "".
+  And the caches themselves are emptied (Codex review of M3): `on_clear`
+  tells the daemon, which stops merging the agents' cached turns, and
+  `generation` tells the run loop to drop the text from its own copy.
 - **A capture never carries an answer.** The follow-up window opens on the
   turn just finished, and its partials replace only the transcript, so the
   old answer rode along as `reply` -- drawn whatever `hudKeepReply` said.
@@ -81,12 +80,21 @@ SAMPLE_REPLY = ("Two things: the design review at three, and a call with Sam at 
 
 
 class Readout:
-    def __init__(self, clock=time.monotonic) -> None:
+    def __init__(self, clock=time.monotonic, lock=None, on_clear=None) -> None:
         self._clock = clock
-        # Re-entrant: the daemon's SIGUSR1 handler publishes from the main
-        # thread, which may already be inside compose() when the signal
-        # lands, and a plain Lock would deadlock it there (Codex review).
-        self._lock = threading.RLock()
+        #: Called (under the lock) whenever both lines are cleared, so the
+        #: daemon can stop its caches of the old turn from bringing it back.
+        self._on_clear = on_clear
+        #: Bumped on every clear; the run loop compares it with the one it
+        #: last saw and drops the text from its own copy of the turn.
+        self.generation = 0
+        # The state file's own lock when the daemon gives it, else a new
+        # one; re-entrant either way. One lock, not two: compose() runs
+        # under the state file's lock, so a separate one here could be held
+        # by the main thread (expire) while a worker held the state file's
+        # and waited for it -- and SIGUSR1's handler, which publishes from
+        # the main thread, then deadlocked both (Codex review of M3).
+        self._lock = lock if lock is not None else threading.RLock()
         #: {"who", "text"}: the last reply the readout carried.
         self._kept: dict | None = None
         #: Texts cleared and not to be shown again, oldest first.
@@ -114,26 +122,29 @@ class Readout:
         with self._lock:
             now = self._clock()
             extra = dict(extra)
+            # Whose words these are. The main agent's id is "" in crew mode,
+            # as is nobody's, so its label tells the two apart (Codex review:
+            # a lent microphone after the main agent answered kept its words).
             who = str(extra.get("who", "") or "")
+            if not who and extra.get("who_label"):
+                who = "\x00main"
             t, r = extra.get("transcript"), extra.get("reply")
 
-            if self._gone:
+            if self._blank:
                 gone = set(self._gone)
-                if self._blank and any(isinstance(v, str) and v != "" and v not in gone
-                                       for v in (t, r)):
+                if any(isinstance(v, str) and v != "" and v not in gone for v in (t, r)):
+                    # New words: the screen is the new turn's now. The
+                    # daemon's caches of the old one were emptied at the
+                    # clear (on_clear, generation), so nothing stale is
+                    # left to filter, and a new turn worded like an old
+                    # one ("Yes.") is shown like any other.
                     self._blank = False
-                if self._blank:
+                    self._gone = []
+                else:
                     # Said outright, not left out: the screen updates only a
                     # field it is sent, so an absent key keeps the old words.
                     extra["transcript"] = extra["reply"] = ""
                     t = r = ""
-                else:
-                    # Newer words are on screen; a stale copy of cleared ones
-                    # must not replace them, nor bring the old ones back.
-                    for key, v in (("transcript", t), ("reply", r)):
-                        if isinstance(v, str) and v != "" and v in gone:
-                            extra.pop(key)
-                    t, r = extra.get("transcript"), extra.get("reply")
 
             if who != self._who:
                 # Another agent's turn, or none: its answer is not this
@@ -176,10 +187,12 @@ class Readout:
                 self._previewed = True
                 state = "speaking"
             elif self._previewed:
-                # The first payload after it: the real words, said outright,
-                # or a merging screen keeps the sample (a muted `off`
-                # payload carries no text at all).
-                self._previewed = False
+                # After it: the real words, said outright, or a merging screen
+                # keeps the sample (a muted `off` payload carries no text at
+                # all). Until a payload carries both itself, not just once:
+                # the watcher can miss a write that is replaced at once.
+                if t is not None and r is not None:
+                    self._previewed = False
                 extra.setdefault("transcript", self._shown[0])
                 extra.setdefault("reply", self._shown[1])
             return state, extra
@@ -195,6 +208,9 @@ class Readout:
             self._blank = True
         self._seen = []
         self._kept = None
+        self.generation += 1
+        if self._on_clear is not None:
+            self._on_clear()
 
     def lock(self) -> None:
         """The screen locked: both lines go, and stay gone after the unlock.
@@ -210,10 +226,13 @@ class Readout:
         switch made from the conversation view, where no turn follows to
         replace it. Not for "new chat" said aloud: that turn's own words are
         the ones on screen, and clearing them would blink."""
+        # The main agent is "" to the daemon and "\x00main" here in crew
+        # mode (compose, above): either names it.
+        mine = {who, "\x00main"} if who == "" else {who}
         with self._lock:
-            if self._kept is not None and self._kept["who"] == who:
+            if self._kept is not None and self._kept["who"] in mine:
                 self._kept = None
-            if clear and self._who == who:
+            if clear and self._who in mine:
                 self._clear_shown()
 
     def expire(self) -> bool:
