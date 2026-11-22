@@ -851,7 +851,7 @@ class TestReconcile:
         recon.cfg._values["voiceAgents"] = [{"name": "jarvis", "model": "haiku"}]
         recon.reconcile_crew()
         assert p.session_id is None and len(recon.built) == 2
-        assert "model change" in recon.crew_fields()["notice"]
+        assert "model change" in recon._compose("listening", {})[1]["notice"]
 
     def test_a_busy_agent_is_left_alone(self, recon):
         recon.cfg._values["voiceAgents"] = [{"name": "jarvis"}]

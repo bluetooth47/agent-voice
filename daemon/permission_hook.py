@@ -798,8 +798,9 @@ def grant(session: str) -> bool:
         return False
 
 
-def revoke(session: str) -> int:
+def revoke(session: str) -> bool:
     """Forget every "allow all in this chat" for `session`, for any agent.
+    True when none is left behind; False when one may be.
 
     Called by the daemon, not the hook: since phase M2 a conversation is
     kept across a change of permission level (bug I), and the level is the
@@ -808,30 +809,39 @@ def revoke(session: str) -> int:
     session that was carried over. Before M2 the session itself was dropped,
     which took the grant's meaning with it.
 
-    Removes only files whose record names this session; anything unreadable
-    is left alone (`granted()` never reads it as a yes). Returns how many
-    went. Never raises: the caller is the idle poll."""
+    False -- the folder could not be listed, or a grant for this session
+    could not be removed -- makes the daemon drop the session after all,
+    which is the other way to make the grant mean nothing (Codex review of
+    M2: a grant left behind by a failed unlink was otherwise still honoured
+    on the next turn). A file nothing can read is skipped: `granted()`, as
+    the same user, cannot read it either, so it grants nothing. Never
+    raises: the caller is the idle poll."""
     if not _SESSION.fullmatch(session or ""):
-        return 0
-    gone = 0
+        return True                 # granted() refuses such an id outright
     try:
         entries = list(os.scandir(GRANTS))
+    except FileNotFoundError:
+        return True
     except OSError:
-        return 0
+        return False
+    cleared = True
     for entry in entries:
         if not entry.name.endswith(".grant"):
             continue
         try:
             if not entry.is_file(follow_symlinks=False):
-                continue
-            with open(entry.path, encoding="utf-8") as f:
-                record = json.loads(f.read(4096))
-            if isinstance(record, dict) and record.get("session") == session:
-                os.unlink(entry.path)
-                gone += 1
+                continue            # granted() refuses anything but a file
+            record = json.loads(Path(entry.path).read_text())
         except (OSError, ValueError):
             continue
-    return gone
+        if isinstance(record, dict) and record.get("session") == session:
+            try:
+                os.unlink(entry.path)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                cleared = False
+    return cleared
 
 
 def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, str]:

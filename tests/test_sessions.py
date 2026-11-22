@@ -31,6 +31,12 @@ from adapters.claude_code import ClaudeCode
 SID = "97c52faa-f737-43a3-83db-1ef0a1d86245"
 
 
+def notice_of(daemon) -> str:
+    """The notice as the state file shows it: composed into each publish,
+    never part of the sticky fields (so a lock takes it away)."""
+    return daemon._compose("listening", {})[1].get("notice", "")
+
+
 # --- the rule ------------------------------------------------------------------
 
 class TestCarry:
@@ -82,14 +88,24 @@ def test_only_the_backends_with_a_recording_claim_it():
 # --- the main agent ------------------------------------------------------------
 
 class FakeClaude(ClaudeCode):
-    """Never starts anything; counts what is stopped."""
+    """Never starts anything; counts what is stopped, and records which
+    adapter object each turn was sent to."""
     cancelled = 0
+    turns: list = []
 
     def available(self):
         return True
 
     def cancel(self):
         self.cancelled += 1
+
+    def prepare(self, session_id=None):
+        pass
+
+    def send(self, text, session_id=None):
+        from adapters.base import Chunk
+        FakeClaude.turns.append((self, session_id))
+        yield Chunk(text="Done. ", session_id=session_id or SID)
 
 
 class FakeAgy(Antigravity):
@@ -170,14 +186,14 @@ class TestMainAgent:
         main.reconcile_agent()
         assert main.agent.cwd == str(other)
         assert main.session_id is None
-        assert "project folder changed" in main.state._context["notice"]
+        assert "project folder changed" in notice_of(main)
         assert "new conversation — its project folder changed" in capsys.readouterr().out
 
     def test_a_new_program_starts_a_new_one(self, main):
         main.cfg._values["mainProgram"] = "agy"
         main.reconcile_agent()
         assert isinstance(main.agent, FakeAgy) and main.session_id is None
-        assert "different program" in main.state._context["notice"]
+        assert "different program" in notice_of(main)
 
     def test_a_backend_without_a_recording_starts_fresh_and_says_why(self, main):
         main.cfg._values["mainProgram"] = "agy"
@@ -186,7 +202,7 @@ class TestMainAgent:
         main.cfg._values["permissions"] = {"claude": "ask", "agy": "trusted"}
         main.reconcile_agent()
         assert main.agent.level == "trusted" and main.session_id is None
-        notice = main.state._context["notice"]
+        notice = notice_of(main)
         assert "Antigravity cannot carry a chat across a permission change" in notice
 
     def test_the_notice_lasts_until_the_agent_has_answered(self, main):
@@ -198,8 +214,7 @@ class TestMainAgent:
         assert main.expire_notices() is False         # ...and is still going
         main._main.answering = False
         assert main.expire_notices() is True
-        main.publish_agent()
-        assert "notice" not in main.state._context
+        assert "notice" not in main._compose("listening", {})[1]
 
     def test_a_level_change_withdraws_allow_all_in_this_chat(self, main, monkeypatch):
         _grant(monkeypatch)
@@ -227,28 +242,29 @@ class TestRevoke:
         _grant(monkeypatch, "claude")
         monkeypatch.setattr(sys, "argv", ["permission_hook.py", "claude", "sora"])
         assert hook.grant(SID)
-        assert hook.revoke(SID) == 2
+        assert hook.revoke(SID) is True
         assert not hook.granted(SID)
 
     def test_other_sessions_are_kept(self, monkeypatch):
         other = "11111111-2222-3333-4444-555555555555"
         monkeypatch.setattr(sys, "argv", ["permission_hook.py", "claude"])
         assert hook.grant(other)
-        assert hook.revoke(SID) == 0
+        assert hook.revoke(SID) is True
         assert hook.granted(other)
 
     @pytest.mark.parametrize("bad", ["", "not-a-session", "../../x", None])
     def test_a_malformed_session_touches_nothing(self, monkeypatch, bad):
         _grant(monkeypatch)
-        assert hook.revoke(bad) == 0
+        assert hook.revoke(bad) is True       # granted() refuses it anyway
         assert hook.granted(SID)
 
     def test_unreadable_files_and_a_missing_folder_never_raise(self, grants, monkeypatch):
-        assert hook.revoke(SID) == 0                   # no folder yet
+        assert hook.revoke(SID) is True                # no folder yet
         _grant(monkeypatch)
         (grants / "junk.grant").write_text("{not json")
         (grants / "dir.grant").mkdir()
-        assert hook.revoke(SID) == 1
+        assert hook.revoke(SID) is True
+        assert not hook.granted(SID)
         assert (grants / "junk.grant").exists(), "left alone: granted() rejects it"
 
 
@@ -301,7 +317,7 @@ class TestExtraAgent:
         crew.reconcile_crew()
         assert crew.crew["sora"].session_id is None
         assert "sora: new chat — its project folder changed." in \
-            crew.crew_fields()["notice"].lower()
+            notice_of(crew).lower()
 
     def test_agy_starts_fresh_on_a_level_change(self, crew):
         crew.cfg._values["voiceAgents"] = [{"name": "sora", "agent": "agy"}]
@@ -313,7 +329,7 @@ class TestExtraAgent:
         crew.reconcile_crew()
         assert p.session_id is None
         assert "cannot carry a chat across a permission change" in \
-            crew.crew_fields()["notice"]
+            notice_of(crew)
 
     def test_the_grant_goes_with_the_level(self, crew, monkeypatch):
         monkeypatch.setattr(sys, "argv", ["permission_hook.py", "claude", "sora"])
@@ -322,3 +338,109 @@ class TestExtraAgent:
                                             "level": "trusted"}]
         crew.reconcile_crew()
         assert crew.crew["sora"].session_id == SID and not hook.granted(SID)
+
+
+# --- the Codex review of M2, pass 1 ---------------------------------------------
+
+class TestReviewPassOne:
+    def test_edits_to_ask_withdraws_the_grant_without_a_rebuild(self, main, monkeypatch):
+        """Ask and Edits share the hook, so no new process -- but lowering
+        the level is a new decision all the same."""
+        main.cfg._values["permissions"] = {"claude": "edits"}
+        main.reconcile_agent()
+        same = main.agent
+        _grant(monkeypatch)
+        main.cfg._values["permissions"] = {"claude": "ask"}
+        main.reconcile_agent()
+        assert main.agent is same and same.cancelled == 0
+        assert main.session_id == SID and not hook.granted(SID)
+
+    def test_edits_to_ask_with_a_new_model_withdraws_it_too(self, main, monkeypatch):
+        main.cfg._values["permissions"] = {"claude": "edits"}
+        main.reconcile_agent()
+        _grant(monkeypatch)
+        main.cfg._values["permissions"] = {"claude": "ask"}
+        main.cfg._values["agentModels"] = {"claude": "sonnet"}
+        main.reconcile_agent()
+        assert main.agent.model == "sonnet" and main.session_id == SID
+        assert not hook.granted(SID)
+
+    def test_a_grant_that_cannot_be_withdrawn_ends_the_chat(self, main, monkeypatch):
+        _grant(monkeypatch)
+        grants = hook.GRANTS
+        grants.chmod(0o500)                 # readable, nothing can be removed
+        try:
+            main.cfg._values["permissions"] = {"claude": "trusted"}
+            main.reconcile_agent()
+        finally:
+            grants.chmod(0o700)
+        assert main.session_id is None, "kept a session whose grant survived"
+        assert "old permissions could not be withdrawn" in notice_of(main)
+
+    def test_a_folder_that_cannot_be_listed_ends_the_chat(self, main, monkeypatch):
+        _grant(monkeypatch)
+        grants = hook.GRANTS
+        grants.chmod(0o000)
+        try:
+            main.cfg._values["permissions"] = {"claude": "trusted"}
+            main.reconcile_agent()
+        finally:
+            grants.chmod(0o700)
+        assert main.session_id is None
+
+    def test_the_notice_never_reaches_a_locked_screen(self, main):
+        main.cfg._values["projectDir"] = str(main.tmp / "elsewhere")
+        main.reconcile_agent()
+        assert notice_of(main)
+        main.locked = True
+        try:
+            state, extra = main._compose("listening", {})
+        finally:
+            main.locked = False
+        assert state == "locked" and "notice" not in extra
+        assert "notice" not in main.state._context
+
+    def test_a_turn_after_a_busy_level_change_runs_on_the_new_flags(self, crew, monkeypatch,
+                                                                     cfg_factory):
+        """Lowered to Ask while it worked, then given a new request: the new
+        turn must not go to the process started under Trusted."""
+        crew.cfg._values["voiceAgents"] = [{"name": "sora", "agent": "claude",
+                                            "level": "trusted"}]
+        crew.reconcile_crew()
+        p = crew.crew["sora"]
+        trusted = p.agent
+        assert trusted.ask_permission is False
+        lowered = [{"name": "sora", "agent": "claude", "level": "ask"}]
+        monkeypatch.setattr(crew, "fresh_config",
+                            lambda: cfg_factory(voiceAgents=lowered))
+
+        def refresh():
+            crew.cfg._values["voiceAgents"] = lowered
+            crew.reconcile_crew()
+        monkeypatch.setattr(crew, "refresh", refresh)
+        monkeypatch.setattr(crew, "publish_agent", lambda: None)
+        FakeClaude.turns.clear()
+        crew.dispatch(p, "do it", {})
+        p.thread.join(timeout=5)
+        sent_to, sid = FakeClaude.turns[-1]
+        assert sent_to is not trusted and sent_to.ask_permission is True
+        assert sid == SID, "and the conversation came with it"
+
+    def test_an_unchanged_level_refreshes_nothing(self, crew, monkeypatch, cfg_factory):
+        spec = [{"name": "sora", "agent": "claude"}]
+        monkeypatch.setattr(crew, "fresh_config", lambda: cfg_factory(voiceAgents=spec))
+        called = []
+        monkeypatch.setattr(crew, "refresh", lambda: called.append(1))
+        crew.catch_up_flags(crew.crew["sora"])
+        assert called == []
+
+    def test_the_actual_folder_decides_not_the_setting(self, crew):
+        """An adapter running somewhere the settings now resolve elsewhere
+        (an unmounted project falls back to home) has moved."""
+        p = crew.crew["sora"]
+        p.agent.cwd = "/mnt/a-project-no-longer-mounted"
+        crew.cfg._values["voiceAgents"] = [{"name": "sora", "agent": "claude",
+                                            "level": "trusted"}]
+        crew.reconcile_crew()
+        assert p.session_id is None
+        assert "project folder changed" in notice_of(crew)

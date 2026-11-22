@@ -39,6 +39,10 @@ Column {
   // "Cut 3 turns off at this limit today, the last at 16:58." -- or nothing.
   readonly property string limitLine: {
     var h = s.vLimitHits || {}
+    // Today's by the date it was counted on, not by whether the daemon
+    // has rolled it over: it does that on its idle poll, which a mute
+    // overnight stops (Codex review of M2).
+    if (String(h.date || "") !== Qt.formatDate(new Date(), "yyyy-MM-dd")) return ""
     var n = Number(h.today) || 0
     if (n <= 0) return ""
     var when = Number(h.last) > 0

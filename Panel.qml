@@ -426,8 +426,10 @@ Panel {
         // Absent with a single agent, and then cleared rather than kept: a
         // name left over from when there were several would be wrong.
         voice.lastWho = d.who_label !== undefined ? String(d.who_label) : ""
-        voice.collabLine = d.collab !== undefined ? String(d.collab)
-                         : d.notice !== undefined ? String(d.notice) : ""
+        // A task list with no line yet publishes collab as "": the notice
+        // shows then too (Codex review of M2).
+        voice.collabLine = d.collab ? String(d.collab)
+                         : d.notice ? String(d.notice) : ""
         voice.micMuted = d.muted === true
         voice.vWindow = d.window !== undefined ? String(d.window) : ""
         if (d.agent !== undefined) voice.vAgent = String(d.agent)

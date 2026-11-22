@@ -1731,6 +1731,11 @@ class Daemon:
         #: rebuild, by agent id ("" the main agent), as (line, its turn count
         #: then, when). Shown in the readout until its next turn is answered.
         self._notices: dict[str, tuple[str, int, float]] = {}
+        #: The permission level the main agent's conversation last ran
+        #: under. Compared as a level, not as the hook-or-not flag: Ask and
+        #: Edits share the flag, and lowering Edits to Ask must still
+        #: withdraw "allow all in this chat" (Codex review of M2).
+        self._main_level: str | None = None
         #: phase M2, bug C: turns cut at maxUtteranceMs, today. Carried over
         #: from the state file a previous run of the daemon left, so a restart
         #: (an install) does not wipe the count the Conversation page shows.
@@ -2134,6 +2139,12 @@ class Daemon:
                      or getattr(self.agent, "model", None) == want_model)):
             self.apply_instructions(want_instructions)
             self.apply_effort(want_effort)
+            # A level that moved no flag (Ask and Edits share the hook)
+            # needs no new process, but it is still a new decision.
+            if getattr(self, "_main_level", None) not in (None, want_level):
+                self.carry_session(self._main, {sessions.LEVEL}, want_name or "",
+                                   rebuilt=False)
+            self._main_level = want_level
             self.publish_agent()
             return
         old = self.agent
@@ -2146,7 +2157,8 @@ class Daemon:
             else:
                 if getattr(old, "cwd", None) != want_cwd:
                     changed.add(sessions.FOLDER)
-                if getattr(old, "ask_permission", None) != want_ask:
+                if (getattr(old, "ask_permission", None) != want_ask
+                        or getattr(self, "_main_level", None) not in (None, want_level)):
                     changed.add(sessions.LEVEL)
                 if takes_model(old) and getattr(old, "model", None) != want_model:
                     changed.add(sessions.MODEL)
@@ -2160,6 +2172,7 @@ class Daemon:
                                   instructions=want_instructions)
         # phase M2, bug I: was `self.session_id = None` whatever changed.
         self.carry_session(self._main, changed, want_name or "")
+        self._main_level = want_level
         self.publish_agent()
         where = f" · {want_cwd}" if getattr(self.agent, "has_tools", True) else ""
         if want_model and takes_model(self.agent):
@@ -2186,16 +2199,20 @@ class Daemon:
                           f"fresh every turn — it saves you the wake word and "
                           f"nothing more{OFF}")
 
-    def carry_session(self, p: Persona, changed: set[str], program: str) -> bool:
-        """After `p`'s adapter was rebuilt for `changed`: keep its
+    def carry_session(self, p: Persona, changed: set[str], program: str,
+                      rebuilt: bool = True) -> bool:
+        """After `p`'s adapter was rebuilt for `changed` (or, `rebuilt`
+        False, after its level moved with no new flags): keep its
         conversation or end it, by sessions.carry(), and say which. True if
         kept (phase M2, bug I).
 
         Kept across a level change, it loses every "allow all in this chat"
-        made under the old level: the level is the newer decision. Ended
-        with a conversation to end, the reason goes in the journal and in the
-        readout until `p`'s next turn has been answered, so a backend that
-        has to start fresh says why rather than seeming to forget."""
+        made under the old level: the level is the newer decision. If one
+        cannot be withdrawn the conversation ends instead, which makes the
+        grant mean nothing (fail closed). Ended with a conversation to end,
+        the reason goes in the journal and in the readout until `p`'s next
+        turn, so a backend that has to start fresh says why rather than
+        seeming to forget."""
         sid = p.session_id
         if not sid:
             return False
@@ -2203,26 +2220,74 @@ class Daemon:
         if p.agent is None:
             keep, reason = False, (sorted(changed & {sessions.PROGRAM, sessions.FOLDER})
                                    or [sessions.OTHER])[0]
+        elif not rebuilt:
+            keep, reason = True, ""         # the same process: nothing to resume
         else:
             keep, reason = sessions.carry(
                 changed, getattr(p.agent, "carries_session_across", frozenset()))
+        if keep and sessions.LEVEL in changed:
+            import permission_hook
+            if permission_hook.revoke(sid):
+                print(f"  {CYA}agent “{label}”: no “allow all in this chat” "
+                      f"carried over — the permission level changed{OFF}",
+                      flush=True)
+            else:
+                keep, reason = False, sessions.GRANTS
         if keep:
-            print(f"  {CYA}agent “{label}”: conversation kept "
-                  f"({' and '.join(sorted(changed)) or 'nothing'} changed){OFF}",
-                  flush=True)
-            if sessions.LEVEL in changed:
-                import permission_hook
-                if permission_hook.revoke(sid):
-                    print(f"  {CYA}agent “{label}”: “allow all in this chat” "
-                          f"withdrawn — the permission level changed{OFF}",
-                          flush=True)
+            if rebuilt:
+                print(f"  {CYA}agent “{label}”: conversation kept "
+                      f"({' and '.join(sorted(changed)) or 'nothing'} changed){OFF}",
+                      flush=True)
             return True
         p.session_id = None
+        if not rebuilt and p.agent is not None:
+            p.agent.cancel()                # its warm process holds the old chat
         because = sessions.why(reason, program_label(program) or program)
         print(f"  {YEL}agent “{label}”: new conversation — {because}{OFF}", flush=True)
         self._notices[p.id or ""] = (f"{label}: new chat — {because}.",
                                      getattr(p, "turn_id", 0), time.time())
+        self._recompose()
         return False
+
+    def flags_moved(self, p: Persona, cfg) -> bool:
+        """Whether the settings in `cfg` give `p` another level or folder
+        than its running adapter was built under: adapter_stale(), which
+        collaboration calls already use, plus a level that moved without
+        moving the hook (Ask and Edits). False for an agent the settings no
+        longer have -- the idle poll removes it -- and for an endpoint,
+        which runs nothing here."""
+        have = p.agent
+        if have is None or hasattr(have, "base_url"):
+            return False
+        if p is self._main:
+            level = cfg.level_for(getattr(have, "name", "") or "")
+            seen = getattr(self, "_main_level", None)
+        else:
+            spec = cfg.agent_by_id(p.id)
+            if spec is None:
+                return False
+            level, seen = spec["level"], (p.spec or {}).get("level")
+        return (seen is not None and level != seen) or bool(self.adapter_stale(p, cfg))
+
+    def catch_up_flags(self, p: Persona) -> None:
+        """Before `p`'s next turn starts: if its level or folder moved since
+        its adapter was built, apply that now (Codex review of M2).
+
+        The idle poll rebuilds an agent only while it is idle. One that was
+        busy when the level was lowered, then stopped -- by its name, a
+        barge-in, or a typed or spoken replacement -- went straight into its
+        next turn: no poll runs during a capture, and catch_up_one() leaves
+        the level to the poll. That turn ran on the process started under
+        the old flags, Trusted after the user had chosen Ask. Read from the
+        settings on disk, as collaboration calls are; on the run loop's
+        thread only, where a refresh belongs."""
+        if threading.current_thread() is not threading.main_thread() \
+                or getattr(self, "pipe", None) is None:
+            return
+        if self.flags_moved(p, self.fresh_config()):
+            print(f"  {CYA}agent “{p.label or p.name or 'main'}”: settings "
+                  f"changed while it worked — applying them first{OFF}", flush=True)
+            self.refresh()
 
     def expire_notices(self) -> bool:
         """Drop each notice once its agent has answered a turn since, or is
@@ -2699,7 +2764,9 @@ class Daemon:
             self.history.clear()
         # phase M2: a notice outlives the turn it explained only until the
         # agent answers again, and today's limit count rolls over at midnight.
-        if self.expire_notices() or self.limit_hits_rolled():
+        if self.expire_notices():
+            self._recompose()
+        if self.limit_hits_rolled():
             self.publish_agent()
         if not changed:
             return
@@ -4572,15 +4639,20 @@ class Daemon:
             return
         changed = sessions.spec_changes(was, same) if p.agent is not None \
             else {sessions.PROGRAM}
-        if sessions.FOLDER in changed and (
-                str(project_dir(was.get("projectDir", "")))
-                == str(project_dir(same.get("projectDir", "")))):
-            # "" and the home folder are one place: not a move.
-            changed.discard(sessions.FOLDER)
         sid = p.session_id
+        old_cwd = getattr(p.agent, "cwd", None)
         if p.agent is not None:
             p.agent.cancel()
         self._build_persona(p, spec)        # always: the old flags go
+        # The folder each adapter really runs in, not the settings resolved
+        # now: a project that was unmounted resolves to home on both sides
+        # and would have read as no move at all (Codex review of M2).
+        new_cwd = getattr(p.agent, "cwd", None)
+        if old_cwd and new_cwd:
+            if str(old_cwd) != str(new_cwd):
+                changed.add(sessions.FOLDER)
+            else:
+                changed.discard(sessions.FOLDER)
         # phase M2, bug I: _build_persona drops the session; put it back
         # when this change is one the new adapter can carry it across.
         p.session_id = sid
@@ -4644,18 +4716,13 @@ class Daemon:
                            or (p.problem if p is not None else ""),
                 "voice": getattr(p.speaker, "name", "") if p and p.speaker else "",
             })
-        notices = getattr(self, "_notices", None) or {}
         return {"crew": out, "open_mic": self.open_mic_field(),
                 # Per folder: sizes, problems, files changed outside Settings
                 # (Phase 9). The pages draw it from Phase 12.
                 "agent_files": getattr(self, "_agent_files", None) or {},
                 # phase M2, bug C: {"date", "today", "last"}; the
                 # Conversation page says so beside the longest-turn slider.
-                "limit_hits": self.limit_field(),
-                # phase M2, bug I: why a conversation was ended by a rebuild,
-                # for the readout's extra line. Absent when there is none.
-                **({"notice": " · ".join(n[0] for n in notices.values())}
-                   if notices else {})}
+                "limit_hits": self.limit_field()}
 
     def panel_agents(self, payload: dict) -> list[dict]:
         """Every agent as agents_panel.py draws it, from the payload just
@@ -4764,6 +4831,12 @@ class Daemon:
             return "locked", {k: v for k, v in extra.items()
                               if k not in ("transcript", "reply", "partial", "thinking",
                                            "who", "who_label", "collab", "tasks")}
+        # phase M2, bug I: why a rebuild ended an agent's conversation, for
+        # the HUD's extra line. Here rather than in the sticky fields so that
+        # a lock, above, takes it off the screen with everything else.
+        notices = getattr(self, "_notices", None)
+        if notices:
+            extra = {**extra, "notice": " · ".join(n[0] for n in notices.values())}
         fields = self.collab.fields()
         if fields["tasks"] or fields["collab"]:
             extra = {**extra, **fields}
@@ -4911,6 +4984,7 @@ class Daemon:
         # where a refresh belongs.
         if threading.current_thread() is threading.main_thread():
             self.catch_up_one(p)
+            self.catch_up_flags(p)
         p.interrupt.clear()
         p.follow_up = False
         p.turn_error = ""           # collab: this turn's own, not the last one's
@@ -5489,8 +5563,11 @@ class Daemon:
                 # this thing can have.
                 if not heard:
                     # Holding the key says "I am about to speak", so the
-                    # lead-in timer does not run until it comes back up.
-                    if ptt_done if ptt else elapsed_ms > active_lead_in:
+                    # lead-in timer does not run until it comes back up --
+                    # but a key held in silence still stops at the limit, or
+                    # a lost key-up buffered forever (Codex review of M2).
+                    if (ptt_done if ptt else elapsed_ms > active_lead_in) or (
+                            ptt and elapsed_ms >= self.pipe.max_utterance_ms):
                         if capture_kind == "open":
                             # The open microphone's wait is the time it has
                             # left: running out is the idle timeout.
@@ -5639,6 +5716,9 @@ class Daemon:
                         follow_up = False
                     elif text:
                         self._main.open_turn = capture_kind == "open"
+                        # A level lowered during the last turn applies
+                        # before this one (Codex review of M2).
+                        self.catch_up_flags(self._main)
                         self.answer(text, last, clock=clock)
                         # Uncapped on purpose, and worth stating because it
                         # reads like an oversight: a follow-up window opens

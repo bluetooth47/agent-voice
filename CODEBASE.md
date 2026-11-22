@@ -174,17 +174,20 @@ This file is the entry point (`main()`), and its structure is:
   reply); a payload naming an agent's state while the microphone is muted
   carries `muted: true`; the sticky fields carry `limit_hits` (`{date,
   today, last}`: turns cut at `maxUtteranceMs` today, kept across a daemon
-  restart through the old state file) and, when a rebuild ended a
-  conversation, `notice` (why; shown on the HUD's extra line until that
-  agent answers again).
+  restart through the old state file); and when a rebuild ended a
+  conversation every publish but a locked one carries `notice` (why; the
+  HUD's extra line, until that agent's next turn).
 - **Rebuilds keep the conversation (M2, bug I).** `reconcile_agent` (main)
   and `_rebuild_persona` (extra agents) always build a new adapter when the
   program, folder, endpoint, level or model changes, so no process started
   under old flags survives. `carry_session()` then keeps the session when
   only the level and/or model changed and the adapter's
   `carries_session_across` covers it (`sessions.carry`); a kept session
-  loses its "allow all in this chat" grants on a level change
-  (`permission_hook.revoke`).
+  loses its "allow all in this chat" grants on any level change, Ask ↔
+  Edits included (`permission_hook.revoke`; if one cannot be removed the
+  session is dropped instead). `catch_up_flags()` applies a level or folder
+  that moved while an agent was busy before its next turn starts
+  (`dispatch()`, and the single-agent path before `answer()`).
 - **Chimes (M2, bug J).** `chime(name, why)` logs `chime: NAME (why)` for
   every sound played. A wake for the agent the open microphone is already
   listening for re-arms silently (`listening_for`).

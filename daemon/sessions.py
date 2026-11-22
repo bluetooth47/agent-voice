@@ -29,6 +29,10 @@ from __future__ import annotations
 #: What can differ between the adapter being replaced and its replacement.
 PROGRAM, ENDPOINT, FOLDER, LEVEL, MODEL, OTHER = (
     "program", "endpoint", "folder", "level", "model", "other")
+#: Not a change: the reason a session that could have been kept was not --
+#: an "allow all in this chat" made under the old level could not be
+#: withdrawn (permission_hook.revoke), so the chat itself goes instead.
+GRANTS = "grants"
 
 #: A change that always ends the conversation, in the order they are named.
 _ENDS = (PROGRAM, ENDPOINT, FOLDER, OTHER)
@@ -74,4 +78,5 @@ def why(reason: str, program: str = "") -> str:
         LEVEL: f"{program} cannot carry a chat across a permission change",
         MODEL: f"{program} cannot carry a chat across a model change",
         OTHER: "its settings changed",
+        GRANTS: "its old permissions could not be withdrawn",
     }.get(reason, "its settings changed")

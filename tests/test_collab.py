@@ -492,6 +492,10 @@ def crew(daemon, tmp_path):
     d._main.name, d._main.label = "theo", "Theo"
     d._main.agent = SlowAgent(["Theo here."])
     d._main.speaker = Voice("main", log)
+    # The fakes run in "/p" whatever the settings say, which would read as a
+    # folder change at every dispatch; applying a moved level or folder
+    # before a turn is tested on real adapters in test_sessions.py (M2).
+    d.catch_up_flags = lambda p: None
     for spec in AGENTS[:2]:
         p = d.crew[spec["id"]] = Persona(spec["name"], spec)
         p.agent = SlowAgent([f"{spec['label']} here."])

@@ -1093,3 +1093,52 @@ def test_the_page_draws_it_beside_the_slider():
     assert "s.vLimitHits" in page
     overlay = (ROOT / "Settings.qml").read_text()
     assert "root.vLimitHits = (d.limit_hits" in overlay
+
+
+def test_a_key_held_in_silence_still_stops_at_the_limit(daemon, monkeypatch, capsys):
+    """Push-to-talk with nothing said and the key-up lost: the lead-in does
+    not run while the key is down, so the capture waited forever (Codex
+    review of M2). It ends at the limit, as nothing heard, uncounted."""
+    import frame_loop
+
+    before = daemon.limit_field()["today"]
+    sent = []
+    monkeypatch.setattr(daemon, "answer", lambda *a, **k: sent.append(a))
+    pipe = frame_loop.Pipe()
+    pipe.max_utterance_ms = 3000
+    items = [frame_loop.command("talk")] + [frame_loop.QUIET] * 25
+    frame_loop.drive(daemon, monkeypatch, items, pipe=pipe)
+    assert "(nothing heard)" in capsys.readouterr().out
+    assert pipe.utterances[0].abandoned and sent == []
+    assert daemon.limit_field()["today"] == before
+
+
+def test_one_agent_catches_up_its_flags_before_each_turn(daemon, monkeypatch):
+    """With one agent the turn runs on the loop's thread, and a wake word
+    that stopped the last one re-arms with no poll in between: a level
+    lowered meanwhile is applied before the next request is sent."""
+    import frame_loop
+
+    order = []
+    monkeypatch.setattr(daemon, "catch_up_flags", lambda p: order.append(("flags", p)))
+
+    def answer(text, last, clock=None):
+        order.append(("answer", text))
+        raise frame_loop.Done()
+    monkeypatch.setattr(daemon, "answer", answer)
+    pipe = frame_loop.Pipe(feed_wake=frame_loop.wake_on(1))
+    items = [frame_loop.LOUD] * 3 + [frame_loop.QUIET] * 6
+    frame_loop.drive(daemon, monkeypatch, items, pipe=pipe)
+    assert order == [("flags", daemon._main), ("answer", "what time is it")]
+
+
+def test_the_page_and_the_popup_read_the_new_fields_safely():
+    """Two QML details from the Codex review of M2: the limit line is
+    today's by its own date (the daemon's roll-over waits for an idle poll a
+    mute stops), and an empty collaboration line does not hide a notice."""
+    page = (ROOT / "pages" / "ConversationPage.qml").read_text()
+    assert 'Qt.formatDate(new Date(), "yyyy-MM-dd")' in page
+    panel = (ROOT / "Panel.qml").read_text()
+    assert 'voice.collabLine = d.collab ? String(d.collab)' in panel
+    assert ': d.notice ? String(d.notice) : ""' in panel
+    assert "voice.micMuted = d.muted === true" in panel
