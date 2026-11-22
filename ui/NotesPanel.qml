@@ -19,10 +19,19 @@ import qs.Ui
 // What the person writes here is theirs: a lock and an agent's "read only"
 // bind the agents, not the person.
 //
+// Since M13 a note is a topic, shown as a card (its topic, its first line)
+// in its owner's lane: this folder's lane first, then every other folder's
+// from `agentvoice notes lanes`. A card is dragged to another lane to move
+// it (Ctrl copies) or sent with its Move to…; NoteMover asks before it
+// widens and offers Undo. Combine merges notes of this folder into one
+// topic, and Earlier notes puts back one that was combined away or deleted.
+// A card in another lane opens on its owner's own tab (openElsewhere).
+//
 //   NotesPanel {
 //     target: "sora"             // "main", an agent's id, or "communal"
 //     owner: "Sora"              // whose notes, in words; "" for communal
 //     whyNot: ""                 // why its program cannot use them, or ""
+//     onOpenElsewhere: function(id) { page.s.goTo("agentdetails", id, "notes") }
 //   }
 Column {
   id: np
@@ -64,6 +73,43 @@ Column {
 
   readonly property var notesList: listing ? listing.notes : []
   readonly property var otherFiles: listing ? listing.files : []
+
+  // Phase M13: every notes folder as a lane, this one's first.
+  property var lanesData: null
+  property string moveNote: ""
+  property bool combining: false
+  // Names picked for Combine, in the order picked: the first is kept.
+  property var picked: []
+  property bool showGone: false
+  // A card being dragged: a poll that rebuilt the cards now would drop the
+  // drag out of the person's hand, so a new reading waits (and one that
+  // changed nothing is never applied at all, which also keeps a card that
+  // was unfolded unfolded).
+  property bool dragActive: false
+  signal openElsewhere(string laneId)
+
+  readonly property string homeLabel: communal ? "Communal" : owner
+  readonly property bool lockedAll: listing !== null && listing.locked_all === true
+  readonly property var goneList: listing && Array.isArray(listing.gone) ? listing.gone : []
+  readonly property var allLanes: lanesData && Array.isArray(lanesData.lanes) ? lanesData.lanes : []
+  readonly property var otherLanes: allLanes.filter(function(l) { return l.id !== np.target })
+  // Anything but a list tells the mover the quarantine cannot be read.
+  readonly property var quarantinedIds: lanesData && lanesData.quarantine_readable === false ? null
+                                        : allLanes.filter(function(l) { return l.quarantined === true })
+                                                  .map(function(l) { return l.id })
+  readonly property var laneList: {
+    var out = [{ id: np.target, label: np.homeLabel }]
+    np.otherLanes.forEach(function(l) {
+      out.push({ id: l.id, label: l.label,
+                 reason: l.id === "communal" ? "Every agent can read it; asks first" : "" })
+    })
+    return out
+  }
+  readonly property var laneLabels: {
+    var out = {}
+    np.laneList.forEach(function(l) { out[l.id] = l.label })
+    return out
+  }
   readonly property var openEntry: {
     for (var i = 0; i < notesList.length; i++)
       if (notesList[i].name === openName) return notesList[i]
@@ -96,6 +142,84 @@ Column {
     return at > 0 ? Qt.formatDateTime(new Date(at * 1000), "MMM d, h:mm AP") : ""
   }
   function cli(args) { return ["agentvoice", "agents", "notes", np.target].concat(args) }
+  function refresh() { list(); lanes() }
+  function lanes() {
+    if (lanesRunner.running) { lanesRunner.again = true; return }
+    lanesRunner.command = ["agentvoice", "notes", "lanes", "--json"]
+    lanesRunner.running = true
+  }
+
+  // --- M13: cards, moves and Combine -----------------------------------------------
+  function laneById(id) {
+    for (var i = 0; i < allLanes.length; i++) if (allLanes[i].id === id) return allLanes[i]
+    return null
+  }
+  function laneNotes(id) {
+    if (id === target) return notesList
+    var l = laneById(id)
+    return l && Array.isArray(l.notes) ? l.notes : []
+  }
+  function laneLocked(id) {
+    if (id === target) return lockedAll
+    var l = laneById(id)
+    return l !== null && l.locked_all === true
+  }
+  function laneLabel(id) { return laneLabels[id] !== undefined ? laneLabels[id] : id }
+  function notePayload(x, laneId) {
+    return { kind: "note", name: x.name, label: x.label || x.name, from: laneId,
+             tainted: x.tainted === true, problem: x.problem || "", versions: x.versions || 0 }
+  }
+  function noteRefusal(p, to) {
+    if (!p || p.kind !== "note" || !p.name) return "Not a note."
+    if (p.problem !== "") return "It cannot be moved: " + p.problem
+    if (laneLocked(p.from)) return laneLabel(p.from) + "'s notes record cannot be read, so nothing is moved out of it."
+    if (laneLocked(to)) return laneLabel(to) + "'s notes record cannot be read, so nothing is moved into it."
+    if (laneNotes(to).some(function(x) { return x.name === p.name }))
+      return laneLabel(to) + " already has a note called " + p.name + ". Combine or rename one first."
+    return ""
+  }
+  // Every way a card moves -- a drop on a lane, its Move to… -- ends here.
+  function noteDropped(p, copy, from, to) {
+    var why = noteRefusal(p, to)
+    if (why !== "") { moveNote = why; return }
+    moveNote = ""
+    noteMover.request(p.name, from, to, copy, p.tainted, p.label, p.versions)
+  }
+  function noteStatus(x) {
+    return "rev " + x.rev + " · " + (x.author_label || x.author) +
+           (when(x.at) !== "" ? ", " + when(x.at) : "") + " · " + x.chars + " characters" +
+           (x.tainted ? " · may contain text from web pages" : "") +
+           (x.problem ? " · " + x.problem : "")
+  }
+  function noteDetails(x) {
+    var out = [{ label: "Name", value: x.name },
+               { label: "Saved versions", value: String(x.versions || 0) + " (they move with it)" }]
+    if (x.locked) out.push({ label: "Locked", value: "read-only for every agent" })
+    if (x.tainted) out.push({ label: "Taint", value: "may contain text from web pages", urgent: true })
+    return out
+  }
+  function togglePick(name) {
+    var c = picked.slice()
+    var i = c.indexOf(name)
+    if (i >= 0) c.splice(i, 1); else c.push(name)
+    picked = c
+  }
+  function startCombine() { combining = !combining; picked = []; moveNote = "" }
+  function askCombine() {
+    var parts = []
+    picked.forEach(function(n) {
+      var e = notesList.filter(function(x) { return x.name === n })[0]
+      if (e) parts.push({ name: e.name, label: e.label || e.name, tainted: e.tainted === true,
+                          locked: e.locked === true })
+    })
+    noteMover.askCombine(target, parts)
+  }
+  function restoreGone(g) {
+    if (goneRestorer.running) return
+    actionNote = ""
+    goneRestorer.command = cli(["restore", g.name, g.latest, "--json"])
+    goneRestorer.running = true
+  }
   function err(t) { return String(t).trim().replace(/^agentvoice agents: /, "").split("\n").pop() }
 
   function list() {
@@ -252,16 +376,52 @@ Column {
     listing = null; listError = ""
     clearEditor()
     openName = ""; creating = false; editTarget = ""
-    list()
+    combining = false; picked = []; moveNote = ""; dragActive = false
+    refresh()
   }
-  onActiveChanged: if (active) list()
-  Component.onCompleted: list()
+  onActiveChanged: if (active) refresh()
+  Component.onCompleted: refresh()
 
   Timer {
     interval: 4000
     repeat: true
     running: np.active && np.target !== ""
     onTriggered: np.list()
+  }
+  // The other lanes change less often, and reading them all costs more.
+  Timer {
+    interval: 8000
+    repeat: true
+    running: np.active && np.target !== ""
+    onTriggered: np.lanes()
+  }
+
+  Process {
+    id: lanesRunner
+    property bool again: false
+    onRunningChanged: if (!running && again) { again = false; Qt.callLater(np.lanes) }
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var d
+        try { d = JSON.parse(String(text)) } catch (e) { return }
+        if (!d || !Array.isArray(d.lanes) || np.dragActive) return
+        if (np.lanesData === null || JSON.stringify(np.lanesData) !== JSON.stringify(d)) np.lanesData = d
+      }
+    }
+  }
+  Process {
+    id: goneRestorer
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var d
+        try { d = JSON.parse(String(text)) } catch (e) { return }
+        if (d && typeof d.rev === "number") np.actionNote = "Put back: " + d.name + "."
+      }
+    }
+    stderr: StdioCollector {
+      onStreamFinished: { var t = String(text).trim(); if (t !== "") np.actionNote = "Not put back: " + np.err(t) }
+    }
+    onRunningChanged: if (!running) np.refresh()
   }
 
   Process {
@@ -276,7 +436,22 @@ Column {
         try { d = JSON.parse(String(text)) } catch (e) { return }
         if (!d || !Array.isArray(d.notes)) return
         np.listError = ""
+        if (np.dragActive) return
+        if (np.listing !== null && JSON.stringify(np.listing) === JSON.stringify(d)) return
         np.listing = d
+        // Picks for Combine that are no longer here are dropped.
+        if (np.picked.length > 0)
+          np.picked = np.picked.filter(function(n) { return d.notes.some(function(x) { return x.name === n }) })
+        // The open note left (moved, combined or deleted): the editor closes
+        // rather than offer to save it back into a folder it left.
+        if (np.openName !== "" && !np.creating && np.noteLoaded && np.openEntry === null &&
+            !box.editing && !np.holding) {
+          var left = np.openName
+          np.clearEditor()
+          np.openName = ""
+          np.actionNote = left + " is no longer here: it was moved, combined or deleted."
+          return
+        }
         // The open note changed on disk (an agent wrote it, or a hand
         // edit): read it again, unless something typed would be lost.
         var e = np.openEntry
@@ -475,11 +650,12 @@ Column {
     width: parent.width
     wrapMode: Text.WordWrap
     textFormat: Text.PlainText
-    text: np.communal
+    text: (np.communal
           ? "Notes every agent here can read, and write unless it is set to read only on its Agents card. " +
             "A note is handed to an agent as information, never as an instruction."
           : np.owner + "'s own notes: what it writes down for itself. Other agents cannot reach them " +
-            "through the notes tools. What it writes in the communal notes is on the Communal page."
+            "through the notes tools. What it writes in the communal notes is on the Communal page.") +
+          " One note per topic: agents are told to add to a topic's note rather than start another."
     color: np.foreground
     font.family: np.fontFamily
     font.pixelSize: Style.font.bodySmall
@@ -535,6 +711,37 @@ Column {
       fontFamily: np.fontFamily
       onClicked: np.openFolder()
     }
+    Button {
+      visible: np.notesList.length >= 2 && !np.lockedAll
+      text: np.combining ? "Stop combining" : "Combine…"
+      focusable: true
+      foreground: np.foreground
+      fontFamily: np.fontFamily
+      tooltipText: "Merge several notes here into one topic note"
+      onClicked: np.startCombine()
+    }
+  }
+  Text {
+    width: parent.width
+    visible: np.combining
+    wrapMode: Text.WordWrap
+    textFormat: Text.PlainText
+    text: np.picked.length === 0
+          ? "Pick the notes to combine. The first you pick is kept; the others are added under it, each with its topic as a heading."
+          : "Kept: " + np.picked[0] + (np.picked.length > 1 ? ". Added under it: " + np.picked.slice(1).join(", ") + "." : ". Pick at least one more.")
+    color: np.dim
+    font.family: np.fontFamily
+    font.pixelSize: Style.font.caption
+  }
+  Button {
+    visible: np.combining
+    text: "Combine " + np.picked.length + " notes…"
+    bordered: true
+    focusable: true
+    enabled: np.picked.length >= 2 && !noteMover.busy
+    foreground: np.foreground
+    fontFamily: np.fontFamily
+    onClicked: np.askCombine()
   }
 
   Text {
@@ -546,65 +753,173 @@ Column {
     font.family: np.fontFamily
     font.pixelSize: Style.font.bodySmall
   }
-  Text {
-    width: parent.width
-    visible: np.listing !== null && np.notesList.length === 0 && np.otherFiles.length === 0
-    wrapMode: Text.WordWrap
-    textFormat: Text.PlainText
-    text: "No notes yet. " + (np.communal ? "Any agent may start one" : np.owner + " starts one") +
-          " when it has something worth keeping, or you can, with New note."
-    color: np.dim
-    font.family: np.fontFamily
-    font.pixelSize: Style.font.bodySmall
-  }
 
-  // --- the list -------------------------------------------------------------------
-  Repeater {
-    model: np.notesList
-    Item {
-      id: row
-      required property var modelData
-      width: np.width
-      height: rowText.implicitHeight + Style.space(10)
-      Rectangle {
-        anchors.fill: parent
-        radius: Style.cornerRadius
-        color: np.foreground
-        opacity: row.modelData.name === np.openName ? 0.10 : (rowHover.hovered ? 0.05 : 0)
-      }
-      HoverHandler { id: rowHover; cursorShape: Qt.PointingHandCursor }
-      TapHandler { onTapped: np.open(row.modelData.name) }
-      Text {
-        id: rowText
-        anchors.left: parent.left
-        anchors.right: lockButton.left
-        anchors.verticalCenter: parent.verticalCenter
-        anchors.leftMargin: Style.space(6)
-        anchors.rightMargin: Style.space(8)
-        wrapMode: Text.WordWrap
-        textFormat: Text.PlainText
-        text: (row.modelData.locked ? "🔒 " : "") + row.modelData.name + "  ·  " +
-              (row.modelData.author_label || row.modelData.author) +
-              (np.when(row.modelData.at) !== "" ? ", " + np.when(row.modelData.at) : "") +
-              "  ·  " + row.modelData.chars + " characters" +
-              (row.modelData.tainted ? "  ·  may contain text from web pages" : "") +
-              (row.modelData.problem ? "  ·  " + row.modelData.problem : "")
-        color: row.modelData.tainted || row.modelData.problem ? Commons.Color.urgent : np.foreground
-        font.family: np.fontFamily
-        font.pixelSize: Style.font.bodySmall
-      }
-      Button {
-        id: lockButton
-        anchors.right: parent.right
-        anchors.verticalCenter: parent.verticalCenter
-        text: row.modelData.locked ? "Unlock" : "Lock"
-        enabled: !(np.listing && np.listing.locked_all)
-        focusable: true
-        foreground: np.foreground
-        fontFamily: np.fontFamily
-        onClicked: np.setLock(row.modelData.name, !row.modelData.locked)
+  // --- the lanes (M13) -------------------------------------------------------------
+  // This folder's topics first, each a card: Open puts it in the editor
+  // below, Lock binds every agent. Then every other folder's, whose cards
+  // open on their own tab. A drag moves a card (Ctrl copies); Move to… does
+  // the same from the keyboard.
+  Flow {
+    id: noteLanes
+    width: parent.width
+    visible: np.listing !== null
+    spacing: Style.space(10)
+    readonly property real laneWidth: width >= Style.space(760) ? (width - spacing) / 2 : width
+
+    DropLane {
+      width: noteLanes.laneWidth
+      laneId: np.target
+      title: np.homeLabel
+      subtitle: np.communal ? "Every agent can read these." : "Its own notes."
+      count: np.notesList.length
+      dragKey: "agentvoice-note"
+      emptyText: "No notes yet. " + (np.communal ? "Any agent may start one" : np.owner + " starts one") +
+                 " when it has something worth keeping, or you can, with New note, or drag one here."
+      refuse: function(p, copy, from) { return np.noteRefusal(p, np.target) }
+      onReceived: function(p, copy, from) { np.noteDropped(p, copy, from, np.target) }
+      foreground: np.foreground
+      fontFamily: np.fontFamily
+      Repeater {
+        model: np.notesList
+        SkillCard {
+          required property var modelData
+          width: parent.width
+          draggable: !np.lockedAll && !modelData.problem
+          dragKey: "agentvoice-note"
+          laneId: np.target
+          payload: np.notePayload(modelData, np.target)
+          lanes: np.laneList
+          onMoveRequested: function(to, copy) { np.noteDropped(payload, copy, np.target, to) }
+          onDraggingChanged: np.dragActive = dragging
+          Component.onDestruction: if (dragging) np.dragActive = false
+          title: modelData.label || modelData.name
+          subtitle: modelData.first_line || ""
+          badge: modelData.locked ? "locked" : ""
+          status: np.noteStatus(modelData)
+          statusUrgent: modelData.tainted === true || (modelData.problem || "") !== ""
+          details: np.noteDetails(modelData)
+          border.color: modelData.name === np.openName ? Commons.Color.accent
+                        : Qt.rgba(np.foreground.r, np.foreground.g, np.foreground.b, 0.22)
+          foreground: np.foreground
+          fontFamily: np.fontFamily
+          Button {
+            text: modelData.name === np.openName ? "Open ✓" : "Open"
+            focusable: true
+            fontSize: Style.font.caption
+            foreground: np.foreground
+            fontFamily: np.fontFamily
+            onClicked: np.open(modelData.name)
+          }
+          Button {
+            text: modelData.locked ? "Unlock" : "Lock"
+            enabled: !np.lockedAll
+            focusable: true
+            fontSize: Style.font.caption
+            foreground: np.foreground
+            fontFamily: np.fontFamily
+            tooltipText: "A locked note is read-only for every agent, wherever it is moved"
+            onClicked: np.setLock(modelData.name, !modelData.locked)
+          }
+          Button {
+            visible: np.combining
+            text: np.picked.indexOf(modelData.name) === 0 ? "Kept ✓"
+                  : np.picked.indexOf(modelData.name) > 0 ? "Picked ✓" : "Pick"
+            bordered: np.picked.indexOf(modelData.name) >= 0
+            focusable: true
+            fontSize: Style.font.caption
+            foreground: np.foreground
+            fontFamily: np.fontFamily
+            onClicked: np.togglePick(modelData.name)
+          }
+        }
       }
     }
+
+    Repeater {
+      model: np.otherLanes
+      DropLane {
+        id: otherLane
+        required property var modelData
+        width: noteLanes.laneWidth
+        laneId: modelData.id
+        title: modelData.label + (modelData.quarantined && modelData.id !== "communal" ? " · quarantined" : "")
+        subtitle: modelData.problem !== "" ? modelData.problem
+                  : modelData.id === "communal" ? "Every agent can read these. Open one to edit it on the Communal page."
+                  : "Open one to edit it on " + modelData.label + "'s own Notes tab."
+        count: modelData.notes.length
+        dragKey: "agentvoice-note"
+        emptyText: "No notes."
+        refuse: function(p, copy, from) { return np.noteRefusal(p, laneId) }
+        onReceived: function(p, copy, from) { np.noteDropped(p, copy, from, laneId) }
+        foreground: np.foreground
+        fontFamily: np.fontFamily
+        Repeater {
+          model: otherLane.modelData.notes
+          SkillCard {
+            required property var modelData
+            width: parent.width
+            draggable: otherLane.modelData.locked_all !== true && !modelData.problem
+            dragKey: "agentvoice-note"
+            laneId: otherLane.laneId
+            payload: np.notePayload(modelData, otherLane.laneId)
+            lanes: np.laneList
+            onMoveRequested: function(to, copy) { np.noteDropped(payload, copy, otherLane.laneId, to) }
+            onDraggingChanged: np.dragActive = dragging
+          Component.onDestruction: if (dragging) np.dragActive = false
+            title: modelData.label || modelData.name
+            subtitle: modelData.first_line || ""
+            badge: modelData.locked ? "locked" : ""
+            status: np.noteStatus(modelData)
+            statusUrgent: modelData.tainted === true || (modelData.problem || "") !== ""
+            details: np.noteDetails(modelData)
+            foreground: np.foreground
+            fontFamily: np.fontFamily
+            Button {
+              text: "Open →"
+              focusable: true
+              fontSize: Style.font.caption
+              foreground: np.foreground
+              fontFamily: np.fontFamily
+              tooltipText: "Open it on " + otherLane.modelData.label + "'s Notes"
+              onClicked: np.openElsewhere(otherLane.laneId)
+            }
+          }
+        }
+      }
+    }
+  }
+  // The move or copy itself, its confirm when it widens, Combine's confirm,
+  // and Undo.
+  NoteMover {
+    id: noteMover
+    width: parent.width
+    labels: np.laneLabels
+    quarantined: np.quarantinedIds
+    foreground: np.foreground
+    fontFamily: np.fontFamily
+    onChanged: np.refresh()
+    onCombined: function(t, into) { if (t === np.target) { np.combining = false; np.picked = [] } }
+  }
+  Text {
+    width: parent.width
+    visible: np.moveNote !== ""
+    wrapMode: Text.WordWrap
+    textFormat: Text.PlainText
+    text: np.moveNote
+    color: Commons.Color.urgent
+    font.family: np.fontFamily
+    font.pixelSize: Style.font.caption
+  }
+  Text {
+    width: parent.width
+    visible: np.listing !== null
+    wrapMode: Text.WordWrap
+    textFormat: Text.PlainText
+    text: "Drag a card to another lane to move it (hold Ctrl to copy), or use its Move to…; Undo is offered " +
+          "for ten seconds. A note's past versions, who wrote it, its lock and its web-page mark go with it."
+    color: np.dim
+    font.family: np.fontFamily
+    font.pixelSize: Style.font.caption
   }
   Text {
     width: parent.width
@@ -636,6 +951,44 @@ Column {
       foreground: np.foreground
       fontFamily: np.fontFamily
       onClicked: np.openFile(modelData.name)
+    }
+  }
+
+  // --- Earlier notes (M13) ---------------------------------------------------------
+  // Names with saved versions and no note now: combined away, or deleted by
+  // hand. Put back restores the newest version, as the person.
+  Button {
+    visible: np.goneList.length > 0
+    text: (np.showGone ? "▾ " : "▸ ") + "Earlier notes (" + np.goneList.length + ")"
+    focusable: true
+    foreground: np.foreground
+    fontFamily: np.fontFamily
+    onClicked: np.showGone = !np.showGone
+  }
+  Repeater {
+    model: np.showGone ? np.goneList : []
+    Flow {
+      required property var modelData
+      width: np.width
+      spacing: Style.space(8)
+      Text {
+        text: (modelData.label || modelData.name) + " · " + modelData.versions +
+              (modelData.versions === 1 ? " saved version" : " saved versions") + " · newest " + np.when(modelData.at)
+        textFormat: Text.PlainText
+        color: np.foreground
+        font.family: np.fontFamily
+        font.pixelSize: Style.font.bodySmall
+      }
+      Button {
+        text: "Put back"
+        focusable: true
+        enabled: !goneRestorer.running
+        fontSize: Style.font.caption
+        foreground: np.foreground
+        fontFamily: np.fontFamily
+        tooltipText: "Make it a note again from its newest saved version"
+        onClicked: np.restoreGone(modelData)
+      }
     }
   }
 

@@ -9,7 +9,11 @@ communal one:
       communal/notes/  (the same shape)
 
 The agents reach them through `crew_mcp.py`'s four tools; the settings
-pages through `agentvoice agents notes …`. Nothing else writes here.
+pages through `agentvoice agents notes …`, and, to move, copy or combine
+them, `agentvoice notes …` (notemoves.py, phase M13). Nothing else writes
+here. **A note is a topic**: one file per subject, appended to rather than
+started again, which is what the tools' descriptions steer agents toward
+and what the Notes tab's cards show (`topic_label`, `first_line`).
 
 **Every write**, under the one lock agentfs uses for every folder: check
 the record can be read → check the writer is allowed and the note is not
@@ -277,12 +281,26 @@ def _seen(meta: dict, name: str, data: bytes | None, path: Path) -> bool:
     return False
 
 
+def _settle_transfers() -> None:
+    """With the lock held: finish or roll back a move, copy or combine that
+    did not end (phase M13), before any note is read. Half a move is a note
+    file with no record entry, which the scan below would take for a note
+    made by hand -- its taint and its lock gone -- so nothing is read until
+    the journal has been settled. Skipped inside a transfer, which is
+    settling or making the record itself."""
+    import transfer
+    if transfer.busy() or not transfer.pending():
+        return
+    transfer._recover_locked()
+
+
 def _current(target: str, create: bool = False,
              make_folder: bool = True) -> tuple[Path, dict | None, dict]:
     """With the lock held: the folder, its record brought up to date (and
     saved when it moved and can be trusted), and each note's bytes as they
     were read for that, so what is returned and what was hashed are the
     same bytes. A note that cannot be read maps to its NotesError."""
+    _settle_transfers()
     d = notes_dir(target, create=create, make_folder=make_folder)
     names = _note_names(d)
     meta = _load_meta(d)
@@ -307,10 +325,55 @@ def _current(target: str, create: bool = False,
 
 # --- reading ------------------------------------------------------------------
 
+#: The most of a note's first line a listing carries (phase M13).
+FIRST_LINE_MAX = 120
+
+
+def topic_label(name: str) -> str:
+    """A note's name as a topic, for people: "shopping-list" -> "Shopping
+    list" (phase M13). The name stays the note's identity; this is only
+    how a card reads."""
+    words = str(name).replace("-", " ").split()
+    return " ".join(words)[:1].upper() + " ".join(words)[1:] if words else str(name)
+
+
+def first_line(text: str) -> str:
+    """The first line with words in it, without Markdown's heading marks,
+    cut to FIRST_LINE_MAX: what a topic is about, at a glance. It is the
+    note's own text, so whoever shows it shows it as plain text."""
+    for line in text.split("\n"):
+        line = line.strip().lstrip("#").strip()
+        if line:
+            line = "".join(c if c.isprintable() else " " for c in line)
+            return line if len(line) <= FIRST_LINE_MAX else line[:FIRST_LINE_MAX - 1] + "…"
+    return ""
+
+
 def _entry_out(name: str, e: dict | None, locked_all: bool) -> dict:
     e = e or {"rev": 0, "author": YOU, "at": 0, "tainted": False, "locked": False}
-    return {"name": name, "rev": e["rev"], "author": e["author"], "at": e["at"],
-            "tainted": e["tainted"], "locked": locked_all or e["locked"]}
+    return {"name": name, "label": topic_label(name), "rev": e["rev"], "author": e["author"],
+            "at": e["at"], "tainted": e["tainted"], "locked": locked_all or e["locked"]}
+
+
+def _gone(d: Path, live) -> list[dict]:
+    """Names with saved versions and no note now: a note deleted by hand,
+    or one combined into another (phase M13), whose past is still there to
+    restore. Newest version first."""
+    out = []
+    try:
+        agentfs._no_link(d / ".history")
+        entries = sorted(os.scandir(d / ".history"), key=lambda e: e.name)
+    except (OSError, AgentFsError):
+        return out
+    for e in entries:
+        if not valid_name(e.name) or e.name in live or not e.is_dir(follow_symlinks=False):
+            continue
+        versions = _versions(d, e.name)
+        if versions:
+            m = _VERSION.fullmatch(versions[0].name)
+            out.append({"name": e.name, "label": topic_label(e.name), "versions": len(versions),
+                        "latest": versions[0].name, "at": int(m.group(1)) / 1e9})
+    return out
 
 
 def list_notes(target: str) -> dict:
@@ -326,11 +389,15 @@ def list_notes(target: str) -> dict:
         try:
             if isinstance(data, NotesError):
                 raise data
-            out["chars"] = len(_decode(data or b""))
+            text = _decode(data or b"")
+            out["chars"] = len(text)
+            out["first_line"] = first_line(text)
             out["problem"] = ""
         except NotesError as e:
             out["chars"] = 0
+            out["first_line"] = ""
             out["problem"] = str(e)
+        out["versions"] = len(_versions(d, name))
         notes.append(out)
     files = []
     try:
@@ -346,7 +413,8 @@ def list_notes(target: str) -> dict:
     except OSError:
         pass
     return {"target": target, "folder": str(d), "notes": notes, "files": files,
-            "locked_all": locked_all, "max": FOLDER_MAX, "note_max": NOTE_MAX,
+            "gone": _gone(d, got), "locked_all": locked_all, "max": FOLDER_MAX,
+            "note_max": NOTE_MAX,
             "problem": ("The notes record (.meta.json) cannot be read, so every note is "
                         "treated as locked. Fix the file or remove it; removing it "
                         "unlocks every note." if locked_all else "")}

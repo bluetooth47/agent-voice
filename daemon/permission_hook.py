@@ -337,6 +337,26 @@ SKILL_WORDS = ("agentvoice skills import", "skillscan.py import",
                "agentvoice skills move", "agentvoice skills copy", "agentvoice skills undo",
                "skillscan.py move", "skillscan.py copy", "skillscan.py undo", "transfer.py")
 
+#: Command text that moves, copies or combines a note, or undoes a move
+#: (phase M13): only the person does, and a move can widen who reads a note
+#: and its past versions. The same text match.
+NOTE_WORDS = ("agentvoice notes move", "agentvoice notes copy", "agentvoice notes combine",
+              "agentvoice notes undo", "notemoves.py move", "notemoves.py copy",
+              "notemoves.py combine", "notemoves.py undo")
+
+#: The person's own command-line ways to change an agent's folder (phase
+#: M13, found reading the notes CLI). Through them a write is the person's:
+#: a note written or restored there is "you", held by no `notesWrite=deny`
+#: and no lock, and `notes ... unlock` lifts a lock the person set. So an
+#: agent running one is asked at every level, as for a raw write into the
+#: folder. Reading (list, show, history, version, folder, export, apply) is
+#: not asked. The same text match, on the words with whitespace folded.
+FOLDER_WORDS = re.compile(
+    r"(?:agentvoice agents|agentfs\.py) (?:"
+    r"(?:write|revert|ack|trash|restore|create|migrate)(?![\w-])(?! --dry-run)"
+    r"|traits set(?![\w-])"
+    r"|notes \S+ (?:write|lock|unlock|restore)(?![\w-]))")
+
 
 def _spellings(dirs: list[Path]) -> list[str]:
     """The ways a shell command can name those places: absolute, resolved,
@@ -403,9 +423,16 @@ def orders_write(tool_name: str, tool_input) -> str:
             if frag in cmd or frag in flat:
                 return ("this command could pass work between agents as if you had, "
                         f"stepping round the Crew map ({frag})")
+        for frag in NOTE_WORDS:
+            if frag in cmd or frag in flat:
+                return f"this command moves, copies or combines notes, which only you do ({frag})"
         for frag in SKILL_WORDS:
             if frag in cmd or frag in flat:
                 return f"this command gives, moves or takes back a skill, which only you do ({frag})"
+        m = FOLDER_WORDS.search(flat)
+        if m:
+            return ("this command changes an agent's folder or notes as you, past any lock "
+                    f"({m.group(0)})")
     return ""
 
 

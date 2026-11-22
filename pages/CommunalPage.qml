@@ -811,6 +811,9 @@ Column {
     target: "communal"
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
+    // Phase M13: every agent's notes are lanes here too; one opens on that
+    // agent's own Notes tab.
+    onOpenElsewhere: function(id) { page.s.goTo("agentdetails", id, "notes") }
   }
 
   // --- Chats (Phase 15) -----------------------------------------------------------

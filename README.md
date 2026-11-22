@@ -655,6 +655,21 @@ published in one step, and one cut short by a crash is finished or put back
 before any agent sees either side. A skill found outside Agent Voice is
 only ever copied in, never moved.
 
+**Notes are topics.** Each note is one subject (a shopping list, the garden,
+how the house runs), and agents are told to add to a topic's note rather than
+start another. The Notes tab shows each as a card with its topic and its first
+line, in its owner's lane: this agent's first, then every other agent's and
+Communal's (Communal → Notes shows the same lanes). Drag a card to another lane
+to move it, hold Ctrl to copy it, or use its **Move to…**; the note takes its
+past versions, who wrote it, its lock and its "may contain text from web pages"
+mark with it. Moving one into Communal, out of a quarantined agent, or a note
+with that web mark asks first, and says that its past versions go too. **Undo**
+is offered for ten seconds; `agentvoice notes history` and `agentvoice notes undo
+OP` work at any time. **Combine…** merges several notes of one folder into one
+topic: the first you pick is kept and the others are added under it, each with
+its topic as a heading. A note combined away keeps all its past versions, and
+**Earlier notes** puts it back. Agents cannot move or combine notes.
+
 ### In Omarchy's Agents panel
 
 Each voice agent also gets a section in Omarchy's own Agents panel, the one

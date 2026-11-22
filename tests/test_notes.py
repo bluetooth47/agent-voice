@@ -818,7 +818,9 @@ AUDIT_SAFE = {"author", "target", "name", "kind", "reason", "locked", "valid_nam
               "copied_bytes",
               # Phase M12 (transfer._audit): a transfer's ids, the skill's
               # name, its size in bytes, and "outside" for an import.
-              "size", "OUTSIDE"}
+              "size", "OUTSIDE",
+              # Phase M13 (a Combine): the byte count of the notes combined.
+              "parts_bytes"}
 
 
 def _names_outside_len(node):

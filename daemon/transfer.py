@@ -1,5 +1,7 @@
 """Moving and copying a skill between agents and Communal, and undoing it
-(master plan, phase M12). Notes reuse the journal in M13.
+(master plan, phase M12). Notes reuse the journal since M13: a record whose
+`kind` is "note" is written, settled and undone by notemoves.py, and this
+module only keeps the journal, recovery's loop and the dispatch.
 
 Only the person moves anything: the pages and `agentvoice skills move|copy|
 undo` call this, no agent tool does, and an agent running those commands is
@@ -86,6 +88,26 @@ class Stuck(AgentFsError):
     """A record that could not be settled."""
 
 
+#: How deep this process is inside a transfer or a recovery (phase M13).
+#: notes._current settles open records before it reads, which must not
+#: happen while one is being written or settled here.
+_BUSY = 0
+
+
+@contextlib.contextmanager
+def working():
+    global _BUSY
+    _BUSY += 1
+    try:
+        yield
+    finally:
+        _BUSY -= 1
+
+
+def busy() -> bool:
+    return _BUSY > 0
+
+
 # --- the journal ----------------------------------------------------------------
 
 def journal_dir(create: bool = False) -> Path:
@@ -116,6 +138,9 @@ def _valid(rec) -> bool:
     never acted on (a record's names become folder names)."""
     if not isinstance(rec, dict):
         return False
+    if rec.get("kind") == "note":
+        import notemoves
+        return notemoves.valid(rec)
     action, frm, to = rec.get("action"), rec.get("from"), rec.get("to")
     if action not in ACTIONS or not isinstance(rec.get("op"), str) or not _OP.fullmatch(rec["op"]):
         return False
@@ -590,6 +615,9 @@ def _remove_locked(target: str, name: str, undo_of: str, expect: str) -> dict:
 def _settle(rec: dict) -> str:
     """Finish or roll back one record left open by a transfer that did not
     end (the lock held, so its process is gone). Returns what was done."""
+    if rec.get("kind") == "note":
+        import notemoves
+        return notemoves.settle(rec)
     op, action, frm, to, name = rec["op"], rec["action"], rec["from"], rec["to"], rec["name"]
     stage, hidden = f".t-{op}", f".t-{op}-gone"
     if rec["state"] == "published":
@@ -652,6 +680,11 @@ def _settle(rec: dict) -> str:
 
 
 def _recover_locked() -> list[dict]:
+    with working():
+        return _recover_open()
+
+
+def _recover_open() -> list[dict]:
     out = []
     try:
         d = journal_dir()
@@ -705,11 +738,14 @@ def recover(block: bool = True) -> list[dict] | None:
 
 # --- what the person does ----------------------------------------------------------------
 
-def _audit(rec: dict, kind: str) -> None:
+def _audit(rec: dict, kind: str, parts_bytes: int | None = None) -> None:
+    """One line: ids, the name, its size; for a Combine (M13) the size of
+    the notes it was made of too. Never text."""
     try:
         import audit
         frm, to, name, size = rec["from"], rec["to"], rec["name"], rec["bytes"]
-        audit.record(kind, frm="you" if frm == OUTSIDE else frm, to=to, note=name, after=size)
+        audit.record(kind, frm="you" if frm == OUTSIDE else frm, to=to, note=name,
+                     before=parts_bytes, after=size)
     except Exception:           # noqa: BLE001 -- the move is made; a log never undoes it
         pass
 
@@ -759,7 +795,7 @@ def copy(frm: str, name: str, to: str) -> dict:
 
 def _do(frm: str, name: str, to: str, action: str) -> dict:
     _check_targets(frm, to, name)
-    with agentfs._locked():
+    with agentfs._locked(), working():
         _recover_locked()
         rec = _transfer_locked(frm, name, to, action)
     _audit(rec, f"skill_{action}")
@@ -769,7 +805,7 @@ def _do(frm: str, name: str, to: str, action: str) -> dict:
 def record_import(target: str, name: str) -> dict | None:
     """Record a skill just imported into `target` (agentfs.import_skill), so
     it can be undone like a copy. None when it cannot be read back."""
-    with agentfs._locked():
+    with agentfs._locked(), working():
         try:
             fd = _skills_fd(target)
         except AgentFsError:
@@ -791,19 +827,30 @@ def record_import(target: str, name: str) -> dict | None:
 
 def undo(op: str) -> dict:
     """Undo the transfer `op`, if neither side changed since (see the top)."""
+    return _undo(op, "skill")
+
+
+def _undo(op: str, kind: str) -> dict:
+    """Undo the transfer `op` of `kind` (a skill's here, a note's for
+    notemoves.undo), the checks every undo shares made first."""
     if not isinstance(op, str) or not _OP.fullmatch(op):
         raise AgentFsError(f"not a transfer id: {op!r}")
-    with agentfs._locked():
+    with agentfs._locked(), working():
         _recover_locked()
         rec = _finished(op)
-        if rec is None:
-            raise AgentFsError(f"no finished transfer {op} is recorded")
+        if rec is None or rec.get("kind") != kind:
+            raise AgentFsError(f"no finished {kind} transfer {op} is recorded")
         if rec.get("undo_of"):
             raise AgentFsError("that was an Undo, which cannot itself be undone; move it again")
         if rec.get("state") == "undone":
             raise AgentFsError("that was undone already")
         if rec.get("state") != "done":
             raise AgentFsError(f"that did not finish ({rec.get('state')}); nothing to undo")
+        if kind == "note":
+            import notemoves
+            new = notemoves.undo_locked(rec)
+            _audit(new, "note_undo")
+            return notemoves.result(new)
         name = rec["name"]
         if rec["action"] == "move":
             new = _transfer_locked(rec["to"], name, rec["from"], "move", undo_of=op,
@@ -831,9 +878,10 @@ def undo(op: str) -> dict:
     return _result(new)
 
 
-def history(limit: int = 20) -> list[dict]:
-    """The transfers recorded, newest first, each with whether Undo would
-    be offered for it (not whether it would succeed: that is checked then)."""
+def history(limit: int = 20, kind: str = "skill") -> list[dict]:
+    """The transfers of `kind` recorded, newest first, each with whether
+    Undo would be offered for it (not whether it would succeed: that is
+    checked then)."""
     try:
         d = journal_dir()
         names = sorted((n for n in os.listdir(d) if n.endswith(DONE) or n.endswith(OPEN)),
@@ -847,9 +895,9 @@ def history(limit: int = 20) -> list[dict]:
             continue
         seen.add(op)
         rec = _read_record(d / n)
-        if rec is None:
+        if rec is None or rec.get("kind") != kind:
             continue
-        out.append({k: rec.get(k, "") for k in ("op", "action", "from", "to", "name", "files",
+        out.append({k: rec.get(k, "") for k in ("op", "kind", "action", "from", "to", "name", "files",
                                                  "bytes", "state", "undo_of", "undone_by",
                                                  "at", "problem")}
                    | {"undoable": bool(rec.get("state") == "done" and not rec.get("undo_of")

@@ -1950,3 +1950,27 @@ unfinished (`transfer.pending()`, one listing of `agents/.transfers`): 72 µs.
 A move publishes by one rename, so an agent's next turn sees the skill
 either where it was or where it went; the plugin folder for each side is
 rebuilt on that turn as for any skill change (§45: 18 ms with 20 skills).
+
+## 47. M13: what moving, combining and listing notes costs
+
+Measured 2026-11-22 on the i7-1185G7 (8 threads), in a scratch data folder on
+the home disk (btrfs, so every fsync is real), through `notemoves.move` then
+`notemoves.undo` 21 times each, `notemoves.combine` 11 times, `lanes` 11 times
+and `notes.list_notes` 21 times. The script lived in /tmp and is not kept: it is
+those calls in a loop around `time.perf_counter()`.
+
+| what | median (max) |
+|---|---|
+| move a one-line note, no history | 16.8 ms (21.7); undo 19.1 ms |
+| move a note at the 20,000-character cap with its 20 saved versions | 68.1 ms (78.9); undo 72.3 ms |
+| combine five notes of 1,000 characters | 25.6 ms (30.8) |
+| `lanes`: nine folders of about 20 notes each | 45.0 ms (59.6) |
+| `list_notes`: one folder of 20 notes | 3.8 ms (4.3) |
+| `transfer.pending()` (the check `_current` makes before every read) | 68 µs |
+
+A small move costs what a small skill move does (§46: 17.1 ms): the fsyncs.
+History is what makes the big one bigger, one fsynced file per version. The
+Notes tab reads `lanes` every 8 s and its own folder every 4 s while it is
+drawn; each is one `agentvoice` process, whose Python start-up costs more than
+the reading itself, and a reading that changed nothing is not applied, so the
+cards are not rebuilt.

@@ -32,6 +32,8 @@
 #   agentvoice tools scan [--json] the MCP servers and CLIs found on this machine
 #   agentvoice skills lanes [--json] every skill on this machine, and who gets it
 #   agentvoice skills import ID TO  give an agent or communal a checked copy of one
+#   agentvoice notes move|copy FROM NAME TO   a note to another agent or communal,
+#                                  with its past versions (combine, undo, lanes)
 #   agentvoice commands [--json]   every spoken command, and the wake phrases
 #   agentvoice try AGENT < draft   one sentence in AGENT's voice, on a draft
 #                                  personality (Agent details' Try it)
@@ -414,6 +416,23 @@ case "${1:-status}" in
     shift
     exec "$PY" "$REPO/daemon/skillscan.py" "$@"
     ;;
+  notes)
+    # Moving, copying and combining notes (phase M13): a note goes with its
+    # past versions and its record entry (rev, author, taint, lock). Into
+    # Communal, out of a quarantined agent, or a note that may hold text from
+    # web pages needs --confirm. Only the person does this: an agent running
+    # it is asked at every level (the orders guard). One folder's notes are
+    # `agentvoice agents notes TARGET ...`.
+    #   agentvoice notes lanes [--json]          every folder's notes
+    #   agentvoice notes move|copy FROM NAME TO [--confirm]
+    #   agentvoice notes combine TARGET INTO NAME NAME...
+    #   agentvoice notes undo OP | history [--json]
+    REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+    PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+    [[ -x $PY ]] || PY=python3
+    shift
+    exec "$PY" "$REPO/daemon/notemoves.py" "$@"
+    ;;
   chats)
     # Saved conversations (saveChats). The daemon holds which chat each
     # agent is in, so continuing or starting one is a command to it; the
@@ -527,7 +546,7 @@ case "${1:-status}" in
     active && echo yes || echo no
     ;;
   *)
-    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|try|interrupt|hud-preview|monitor|calibrate|voice|permit|pending|history|chats|pass|tasks|crew|tools|skills|agents|endpoint|open-mic|commands|wake-test|status|is-active]" >&2
+    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|try|interrupt|hud-preview|monitor|calibrate|voice|permit|pending|history|chats|pass|tasks|crew|tools|skills|notes|agents|endpoint|open-mic|commands|wake-test|status|is-active]" >&2
     exit 2
     ;;
 esac

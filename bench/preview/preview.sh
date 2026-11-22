@@ -254,6 +254,10 @@ case "\${1:-}" in
     # Skills on this machine (M11): the synthetic one above, and a copy
     # given from Unused lands in the scratch data folder.
     env XDG_CONFIG_HOME="\${XDG_CONFIG_HOME:-$real_config}" XDG_DATA_HOME='$tmp/data' $tools_env '$repo/bin/agentvoice' "\$@"; exit \$? ;;
+  notes)
+    # Moving, copying and combining notes (M13): in the scratch data folder
+    # only. Passed on to the real command, it would move a real note.
+    env XDG_CONFIG_HOME="\${XDG_CONFIG_HOME:-$real_config}" XDG_DATA_HOME='$tmp/data' $tools_env '$repo/bin/agentvoice' "\$@"; exit \$? ;;
   tools)
     # The tools found on this machine (M10): the synthetic one above.
     env XDG_CONFIG_HOME="\${XDG_CONFIG_HOME:-$real_config}" XDG_DATA_HOME='$tmp/data' $tools_env '$repo/bin/agentvoice' "\$@"; exit \$? ;;

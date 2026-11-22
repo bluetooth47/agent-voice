@@ -43,7 +43,10 @@ def test_confirm_is_added_only_in_the_two_confirmed_functions():
         s = scan(path)
         for m in re.finditer(r'"--confirm"', s.nocomment):
             found.append((path.name, s.handler_of(m.start())))
+    # Since M13 the note mover's own confirmed function too
+    # (tests/test_notemoves_ui.py).
     assert sorted(found) == [("AgentDetailsPage.qml", "function importSkill"),
+                             ("NoteMover.qml", "function transferNote"),
                              ("SkillMover.qml", "function transferSkill")]
 
 

@@ -19,6 +19,7 @@ LevelMeter 1.0 LevelMeter.qml
 MenuList 1.0 MenuList.qml
 MiniBars 1.0 MiniBars.qml
 ModelPicker 1.0 ModelPicker.qml
+NoteMover 1.0 NoteMover.qml
 NotesPanel 1.0 NotesPanel.qml
 PageHeader 1.0 PageHeader.qml
 Pill 1.0 Pill.qml

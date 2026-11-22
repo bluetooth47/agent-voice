@@ -175,7 +175,9 @@ ShellRoot {
           overlay.check(e !== null && e.rev === 1 && e.author === "you", "Sora's Notes tab lists the seeded note (" + JSON.stringify(e) + ")")
           overlay.check(p && p.otherFiles.length === 1 && p.otherFiles[0].name === "photo.png", "and the dropped file as another file")
           overlay.check(p && p.whyNot === "", "Claude Code takes the notes tools, so nothing says otherwise")
-          overlay.click(overlay.row(p, "shopping"), "the shopping row")
+          overlay.check(overlay.row(p, "shopping") !== null && overlay.row(p, "shopping").title === "Shopping",
+                        "the note is a card titled by its topic (M13)")
+          overlay.click(overlay.chip(overlay.row(p, "shopping"), "Open"), "the shopping card's Open")
           break
         case 10:
           p = overlay.panel()

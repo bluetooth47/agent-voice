@@ -615,7 +615,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         import transfer
         if a.cmd == "history":
-            got = transfer.history()
+            got = transfer.history(kind="skill")
             if a.json:
                 print(json.dumps(got))
             else:

@@ -55,6 +55,10 @@ KINDS = frozenset({
     # A skill moved or copied between agents and Communal, or a move, copy or
     # import undone, by the person (phase M12): ids, the name and its size.
     "skill_move", "skill_copy", "skill_undo",
+    # A note moved or copied between agents and Communal (with its history
+    # and its record entry), several combined into one topic, or a move or
+    # copy undone, by the person (phase M13): ids, the name and sizes.
+    "note_move", "note_copy", "note_combine", "note_undo",
 })
 #: How a task ended: collab.DONE, kept here so this file imports nothing.
 STATES = frozenset({"completed", "cancelled", "failed", "refused"})

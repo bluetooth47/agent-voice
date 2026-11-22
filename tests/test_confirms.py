@@ -69,6 +69,10 @@ DESTRUCTIVE: dict[str, tuple[dict[str, list[str]], list[re.Pattern]]] = {
     "quarantine": ({"CrewMapPage.qml": ["quarantineAgent"]},
                    [call("quarantineAgent"), call("linksQuarantining")]),
     "crew reset": ({"CrewMapPage.qml": ["clearUnreadable"]}, [call("clearUnreadable")]),
+    # Phase M13: notes combined into one topic, which takes the others off
+    # the list (their history stays, and Earlier notes puts one back). Asked
+    # through NoteMover's ToolConfirm, never a plain click.
+    "notes combine": ({"NoteMover.qml": ["combineNotes"]}, [call("combineNotes")]),
 }
 
 # How each verb looks where it is built.
@@ -81,6 +85,7 @@ SPELLING = {
     "link everyone": '"link everyone"',
     "quarantine": '"quarantine "',
     "crew reset": '"crew reset"',
+    "notes combine": '"notes", "combine"',
 }
 
 # Functions a call may sit in without a confirmation of its own, because
@@ -152,8 +157,10 @@ def test_the_buttons_that_confirm_are_danger_buttons():
     found on this machine is switched on, whose handlers may only write a
     tool switch -- or, since M11, give an agent a copy of a skill found on
     this machine (importSkill), or, since M12, move or copy a skill into
-    Communal or out of a quarantined agent (transferSkill) -- never one of
-    the destructive commands above."""
+    Communal or out of a quarantined agent (transferSkill), or, since M13,
+    move or copy a note that widens who reads it (transferNote) or combine
+    notes (combineNotes, in the table above) -- never one of the other
+    destructive commands above."""
     wrong = []
     for path in overlay_qml():
         s = scan(path)
@@ -161,7 +168,8 @@ def test_the_buttons_that_confirm_are_danger_buttons():
             el = s.element_of(m.start())
             if el == "ToolConfirm":
                 body = s.src[m.end():m.end() + 400].split("onCancelled")[0]
-                if not re.search(r"\b(setAgentTool|putShared|importSkill|transferSkill)\(", body) or \
+                if not re.search(r"\b(setAgentTool|putShared|importSkill|transferSkill|transferNote|"
+                                 r"combineNotes)\(", body) or \
                         re.search(r"agents\W+trash|chats\W+delete|--uninstall|remove|reset", body):
                     wrong.append(f"{path.relative_to(ROOT)}:{s.lineno(m.start())} ToolConfirm "
                                  f"doing something other than a tool switch")

@@ -1770,6 +1770,11 @@ Column {
             ? page.catalog.notes.why_not : ""
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
+    // Phase M13: a card in another lane opens on its owner's own Notes.
+    onOpenElsewhere: function(id) {
+      if (id === "communal") page.s.goTo("communal", "", "notes")
+      else page.s.goTo("agentdetails", id, "notes")
+    }
   }
   Text {
     width: parent.width
