@@ -611,12 +611,16 @@ def _settle(rec: dict) -> str:
     src_fd = _skills_fd(frm)
     try:
         dst_fd = _skills_fd(to)
+    except AgentFsError:
+        # The destination is gone (its agent trashed since): nothing landed
+        # there, and the source must not stay hidden for want of it.
+        dst_fd = None
     except BaseException:
         os.close(src_fd)
         raise
     try:
         landed = False
-        if not _present(dst_fd, stage) and _present(dst_fd, name):
+        if dst_fd is not None and not _present(dst_fd, stage) and _present(dst_fd, name):
             try:
                 landed = read_item(dst_fd, name)[1] == rec["digest"]
             except (OSError, AgentFsError):
@@ -625,18 +629,21 @@ def _settle(rec: dict) -> str:
             rec["state"] = "published"
             _save(rec)
         else:
-            _rmtree(dst_fd, stage)
+            if dst_fd is not None:
+                _rmtree(dst_fd, stage)
             if action == "move" and _present(src_fd, hidden):
                 if _present(src_fd, name):
                     raise Stuck(f"{name} was hidden in {_label(frm)} by a move that did not "
                                 f"finish, and a new {name} is there now; the old one is in "
                                 f"skills/{hidden}")
                 _rename(src_fd, hidden, src_fd, name)
-            _fsync(dst_fd)
+            if dst_fd is not None:
+                _fsync(dst_fd)
             _fsync(src_fd)
     finally:
         os.close(src_fd)
-        os.close(dst_fd)
+        if dst_fd is not None:
+            os.close(dst_fd)
     if rec["state"] == "published":
         _finish(rec)
         return "finished"

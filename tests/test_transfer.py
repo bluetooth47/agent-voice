@@ -524,6 +524,18 @@ def test_a_move_cut_short_anywhere_is_finished_or_rolled_back(at, lands):
     assert transfer.recover() == []
 
 
+def test_a_cut_short_move_is_put_back_even_if_the_destination_has_gone():
+    """The destination agent trashed before recovery: the source is not
+    left hidden for want of somewhere to finish."""
+    import shutil
+    src = skill("theo", "weekly", extra={"a.md": "a", "b.md": "b"})
+    want = tree(src)
+    crash(HIDDEN)
+    shutil.rmtree(base("sora"))
+    assert [r["done"] for r in transfer.recover()] == ["rolled back"]
+    assert tree(src) == want and leftovers() == [] and open_records() == []
+
+
 def test_a_published_move_is_finished_even_if_the_destination_was_edited_since():
     """Recorded as published, it is finished as it is: the source is not put
     back beside an edited destination, which would leave two."""
