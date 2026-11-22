@@ -131,3 +131,98 @@ def test_no_microphone_runs_on_silence(daemon):
         while not frames and time.time() < end:
             time.sleep(0.01)
     assert frames and set(frames[0]) == {0}, "no silent frames came"
+
+
+# --- the readout while muted (phase M2, testresults #10) ---------------------------
+
+class _Talker:
+    name = "stub"
+
+    def __init__(self):
+        self.sent = []
+
+    def send(self, text, session_id=None):
+        from adapters.base import Chunk
+        self.sent.append(text)
+        yield Chunk(text="Here you go. ")
+
+    def cancel(self):
+        pass
+
+    def posture(self, level):
+        return level
+
+
+def _record(daemon, monkeypatch):
+    import json
+    seen = []
+    real = daemon.state._write
+
+    def write(state, extra):
+        real(state, extra)
+        seen.append(json.loads(json.dumps(daemon.state._last, default=str)))
+    monkeypatch.setattr(daemon.state, "_write", write)
+    monkeypatch.setattr(daemon, "publish_agent", lambda: None)
+    return seen
+
+
+def test_a_muted_typed_turn_is_shown_with_several_agents(daemon, monkeypatch):
+    """Reported live: muted, a typed turn was answered aloud, but the HUD
+    never appeared, the last thing heard stayed on the turn before, and the
+    agent's chip still read "speaking" afterwards. With several agents the
+    microphone's "off" was put on screen over the agent's own state."""
+    from conftest import FakeAgent
+    from crew import Persona
+
+    sora = Persona("sora", {"id": "sora", "name": "sora", "label": "Sora"})
+    sora.agent = FakeAgent()
+    daemon.crew = {"sora": sora}
+    daemon.agent = _Talker()
+    seen = _record(daemon, monkeypatch)
+    daemon.enabled = False
+    daemon._publish()
+    daemon.handle_typed("", "what time is it", crew=True)
+    daemon._main.thread.join(timeout=5)
+    states = [d["state"] for d in seen]
+    assert "thinking" in states and "speaking" in states, states
+    speaking = next(d for d in seen if d["state"] == "speaking")
+    assert speaking["who"] == "" and speaking["transcript"] == "what time is it"
+    assert speaking["reply"] == "Here you go."
+    assert speaking.get("muted") is True, "the popup would offer Mute while muted"
+    last = seen[-1]
+    assert last["state"] == "off" and "muted" not in last
+    assert last["live"][""] == "idle", "still shown speaking after it finished"
+    assert last["transcript"] == "what time is it", "the last thing heard went stale"
+
+
+def test_a_muted_typed_turn_with_one_agent_does_not_stay_speaking(daemon, monkeypatch):
+    """With one agent the turn ran on the loop's thread and published its
+    own states -- and nothing published "off" after it while muted."""
+    daemon.agent = _Talker()
+    seen = _record(daemon, monkeypatch)
+    daemon.enabled = False
+    daemon.handle_typed("", "what time is it", crew=False)
+    assert seen[-1]["state"] == "off", [d["state"] for d in seen]
+    assert seen[-1]["reply"] == "Here you go."
+    assert any(d["state"] == "speaking" and d.get("muted") for d in seen)
+
+
+def test_nothing_of_it_is_shown_over_a_lock(daemon, monkeypatch):
+    """A lock still wins over everything, muted or not."""
+    from crew import Persona
+
+    sora = Persona("sora", {"id": "sora", "name": "sora", "label": "Sora"})
+    daemon.crew = {"sora": sora}
+    import threading
+    gate = threading.Event()
+    sora.thread = threading.Thread(target=gate.wait, args=(5,), daemon=True)
+    sora.thread.start()
+    try:
+        sora.state, sora.last = "speaking", {"transcript": "secret", "reply": "secret"}
+        daemon.enabled, daemon.locked = False, True
+        state, extra = daemon._compose("off", {})
+    finally:
+        gate.set()
+        daemon.locked = False
+    assert state == "locked"
+    assert "secret" not in str(extra)

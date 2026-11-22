@@ -72,7 +72,15 @@ Panel {
   // Whose turn the readout is showing, with more than one agent.
   property string lastWho: ""
   // The collaboration line for the HUD (Phase 15); "" when nothing is passing.
+  // Also why an agent had to start a new chat (phase M2), when nothing is.
   property string collabLine: ""
+  // The microphone is muted even though the state names something else:
+  // an agent answering a typed turn, or a reply that kept playing (M2).
+  property bool micMuted: false
+  readonly property bool micOff: vState === "off" || micMuted
+  // Which listening window "followup" is: "open" for the open microphone,
+  // "followup" after a reply (M2). "" from a daemon that does not say.
+  property string vWindow: ""
 
   readonly property bool live: serviceActive && vState !== "off"
 
@@ -118,7 +126,7 @@ Panel {
     if (vState === "locked") return "CLOSED WHILE LOCKED"
     if (vState === "capture") return "LISTENING TO YOU"
     // Still hot after a reply, waiting to see if you carry on.
-    if (vState === "followup" && openMicOn)
+    if (vState === "followup" && openMicOn && vWindow !== "followup")
       return "OPEN MIC · " + String(openMic.who || "").toUpperCase() + " · "
              + openMicMinutes + " MIN LEFT"
     if (vState === "followup") return "STILL LISTENING"
@@ -418,7 +426,10 @@ Panel {
         // Absent with a single agent, and then cleared rather than kept: a
         // name left over from when there were several would be wrong.
         voice.lastWho = d.who_label !== undefined ? String(d.who_label) : ""
-        voice.collabLine = d.collab !== undefined ? String(d.collab) : ""
+        voice.collabLine = d.collab !== undefined ? String(d.collab)
+                         : d.notice !== undefined ? String(d.notice) : ""
+        voice.micMuted = d.muted === true
+        voice.vWindow = d.window !== undefined ? String(d.window) : ""
         if (d.agent !== undefined) voice.vAgent = String(d.agent)
         if (d.level !== undefined) voice.permissionLevel = String(d.level)
         if (d.posture !== undefined) voice.vPosture = String(d.posture)
@@ -840,8 +851,8 @@ Panel {
           Button {
             id: micButton
             anchors.verticalCenter: parent.verticalCenter
-            text: voice.vState === "off" ? "Unmute" : "Mute"
-            iconText: voice.vState === "off" ? "\u{f036d}" : "\u{f036c}"
+            text: voice.micOff ? "Unmute" : "Mute"
+            iconText: voice.micOff ? "\u{f036d}" : "\u{f036c}"
             bordered: true
             hasCursor: voice.cursorOn("mic")
             foreground: voice.fg
@@ -857,7 +868,7 @@ Panel {
         Text {
           width: parent.width
           wrapMode: Text.WordWrap
-          visible: voice.vState === "off" || voice.vState === "yielded"
+          visible: voice.micOff || voice.vState === "yielded"
           text: voice.vState === "yielded"
                 ? "Listening again as soon as it stops."
                 : "Unmute, or click the microphone above, to start listening again."

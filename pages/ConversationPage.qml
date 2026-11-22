@@ -36,6 +36,15 @@ Column {
     }
     return "custom"
   }
+  // "Cut 3 turns off at this limit today, the last at 16:58." -- or nothing.
+  readonly property string limitLine: {
+    var h = s.vLimitHits || {}
+    var n = Number(h.today) || 0
+    if (n <= 0) return ""
+    var when = Number(h.last) > 0
+        ? ", the last at " + Qt.formatTime(new Date(Number(h.last) * 1000), "HH:mm") : ""
+    return "Cut " + n + (n === 1 ? " turn" : " turns") + " off at this limit today" + when + "."
+  }
   function applyPreset(name) {
     var p = presets[name]
     if (!p) return
@@ -324,13 +333,24 @@ Column {
       width: parent.width
       foreground: page.s.foreground; fontFamily: page.s.fontFamily
       label: "Longest a turn can be"
-      description: "A microphone stuck open stops here rather than recording forever."
+      description: "Counted from your first word. A microphone stuck open stops here rather than recording forever."
       value: page.s.setting("maxUtteranceMs", 30000)
       defaultValue: page.dflt("maxUtteranceMs")
       changed: page.s.changed("maxUtteranceMs")
       minimum: 5000; maximum: 120000; stepSize: 5000
       onCommitted: function(v) { page.s.put("maxUtteranceMs", v) }
       onReset: page.s.resetKey("maxUtteranceMs")
+    }
+
+    // Turns were cut at this limit with nothing on screen to say so
+    // (phase M2, bug C). Only while it is true: the count is today's.
+    Hint {
+      width: parent.width
+      tone: "warn"
+      foreground: page.s.foreground; fontFamily: page.s.fontFamily
+      text: page.limitLine
+      detail: "Each of these turns stopped recording at the limit, mid-sentence " +
+              "if you were still talking. Raise it above if you talk for longer."
     }
   }
 

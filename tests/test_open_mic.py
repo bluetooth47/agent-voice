@@ -413,3 +413,105 @@ class TestSettings:
             assert key in DEFAULTS and key in TOML_ALIASES and key in defaults
         assert defaults["openMicAuto"] is False
         assert defaults["openMicAddressedOnly"] is True
+
+
+# --- closing it, driven through the real loop (phase M2, bug K) ------------------
+
+def _states(payloads):
+    return [(t, d["state"], d.get("window")) for t, d in payloads]
+
+
+def test_open_mic_off_ends_the_window_within_one_frame(daemon, monkeypatch, capsys):
+    """Reported as "still listening" staying up after open mic was turned
+    off. The window's lead-in was the open microphone's time left, so an
+    empty window ran on for up to its idle time -- ten minutes -- after the
+    switch. Now it closes on the frame the command arrives with."""
+    import frame_loop
+
+    clock, marks = frame_loop.Clock(), {}
+    items = [lambda: daemon.start_open_mic(daemon._main, say=False)]
+    items += [frame_loop.QUIET] * 5
+    items += [frame_loop.command("open-mic off"),
+              lambda: marks.setdefault("off", clock.now)]
+    items += [frame_loop.QUIET] * 3
+    payloads, _ = frame_loop.drive(daemon, monkeypatch, items, clock=clock)
+    states = _states(payloads)
+    opened = [s for s in states if s[1] == "followup"]
+    assert opened and opened[0][2] == "open", "the open window was not marked"
+    after = [s for s in states if s[0] > marks["off"]]
+    assert after and after[0][1] == "listening", states
+    # The command is read with the next frame: one frame, 200ms, at most.
+    assert after[0][0] - marks["off"] <= frame_loop.FRAME_S + 1e-6
+    assert daemon.open_mic is None
+    assert "(open mic window closed)" in capsys.readouterr().out
+    assert daemon.pipe.utterances[0].abandoned
+
+
+def test_a_turn_already_being_spoken_is_finished_and_sent(daemon, monkeypatch):
+    """"Unless a capture is under way": somebody mid-sentence when the
+    switch goes off is not cut off; what they said goes to the agent."""
+    import frame_loop
+
+    sent = []
+
+    def answer(text, last, clock=None):
+        sent.append(text)
+        raise frame_loop.Done()
+    monkeypatch.setattr(daemon, "answer", answer)
+    items = [lambda: daemon.start_open_mic(daemon._main, say=False)]
+    items += [frame_loop.QUIET] * 2 + [frame_loop.LOUD] * 3
+    items += [frame_loop.command("open-mic off")]
+    items += [frame_loop.LOUD] * 2 + [frame_loop.QUIET] * 6
+    frame_loop.drive(daemon, monkeypatch, items)
+    assert sent == ["what time is it"]
+    assert daemon.open_mic is None
+
+
+def test_an_ordinary_follow_up_is_marked_as_one(daemon, monkeypatch):
+    """The state tells the open microphone from the window after a reply,
+    which the popup's label used to guess from whether open mic was on."""
+    import frame_loop
+
+    turns = []
+
+    def answer(text, last, clock=None):
+        turns.append(text)
+    monkeypatch.setattr(daemon, "answer", answer)
+    pipe = frame_loop.Pipe(feed_wake=frame_loop.wake_on(1))
+    items = [frame_loop.LOUD] * 3 + [frame_loop.QUIET] * 6 + [frame_loop.stop()]
+    payloads, _ = frame_loop.drive(daemon, monkeypatch, items, pipe=pipe)
+    windows = [d.get("window") for _t, d in payloads if d["state"] == "followup"]
+    assert turns and windows == ["followup"]
+
+
+# --- a dropped open-mic turn keeps the chat (phase M2, bug J) --------------------
+
+class TestDroppedTurnsKeepTheChat:
+    """"Feels like new chats keep starting": none of the ways an open-mic
+    turn is dropped -- not meant for it, nothing heard, too short -- may
+    touch the agent's session or saved chat."""
+
+    def test_not_meant_for_it(self, daemon):
+        daemon.agent = SeenAgent(reply="SKIP")
+        daemon.session_id = "sess-0001"
+        daemon._main.chat_id = "chat-1"
+        daemon._main.open_turn = True
+        daemon.answer("did you see the game", {"transcript": "x"})
+        assert daemon.session_id == "sess-0001"
+        assert daemon._main.chat_id == "chat-1"
+
+    def test_nothing_heard_and_too_short(self, daemon, monkeypatch):
+        import frame_loop
+        daemon.session_id = "sess-0001"
+        daemon._main.chat_id = "chat-1"
+        sent = []
+        monkeypatch.setattr(daemon, "answer", lambda *a, **k: sent.append(a))
+        pipe = frame_loop.Pipe()
+        pipe.min_utterance_ms = 5000            # a short burst is discarded
+        daemon.cfg._values["openMicIdleMin"] = 1
+        items = [lambda: daemon.start_open_mic(daemon._main, say=False)]
+        items += [frame_loop.LOUD] + [frame_loop.QUIET] * 6     # too short
+        items += [frame_loop.QUIET] * 310                       # runs out: closed
+        frame_loop.drive(daemon, monkeypatch, items, pipe=pipe)
+        assert sent == [] and daemon.open_mic is None
+        assert daemon.session_id == "sess-0001" and daemon._main.chat_id == "chat-1"

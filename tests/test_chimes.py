@@ -187,3 +187,120 @@ def test_the_setting_exists_in_all_three_places():
     assert manifest["barWidget"]["defaults"]["chimes"] is runtime.DEFAULTS["chimes"]
     from qml_sources import overlay
     assert '"chimes"' in overlay()
+
+
+# --- which chime, and why (phase M2, bug J) ----------------------------------------
+
+def test_every_chime_that_plays_says_which_and_why(daemon, capsys):
+    """"A random be-deep" could not be traced: the journal said what the loop
+    did and never what it played. A fixed phrase, never anything said."""
+    daemon.chimes = FakeChimes(length=0.0)
+    daemon.cfg._values["chimes"] = True
+    daemon.chime("wake", "wake word")
+    daemon.chime("heard", "end of what was said")
+    out = capsys.readouterr().out
+    assert "chime: wake (wake word)" in out
+    assert "chime: heard (end of what was said)" in out
+
+
+def test_a_chime_that_does_not_play_says_nothing(daemon, capsys):
+    daemon.chimes = FakeChimes()
+    daemon.cfg._values["chimes"] = False
+    daemon.chime("wake", "wake word")
+    assert "chime:" not in capsys.readouterr().out
+
+
+def test_every_call_names_its_reason():
+    """Parsed: a chime() with no reason is a sound the journal cannot place."""
+    import ast
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "daemon" / "wake_listen.py").read_text()
+    calls = [n for n in ast.walk(ast.parse(src))
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and n.func.attr == "chime"]
+    assert len(calls) == 4, "a chime site was added or lost: give it a reason"
+    for call in calls:
+        assert len(call.args) == 2, f"chime() at line {call.lineno} has no reason"
+
+
+def _crew_with_theo_busy(daemon, monkeypatch):
+    """Theo (the main agent) working, Sora beside him: the open microphone's
+    stretch between turns, when the loop is waiting for a wake word."""
+    import threading
+
+    import wake_listen
+    from conftest import FakeAgent
+    from crew import Persona
+
+    monkeypatch.setattr(wake_listen, "CHIME_TAIL_S", 0.0)
+    monkeypatch.setattr(daemon, "publish_agent", lambda: None)
+    daemon.chimes = FakeChimes(length=0.0)
+    daemon.cfg._values["chimes"] = True
+    sora = Persona("sora", {"id": "sora", "name": "sora", "label": "Sora"})
+    sora.agent = FakeAgent()
+    daemon.crew = {"sora": sora}
+    daemon._main.name, daemon._main.label = "theo", "Theo"
+    gate = threading.Event()
+    daemon._main.thread = threading.Thread(target=gate.wait, args=(5,), daemon=True)
+    daemon._main.thread.start()
+    return gate
+
+
+@pytest.mark.parametrize("heard, open_mic, chimed", [
+    ("theo", True, False),      # its own name inside its own open microphone
+    ("sora", True, True),       # somebody else woken: a real wake
+    ("theo", False, True),      # no open microphone: a real wake
+])
+def test_a_wake_inside_the_open_mic_is_silent(daemon, monkeypatch, capsys,
+                                               heard, open_mic, chimed):
+    """The be-deep: in open mic, the agent's name heard while it worked
+    stopped it and played "listening, go ahead" over a microphone that was
+    listening already (2026-11-19 and 11-21, every open-mic wake). The wake
+    still stops the turn; it just does not announce what was already so."""
+    import frame_loop
+
+    gate = _crew_with_theo_busy(daemon, monkeypatch)
+    pipe = frame_loop.Pipe(feed_wake=frame_loop.wake_on(2))
+    pipe.heard_phrase = heard
+    items = [lambda: daemon.start_open_mic(daemon._main, say=False)] if open_mic else []
+    items += [frame_loop.QUIET] * 4
+    try:
+        frame_loop.drive(daemon, monkeypatch, items, pipe=pipe)
+    finally:
+        gate.set()
+    out = capsys.readouterr().out
+    assert ("wake" in daemon.chimes.played) is chimed, daemon.chimes.played
+    if not chimed:
+        assert "chime: wake not played (open mic was already listening)" in out
+    if heard == "theo":
+        assert "stopping it" in out, "the wake no longer stops the turn"
+
+
+@pytest.mark.parametrize("open_mic, played", [
+    (True, ["heard"]),
+    (False, ["wake", "heard", "wake"]),
+])
+def test_the_rearm_after_a_wake_stopped_the_reply(daemon, monkeypatch, open_mic, played):
+    """With one agent, the wake word heard during a reply re-arms with the
+    wake chime -- inside the open microphone, silently."""
+    import frame_loop
+    import wake_listen
+
+    monkeypatch.setattr(wake_listen, "CHIME_TAIL_S", 0.0)
+    monkeypatch.setattr(daemon, "publish_agent", lambda: None)
+    daemon.chimes = FakeChimes(length=0.0)
+    daemon.cfg._values["chimes"] = True
+    turns = []
+
+    def answer(text, last, clock=None):
+        turns.append(text)
+        if len(turns) > 1:
+            raise frame_loop.Done()
+        daemon._woke = True                 # the wake word stopped this reply
+    monkeypatch.setattr(daemon, "answer", answer)
+    pipe = frame_loop.Pipe(feed_wake=frame_loop.wake_on(1) if not open_mic else None)
+    items = [lambda: daemon.start_open_mic(daemon._main, say=False)] if open_mic else []
+    items += [frame_loop.LOUD] * 3 + [frame_loop.QUIET] * 5 + [frame_loop.stop()]
+    frame_loop.drive(daemon, monkeypatch, items, pipe=pipe)
+    assert len(turns) == 1
+    assert daemon.chimes.played == played

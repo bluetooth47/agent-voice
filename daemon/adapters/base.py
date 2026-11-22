@@ -283,6 +283,14 @@ class Adapter(ABC):
     #: and every turn starts from nothing -- so the screen has to say it.
     remembers: bool = False
 
+    #: Which rebuilds a conversation outlives on this backend: "level" (new
+    #: permission flags) and "model". Empty by default, the safe direction:
+    #: a backend that cannot resume under new flags and claims it can would
+    #: answer the next turn from nothing, or fail it. A backend earns each
+    #: entry with a recorded real turn in tests/fixtures/resume/, replayed
+    #: by test_adapters.py (phase M2, bug I; see sessions.py).
+    carries_session_across: frozenset = frozenset()
+
     #: Seconds of silence before this backend is presumed hung.
     idle_timeout_s: float = IDLE_TIMEOUT_S
 

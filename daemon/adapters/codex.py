@@ -153,6 +153,12 @@ def codex_default_model() -> str:
 class Codex(Adapter):
     name = "codex"
     remembers = True          # resume <thread_id>, verified across two turns
+    # `resume <id>` with and without --approve-for-me and another -m, both
+    # ways, recalled a marker from the first turn: recorded against 0.171.0
+    # in tests/fixtures/resume/codex-level-and-model.json (M2). A model
+    # change makes Codex emit an `error` item (a warning that the session was
+    # recorded with another model) and then answer normally.
+    carries_session_across = frozenset({"level", "model"})
 
     # Codex's own spelling of "do not stop to ask", as used by omarchy-agent.
     def __init__(self, model: str | None = None, spoken: bool = True,

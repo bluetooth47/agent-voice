@@ -1,0 +1,136 @@
+{
+ "recorded": "2026-11-21, phase M2, bin: codex-cli 0.171.0",
+ "how": "three real turns, each on a new adapter object as reconcile_agent builds one; crew/desktop MCP servers off; reduced to the fields the adapter reads (tests/test_adapters.py replays them)",
+ "marker": "PELICAN-6946",
+ "turns": [
+  {
+   "level": "ask",
+   "model": "gpt-6-luna",
+   "resumed": null,
+   "argv": [
+    "codex",
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "-m",
+    "gpt-6-luna",
+    "-c",
+    "model_reasoning_effort=\"low\""
+   ],
+   "lines": [
+    {
+     "type": "thread.started",
+     "thread_id": "01a2013a-9672-7be2-95ef-98084f81cd10"
+    },
+    {
+     "type": "turn.started"
+    },
+    {
+     "type": "item.completed",
+     "item": {
+      "id": "item_0",
+      "type": "agent_message",
+      "text": "OK"
+     }
+    },
+    {
+     "type": "turn.completed"
+    }
+   ],
+   "reply": "OK"
+  },
+  {
+   "level": "trusted",
+   "model": "gpt-5.6-luna",
+   "resumed": "01a2013a-9672-7be2-95ef-98084f81cd10",
+   "argv": [
+    "codex",
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "-m",
+    "gpt-5.6-luna",
+    "-c",
+    "model_reasoning_effort=\"low\"",
+    "--approve-for-me",
+    "resume",
+    "01a2013a-9672-7be2-95ef-98084f81cd10"
+   ],
+   "lines": [
+    {
+     "type": "thread.started",
+     "thread_id": "01a2013a-9672-7be2-95ef-98084f81cd10"
+    },
+    {
+     "type": "item.completed",
+     "item": {
+      "id": "item_0",
+      "type": "error",
+      "message": "This session was recorded with model `gpt-6-luna` but is resuming with `gpt-5.6-luna`. Consider switching back to `gpt-6-luna` as it may affect Codex performance."
+     }
+    },
+    {
+     "type": "turn.started"
+    },
+    {
+     "type": "item.completed",
+     "item": {
+      "id": "item_1",
+      "type": "agent_message",
+      "text": "PELICAN-6946"
+     }
+    },
+    {
+     "type": "turn.completed"
+    }
+   ],
+   "reply": "PELICAN-6946"
+  },
+  {
+   "level": "ask",
+   "model": "gpt-6-luna",
+   "resumed": "01a2013a-9672-7be2-95ef-98084f81cd10",
+   "argv": [
+    "codex",
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "-m",
+    "gpt-6-luna",
+    "-c",
+    "model_reasoning_effort=\"low\"",
+    "resume",
+    "01a2013a-9672-7be2-95ef-98084f81cd10"
+   ],
+   "lines": [
+    {
+     "type": "thread.started",
+     "thread_id": "01a2013a-9672-7be2-95ef-98084f81cd10"
+    },
+    {
+     "type": "item.completed",
+     "item": {
+      "id": "item_0",
+      "type": "error",
+      "message": "This session was recorded with model `gpt-5.6-luna` but is resuming with `gpt-6-luna`. Consider switching back to `gpt-5.6-luna` as it may affect Codex performance."
+     }
+    },
+    {
+     "type": "turn.started"
+    },
+    {
+     "type": "item.completed",
+     "item": {
+      "id": "item_1",
+      "type": "agent_message",
+      "text": "PELICAN-6946"
+     }
+    },
+    {
+     "type": "turn.completed"
+    }
+   ],
+   "reply": "PELICAN-6946"
+  }
+ ]
+}

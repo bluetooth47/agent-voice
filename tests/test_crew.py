@@ -840,7 +840,10 @@ class TestReconcile:
         assert p.session_id == "keep" and p.agent.effort == "low"
         assert len(recon.built) == 1
 
-    def test_a_model_change_starts_a_new_one(self, recon):
+    def test_a_model_change_starts_a_new_one_where_it_cannot_carry(self, recon):
+        """SlowAgent claims no `carries_session_across`, so a new model is a
+        new conversation for it, and says why (phase M2: a backend shown to
+        resume under the new model keeps it -- see test_sessions.py)."""
         recon.cfg._values["voiceAgents"] = [{"name": "jarvis"}]
         recon.reconcile_crew()
         p = recon.crew["jarvis"]
@@ -848,6 +851,7 @@ class TestReconcile:
         recon.cfg._values["voiceAgents"] = [{"name": "jarvis", "model": "haiku"}]
         recon.reconcile_crew()
         assert p.session_id is None and len(recon.built) == 2
+        assert "model change" in recon.crew_fields()["notice"]
 
     def test_a_busy_agent_is_left_alone(self, recon):
         recon.cfg._values["voiceAgents"] = [{"name": "jarvis"}]

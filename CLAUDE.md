@@ -433,6 +433,9 @@ So, in order of how much they are worth:
   import is inside `run()` -- whose stream delivers frames from its own
   thread the way PortAudio does. Real frame sizes, real `frame_db`, real
   endpointing. It reads *both* streams, because systemd journals stderr too.
+  `tests/frame_loop.py` does the same over a scripted microphone on a fake
+  clock (200ms of audio time per frame), so a ten-minute open-mic window
+  runs in milliseconds and "within one frame" is a number in the assertion.
 - **parse it, never grep it.** The audit is an AST walk and matches on every
   identifier a `print` reads, at any depth. Matching on the presence of
   `safe_for_terminal` in the source was worse than it looked: it only fired
@@ -463,3 +466,13 @@ everything on stdout was speech -- and nothing in Codex's. Flags read off
 `--help` are a hypothesis, not a contract; record what a real turn emitted,
 and replay it in a test so a schema change fails loudly rather than going
 quiet.
+
+The same rule decides which backends keep a conversation when an agent is
+rebuilt for a new permission level or model (M2, bug I): an entry in
+`carries_session_across` needs three recorded turns in
+`tests/fixtures/resume/` -- the old flags, the new ones resuming, and back.
+Claude Code and Codex have them; agy could not be signed in to record one,
+so it starts a new chat on a level change and says why on the HUD. The
+adapter is rebuilt either way: no process started under the old flags takes
+another turn, and a kept session loses its "allow all in this chat" grants
+when the level changed.

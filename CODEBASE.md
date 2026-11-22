@@ -169,7 +169,30 @@ This file is the entry point (`main()`), and its structure is:
   `speech_text` chunks the stream into sentences for Piper.
 - **States** (`STATES`): off, locked, yielded, listening, capture,
   transcribing, thinking, speaking, followup. Panel.qml must draw every
-  state; check 10b enforces this.
+  state; check 10b enforces this. Since M2 a `followup` payload says which
+  window it is (`window`: `open` for the open microphone, `followup` after a
+  reply); a payload naming an agent's state while the microphone is muted
+  carries `muted: true`; the sticky fields carry `limit_hits` (`{date,
+  today, last}`: turns cut at `maxUtteranceMs` today, kept across a daemon
+  restart through the old state file) and, when a rebuild ended a
+  conversation, `notice` (why; shown on the HUD's extra line until that
+  agent answers again).
+- **Rebuilds keep the conversation (M2, bug I).** `reconcile_agent` (main)
+  and `_rebuild_persona` (extra agents) always build a new adapter when the
+  program, folder, endpoint, level or model changes, so no process started
+  under old flags survives. `carry_session()` then keeps the session when
+  only the level and/or model changed and the adapter's
+  `carries_session_across` covers it (`sessions.carry`); a kept session
+  loses its "allow all in this chat" grants on a level change
+  (`permission_hook.revoke`).
+- **Chimes (M2, bug J).** `chime(name, why)` logs `chime: NAME (why)` for
+  every sound played. A wake for the agent the open microphone is already
+  listening for re-arms silently (`listening_for`).
+- **Longest turn (M2, bug C).** `maxUtteranceMs` counts from the first
+  voiced frame of a capture (from the key going down with push-to-talk),
+  not from when the window opened; each cut is counted (`count_limit_hit`).
+- **Open mic off (M2, bug K).** An open-mic window nobody has started
+  speaking into closes on the frame `open_mic` goes `None`.
 - **Signals.** `SIGUSR1` toggles the mic and `SIGUSR2` interrupts. `SIGTERM`
   raises SystemExit so `finally` cleans up the pidfile and the panel records.
   Other commands arrive as the atomic file `$RUNDIR/command` (including
@@ -189,6 +212,7 @@ This file is the entry point (`main()`), and its structure is:
 | `audit.py` | `audit.record()` takes only typed fields (ids, names, integers); a bad value is written as "?". A test AST-walks every call. |
 | `speech_text.py` | Markdown → speakable prose, sentence boundaries, code blocks → "Code omitted", `safe_for_terminal`, `as_prompt`; `pass_command` ("pass/send this to NAME …") and `is_take_over`. |
 | `permission_hook.py` | Claude Code **PreToolUse hook**. Writes `permissions/<id>.request`, summons the overlay, waits for the response. Levels: `ask` / `edits` / `trusted`. Fails *closed*; hook settings use `onFailure: "block"`. Crew rules: notes reads allowed, notes writes asked at Ask and refused when `notesWrite` is deny; collaboration tools pass (the daemon asks). Loading the agent's own skill is a read. **Orders guard** (`orders_write`, 92c71ff): see section 8. Security-critical. |
+| `sessions.py` | M2, bug I: the pure rule for whether a conversation survives an adapter rebuild (`carry`, `spec_changes`, `why`). |
 | `crew.py` | Multiple agents: `Persona` (own adapter/session/voice, plus `task`, `saved_conversation`, `turn_id`, `answering` for collaboration), `route()` picks who was addressed by wake name. With extra agents, each turn runs on its own thread. |
 | `chats.py` | Saved conversations (opt-in `saveChats`), 0600, `index.json`. Shared chats (Phase 15): `owner`, `participants`, `shared_with`, per-speaker `sessions`; `may_replay`, `may_continue`. CLI includes `may-continue`. |
 | `eager.py` | Transcribes at pauses while the person is still talking. |
@@ -227,10 +251,10 @@ byte.
 
 | Adapter | Notes |
 |---|---|
-| `claude_code.py` | A warm `claude -p` stream-json process. `--resume`; instructions via `--append-system-prompt-file`; the hook via `--settings` (full matcher below Trusted; at Trusted `TRUSTED_MATCHER`: Bash + edit tools, plus the browser when on); one `--mcp-config` with desktop and crew servers; `--plugin-dir` from `agentfs.plugin_dir`; `--no-session-persistence` for side turns. The only backend that can ask permission. |
-| `codex.py` | `codex exec --json`, `thread_id` resume; options before `resume`. Crew server via `crew_mcp.codex_config` (`--guard` below Trusted); `--ephemeral` side turns. Read-only unless trusted. Keeps `ask_permission` so a refresh no longer rebuilds it (Phase 9 fix). |
+| `claude_code.py` | A warm `claude -p` stream-json process. `--resume` (carried across a level or model change: `carries_session_across`, recorded in `tests/fixtures/resume/`); instructions via `--append-system-prompt-file`; the hook via `--settings` (full matcher below Trusted; at Trusted `TRUSTED_MATCHER`: Bash + edit tools, plus the browser when on); one `--mcp-config` with desktop and crew servers; `--plugin-dir` from `agentfs.plugin_dir`; `--no-session-persistence` for side turns. The only backend that can ask permission. |
+| `codex.py` | `codex exec --json`, `thread_id` resume; options before `resume`; carried across a level or model change (recorded; a model change makes Codex emit a warning `error` item, then answer). Crew server via `crew_mcp.codex_config` (`--guard` below Trusted); `--ephemeral` side turns. Read-only unless trusted. Keeps `ask_permission` so a refresh no longer rebuilds it (Phase 9 fix). |
 | `gemini.py` | Plain text, one-shot, **no memory**; `--approval-mode plan`. |
-| `antigravity.py` | `agy`, JSON, `--conversation` resume. |
+| `antigravity.py` | `agy`, JSON, `--conversation` resume. Not carried across a level change (no recorded turn: agy was not signed in during M2), so it starts fresh and says why. |
 | `cli_agent.py` | Plain-stdout template; only `copilot` remains (no memory). |
 | `openai_compat.py` | Any `/chat/completions` endpoint. History replayed, capped by `endpointHistoryTurns`. |
 | `__init__.py` | `load()` picks the backend. The main agent follows `omarchy default agent` unless `mainProgram` or an endpoint URL overrides it. |
@@ -488,7 +512,9 @@ Summarized from CLAUDE.md and merged-plan.md section 3; read the full text.
   runs `check` and `full` (`AGENTVOICE_NO_SKIPS=1`).
 - **Tests** cover `speech_text`, `permission_hook`, `runtime.Config`, the
   adapters (recorded real turns replayed), the frame loop (fake
-  `sounddevice` in `test_states.py`), and new suites `test_agentfs`,
+  `sounddevice` in `test_states.py`; `tests/frame_loop.py` drives it over a
+  scripted microphone on a fake clock, 200ms of audio time per frame, and
+  records every state payload), and new suites `test_agentfs`,
   `test_agentfs_migrate`, `test_preamble`, `test_agent_pages`,
   `test_tools_skills`, `test_notes`, `test_collab` (replays
   `fixtures/collab/recorded-session.json`), `test_turn_latency`. Do not test

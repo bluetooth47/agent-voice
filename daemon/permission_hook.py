@@ -798,6 +798,42 @@ def grant(session: str) -> bool:
         return False
 
 
+def revoke(session: str) -> int:
+    """Forget every "allow all in this chat" for `session`, for any agent.
+
+    Called by the daemon, not the hook: since phase M2 a conversation is
+    kept across a change of permission level (bug I), and the level is the
+    newer decision. Someone who lowers Trusted to Ask expects to be asked
+    again, so a grant made under the old level must not outlive it in the
+    session that was carried over. Before M2 the session itself was dropped,
+    which took the grant's meaning with it.
+
+    Removes only files whose record names this session; anything unreadable
+    is left alone (`granted()` never reads it as a yes). Returns how many
+    went. Never raises: the caller is the idle poll."""
+    if not _SESSION.fullmatch(session or ""):
+        return 0
+    gone = 0
+    try:
+        entries = list(os.scandir(GRANTS))
+    except OSError:
+        return 0
+    for entry in entries:
+        if not entry.name.endswith(".grant"):
+            continue
+        try:
+            if not entry.is_file(follow_symlinks=False):
+                continue
+            with open(entry.path, encoding="utf-8") as f:
+                record = json.loads(f.read(4096))
+            if isinstance(record, dict) and record.get("session") == session:
+                os.unlink(entry.path)
+                gone += 1
+        except (OSError, ValueError):
+            continue
+    return gone
+
+
 def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, str]:
     """Return (decision, reason). decision is 'allow' or 'deny'."""
     if tool_name in NO_EFFECT:

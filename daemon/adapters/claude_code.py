@@ -197,6 +197,10 @@ class ClaudeCode(Adapter):
     name = "claude"
     guards_permissions = True
     remembers = True          # one process per conversation, --resume after
+    # --resume under the other level's hook settings and another --model,
+    # both ways, recalled a marker from the first turn: recorded against
+    # 2.1.330 in tests/fixtures/resume/claude-level-and-model.json (M2).
+    carries_session_across = frozenset({"level", "model"})
     # The only backend with somewhere to put the question: a PreToolUse hook
     # receives the pending call and blocks on the verdict, so "edits" can be
     # decided per call against the project path.

@@ -1601,3 +1601,73 @@ user's day (tool runs included), the real-use check, never the gate.
 
 78 distractors, **one false wake**: "Thank you" (voice ryan-high) woke
 Theo. Synthesized voices; the manual test is the real rate.
+
+## 41. M2: what the journal and three recorded turns say about bugs C, I, J, K
+
+Measured 2026-11-21 on this machine, phase M2 (`phaseM2notes.md`). The
+journal was read with `journalctl --user -u agentvoice -o json` from
+2026-11-18 (three boots, 3,530 entries), structural lines only: no
+transcript or reply was read (`logSpeech` was off).
+
+### What the journal held
+
+| line | count | inside an open-mic period |
+|---|---|---|
+| `● wake NAME` (the wake chime played) | 45 | 2 |
+| `● NAME stopping it — go ahead` (a wake stopped a busy agent) | 10 | 2 |
+| `● still listening` (a follow-up or open-mic window, no chime) | 197 | 87 |
+| `(nothing heard)` | 36 | — |
+| `(open mic: not meant for it)` | 3 | 3 |
+| `(hit max_utterance_ms)` | 21 | **18** |
+
+- **I.** On 2026-11-19 at 00:20:51 the level went Trusted → Ask in open mic;
+  the log shows the rebuild ("agent: claude … (asks before every change)")
+  and the next two turns, 11 s and 21 s later, were both judged "not meant
+  for it": a fresh session had nothing to judge them against. The same
+  shape followed the M0 project-folder change at 16:42:17 on 11-21
+  (expected there). The 00:23:19 flip back to Trusted also rebuilt and
+  dropped the session; the user's "it did not seem to lose this one" was
+  the saved chat continuing, not the agent's memory.
+- **J.** Both wakes inside open mic (11-21 00:38:49 and 16:34:18) were the
+  agent's name heard while it was working: the turn was stopped and the
+  two-note `wake` chime ("be-deep") played over a microphone that was
+  already listening. No other call site played a wake chime in those
+  periods. Which chime the user heard at each moment cannot be told from
+  this journal (it never logged chimes); from M2 every played chime logs
+  `chime: NAME (why)`, and the silenced re-arm logs `chime: wake not
+  played (open mic was already listening)`.
+- **C.** 18 of the 21 cuts were in open mic. The limit was measured from
+  when the window opened, and the open microphone's window waits up to its
+  idle time (10 min) for speech, so a turn begun more than
+  `maxUtteranceMs` into it was cut at its first frame. Driven in the frame
+  loop (`test_an_open_mic_wait_does_not_count_against_the_turn`): a turn
+  starting 40 s into a window was cut at 40.2 s, its first frame, before
+  M2; after, it ran to its pause (42.6 s). The limit now counts from the
+  first word.
+
+### Bug I: does a session survive the rebuild? (three real turns each)
+
+Driven through the clone's adapters exactly as `reconcile_agent` builds
+them, each turn on a new adapter object, scratch folder `/tmp/m2-live/proj`,
+crew and desktop MCP servers off (`tests/fixtures/resume/`):
+
+| backend | turn 1 | turn 2 (resumes 1) | turn 3 (resumes 1) | marker recalled |
+|---|---|---|---|---|
+| Claude Code 2.1.330 | ask, haiku | trusted hook matcher, sonnet | ask, haiku | yes, yes; same session id throughout |
+| codex-cli 0.171.0 | no `--approve-for-me`, gpt-6-luna | `--approve-for-me`, gpt-5.6-luna | none, gpt-6-luna | yes, yes; same thread id; a warning `error` item on each model change, then the answer |
+| agy 1.5.14 | "authentication failed or timed out" on every turn | — | — | not recordable here |
+
+Codex's three turns used 87,612 input tokens (Codex resends the thread
+each turn). The credit balance read 423.05 at the first turn and 422.88
+after the third; it had read 431.60 at the end of M1, with no Codex call
+logged in between (see `phaseM2notes.md`, "Codex credits used").
+
+### Bug K: how long "still listening" outlived "open mic off"
+
+Frame loop, fake clock (`test_open_mic_off_ends_the_window_within_one_frame`):
+`listening` is published on the frame the command arrives with, **≤ 200 ms**
+(one frame) after `agentvoice open-mic off`. Before M2 nothing ended the
+empty window: it ran out its lead-in, which for the open microphone is the
+rest of `openMicIdleMin`, **up to 600 s** at the default. Not measured on
+the live daemon (needs the microphone open: `phaseM2notes.md`, Not
+verified).

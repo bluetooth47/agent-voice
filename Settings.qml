@@ -331,6 +331,9 @@ Item {
   property var vAgentFiles: ({})
   // Tasks between agents, from the state file (collab.py): never a brief.
   property var vTasks: []
+  // Turns cut at the longest-turn limit today: {date, today, last}, from
+  // the state file (phase M2, bug C). Empty from a daemon that does not say.
+  property var vLimitHits: ({})
   // "Send to another agent" (ui/SendSheet.qml), from the conversation view
   // and a chat row. `fromId` is the source's external id ("main" for the
   // main agent), `chatId` a saved chat or "" for this session.
@@ -1305,6 +1308,8 @@ Item {
         root.vAgentFiles = (d.agent_files && typeof d.agent_files === "object") ? d.agent_files : ({})
         // Collaboration tasks (Phase 15); absent when there are none.
         root.vTasks = Array.isArray(d.tasks) ? d.tasks : []
+        root.vLimitHits = (d.limit_hits && typeof d.limit_hits === "object")
+                          ? d.limit_hits : ({})
       } catch (e) {}
     }
   }

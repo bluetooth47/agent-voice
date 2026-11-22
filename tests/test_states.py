@@ -976,3 +976,120 @@ def test_main_imports_sounddevice_with_the_stop_held():
     held = src.index("with sigterm_deferred():")
     assert src.index("import sounddevice", held) - held < 120
     assert src.index("signal.signal(signal.SIGTERM, _stopped)") < held
+
+
+# --- the longest-turn limit (phase M2, bug C) ----------------------------------
+
+def _limit_drive(daemon, monkeypatch, items, *, max_ms=30_000):
+    """The real loop over `items`, the agent replaced by a recorder that ends
+    the drive. Returns (when each turn reached the agent, as seconds after
+    the drive started, and the payloads written)."""
+    import frame_loop
+
+    pipe = frame_loop.Pipe(said="the turn")
+    pipe.max_utterance_ms = max_ms
+    reached: list[float] = []
+    clock = frame_loop.Clock()
+
+    def answer(text, last, clock_=None, **_):
+        reached.append(clock.now)
+        raise frame_loop.Done("the turn reached the agent")
+    monkeypatch.setattr(daemon, "answer", answer)
+    t0 = clock.now
+    payloads, _ = frame_loop.drive(daemon, monkeypatch, items, pipe=pipe, clock=clock)
+    return [t - t0 for t in reached], payloads
+
+
+def test_an_open_mic_wait_does_not_count_against_the_turn(daemon, monkeypatch, capsys):
+    """Reported as "turns cut off at 30 seconds with no warning", always in
+    open mic. The limit was measured from when the window opened, and the
+    open microphone's window waits up to its idle time for somebody to
+    speak -- so anyone who started more than maxUtteranceMs into it was cut
+    off at their first frame. Measured from the first word now."""
+    import frame_loop
+
+    before = daemon.limit_field()["today"]
+    items = [lambda: daemon.start_open_mic(daemon._main, say=False)]
+    items += [frame_loop.QUIET] * 200              # 40s of nobody talking
+    items += [frame_loop.LOUD] * 10                # then 2s of speech
+    items += [frame_loop.QUIET] * 10               # and a pause that ends it
+    reached, _ = _limit_drive(daemon, monkeypatch, items)
+    out = capsys.readouterr().out
+    assert "hit max_utterance_ms" not in out
+    assert daemon.limit_field()["today"] == before, "a phantom cut was counted"
+    assert len(reached) == 1
+    # Frame 201 is the first word; the turn ends after the last of the ten
+    # loud frames and the 600ms pause, not at frame 201.
+    first_word = 201 * frame_loop.FRAME_S
+    last_word = first_word + 9 * frame_loop.FRAME_S
+    assert reached[0] >= last_word + 0.6 - 1e-6, \
+        "the turn was cut before it was finished"
+
+
+def test_a_turn_that_runs_past_the_limit_is_cut_and_counted(daemon, monkeypatch, capsys):
+    """The other half: someone who really does talk past it is cut there,
+    and the cut is counted where the Conversation page can see it."""
+    import frame_loop
+
+    before = daemon.limit_field()["today"]
+    items = [lambda: daemon.start_open_mic(daemon._main, say=False)]
+    items += [frame_loop.QUIET] * 50               # waiting 10s first
+    items += [frame_loop.LOUD] * 40                # 8s of talking, limit 3s
+    reached, payloads = _limit_drive(daemon, monkeypatch, items, max_ms=3000)
+    out = capsys.readouterr().out
+    assert "hit max_utterance_ms" in out
+    assert "cut at the longest-turn limit (3s; " in out, "no structural line"
+    assert len(reached) == 1
+    hits = daemon.limit_field()
+    assert hits["today"] == before + 1 and hits["last"] > 0
+    # Published, not only kept: the page reads the state file.
+    assert payloads[-1][1]["limit_hits"]["today"] == before + 1
+    # Cut at the limit counted from the first word (frame 51): 3s after it.
+    spoke = 51 * frame_loop.FRAME_S
+    assert 2.8 <= reached[0] - spoke <= 3.3, reached[0] - spoke
+
+
+def test_the_count_survives_a_restart_the_same_day(tmp_path, monkeypatch):
+    """An install restarts the daemon; the page's note should not vanish
+    with it. The runtime folder outlives a restart and not a reboot."""
+    import json as _json
+    import types
+
+    import wake_listen
+    path = tmp_path / "state"
+    state = types.SimpleNamespace(path=path)
+    today = wake_listen._today()
+    path.write_text(_json.dumps({"state": "listening", "limit_hits":
+                                 {"date": today, "today": 3, "last": 1234}}))
+    assert wake_listen._limit_hits_from(state) == {"date": today, "today": 3,
+                                                   "last": 1234}
+    path.write_text(_json.dumps({"limit_hits": {"date": "1999-01-01", "today": 3,
+                                                "last": 1}}))
+    assert wake_listen._limit_hits_from(state)["today"] == 0
+    for junk in ("{not json", "[]", '{"limit_hits": {"date": "%s", "today": -2,'
+                 ' "last": 0}}' % today, '{"limit_hits": "lots"}'):
+        path.write_text(junk)
+        assert wake_listen._limit_hits_from(state)["today"] == 0, junk
+    path.unlink()
+    assert wake_listen._limit_hits_from(state)["today"] == 0
+
+
+def test_the_count_starts_again_at_midnight(daemon, monkeypatch):
+    import wake_listen
+
+    daemon.limit_hits = {"date": "2026-11-20", "today": 4, "last": 99}
+    monkeypatch.setattr(wake_listen, "_today", lambda: "2026-11-21")
+    assert daemon.limit_field() == {"date": "2026-11-21", "today": 0, "last": 99}
+    assert daemon.limit_hits_rolled() is True
+    assert daemon.limit_hits_rolled() is False
+
+
+def test_the_page_draws_it_beside_the_slider():
+    """One line, under "Longest a turn can be", from the state file."""
+    page = (ROOT / "pages" / "ConversationPage.qml").read_text()
+    slider = page.index('label: "Longest a turn can be"')
+    hint = page.index("text: page.limitLine")
+    assert slider < hint < page.index("SettingsGroup", slider)
+    assert "s.vLimitHits" in page
+    overlay = (ROOT / "Settings.qml").read_text()
+    assert "root.vLimitHits = (d.limit_hits" in overlay

@@ -1,0 +1,239 @@
+{
+ "recorded": "2026-11-21, phase M2, bin: Claude Code 2.1.330",
+ "how": "three real turns, each on a new adapter object as reconcile_agent builds one; crew/desktop MCP servers off; reduced to the fields the adapter reads (tests/test_adapters.py replays them)",
+ "marker": "PELICAN-6920",
+ "turns": [
+  {
+   "level": "ask",
+   "model": "haiku",
+   "resumed": null,
+   "argv": [
+    "claude",
+    "-p",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--include-partial-messages",
+    "--verbose",
+    "--permission-mode",
+    "auto",
+    "--no-chrome",
+    "--settings",
+    "<hook settings, matcher=.*>",
+    "--model",
+    "haiku"
+   ],
+   "lines": [
+    {
+     "type": "system",
+     "subtype": "init",
+     "session_id": "27092f9b-fae6-4387-96a3-150bb1cc98f4",
+     "model": "claude-haiku-5-5"
+    },
+    {
+     "type": "stream_event",
+     "event": {
+      "type": "message_start"
+     }
+    },
+    {
+     "type": "stream_event",
+     "event": {
+      "type": "content_block_start",
+      "content_block": {
+       "type": "text"
+      }
+     }
+    },
+    {
+     "type": "stream_event",
+     "event": {
+      "type": "content_block_delta",
+      "delta": {
+       "type": "text_delta",
+       "text": "OK"
+      }
+     }
+    },
+    {
+     "type": "stream_event",
+     "event": {
+      "type": "content_block_stop"
+     }
+    },
+    {
+     "type": "stream_event",
+     "event": {
+      "type": "message_stop"
+     }
+    },
+    {
+     "type": "result",
+     "subtype": "success",
+     "is_error": false,
+     "session_id": "27092f9b-fae6-4387-96a3-150bb1cc98f4",
+     "result": "OK",
+     "num_turns": 1
+    }
+   ],
+   "reply": "OK"
+  },
+  {
+   "level": "trusted",
+   "model": "sonnet",
+   "resumed": "27092f9b-fae6-4387-96a3-150bb1cc98f4",
+   "argv": [
+    "claude",
+    "-p",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--include-partial-messages",
+    "--verbose",
+    "--permission-mode",
+    "auto",
+    "--no-chrome",
+    "--settings",
+    "<hook settings, matcher=Bash|Write|Edit|MultiEdit|NotebookEdit>",
+    "--resume",
+    "27092f9b-fae6-4387-96a3-150bb1cc98f4",
+    "--model",
+    "sonnet"
+   ],
+   "lines": [
+    {
+     "type": "system",
+     "subtype": "init",
+     "session_id": "27092f9b-fae6-4387-96a3-150bb1cc98f4",
+     "model": "claude-sonnet-5-5"
+    },
+    {
+     "type": "stream_event",
+     "event": {
+      "type": "message_start"
+     }
+    },
+    {
+     "type": "stream_event",
+     "event": {
+      "type": "content_block_start",
+      "content_block": {
+       "type": "text"
+      }
+     }
+    },
+    {
+     "type": "stream_event",
+     "event": {
+      "type": "content_block_delta",
+      "delta": {
+       "type": "text_delta",
+       "text": "PELICAN-6920"
+      }
+     }
+    },
+    {
+     "type": "stream_event",
+     "event": {
+      "type": "content_block_stop"
+     }
+    },
+    {
+     "type": "stream_event",
+     "event": {
+      "type": "message_stop"
+     }
+    },
+    {
+     "type": "result",
+     "subtype": "success",
+     "is_error": false,
+     "session_id": "27092f9b-fae6-4387-96a3-150bb1cc98f4",
+     "result": "PELICAN-6920",
+     "num_turns": 1
+    }
+   ],
+   "reply": "PELICAN-6920"
+  },
+  {
+   "level": "ask",
+   "model": "haiku",
+   "resumed": "27092f9b-fae6-4387-96a3-150bb1cc98f4",
+   "argv": [
+    "claude",
+    "-p",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--include-partial-messages",
+    "--verbose",
+    "--permission-mode",
+    "auto",
+    "--no-chrome",
+    "--settings",
+    "<hook settings, matcher=.*>",
+    "--resume",
+    "27092f9b-fae6-4387-96a3-150bb1cc98f4",
+    "--model",
+    "haiku"
+   ],
+   "lines": [
+    {
+     "type": "system",
+     "subtype": "init",
+     "session_id": "27092f9b-fae6-4387-96a3-150bb1cc98f4",
+     "model": "claude-haiku-5-5"
+    },
+    {
+     "type": "stream_event",
+     "event": {
+      "type": "message_start"
+     }
+    },
+    {
+     "type": "stream_event",
+     "event": {
+      "type": "content_block_start",
+      "content_block": {
+       "type": "text"
+      }
+     }
+    },
+    {
+     "type": "stream_event",
+     "event": {
+      "type": "content_block_delta",
+      "delta": {
+       "type": "text_delta",
+       "text": "PELICAN-6920"
+      }
+     }
+    },
+    {
+     "type": "stream_event",
+     "event": {
+      "type": "content_block_stop"
+     }
+    },
+    {
+     "type": "stream_event",
+     "event": {
+      "type": "message_stop"
+     }
+    },
+    {
+     "type": "result",
+     "subtype": "success",
+     "is_error": false,
+     "session_id": "27092f9b-fae6-4387-96a3-150bb1cc98f4",
+     "result": "PELICAN-6920",
+     "num_turns": 1
+    }
+   ],
+   "reply": "PELICAN-6920"
+  }
+ ]
+}

@@ -805,3 +805,110 @@ class TestNoSpokenPromptInArgv:
         assert spawns == known, (
             f"a backend that spawns a process is not covered by this test: "
             f"{spawns ^ known}")
+
+
+class TestResumeAcrossARebuild:
+    """Recorded real turns: a session resumed by a NEW adapter object under
+    the other permission level and another model, then back (phase M2, bug
+    I). Three turns each, made by driving these adapters exactly as
+    reconcile_agent builds them (tests/fixtures/resume/).
+
+    What they hold: `carries_session_across` on Claude Code and Codex is a
+    recording, not a reading of --help. The argv each turn was started with
+    is compared with what the adapter builds today, so a change to the flags
+    fails here and says to record again, rather than going quiet."""
+
+    FIXTURES = Path(__file__).parent / "fixtures" / "resume"
+
+    def fixture(self, name):
+        import json
+        return json.loads((self.FIXTURES / f"{name}-level-and-model.json").read_text())
+
+    @staticmethod
+    def _matcherless(argv):
+        """argv with the hook's JSON replaced by its matcher, as recorded:
+        the JSON holds this machine's paths."""
+        import json
+        out = list(argv)
+        if "--settings" in out:
+            i = out.index("--settings") + 1
+            matcher = json.loads(out[i])["hooks"]["PreToolUse"][0]["matcher"]
+            out[i] = f"<hook settings, matcher={matcher}>"
+        return out
+
+    def test_claude_resumed_the_session_both_ways_and_recalled_it(self):
+        from adapters.claude_code import parse_line
+        fx = self.fixture("claude")
+        sessions, replies = [], []
+        for turn in fx["turns"]:
+            chunks = [c for line in turn["lines"] if line["type"] != "result"
+                      for c in parse_line(line)]
+            sessions.append(next(c.session_id for c in chunks if c.session_id))
+            replies.append("".join(c.text for c in chunks if c.text).strip())
+            result = next(line for line in turn["lines"] if line["type"] == "result")
+            assert result["subtype"] == "success" and not result["is_error"]
+        assert len(set(sessions)) == 1, "a rebuilt adapter started a new session"
+        assert replies[0] == "OK"
+        assert replies[1] == replies[2] == fx["marker"], "the conversation was lost"
+        levels = [t["level"] for t in fx["turns"]]
+        models = [t["model"] for t in fx["turns"]]
+        assert levels == ["ask", "trusted", "ask"] and models[0] != models[1] == "sonnet"
+
+    def test_claude_builds_those_turns_the_same_way_today(self, monkeypatch):
+        fx = self.fixture("claude")
+        sid = fx["turns"][1]["resumed"]
+        for turn in fx["turns"]:
+            agent = ClaudeCode(model=turn["model"], cwd="/tmp",
+                               ask_permission=turn["level"] != "trusted")
+            agent.crew_tools = False
+            agent.spoken = False
+            want = turn["argv"]
+            got = self._matcherless(agent._argv("", turn["resumed"]))
+            assert got == want, "the flags changed: record tests/fixtures/resume again"
+            if turn["resumed"]:
+                assert got[got.index("--resume") + 1] == sid
+
+    def test_codex_resumed_the_thread_both_ways_and_recalled_it(self, monkeypatch):
+        import json
+        fx = self.fixture("codex")
+        sessions, replies, errors = [], [], []
+        for turn in fx["turns"]:
+            lines = [json.dumps(line) + "\n" for line in turn["lines"]]
+
+            class FakeProc:
+                stdout = iter(lines)
+                stderr = None
+
+                def wait(self):
+                    return 0
+
+            monkeypatch.setattr("adapters.codex.subprocess.Popen",
+                                lambda argv, **kw: FakeProc())
+            chunks = list(Codex(ask_permission=turn["level"] != "trusted",
+                                model=turn["model"]).send("hi", turn["resumed"]))
+            sessions.append(next(c.session_id for c in chunks if c.session_id))
+            replies.append("".join(c.text for c in chunks if c.text).strip())
+            errors += [c.error for c in chunks if c.error]
+        assert len(set(sessions)) == 1
+        assert replies[1] == replies[2] == fx["marker"]
+        # A model change makes Codex warn as an `error` item, then answer:
+        # neither spoken nor a failed turn.
+        warned = [line for t in fx["turns"][1:] for line in t["lines"]
+                  if (line.get("item") or {}).get("type") == "error"]
+        assert len(warned) == 2 and "resuming with" in warned[0]["item"]["message"]
+        assert not errors and all("resuming" not in r for r in replies)
+
+    def test_codex_builds_those_turns_the_same_way_today(self, monkeypatch):
+        fx = self.fixture("codex")
+        levels = [{"effort": "low"}, {"effort": "medium"}]
+        monkeypatch.setattr("adapters.codex.codex_models", lambda: [
+            {"slug": t["model"], "supported_reasoning_levels": levels}
+            for t in fx["turns"]])
+        for turn in fx["turns"]:
+            agent = Codex(ask_permission=turn["level"] != "trusted",
+                          model=turn["model"], effort="low")
+            agent.crew_tools = False
+            got = agent._argv("", turn["resumed"])
+            assert got == turn["argv"], "the flags changed: record again"
+            if turn["level"] == "trusted":
+                assert got.index("--approve-for-me") < got.index("resume")

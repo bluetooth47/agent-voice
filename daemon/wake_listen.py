@@ -70,6 +70,7 @@ import chats as chat_schema  # noqa: E402
 import collab  # noqa: E402
 import narration  # noqa: E402
 import omarchy_skill  # noqa: E402
+import sessions  # noqa: E402
 from runtime import (  # noqa: E402
     REPLY_MAX, RUNTIME_DIR, Config, History, Speaker, StateFile, instructions_text, speed_pct,
 )
@@ -1378,6 +1379,32 @@ def _logind_locked() -> bool | None:
     return True if answer == "yes" else (False if answer == "no" else None)
 
 
+def _today() -> str:
+    return time.strftime("%Y-%m-%d", time.localtime())
+
+
+def _limit_hits_from(state) -> dict:
+    """Today's count of turns cut at maxUtteranceMs, as the state file a
+    previous run of the daemon left it (phase M2, bug C), else none.
+
+    The state file lives in the runtime folder, which outlives a restart of
+    the service but not a reboot, which is about what "today" should mean
+    here. Anything unreadable, from another day, or the wrong shape is no
+    count at all -- this is a note on a settings page, not a guard."""
+    fresh = {"date": _today(), "today": 0, "last": 0}
+    path = getattr(state, "path", None)
+    try:
+        saved = json.loads(Path(path).read_text())["limit_hits"]
+        if (isinstance(saved, dict) and saved.get("date") == fresh["date"]
+                and isinstance(saved.get("today"), int) and saved["today"] >= 0
+                and isinstance(saved.get("last"), (int, float))):
+            return {"date": fresh["date"], "today": saved["today"],
+                    "last": saved["last"]}
+    except (OSError, TypeError, ValueError, KeyError):
+        pass
+    return fresh
+
+
 def _empty_turn() -> dict:
     """Nothing heard yet, nothing answered.
 
@@ -1700,6 +1727,14 @@ class Daemon:
         #: installed, no voice downloaded -- used to write the same line to
         #: the journal twenty times a minute, forever.
         self._said: dict[str, str] = {}
+        #: phase M2, bug I: why an agent's conversation was ended by a
+        #: rebuild, by agent id ("" the main agent), as (line, its turn count
+        #: then, when). Shown in the readout until its next turn is answered.
+        self._notices: dict[str, tuple[str, int, float]] = {}
+        #: phase M2, bug C: turns cut at maxUtteranceMs, today. Carried over
+        #: from the state file a previous run of the daemon left, so a restart
+        #: (an install) does not wipe the count the Conversation page shows.
+        self.limit_hits = _limit_hits_from(state)
         signal.signal(signal.SIGUSR1, self._on_toggle)
         signal.signal(signal.SIGUSR2, self._on_interrupt)
         if state is not None and hasattr(state, "overlay"):
@@ -2049,9 +2084,14 @@ class Daemon:
         directory would be set in the UI and simply not happen -- the same
         read-once bug that made two earlier settings look broken.
 
-        The session is dropped on the way: `--resume` is scoped to a project
-        in Claude Code, so carrying an id across a directory change would
-        resume the wrong conversation, or none.
+        The process always goes: it was started under the old flags. The
+        conversation goes only with a new program, endpoint or folder --
+        `--resume` is scoped to a project in Claude Code, so carrying an id
+        across a directory change would resume the wrong conversation, or
+        none. A new level or model keeps it where the backend has been shown
+        to resume under the new flags (sessions.py; bug I, phase M2): this
+        dropped it too, and a permission flip mid-chat left the agent unable
+        to recall what it had just said.
         """
         if self._main.busy:
             # Its turn is running on another thread; rebuilding would cancel
@@ -2096,8 +2136,21 @@ class Daemon:
             self.apply_effort(want_effort)
             self.publish_agent()
             return
-        if self.agent is not None:
-            self.agent.cancel()
+        old = self.agent
+        changed: set[str] = set()
+        if old is not None:
+            if getattr(old, "name", None) != want_name:
+                changed.add(sessions.PROGRAM)
+            elif endpoint is not None:
+                changed.add(sessions.ENDPOINT)
+            else:
+                if getattr(old, "cwd", None) != want_cwd:
+                    changed.add(sessions.FOLDER)
+                if getattr(old, "ask_permission", None) != want_ask:
+                    changed.add(sessions.LEVEL)
+                if takes_model(old) and getattr(old, "model", None) != want_model:
+                    changed.add(sessions.MODEL)
+            old.cancel()
         if endpoint:
             endpoint = {**endpoint, "key": endpoint_key(_host(endpoint["url"]))}
         self.agent = load_adapter(name=None if endpoint else want_name,
@@ -2105,7 +2158,8 @@ class Daemon:
                                   level=want_level, endpoint=endpoint,
                                   model=want_model, effort=want_effort,
                                   instructions=want_instructions)
-        self.session_id = None
+        # phase M2, bug I: was `self.session_id = None` whatever changed.
+        self.carry_session(self._main, changed, want_name or "")
         self.publish_agent()
         where = f" · {want_cwd}" if getattr(self.agent, "has_tools", True) else ""
         if want_model and takes_model(self.agent):
@@ -2131,6 +2185,59 @@ class Daemon:
                           f"  {YEL}conversation is on, but {self.agent.name} starts "
                           f"fresh every turn — it saves you the wake word and "
                           f"nothing more{OFF}")
+
+    def carry_session(self, p: Persona, changed: set[str], program: str) -> bool:
+        """After `p`'s adapter was rebuilt for `changed`: keep its
+        conversation or end it, by sessions.carry(), and say which. True if
+        kept (phase M2, bug I).
+
+        Kept across a level change, it loses every "allow all in this chat"
+        made under the old level: the level is the newer decision. Ended
+        with a conversation to end, the reason goes in the journal and in the
+        readout until `p`'s next turn has been answered, so a backend that
+        has to start fresh says why rather than seeming to forget."""
+        sid = p.session_id
+        if not sid:
+            return False
+        label = p.label or p.name or "main"
+        if p.agent is None:
+            keep, reason = False, (sorted(changed & {sessions.PROGRAM, sessions.FOLDER})
+                                   or [sessions.OTHER])[0]
+        else:
+            keep, reason = sessions.carry(
+                changed, getattr(p.agent, "carries_session_across", frozenset()))
+        if keep:
+            print(f"  {CYA}agent “{label}”: conversation kept "
+                  f"({' and '.join(sorted(changed)) or 'nothing'} changed){OFF}",
+                  flush=True)
+            if sessions.LEVEL in changed:
+                import permission_hook
+                if permission_hook.revoke(sid):
+                    print(f"  {CYA}agent “{label}”: “allow all in this chat” "
+                          f"withdrawn — the permission level changed{OFF}",
+                          flush=True)
+            return True
+        p.session_id = None
+        because = sessions.why(reason, program_label(program) or program)
+        print(f"  {YEL}agent “{label}”: new conversation — {because}{OFF}", flush=True)
+        self._notices[p.id or ""] = (f"{label}: new chat — {because}.",
+                                     getattr(p, "turn_id", 0), time.time())
+        return False
+
+    def expire_notices(self) -> bool:
+        """Drop each notice once its agent has answered a turn since, or is
+        gone, or it is an hour old. True if any went. From refresh(), on the
+        run loop's thread, like everything else that rewrites the context."""
+        gone = []
+        for key, (_line, turn, at) in self._notices.items():
+            p = self._persona_by_id(key)
+            if (p is None or time.time() - at > 3600
+                    or (getattr(p, "turn_id", 0) > turn
+                        and not getattr(p, "answering", False))):
+                gone.append(key)
+        for key in gone:
+            del self._notices[key]
+        return bool(gone)
 
     def instructions_for(self, persona_id: str, legacy) -> str:
         """An agent's standing instructions: its folder's instructions.md
@@ -2478,6 +2585,12 @@ class Daemon:
                         self.answer(text, last)
                 finally:
                     self._here.typed = False
+            # The turn is over: say so, keeping what was typed and answered
+            # on screen. The run loop does this after a spoken turn; after a
+            # typed one it went straight back to waiting, and while muted
+            # nothing else publishes -- so the readout stayed on "speaking"
+            # until the microphone came back (phase M2, testresults #10).
+            self._publish(**last)
 
     def _publish(self, **extra):
         # "locked" is its own state rather than "off": the panel should be
@@ -2584,6 +2697,10 @@ class Daemon:
         # left from earlier in the session when the daemon starts.
         if not self.cfg.get_bool("keepHistory"):
             self.history.clear()
+        # phase M2: a notice outlives the turn it explained only until the
+        # agent answers again, and today's limit count rolls over at midnight.
+        if self.expire_notices() or self.limit_hits_rolled():
+            self.publish_agent()
         if not changed:
             return
         self.pipe.apply(self.cfg)
@@ -3328,7 +3445,39 @@ class Daemon:
                     self.agent.cancel()
                 return
 
-    def chime(self, name: str) -> None:
+    # --- turns cut at the longest-turn limit (phase M2, bug C) ---------------
+
+    def limit_field(self) -> dict:
+        """`limit_hits` for the state file: today's count and the last time,
+        or a zero count once the day it was counted on is over."""
+        hits = getattr(self, "limit_hits", None) or {}
+        if hits.get("date") != _today():
+            return {"date": _today(), "today": 0, "last": hits.get("last", 0)}
+        return dict(hits)
+
+    def limit_hits_rolled(self) -> bool:
+        """Start a new day's count at midnight. True if it did."""
+        hits = getattr(self, "limit_hits", None)
+        if not hits or hits.get("date") == _today():
+            return False
+        self.limit_hits = self.limit_field()
+        return True
+
+    def count_limit_hit(self) -> None:
+        """A turn was cut at maxUtteranceMs: count it where the Conversation
+        page can see it. Reported from use: turns were cut at 30 seconds with
+        nothing on screen to say so, and the only trace was a journal line."""
+        self.limit_hits_rolled()
+        hits = self.limit_field()
+        hits["today"] += 1
+        hits["last"] = round(time.time())
+        self.limit_hits = hits
+        print(f"  {YEL}cut at the longest-turn limit "
+              f"({self.pipe.max_utterance_ms / 1000:.0f}s; "
+              f"{hits['today']} today){OFF}", flush=True)
+        self.publish_agent()
+
+    def chime(self, name: str, why: str = "") -> None:
         """Play one of the short sounds, if they are on and we are listening.
 
         Never blocks: the sound plays from PortAudio's own thread. For its
@@ -3337,6 +3486,11 @@ class Daemon:
         starting to talk -- which on `wake` would end the lead-in's wait for
         nobody. It is not made deaf: that dropped the frame after the wake
         word whole, and with it the first word of anyone who did not pause.
+
+        `why` goes in a journal line beside the sound's name whenever one
+        plays (phase M2, bug J): "a random be-deep" could not be traced from
+        the journal, which said what the loop did and never what it played.
+        A reason is a fixed phrase and an agent's name, never anything said.
         """
         if (self.chimes is None or not self.cfg.get_bool("chimes")
                 or not self.listening):
@@ -3349,8 +3503,26 @@ class Daemon:
             self.say_once("chimes", f"  {YEL}cannot play sounds: "
                                     f"{type(e).__name__}: {e}{OFF}")
             return
+        print(f"  {DIM}chime: {name}{f' ({why})' if why else ''}{OFF}", flush=True)
         self._chime_until = max(self._chime_until,
                                 time.time() + length + CHIME_TAIL_S)
+
+    def listening_for(self, p: Persona) -> str:
+        """Why the microphone is already listening for `p` without its name,
+        or "" when it is not (phase M2, bug J).
+
+        The wake chime means "listening now; go ahead". Said while the open
+        microphone is already listening for that agent -- its name heard
+        while it works, in the stretch between its turns -- it announces
+        nothing and reads as the machine starting over: the "random be-deep"
+        of 2026-11-19 and 11-21, whose wakes in open mic all stopped the agent
+        mid-turn. So that re-arm is silent; a wake for anyone else, or with
+        no open microphone, still chimes."""
+        if p is None or not self.listening:
+            return ""
+        if self.open_mic is p:
+            return "open mic"
+        return ""
 
     def voiced(self, level_db: float) -> bool:
         """Whether a frame this loud counts as the person speaking.
@@ -3736,7 +3908,7 @@ class Daemon:
             # long turns are tools running with nothing being said. The
             # spoken summary is the answer; this is the bell that says it
             # is over and the floor is yours.
-            self.chime("done")
+            self.chime("done", f"a {time.time() - t0:.0f}s turn ended")
 
         reply = " ".join(reply_parts)
         last["reply"] = reply[:REPLY_MAX]
@@ -4366,8 +4538,12 @@ class Daemon:
         phrase: the permission hook knows it by id. So do its tool switches
         (Phase 13), which apply_extras hands to the adapter between turns,
         and its notes write (Phase 14), which the notes server reads fresh.
-        Anything else -- program, model, folder, level -- starts a new one,
-        because a session is scoped to all of those.
+        Anything else -- program, model, folder, level -- rebuilds the
+        adapter, so no process started under the old flags takes another
+        turn. The conversation survives a new level or model where the
+        backend can resume under them, as the main agent's does
+        (carry_session; phase M2, bug I); a new program, folder or endpoint
+        starts a new one, because a session is scoped to those.
         """
         old = p.spec or {}
         kept = ("effort", "voice", "speed", "instructions", "name", "label",
@@ -4394,9 +4570,21 @@ class Daemon:
                     print(f"  {CYA}agent “{p.label}”: effort "
                           f"{spec['effort'] or 'default'}{OFF}", flush=True)
             return
+        changed = sessions.spec_changes(was, same) if p.agent is not None \
+            else {sessions.PROGRAM}
+        if sessions.FOLDER in changed and (
+                str(project_dir(was.get("projectDir", "")))
+                == str(project_dir(same.get("projectDir", "")))):
+            # "" and the home folder are one place: not a move.
+            changed.discard(sessions.FOLDER)
+        sid = p.session_id
         if p.agent is not None:
             p.agent.cancel()
-        self._build_persona(p, spec)
+        self._build_persona(p, spec)        # always: the old flags go
+        # phase M2, bug I: _build_persona drops the session; put it back
+        # when this change is one the new adapter can carry it across.
+        p.session_id = sid
+        self.carry_session(p, changed, spec.get("agent") or "")
 
     def persona_speed(self, p: Persona) -> int:
         """An extra agent's own speed, else the main agent's."""
@@ -4456,10 +4644,18 @@ class Daemon:
                            or (p.problem if p is not None else ""),
                 "voice": getattr(p.speaker, "name", "") if p and p.speaker else "",
             })
+        notices = getattr(self, "_notices", None) or {}
         return {"crew": out, "open_mic": self.open_mic_field(),
                 # Per folder: sizes, problems, files changed outside Settings
                 # (Phase 9). The pages draw it from Phase 12.
-                "agent_files": getattr(self, "_agent_files", None) or {}}
+                "agent_files": getattr(self, "_agent_files", None) or {},
+                # phase M2, bug C: {"date", "today", "last"}; the
+                # Conversation page says so beside the longest-turn slider.
+                "limit_hits": self.limit_field(),
+                # phase M2, bug I: why a conversation was ended by a rebuild,
+                # for the readout's extra line. Absent when there is none.
+                **({"notice": " · ".join(n[0] for n in notices.values())}
+                   if notices else {})}
 
     def panel_agents(self, payload: dict) -> list[dict]:
         """Every agent as agents_panel.py draws it, from the payload just
@@ -4554,6 +4750,12 @@ class Daemon:
         HUD. Neither holds a brief or a request. Absent when there are none,
         so the state file reads as before."""
         state, extra = self._compose_line(state, extra)
+        # Said outright now that a muted readout can show an agent
+        # speaking (phase M2, testresults #10): the popup's Mute button
+        # read "muted" off the state being "off", and would have offered
+        # "Mute" -- a click that unmutes -- to somebody already muted.
+        if not self.enabled and state != "off":
+            extra = {**extra, "muted": True}
         if self.locked:
             # Decided here, under the state file's own lock, because a turn
             # thread may compose from a microphone state read before the lock
@@ -4578,10 +4780,17 @@ class Daemon:
         Installed as the state file's overlay, so every publish passes here.
         With one agent it changes nothing. With several, the microphone wins
         whenever it is doing something -- capturing, transcribing, locked,
-        muted, lent out -- and otherwise the readout shows the agent that is
+        lent out -- and otherwise the readout shows the agent that is
         speaking, else the one that started thinking last, else the one that
         answered last. `who` names whose turn it is and `live` says what each
         agent is doing.
+
+        Muted is not "doing something" (phase M2, testresults #10). A mute
+        closes the microphone and nothing else: a typed turn is answered
+        aloud, and a reply under way keeps playing. With the microphone
+        winning, the readout said "off" over all of it -- no HUD, the last
+        thing heard stuck on the turn before, an agent shown speaking after
+        it had finished. A lock still wins, in _compose(), over everything.
         """
         self._mic_shown = (state, dict(extra))
         if not self.crew_mode:
@@ -4590,7 +4799,7 @@ class Daemon:
         # By id, "" being the main agent: a display name is any text and
         # need not be unique, and the screen looks agents up by id.
         live = {p.id: (p.state if p.busy else "idle") for p in everyone}
-        if state == "listening":
+        if state in ("listening", "off"):
             speaking = [p for p in everyone if p.busy and p.state == "speaking"]
             thinking = sorted((p for p in everyone
                                if p.busy and p.state == "thinking"),
@@ -4883,6 +5092,9 @@ class Daemon:
             # Transcribes as you talk; None outside a capture. See eager.py.
             utt = None
             woke_at = last_voice = released_at = 0.0
+            # When the first word of this capture was heard: where the
+            # longest-turn limit counts from (phase M2, bug C).
+            spoke_at = 0.0
             heard = False
             # A follow-up gets its own, shorter window: after a reply the
             # machine keeps listening for a moment so the next thing you say
@@ -4918,7 +5130,26 @@ class Daemon:
                     continue
                 if self.apply_wake_test_command(cmd):
                     continue
-                if self.apply_open_mic_command(cmd):
+                mic_cmd = self.apply_open_mic_command(cmd)
+                # phase M2, bug K: the open microphone ended -- the popup's
+                # switch, `agentvoice open-mic off`, a full stop -- while
+                # its window was open and nobody had started talking. The
+                # window was left to run out its lead-in, which for the
+                # open microphone is the rest of its idle time, so "still
+                # listening" stayed up for up to ten minutes after "off".
+                # It closes now; a capture somebody is speaking into is
+                # left to finish, and goes to the agent as usual.
+                if (phase == "capture" and capture_kind == "open"
+                        and not heard and self.open_mic is None):
+                    if utt is not None:
+                        utt.abandon()
+                        utt = None
+                    phase, ptt, ptt_done = "wake", False, False
+                    self._capture_for = None
+                    print(f"  {DIM}(open mic window closed){OFF}", flush=True)
+                    self._publish(**last)
+                    continue
+                if mic_cmd:
                     continue
                 if self.apply_chat_command(cmd):
                     continue
@@ -4951,7 +5182,7 @@ class Daemon:
                     if crew:
                         self._capture_for, self._recent = capture_for, None
                         self._hold(True)
-                    woke_at = last_voice = time.time()
+                    woke_at = last_voice = spoke_at = time.time()
                     heard = False
                     ptt, ptt_done = True, False
                     active_lead_in = self.pipe.lead_in_ms
@@ -5079,12 +5310,12 @@ class Daemon:
                         with self._as(capture_for):
                             self._interrupt.clear()     # see the wake branch
                             self.prime_agent()
-                        woke_at = last_voice = time.time()
+                        woke_at = last_voice = spoke_at = time.time()
                         heard = False
                         active_lead_in = self.open_mic_left_ms()
                         last = _empty_turn()
                         shown_partial = ""
-                        self.state.publish("followup", **last)
+                        self.state.publish("followup", window=capture_kind, **last)
                         # No `continue`: this frame is the capture's first.
 
                 if phase == "wake" and crew:
@@ -5109,7 +5340,7 @@ class Daemon:
                         with self._as(reopen):
                             self._interrupt.clear()
                             self.prime_agent()
-                        woke_at = last_voice = time.time()
+                        woke_at = last_voice = spoke_at = time.time()
                         heard = kind == "barge"
                         active_lead_in = (self.pipe.follow_up_ms if kind == "followup"
                                           else self.pipe.lead_in_ms)
@@ -5135,7 +5366,7 @@ class Daemon:
                                   flush=True)
                             last = _empty_turn()
                             shown_partial = ""
-                            self.state.publish("followup", **last)
+                            self.state.publish("followup", window=capture_kind, **last)
                         # No `continue`: this frame is the capture's first.
 
                 # While the wake test runs, a wake is counted, not answered.
@@ -5181,8 +5412,15 @@ class Daemon:
                         # feedback, and you are already talking when it goes
                         # down -- a chime there would be deafness over your
                         # first word.
-                        self.chime("wake")
-                        woke_at = last_voice = time.time()
+                        # Not when the open microphone was already
+                        # listening for this agent (phase M2, bug J).
+                        quiet = self.listening_for(capture_for or self._main)
+                        if quiet:
+                            print(f"  {DIM}chime: wake not played ({quiet} "
+                                  f"was already listening){OFF}", flush=True)
+                        else:
+                            self.chime("wake", "wake word")
+                        woke_at = last_voice = spoke_at = time.time()
                         heard = False
                         active_lead_in = self.pipe.lead_in_ms
                         last = _empty_turn()
@@ -5207,6 +5445,8 @@ class Daemon:
                 # chime would go to Whisper.
                 voiced = self.voiced(level)
                 if voiced:
+                    if not heard:
+                        spoke_at = time.time()  # see the limit below
                     heard = True
                     last_voice = time.time()
                     if crew and not self._hold_speech:
@@ -5234,6 +5474,15 @@ class Daemon:
                 now = time.time()
                 elapsed_ms = (now - woke_at) * 1000
                 quiet_ms = (now - last_voice) * 1000
+                # The longest-turn limit counts from the first word, not
+                # from when the window opened (phase M2, bug C). From the
+                # window, the open microphone -- which waits up to its idle
+                # time for somebody to start -- cut anyone who began more
+                # than maxUtteranceMs into it at their first frame: the
+                # "cut off at 30 seconds with no warning" of 2026-11-19,
+                # every one of them in open mic. A capture still ends at
+                # most the lead-in plus the limit after it opens.
+                spoken_ms = (now - spoke_at) * 1000
 
                 # Waiting for you to begin. Deliberately generous: being cut
                 # off before you have started is the most irritating failure
@@ -5259,14 +5508,16 @@ class Daemon:
 
                 if ptt and not ptt_done:
                     # A key that never comes back up must not buffer forever.
+                    # From the key going down: everything since is recorded.
                     if elapsed_ms < self.pipe.max_utterance_ms:
                         continue
-                elif not ptt and elapsed_ms < self.pipe.max_utterance_ms \
+                elif not ptt and spoken_ms < self.pipe.max_utterance_ms \
                         and not self.turn_ended(quiet_ms, utt):
                     continue
-                if elapsed_ms >= self.pipe.max_utterance_ms:
+                if (elapsed_ms if ptt else spoken_ms) >= self.pipe.max_utterance_ms:
                     print(f"{cursor_home()}  {YEL}(hit max_utterance_ms){OFF}"
                           f"{' ' * 30}")
+                    self.count_limit_hit()      # phase M2, bug C
                 # Where the latency of this turn is counted from: the last
                 # sound you made, or the key coming up. Not the endpoint --
                 # the pause it waits out is part of what you sit through.
@@ -5293,7 +5544,7 @@ class Daemon:
                     # Got it. Before the wait for Whisper, not after, so it
                     # marks the moment the turn ended -- the thing you could
                     # not tell before without looking at the bar.
-                    self.chime("heard")
+                    self.chime("heard", "end of what was said")
                     # Its own state. This phase and the agent's turn both
                     # published "thinking", and the panel labelled that
                     # "TRANSCRIBING" -- so the label was right here and wrong
@@ -5433,7 +5684,7 @@ class Daemon:
                     for early in barged:
                         buf += early
                         self.hear(cap, utt, early, self.voiced(frame_db(early)))
-                    woke_at = last_voice = time.time()
+                    woke_at = last_voice = spoke_at = time.time()
                     # Already heard: the lead-in timer is for somebody who
                     # has not started, and this person has. Silence from here
                     # endpoints the turn as usual -- so a bare "stop" is a
@@ -5459,8 +5710,15 @@ class Daemon:
                     self._interrupt.clear()     # see the wake branch
                     self.prime_agent()
                     self._deaf_until = 0.0
-                    self.chime("wake")
-                    woke_at = last_voice = time.time()
+                    # Silent inside the open microphone, which was
+                    # listening for it anyway (phase M2, bug J).
+                    quiet = self.listening_for(self._main)
+                    if quiet:
+                        print(f"  {DIM}chime: wake not played ({quiet} "
+                              f"was already listening){OFF}", flush=True)
+                    else:
+                        self.chime("wake", "the wake word stopped the reply")
+                    woke_at = last_voice = spoke_at = time.time()
                     heard = False
                     active_lead_in = self.pipe.lead_in_ms
                     capture_kind = "wake"
@@ -5476,7 +5734,7 @@ class Daemon:
                     # running. It matters after a stop or a failed turn, which
                     # leave nothing running.
                     self.prime_agent()
-                    woke_at = last_voice = time.time()
+                    woke_at = last_voice = spoke_at = time.time()
                     heard = False
                     active_lead_in = self.pipe.follow_up_ms
                     capture_kind = "followup"
@@ -5486,7 +5744,7 @@ class Daemon:
                     print(f"  {CYA}● still listening{OFF}  {DIM}"
                           f"({active_lead_in / 1000:.0f}s — or say the wake word again)"
                           f"{OFF}", flush=True)
-                    self.state.publish("followup", **last)
+                    self.state.publish("followup", window=capture_kind, **last)
                     self.refresh()
                     continue
 
