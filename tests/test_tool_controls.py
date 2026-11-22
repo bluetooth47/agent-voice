@@ -171,14 +171,12 @@ def codex_home(tmp_path, monkeypatch, text):
 def test_codex_starts_config_servers_not_switched_on_disabled(tmp_path, monkeypatch):
     from adapters.codex import Codex
     codex_home(tmp_path, monkeypatch,
-               '[mcp_servers.node_repl]\ncommand = "x"\n[mcp_servers.github]\ncommand = "y"\n'
-               '[mcp_servers."has.dot"]\ncommand = "z"\n')
+               '[mcp_servers.node_repl]\ncommand = "x"\n[mcp_servers.github]\ncommand = "y"\n')
     c = Codex()
     argv = c._argv("", None)
     flags = [argv[i + 1] for i, w in enumerate(argv) if w == "-c"]
     assert "mcp_servers.node_repl.enabled=false" in flags
     assert "mcp_servers.github.enabled=false" in flags
-    assert not any("has.dot" in f for f in flags)      # cannot be named: shown so on the page
     c.mcp_on = {"github": tooldetect.spec_digest({"command": "y"})}
     flags = [w for w in c._argv("", None) if "enabled=false" in w]
     assert flags == ["mcp_servers.node_repl.enabled=false"]
@@ -691,3 +689,28 @@ def test_a_revoked_server_cannot_hide_behind_an_approved_ones_name(settings, mon
 def test_a_server_key_never_holds_a_double_underscore_or_an_edge_one(name, key):
     got = tooldetect.server_key(name)
     assert got == key and "__" not in got and not got.startswith("_") and not got.endswith("_")
+
+
+def test_a_codex_server_cannot_be_named_does_not_start_codex_until_switched_on(tmp_path, monkeypatch):
+    """`-c` takes a dotted path and refuses a quoted key (tried against
+    0.171.0), so a server named "has.dot" cannot be left out: off means no
+    turn (Codex review of M10, pass 2); switched on, it starts as approved."""
+    from adapters.codex import Codex, ConfigUnaccounted
+    codex_home(tmp_path, monkeypatch, '[mcp_servers."has.dot"]\ncommand = "z"\n')
+    with pytest.raises(ConfigUnaccounted, match="has.dot"):
+        Codex()._argv("", None)
+    c = Codex()
+    c.mcp_on = {"has.dot": tooldetect.spec_digest({"command": "z"})}
+    assert not any("has.dot" in w for w in c._argv("", None))
+    (tmp_path / "codex" / "config.toml").write_text('[mcp_servers."has.dot"]\ncommand = "changed"\n')
+    with pytest.raises(ConfigUnaccounted):
+        c._argv("", None)
+
+
+def test_a_stale_approval_cannot_vouch_for_a_server_of_the_same_key(cfg_factory):
+    """"docs.api" and "docs_api" are one key: with one switched off the key
+    is off, whatever the other's approval says (Codex review, pass 2)."""
+    cfg = cfg_factory(mainTools={"mcp:docs.api": "off", "mcp:docs_api": "on:" + FP})
+    assert tooldetect.switched_on_keys(cfg, "") == set()
+    cfg = cfg_factory(mainTools={"mcp:docs_api": "on:" + FP})
+    assert tooldetect.switched_on_keys(cfg, "") == {"docs_api"}

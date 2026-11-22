@@ -228,6 +228,9 @@ def test_no_secret_value_is_in_what_a_scan_returns(tmp_path):
     (["--env=FOO=PRIVATE"], "--env=•••"),
     (["https://u:PRIVATE@h.example/x?k=PRIVATE"], "https://h.example/x?•••"),
     (["Qx7dPRIVATE9a8b7c6d5e4f3"], "•••"),
+    # A key ending in base64 padding is no assignment (Codex review, pass 2).
+    (["dGhpc2lzYXNlY3JldHRva2VuMTIz=="], "•••"),
+    (["sk-PRIVATEKEY123456789=="], "•••"),
 ])
 def test_arguments_that_look_like_keys_are_masked(args, shown):
     assert tooldetect.shown_command({"command": "srv", "args": args}) == "srv " + shown
@@ -544,7 +547,7 @@ def test_the_notice_lists_what_nobody_switched_and_goes_when_dismissed(cfg_facto
     assert stat.S_IMODE(state.stat().st_mode) == 0o600
 
 
-def test_a_codex_server_whose_name_cannot_be_switched_off_says_it_loads_anyway(cfg_factory, tmp_path):
+def test_a_codex_server_whose_name_cannot_be_switched_off_says_what_off_means(cfg_factory, tmp_path):
     """Codex's -c takes a dotted path; a name with a dot in it cannot be
     named there, so Codex starts it whatever the switch says. The row must
     not offer a switch that does nothing (CLAUDE.md: a control that does
@@ -553,9 +556,15 @@ def test_a_codex_server_whose_name_cannot_be_switched_off_says_it_loads_anyway(c
     (r.codex_home / "config.toml").write_text('[mcp_servers."my.server"]\ncommand = "x"\n')
     result = tooldetect.scan(r, path="", key=KEY)
     row = rows_for(cfg_factory(), result, program="codex")["mcp:my.server"]
-    assert not row["can"] and "whatever this says" in row["why_not"]
-    assert tooldetect.delivery(cfg_factory(), "", "codex", "", result,
-                               tooldetect.definitions(r))["codex_off"] == []
+    # Since Codex review pass 2: switchable, and off means Codex does not start.
+    assert row["can"] and "does not start" in row["note"]
+    defs = tooldetect.definitions(r)
+    got = tooldetect.delivery(cfg_factory(), "", "codex", "", result, defs)
+    assert got["codex_off"] == [] and got["codex_on"] == {}
+    fp = result["tools"][0]["fp"]
+    on = tooldetect.delivery(cfg_factory(mainTools={"mcp:my.server": "on:" + fp}), "", "codex", "",
+                             result, defs)
+    assert on["codex_on"] == {"my.server": tooldetect.spec_digest({"command": "x"})}
 
 
 def test_a_cli_behind_a_link_keeps_its_place_across_upgrades(tmp_path):

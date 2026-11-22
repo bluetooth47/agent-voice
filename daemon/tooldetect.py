@@ -498,7 +498,10 @@ def _mask_args(args: list[str]) -> list[str]:
         if "://" in a:
             out.append(_shown_url(a))
             continue
-        if re.search(_SECRET_WORD, a, re.I) or _SECRET_VALUE.match(a) or _TOKENISH.match(a):
+        if _SECRET_VALUE.match(a) or _TOKENISH.match(a):
+            out.append("•••")               # a key on its own: none of it shown
+            continue
+        if re.search(_SECRET_WORD, a, re.I):
             eq = a.find("=")
             out.append(a[:eq + 1] + "•••" if 0 < eq < 40 and re.fullmatch(r"[A-Za-z0-9_.-]+", a[:eq]) else "•••")
             continue
@@ -879,9 +882,6 @@ def _usable(tool: dict, program: str, project: str, roots: Roots | None = None) 
             return False, "It belongs to another project folder than this agent's."
         if server_key(tool["name"]) in RESERVED:
             return False, "Its name is one Agent Voice uses for its own tools."
-    if program == "codex" and not CODEX_NAME.fullmatch(tool["name"]):
-        return False, ("Codex loads it whatever this says: its name cannot be switched off "
-                       "from here. Rename it in Codex's config.toml.")
     return True, ""
 
 
@@ -912,6 +912,10 @@ def rows(cfg, agent_id: str, program: str, level: str, project: str, scanned: di
         if can and t["kind"] == "mcp" and program == "claude" and keys.get(server_key(t["name"]), 0) > 1:
             can, why = False, (f"Another server's name comes out the same once made safe for "
                                f"Claude Code ({server_key(t['name'])}); rename one of them.")
+        note = ""
+        if can and t["kind"] == "mcp" and program == "codex" and not CODEX_NAME.fullmatch(t["name"]):
+            note = ("Its name cannot be switched off for Codex, so while it is off Codex does not "
+                    "start for this agent. Turn it on, or rename it in Codex's config.toml.")
         status = ""
         if t["kind"] == "mcp" and program == "claude":
             status = mine_live.get(server_key(t["name"])) or ""
@@ -925,7 +929,7 @@ def rows(cfg, agent_id: str, program: str, level: str, project: str, scanned: di
             "can": can, "why_not": why,
             "asks": _asks(t["kind"], program, level) if can else "",
             "enforced": t["kind"] == "mcp",
-            "live": status, "fp": fp, "defs": t["defs"], "found": t["found"],
+            "live": status, "fp": fp, "defs": t["defs"], "found": t["found"], "note": note,
             "added": t.get("added", False),
         })
     return out
@@ -967,8 +971,7 @@ def delivery(cfg, agent_id: str, program: str, project: str, scanned: dict, defs
         # What each approved one was, so the adapter can tell at the turn
         # whether the file still says the same.
         out["codex_on"] = {d["name"]: spec_digest(d["spec"]) for d in defs
-                           if d["backend"] == "codex" and "mcp:" + d["name"] in approved
-                           and CODEX_NAME.fullmatch(d["name"])}
+                           if d["backend"] == "codex" and "mcp:" + d["name"] in approved}
     return out
 
 
@@ -978,12 +981,18 @@ def switched_on_keys(cfg, agent_id: str) -> set[str]:
     started with only approved definitions, so it needs only to know whether
     the switch is still on. Unreadable settings switch nothing on."""
     own, shared = cfg.tool_switches(agent_id)
-    out = set()
+    on: set[str] = set()
+    off: set[str] = set()
     for tid in set(own) | set(shared):
+        if not tid.startswith("mcp:"):
+            continue
         value = own.get(tid, shared.get(tid))
-        if tid.startswith("mcp:") and isinstance(value, str) and value.startswith("on:"):
-            out.add(server_key(tid[4:]))
-    return out
+        key = server_key(tid[4:])
+        (on if isinstance(value, str) and value.startswith("on:") else off).add(key)
+    # Two ids can come out as one key ("docs.api", "docs_api"): a key is on
+    # only when no switch naming it says off (Codex review of M10, pass 2),
+    # so a stale approval of one cannot vouch for the other one running.
+    return on - off
 
 
 # --- the one-time notice -------------------------------------------------------------

@@ -1188,7 +1188,8 @@ Column {
           visible: found.modelData.can && found.modelData.asks !== ""
           wrapMode: Text.WordWrap
           textFormat: Text.PlainText
-          text: found.modelData.asks + (found.modelData.kind === "cli" ? " Told, not enforced." : "")
+          text: found.modelData.asks + (found.modelData.kind === "cli" ? " Told, not enforced." : "") +
+                (String(found.modelData.note || "") !== "" ? " " + found.modelData.note : "")
           color: found.modelData.asks.indexOf("⚠") === 0 ? page.s.urgent : page.s.dim
           font.family: page.s.fontFamily
           font.pixelSize: Style.font.caption

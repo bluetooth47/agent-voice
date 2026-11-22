@@ -152,9 +152,8 @@ CONFIG_SERVERS_MAX = 1000
 
 def config_servers() -> dict | None:
     """The MCP servers in Codex's own config.toml, name -> definition, read
-    now: only the names `-c mcp_servers.<name>.enabled=false` can carry
-    (others are shown as not switchable on the Tools & skills tab, since
-    Codex starts them whatever happens here). No file is no servers. A file
+    now, every one of them (_argv decides what to do with a name `-c` cannot
+    carry). No file is no servers. A file
     that is there but cannot be read whole -- too large, too many servers,
     not TOML, unreadable -- is None: some of its servers could not be named,
     so the caller does not start Codex (Codex review of M10)."""
@@ -175,9 +174,7 @@ def config_servers() -> dict | None:
         return None
     if not isinstance(table, dict) or len(table) > CONFIG_SERVERS_MAX:
         return None
-    return {n: spec for n, spec in sorted(table.items())
-            if isinstance(n, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", n)
-            and isinstance(spec, dict)}
+    return {n: spec for n, spec in sorted(table.items()) if isinstance(n, str) and isinstance(spec, dict)}
 
 
 def codex_default_model() -> str:
@@ -277,18 +274,29 @@ class Codex(Adapter):
             raise ConfigUnaccounted(
                 "Codex's config.toml cannot be read whole, so Agent Voice cannot switch its MCP "
                 "servers off; Codex was not started. Make the file smaller, or fix it.")
+        import re
         from tooldetect import spec_digest
         for name, spec in servers.items():
-            if (self.mcp_on or {}).get(name) != spec_digest(spec):
-                # Found in the user's own config.toml and not switched on
-                # for this agent, or changed since it was (phase M10):
-                # Codex would start it otherwise. Read now, not from the
-                # last scan, so a server added or rewritten since is off
-                # from its first turn -- and only names that are there,
-                # because naming one that is not stops Codex from starting
-                # at all ("invalid transport"). Recorded in
-                # tests/fixtures/tools/codex-mcp-enabled.json.
-                argv += ["-c", f"mcp_servers.{name}.enabled=false"]
+            if (self.mcp_on or {}).get(name) == spec_digest(spec):
+                continue                    # switched on, as approved
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name):
+                # `-c` cannot name it (a dotted path; quoting is refused
+                # too, tried against 0.171.0), so Codex would start it with
+                # its switch off: no turn until it is switched on or renamed
+                # (Codex review of M10, pass 2).
+                shown = name if re.fullmatch(r"[\w .:@+-]{1,64}", name) else "one of its servers"
+                raise ConfigUnaccounted(
+                    f"Codex's config.toml has a server Agent Voice cannot switch off ({shown}), "
+                    f"so Codex was not started. Turn it on for this agent, or rename it.")
+            # Found in the user's own config.toml and not switched on
+            # for this agent, or changed since it was (phase M10):
+            # Codex would start it otherwise. Read now, not from the
+            # last scan, so a server added or rewritten since is off
+            # from its first turn -- and only names that are there,
+            # because naming one that is not stops Codex from starting
+            # at all ("invalid transport"). Recorded in
+            # tests/fixtures/tools/codex-mcp-enabled.json.
+            argv += ["-c", f"mcp_servers.{name}.enabled=false"]
         if self.crew_tools:
             # Below Trusted the notes server asks for itself (--guard), on
             # Codex's own level, not on the desktop server's condition: with
