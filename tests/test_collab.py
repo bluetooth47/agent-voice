@@ -3084,9 +3084,9 @@ class TestQuarantine:
             assert sora.busy
             quarantine(d, ["sora"])
             d.collab.tick()
-            assert sora.session_id == "old" and "sora" not in d.collab._q_applied
+            assert sora.session_id == "old" and d.collab._q_owed.get("sora")
         d.collab.tick()
-        assert sora.session_id is None and "sora" in d.collab._q_applied
+        assert sora.session_id is None and "sora" not in d.collab._q_owed
 
     def test_quarantine_while_queued_refuses_and_while_running_cancels(self, m8):
         d = m8
@@ -3261,3 +3261,141 @@ def test_the_link_check_costs_microseconds(m8):
     parse = (_t.perf_counter() - t0) / 200 * 1e6
     print(f"link check {pure:.1f} µs, parse of 72 links {parse:.1f} µs")
     assert pure < 1000 and parse < 20000
+
+
+class TestCodexPass1:
+    """Codex's first review of M8, each finding held by a test."""
+
+    def test_quarantined_while_the_chat_is_shared_takes_the_share_back(self, m8):
+        """2: the share waits for the chat store's lock; a quarantine in that
+        wait leaves nothing shared and nothing sent."""
+        d = m8
+        cid = d._main.chat_id
+        links(d, crew_links.everyone(["main", "sora"]))
+        assert act(d, "main", "sora", "delegate")["ok"]
+        real = d.chats.share
+
+        def share(chat_id, agent):
+            quarantine(d, ["sora"])             # set while it waited
+            return real(chat_id, agent)
+        d.chats.share = share
+        _release(d)
+        _idle(d)
+        t = last_task(d)
+        assert t.state == "cancelled" and t.code == "changed"
+        assert "sora" not in chat_schema.shared_with(d.chats.load(cid))
+        assert not dispatched(d, "sora")
+
+    def test_quarantined_during_the_catch_up_is_refused(self, m8):
+        """2: the last check comes after the catch-up, which can wait."""
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        assert act(d, "main", "sora", "delegate")["ok"]
+        d.catch_up_one = lambda p: quarantine(d, ["sora"])
+        _release(d)
+        _idle(d)
+        assert last_task(d).state == "refused" and not dispatched(d, "sora")
+
+    def test_ask_first_gained_during_the_catch_up_is_refused(self, m8):
+        """2 and 6 together: the last gate holds the level too."""
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        assert act(d, "main", "sora", "delegate")["ok"]
+        d.catch_up_one = lambda p: links(d, [{"from": "main", "to": "sora",
+                                              "allow": ["delegate"], "askFirst": True}])
+        _release(d)
+        _idle(d)
+        assert last_task(d).state == "refused" and last_task(d).code == "changed"
+        assert not dispatched(d, "sora")
+
+    def test_the_sweep_reads_the_file_even_while_listening_is_off(self, daemon, tmp_path,
+                                                                  monkeypatch):
+        """3: the daemon's own copy is refreshed only between turns, and not
+        while the microphone is off; the sweep watches the file itself, and
+        never reloads the daemon's copy behind refresh()'s back."""
+        import runtime
+        shell = tmp_path / "shell.json"
+        monkeypatch.setattr(runtime, "SHELL_JSON", shell)
+
+        def write(links_value, at):
+            entry = {"id": runtime.PLUGIN_ID, "crewLinks": links_value}
+            shell.write_text(json.dumps({"bar": {"layout": {"right": [entry]}}}))
+            os.utime(shell, (at, at))
+        write(crew_links.everyone(["main", "sora"]), 1_000_000)
+        d = daemon
+        del d.watched_config                    # the real method, not the fixture's
+        assert d.collab._crew_seen().allows("main", "sora", "ask")
+        assert d.cfg._values["crewLinks"] == [], "the daemon's own copy was not reloaded"
+        write([], 1_000_100)
+        assert not d.collab._crew_seen().allows("main", "sora", "ask")
+
+    def test_released_before_its_turn_ended_is_still_detached(self, m8):
+        """4: release grants nothing back, including what was owed."""
+        d = m8
+        sora = d.crew["sora"]
+        sora.session_id = "old"
+        with in_turn(d, "sora"):
+            quarantine(d, ["sora"])
+            d.collab.tick()
+            quarantine(d, [])
+            d.collab.tick()
+            assert sora.session_id == "old"
+        d.collab.tick()
+        assert sora.session_id is None and not d.collab._q_owed
+
+    def test_a_chat_store_that_will_not_take_the_change_is_retried(self, m8):
+        """5: a full disk is not counted as revoked."""
+        d = m8
+        cid = d._main.chat_id
+        d.chats.share(cid, "sora")
+        real = d.chats.detach
+        d.chats.detach = lambda agent: (_ for _ in ()).throw(OSError("disk full"))
+        quarantine(d, ["sora"])
+        d.collab.tick()
+        assert d.collab._q_owed == {"sora": {"chats"}}
+        assert "sora" in chat_schema.shared_with(d.chats.load(cid))
+        d.chats.detach = real
+        quarantine(d, [])                       # released meanwhile: still owed
+        d.collab.tick()
+        assert not d.collab._q_owed
+        assert "sora" not in chat_schema.shared_with(d.chats.load(cid))
+
+    @pytest.mark.parametrize("change", ["ask-first", "off"])
+    def test_a_queued_question_is_held_to_the_level_too(self, m8, monkeypatch, change):
+        """6: askFirst gained, or the caller switched off, while a question
+        waited for a busy agent: no side turn, no card never shown."""
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        monkeypatch.setattr(d.collab, "sweep", lambda: None)
+        out = {}
+        with in_turn(d, "sora"):
+            th = threading.Thread(target=lambda: out.update(got=act(d, "main", "sora", "ask_agent")))
+            th.start()
+            assert _until(lambda: any(t.kind == "ask" for t in d.collab.board.open()))
+            if change == "off":
+                level(d, "main", "off")
+            else:
+                links(d, [{"from": "main", "to": "sora", "allow": ["ask"], "askFirst": True}])
+        th.join(10)
+        assert not out["got"]["ok"] and d.sides == []
+
+    def test_a_result_is_withheld_when_its_agent_is_quarantined_before_delivery(self, m8):
+        """7."""
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        assert act(d, "main", "sora", "delegate", report_back=True)["ok"]
+        _release(d)
+        _idle(d)
+        quarantine(d, ["sora"])
+        text = d.collab.deliveries(d._main)
+        assert "was withheld" in text and "Sora here." not in text
+
+    def test_a_quarantined_answer_keeps_its_mark_in_the_saved_chat(self, m8):
+        """8."""
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        quarantine(d, ["sora"])
+        with in_turn(d, "main") as p:
+            assert call(d, "main", "ask_agent", {"to": "sora", "question": "time?"})["ok"]
+            asides = d.collab.take_asides(p)
+        assert asides and "from a quarantined agent" in asides[0]["answer"]

@@ -4593,6 +4593,19 @@ class Daemon:
         knobs, read fresh on every call (merged plan 3.4)."""
         return Config()
 
+    def watched_config(self) -> Config:
+        """collab: a Config of its own for the crew sweep on every poll (phase
+        M8), re-read only when its files' stamps move -- two stat calls a
+        poll. Not self.cfg: refresh() is skipped while the microphone is off,
+        so that copy can go stale for as long as listening is (Codex review),
+        and reloading self.cfg here would hide a change from refresh()."""
+        c = getattr(self, "_watched_cfg", None)
+        if c is None:
+            c = self._watched_cfg = Config()
+        else:
+            c.reload()
+        return c
+
     def adapter_stale(self, p: Persona, cfg) -> bool:
         """collab: whether `p`'s running adapter no longer matches what the
         settings now say about how it may act -- its permission level (hook

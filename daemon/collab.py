@@ -645,7 +645,8 @@ def deliveries_text(messages: list, reports: list) -> str:
             out += f"{head}\n{fenced(r.get('text', ''), REPORT_MAX)}\n\n"
         elif state == "withheld":
             out += (f"The result of the task you gave {label} (task {r.get('task', '?')}) was "
-                    f"withheld: the Crew map no longer lets you give {label} tasks.\n\n")
+                    f"withheld: the Crew map changed since you gave it, and no longer lets it "
+                    f"come back as it was.\n\n")
         else:
             out += (f"The task you gave {label} (task {r.get('task', '?')}) did not finish: "
                     f"it was {state}.\n\n")
@@ -1140,11 +1141,18 @@ class Runtime:
         #: wrote into an inbox is never delivered as an agent's.
         self._key = secrets.token_bytes(32)
         self.listener = None
-        # Phase M8: the agents whose quarantine has been carried out -- their
-        # sessions detached, their shares revoked -- this run. Empty at
-        # start, so a daemon started with an agent already quarantined
-        # carries it out once more (it costs nothing twice).
+        # Phase M8: the agents seen quarantined this run, so a release is
+        # noticed. Empty at start, so a daemon started with an agent already
+        # quarantined carries it out once more (it costs nothing twice).
         self._q_applied: set = set()
+        #: What of each quarantine is still to carry out: "persona" (its
+        #: conversation and warm process) and then "chats" (its shares and
+        #: sessions in the chat store). Owed from the moment it is seen and
+        #: carried out even if the agent is released first, because release
+        #: grants nothing back (Codex review); kept until the chat store
+        #: takes the change, so a full disk is retried, not forgotten.
+        self._q_owed: dict = {}
+        self._q_failed: set = set()
         #: The last time an unreadable crew list was said in the HUD, so a
         #: burst of refused calls is one line, not twelve.
         self._crew_flash_at = 0.0
@@ -1401,23 +1409,17 @@ class Runtime:
                 task.replay = self._memory_replay(source)
             # Phase M8, the third check: the link, and the quarantine, as
             # they are now. Deleted or changed while it queued: refused.
+            # Read again at the start: a caller switched off, or a target
+            # that stopped taking work, while it waited, stops it here. The
+            # level is the one the link makes it (askFirst counts as ask).
             crew = self._crew()
             if not why:
-                why, code = self._link_refusal(crew, task)
+                why, code = self._task_refusal(crew, task)
                 if why:
                     # Said in the caller's voice to the person, not to the
                     # agent the tool result is for.
                     task.code, why = code, self._said_refusal(task, code, why)
                     self._crew_said(crew)
-            # Read again at the start: a caller switched off, or a target
-            # that stopped taking work, while it waited, stops it here. The
-            # level is the one the link makes it (askFirst counts as ask).
-            now_level = self._effective(crew, task.frm, task.to, self._level(task.frm))
-            if not why and now_level == "off":
-                why = f"{task.frm_label}'s collaboration was switched off, so it did not start."
-            if not why and STRICTNESS.get(now_level, 2) > STRICTNESS.get(task.level or "allow", 2):
-                why = (f"{task.frm_label}'s collaboration setting changed since it was asked "
-                       f"for, so it did not start.")
             if not why and not self._accepts(task.to):
                 why = f"{task.to_label} no longer takes work from other agents."
             if not why and self._stale(task.to):
@@ -1441,6 +1443,14 @@ class Runtime:
                 gone = True
             if gone:
                 why = "That chat is gone, so there is nothing to pass."
+        if not why:
+            # Phase M8 (Codex review): once more after the catch-up and the
+            # chat lookup, either of which can wait, so a quarantine or a
+            # deleted link in that time is not decided on the first read.
+            why, code = self._gate(task)
+            if why:
+                task.code = code
+                why = self._said_refusal(task, code, why) if task.entry == "agent" else why
         if why:
             self._refuse(task, why, source)
             return False
@@ -1545,6 +1555,18 @@ class Runtime:
                 chat = d.chats.load(task.chat_id)
             except (OSError, ValueError):
                 chat = None
+            # Phase M8 (Codex review): the share waits for the chat store's
+            # lock, and a quarantine or a deleted link in that wait must not
+            # leave the chat with the target. Checked after it, so nothing
+            # can fall between: refused here, start() takes the share back.
+            why, code = self._gate(task)
+            if why:
+                task.code = code
+                if self.board.move(task.id, "cancelled", why):
+                    print(f"  {task.kind} {task.id} cancelled ({code}): the crew settings "
+                          f"changed as it started", flush=True)
+                    self._audit(task)
+                return how
         if task.kind == "delegate":
             target.saved_conversation = (target.session_id, target.chat_id,
                                          target.chat_continued, target.replay)
@@ -1801,12 +1823,15 @@ class Runtime:
         return crew_links.Crew(None, None, "the settings could not be read")
 
     def _crew_seen(self):
-        """The crew as the daemon's own settings hold it: reloaded by the idle
-        poll when shell.json changes, so the sweep on every poll parses no
-        file -- and, for settings read from disk, not even the lists, until
-        their files' stamps move. Every decision about a call reads fresh
-        instead (_crew)."""
-        cfg = self.d.cfg
+        """The crew as the settings on disk say it, for the sweep on every
+        poll: the daemon's watched Config (re-read only when the files'
+        stamps move), and the lists parsed again only then too. Every
+        decision about a call reads wholly fresh instead (_crew)."""
+        watched = getattr(self.d, "watched_config", None)
+        try:
+            cfg = watched() if callable(watched) else self.d.cfg
+        except Exception:               # noqa: BLE001 -- unreadable: allow nothing
+            return crew_links.Crew(None, None, "the settings could not be read")
         stamps = getattr(cfg, "_stamps", ())
         key = (id(cfg), stamps) if stamps else None
         if key is not None and getattr(self, "_seen_key", None) == key:
@@ -1838,6 +1863,33 @@ class Runtime:
             why, code = (f"{task.to_label} was {moved} after this was asked for, so it did not "
                          f"go ahead."), "changed"
         return why, code
+
+    def _task_refusal(self, crew, task: Task) -> tuple[str, str]:
+        """Everything the crew settings and the caller's level now say about
+        queued or running work an agent started: its link, a quarantine that
+        changed, and the level the link makes it -- off, or stricter than the
+        one it was admitted under (askFirst gained while it waited is a card
+        that was never shown). Used at dispatch, at delivery and by the
+        sweep (Codex review of M8: a queued question skipped the level)."""
+        why, code = self._link_refusal(crew, task)
+        if why:
+            return why, code
+        now = self._effective(crew, task.frm, task.to, self._level(task.frm))
+        if now == "off":
+            return (f"{task.frm_label}'s collaboration was switched off, so it did not go "
+                    f"ahead."), "off"
+        if STRICTNESS.get(now, 2) > STRICTNESS.get(task.level or "allow", 2):
+            return (f"{task.frm_label}'s collaboration setting changed since it was asked for "
+                    f"(or its link now asks you first), so it did not go ahead."), "changed"
+        return "", ""
+
+    def _gate(self, task: Task) -> tuple[str, str]:
+        """_task_refusal with the settings read now, for an agent's task; for
+        a pass the person started, only quarantine."""
+        if task.entry == "agent":
+            return self._task_refusal(self._crew(), task)
+        why = self._user_pass_refusal(task.to, task.to_label or task.to)
+        return why, ("quarantined" if why else "")
 
     @staticmethod
     def _said_refusal(task: Task, code: str, why: str) -> str:
@@ -1897,7 +1949,7 @@ class Runtime:
         self._apply_quarantine(crew)
         work = [t for t in self.board.open() if t.entry == "agent" and t.kind != "message"]
         for t in work:
-            why, code = self._link_refusal(crew, t)
+            why, code = self._task_refusal(crew, t)
             if not why:
                 continue
             if not crew.ok:
@@ -1932,44 +1984,62 @@ class Runtime:
         it grants nothing back. A busy agent is carried out when its turn
         ends. Settings that cannot be read change nothing here: every call
         is refused anyway, and nothing is detached or released on a guess."""
-        if not crew.ok:
-            return
-        now = set(crew.quarantined)
-        for agent in sorted(self._q_applied - now):
-            self._q_applied.discard(agent)
-            print(f"  crew: {self.label(agent)} released from quarantine; nothing restored",
-                  flush=True)
-        for agent in sorted(now - self._q_applied):
-            if agent not in self._known():
-                continue                # nobody by that id here: nothing to do
-            if self._detach(agent):
+        if crew.ok:
+            now = set(crew.quarantined)
+            for agent in sorted(self._q_applied - now):
+                self._q_applied.discard(agent)
+                print(f"  crew: {self.label(agent)} released from quarantine; nothing "
+                      f"restored", flush=True)
+            for agent in sorted(now - self._q_applied):
+                if agent not in self._known():
+                    continue            # nobody by that id here: nothing to do
                 self._q_applied.add(agent)
+                self._q_owed[agent] = {"persona", "chats"}
+        # What is owed is carried out whatever the settings say now: it only
+        # ever takes something away.
+        for agent in sorted(self._q_owed):
+            left = self._detach(agent, self._q_owed[agent])
+            if left:
+                self._q_owed[agent] = left
+            else:
+                del self._q_owed[agent]
 
-    def _detach(self, agent: str) -> bool:
-        """`agent` quarantined: True once done, False to try again on a later
-        poll (it is mid-turn)."""
+    def _detach(self, agent: str, owed: set) -> set:
+        """Carry out what is owed of `agent`'s quarantine; returns what is
+        still owed. Nothing while it is mid-turn, and the chat store only
+        after its conversation is let go: a turn ending would otherwise
+        record its session back into a chat just revoked."""
+        left = set(owed)
         p = self.persona(agent)
         if p is not None and (p.busy or getattr(p, "task", None) is not None):
-            return False
-        if p is not None:
-            p.session_id, p.chat_id, p.chat_continued, p.replay = None, None, False, ""
-            p.saved_conversation = None
-            p.follow_up = False
+            return left
+        if "persona" in left:
+            if p is not None:
+                p.session_id, p.chat_id, p.chat_continued, p.replay = None, None, False, ""
+                p.saved_conversation = None
+                p.follow_up = False
+                try:
+                    if p.agent is not None:
+                        p.agent.cancel()    # its warm process, and what it held
+                except Exception:           # noqa: BLE001
+                    pass
+            left.discard("persona")
+        if "chats" in left:
             try:
-                if p.agent is not None:
-                    p.agent.cancel()    # its warm process, and what it held
-            except Exception:           # noqa: BLE001
-                pass
-        revoked = 0
-        try:
-            chats = getattr(self.d, "chats", None)
-            if chats is not None:
-                revoked = chats.detach(agent)
-        except (OSError, ValueError, AttributeError):
-            revoked = 0
-        print(f"  crew: {self.label(agent)} quarantined: its sessions detached, "
-              f"{revoked} chat(s) no longer shared with it", flush=True)
-        return True
+                chats = getattr(self.d, "chats", None)
+                revoked = chats.detach(agent) if chats is not None else 0
+            except (OSError, ValueError) as e:
+                if agent not in self._q_failed:
+                    self._q_failed.add(agent)
+                    print(f"  crew: {self.label(agent)} quarantined, but its shared chats "
+                          f"could not be revoked yet ({type(e).__name__}); trying again",
+                          flush=True)
+                return left
+            self._q_failed.discard(agent)
+            left.discard("chats")
+            print(f"  crew: {self.label(agent)} quarantined: its sessions detached, "
+                  f"{revoked} chat(s) no longer shared with it", flush=True)
+        return left
 
     def _live_turn(self, p, turn: int) -> bool:
         """Whether `p` is still in the turn a call was made in: not stopped,
@@ -2317,8 +2387,10 @@ class Runtime:
                              f"nothing was sent."), "changed"
             if why:
                 return self._refused(task, why, code)
+            # The level it was admitted under, for every later check: a
+            # stricter one by then (askFirst gained) stops it.
+            task.level = used
             if kind in ("delegate", "pass"):
-                task.level = used
                 return self._hand(p, task)
             if kind == "ask":
                 # The side turn is reserved here, under the same lock.
@@ -2452,10 +2524,10 @@ class Runtime:
         crew = self._crew()
         if not getattr(d, "may_speak", True):
             why, code = "The screen was locked, so the question was not asked.", "locked"
-        elif self._link_refusal(crew, task)[0]:
-            # Phase M8, the third check: the link and the quarantine as they
-            # are at the moment the side turn would start.
-            why, code = self._link_refusal(crew, task)
+        elif self._task_refusal(crew, task)[0]:
+            # Phase M8, the third check: the link, the quarantine and the
+            # level as they are at the moment the side turn would start.
+            why, code = self._task_refusal(crew, task)
             self._crew_said(crew)
         elif host_key(self.host(task.to)) != host_key(task.host):
             why, code = f"{T}'s endpoint changed, so the question was not sent.", "changed"
@@ -2526,7 +2598,7 @@ class Runtime:
         # Phase M8, the fourth check: delivery. A link deleted, or a
         # quarantine changed, while it answered: the answer is not handed on.
         crew = self._crew()
-        why, code = self._link_refusal(crew, task)
+        why, code = self._task_refusal(crew, task)
         if why:
             self._crew_said(crew)
             return give_up("cancelled", why, code,
@@ -2539,9 +2611,14 @@ class Runtime:
             # For the caller's saved chat, as a collapsed "Theo asked Sora",
             # with the turn that asked it: recorded with that turn's own
             # exchange, only when chats are saved, never a later turn's.
+            # Marked in the saved chat too, so a replay of it later still
+            # says whose it was (Codex review of M8).
+            kept = answer[:ANSWER_MAX]
+            if task.into_quarantine:
+                kept = f"[{quarantined_words(T)}]\n{kept}"
             self.asides.setdefault(task.frm, []).append(
                 {"turn": turn, "asked": task.to, "asked_label": T, "question": question,
-                 "answer": answer[:ANSWER_MAX]})
+                 "answer": kept})
             del self.asides[task.frm][:-8]
         self.publish()
         return True, answer_wrap(T, answer, self._could_browse(task.to),
@@ -2564,7 +2641,10 @@ class Runtime:
         rep = {"task": task.id, "from": task.to, "label": task.to_label,
                "state": state, "text": reply[:REPORT_MAX],
                "tainted": self._could_browse(task.to),
-               "quarantined": task.into_quarantine}
+               "quarantined": task.into_quarantine,
+               # Compared at delivery: a quarantine that changed since it
+               # was given withholds the result (Codex review of M8).
+               "admitted_quarantined": task.into_quarantine}
         with self._lock:
             waiting = self.reports.setdefault(task.frm, [])
             waiting.append(rep)
@@ -2611,8 +2691,9 @@ class Runtime:
         kept = []
         for r in reports:
             who = r.get("from") if isinstance(r.get("from"), str) else ""
-            if r.get("state") == "completed" and crew_links.refusal(crew, me, who, "delegate",
-                                                                    who)[0]:
+            moved = (who in crew.quarantined) != bool(r.get("admitted_quarantined"))
+            if r.get("state") == "completed" and (moved or crew_links.refusal(
+                    crew, me, who, "delegate", who)[0]):
                 print(f"  {p.label or me}: the result of task {r.get('task', '?')} was "
                       f"withheld: the crew links changed", flush=True)
                 r = {**r, "state": "withheld", "text": ""}

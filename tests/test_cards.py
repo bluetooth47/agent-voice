@@ -634,6 +634,34 @@ class TestOrdersGuard:
         assert hook.decide("Write", {"file_path": str(where()), "content": "x"})[0] == "deny"
         assert asked and "approval cards" in asked[0]["note"]
 
+    @pytest.mark.parametrize("cmd", [
+        "agentvoice pass sora --from main < brief.txt",
+        "python3 {data}/app/daemon/collab.py pass sora",
+        "agentvoice chats share 0123456789abcdef sora",
+        "printf 'to=sora\\n\\nx' > $XDG_RUNTIME_DIR/agentvoice/crew/requests/1.req",
+    ])
+    def test_a_command_that_passes_work_as_the_person_is_asked_at_trusted(self, cmd,
+                                                                         monkeypatch):
+        """Phase M8 (Codex review): a pass the person starts is not governed
+        by crew links, so an agent that could file one would step round its
+        own links. Asked at every level, with no chat grant."""
+        cmd = cmd.replace("{data}", str(hook.DATA_DIR))
+        monkeypatch.setattr(hook, "_settings", lambda: ("trusted", None))
+        monkeypatch.setattr(hook, "granted", lambda s: True)
+        asked = []
+        monkeypatch.setattr(hook, "_ask", lambda *a, **k: asked.append((a, k)) or ("deny", "asked"))
+        assert hook.decide("Bash", {"command": cmd}, "x")[0] == "deny"
+        assert asked and asked[0][1].get("session") == ""
+        assert "Crew map" in asked[0][1]["note"] or "approval card" in asked[0][1]["note"]
+
+    def test_a_write_into_the_crew_folder_is_asked_at_trusted(self, monkeypatch):
+        monkeypatch.setattr(hook, "_settings", lambda: ("trusted", None))
+        asked = []
+        monkeypatch.setattr(hook, "_ask", lambda *a, **k: asked.append(k) or ("deny", "asked"))
+        where = hook.RUNTIME_DIR / "crew" / "requests" / "1.req"
+        assert hook.decide("Write", {"file_path": str(where), "content": "to=sora"})[0] == "deny"
+        assert asked and "between agents" in asked[0]["note"]
+
     def test_an_ordinary_command_is_not(self, monkeypatch):
         monkeypatch.setattr(hook, "_settings", lambda: ("trusted", None))
         monkeypatch.setattr(hook, "_ask", lambda *a, **k: pytest.fail("asked"))

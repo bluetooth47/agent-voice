@@ -313,6 +313,22 @@ def _card_dirs() -> list[Path]:
 CARD_WORDS = ("agentvoice permit", "agentvoice/permissions", "agentvoice/cards")
 
 
+def _crew_dirs() -> list[Path]:
+    """What lets a process act as the person between agents (phase M8, Codex
+    review): the crew's runtime folder, where a pass the person starts is
+    filed as a request the daemon cannot tell from the person's own, and
+    where the call socket, the inboxes and the origin files live. Crew
+    links govern what agents start; a pass the person starts is governed
+    only by quarantine, so an agent that could file one would step round
+    its links."""
+    return [RUNTIME_DIR / "crew"]
+
+
+#: Command text that passes work between agents as if the person had, or
+#: grants an agent another's chat. The same text match as CARD_WORDS.
+CREW_WORDS = ("agentvoice pass", "collab.py pass", "agentvoice chats share", "agentvoice/crew")
+
+
 def _spellings(dirs: list[Path]) -> list[str]:
     """The ways a shell command can name those places: absolute, resolved,
     and from the home folder on (which ~, $HOME and ${HOME} all end in)."""
@@ -353,6 +369,8 @@ def orders_write(tool_name: str, tool_input) -> str:
                 return f"this changes what the agents are told ({target})"
             if any(_under(r, d) for d in _card_dirs()):
                 return f"this changes what answers approval cards ({target})"
+            if any(_under(r, d) for d in _crew_dirs()):
+                return f"this reaches what passes work between agents ({target})"
         except (OSError, ValueError, RuntimeError):
             return "this may change what the agents are told"
         return ""
@@ -368,6 +386,10 @@ def orders_write(tool_name: str, tool_input) -> str:
             if frag in cmd:
                 return ("this command could answer an approval card, or change "
                         f"what does ({frag})")
+        for frag in sorted(set(_spellings(_crew_dirs())) | set(CREW_WORDS)):
+            if frag in cmd:
+                return ("this command could pass work between agents as if you had, "
+                        f"stepping round the Crew map ({frag})")
     return ""
 
 

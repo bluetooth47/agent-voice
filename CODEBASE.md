@@ -572,6 +572,10 @@ Summarized from CLAUDE.md and merged-plan.md section 3; read the full text.
   plugin's checkout) and the daemon's installed code (`app/`, `venv/`).
   Not sound against a same-user process set on defeating it (see
   phaseM7notes.md); below Trusted an agent cannot become one unasked.
+  Since M8 it also asks about `agentvoice pass`, `collab.py pass`,
+  `agentvoice chats share` and anything under `$RUNDIR/crew`: a pass the
+  person files is governed only by quarantine, so an agent that filed one
+  itself would step round its crew links.
 - Notes: `notesWrite` deny and a per-note lock beat every level through the
   crew tools; a corrupt `.meta.json` locks all notes.
 - Collaboration: caller identity from `SO_PEERCRED`, never from the call;

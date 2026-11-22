@@ -171,6 +171,8 @@ def daemon(cfg_factory):
     # through d.cfg (collaboration calls; the flag catch-up before a turn,
     # M2): in a test they are the test's own settings, not the sandbox's.
     d.fresh_config = lambda: d.cfg
+    # And the copy the crew sweep watches on every poll (phase M8).
+    d.watched_config = lambda: d.cfg
     yield d
     signal.signal(signal.SIGUSR1, saved[0])
     signal.signal(signal.SIGUSR2, saved[1])
