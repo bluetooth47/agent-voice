@@ -344,9 +344,13 @@ def test_what_was_said_is_selectable_and_never_rendered_as_markup():
 
 
 def test_clearing_takes_two_presses():
+    """A DangerButton since M1: the first press arms it, and clearing runs
+    only from onConfirmed (tests/test_confirms.py holds that for every
+    caller of clearSession)."""
     page = SETTINGS[SETTINGS.index("id: clearButton"):]
     page = page[:page.index("\n            }\n")]
-    assert "root.confirmClear" in page
+    assert "DangerButton {" in SETTINGS[:SETTINGS.index("id: clearButton")].rsplit("\n", 2)[-2]
+    assert "onConfirmed: root.clearSession()" in page
     assert '["agentvoice", "history", "clear"]' in SETTINGS
 
 

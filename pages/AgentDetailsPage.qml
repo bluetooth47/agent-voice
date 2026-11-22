@@ -398,7 +398,7 @@ Column {
                                                          s.setting("mainProgram", ""),
                                                          s.mainAgent, s.usingEndpoint])
   onPreviewWatchChanged: { previewDelay.restart(); catalogDelay.restart() }
-  onTargetChanged: { previewParts = []; catalog = null; confirmRemove = false; loadPreview(); loadCatalog() }
+  onTargetChanged: { previewParts = []; catalog = null; removeButton.disarm(); loadPreview(); loadCatalog() }
   Component.onCompleted: { loadPreview(); loadCatalog() }
   Timer { id: previewDelay; interval: 250; onTriggered: page.loadPreview() }
 
@@ -1052,8 +1052,6 @@ Column {
   }
 
   // --- Advanced ---------------------------------------------------------------------
-  property bool confirmRemove: false
-  Timer { id: removeTimeout; interval: 4000; onTriggered: page.confirmRemove = false }
   Process { id: opener }
   function openFolder(path) {
     opener.command = ["xdg-open", path]
@@ -1125,20 +1123,19 @@ Column {
             fontFamily: page.s.fontFamily
             onClicked: page.s.folders.exportFolder(page.target)
           }
-          Button {
+          // Moves the folder and the settings entry to the trash; Undo and
+          // the trash list below give it back.
+          DangerButton {
+            id: removeButton
             visible: !page.isMain && page.index >= 0
-            text: page.confirmRemove ? "Remove " + page.name + "?" : "Remove"
-            iconText: "\u{f0a7a}"
-            bordered: true
-            focusable: true
+            text: "Remove"
+            question: "Really remove " + page.name + "?"
+            confirmText: "Remove"
             enabled: !page.s.folders.busy
-            foreground: page.confirmRemove ? page.s.urgent : page.s.foreground
+            foreground: page.s.foreground
+            urgent: page.s.urgent
             fontFamily: page.s.fontFamily
-            onClicked: {
-              if (!page.confirmRemove) { page.confirmRemove = true; removeTimeout.restart(); return }
-              page.confirmRemove = false
-              page.s.folders.remove(page.index)
-            }
+            onConfirmed: page.s.folders.remove(page.index)
           }
         }
       }
@@ -1268,14 +1265,15 @@ Column {
                 fontFamily: page.s.fontFamily
                 onClicked: page.openFolder(page.s.dataHome + "/agentvoice/agents/" + String(orphanRow.modelData))
               }
-              Button {
+              DangerButton {
                 text: "Move to trash"
-                bordered: true
-                focusable: true
+                question: "Move it to the trash?"
+                confirmText: "Move"
                 enabled: !page.s.folders.busy
                 foreground: page.s.foreground
+                urgent: page.s.urgent
                 fontFamily: page.s.fontFamily
-                onClicked: page.s.folders.trashOrphan(String(orphanRow.modelData))
+                onConfirmed: page.s.folders.trashOrphan(String(orphanRow.modelData))
               }
             }
           }

@@ -155,6 +155,16 @@ into the twelve-box scroll it was split out of. Building blocks with no
 setting names in them live in `ui/`. Both folders need their `qmldir` kept in
 step (the check script does it).
 
+Every field of a `voiceAgents` entry, its `main*` twin and the six
+defaults-only keys have a home too: `FIELD_HOMES` in the same test, which
+fails when the daemon reads a field with no home or a second page writes one.
+`bench/key-inventory.py` prints key -> page -> control, to diff before and
+after moving a control. And a button that destroys something is a
+`ui/DangerButton` whose action runs in `onConfirmed`: `test_confirms.py`
+lists each destructive command, where it is built, and fails if anything
+reaches it from outside a confirmation. A new destructive command joins that
+table.
+
 Omarchy's Agents panel shows each voice agent from a record the daemon
 writes (`daemon/agents_panel.py`). That panel is Omarchy's and is never
 edited: what a section can show is a name, the plan text on its right and a

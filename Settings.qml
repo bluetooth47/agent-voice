@@ -965,12 +965,6 @@ Item {
   }
 
   // Two presses, a few seconds apart, because it cannot be undone.
-  property bool confirmClear: false
-  Timer {
-    id: clearTimeout
-    interval: 4000
-    onTriggered: root.confirmClear = false
-  }
   Process {
     id: clearHistory
     command: ["agentvoice", "history", "clear"]
@@ -1808,22 +1802,17 @@ Item {
               onClicked: root.openSendSheet(historyModel.count > 0
                                             ? historyModel.get(historyModel.count - 1).agentId : "main", "")
             }
-            Button {
+            DangerButton {
               id: clearButton
               anchors.right: parent.right
               visible: historyModel.count > 0
-              text: root.confirmClear ? "Clear it all?" : "Clear"
+              text: "Clear"
+              question: "Clear this session's conversation?"
+              confirmText: "Clear"
+              foreground: root.foreground
+              urgent: root.urgent
               fontFamily: root.fontFamily
-              bordered: true
-              onClicked: {
-                if (!root.confirmClear) {
-                  root.confirmClear = true
-                  clearTimeout.restart()
-                  return
-                }
-                root.confirmClear = false
-                clearHistory.running = true
-              }
+              onConfirmed: root.clearSession()
             }
           }
         }

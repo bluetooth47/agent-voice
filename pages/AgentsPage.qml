@@ -774,7 +774,6 @@ Column {
       // Missing means on, so lists from before the switch keep every agent.
       readonly property bool on: card.modelData.enabled !== false
       property bool customModel: false
-      property bool confirmRemove: false
 
       width: page.width
       name: card.label || "New agent"
@@ -795,8 +794,6 @@ Column {
       onToggled: function(open) { page.setOpen(card.agentId, open) }
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-
-      Timer { id: removeTimeout; interval: 4000; onTriggered: card.confirmRemove = false }
 
       ToggleRow {
         width: parent.width
@@ -1235,19 +1232,14 @@ Column {
         }
       }
 
-      Button {
-        text: card.confirmRemove ? "Remove " + (card.label || "this agent") + "? Click again"
-                                 : "Remove " + (card.label || "this agent")
-        iconText: "\u{f0a7a}"
-        bordered: true
-        foreground: card.confirmRemove ? page.s.urgent : page.s.foreground
-        accent: page.s.urgent
+      DangerButton {
+        text: "Remove " + (card.label || "this agent")
+        question: "Really remove " + (card.label || "this agent") + "?"
+        confirmText: "Remove"
+        foreground: page.s.foreground
+        urgent: page.s.urgent
         fontFamily: page.s.fontFamily
-        onClicked: {
-          if (!card.confirmRemove) { card.confirmRemove = true; removeTimeout.restart(); return }
-          card.confirmRemove = false
-          page.removeAgent(card.index)
-        }
+        onConfirmed: page.removeAgent(card.index)
       }
     }
   }

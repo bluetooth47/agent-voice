@@ -140,7 +140,7 @@ Column {
     }
   }
 
-  // Last, and the only red control in the overlay.
+  // Last, and the only control drawn red before it is clicked.
   SettingsGroup {
     width: parent.width
     title: "REMOVE"
@@ -154,13 +154,14 @@ Column {
             "recordings and API keys are kept, and it says where they are on the way out."
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      Button {
+      DangerButton {
         text: "Remove Agent Voice…"
-        bordered: true
+        question: "Really remove Agent Voice?"
+        confirmText: "Remove"
         foreground: page.s.urgent
-        accent: page.s.urgent
+        urgent: page.s.urgent
         fontFamily: page.s.fontFamily
-        onClicked: page.s.removeEverything()
+        onConfirmed: page.s.removeEverything()
       }
     }
   }

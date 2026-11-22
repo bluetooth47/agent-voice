@@ -273,8 +273,9 @@ Notes and collaboration exist only for Claude Code and Codex
   Tell the user first. Verify with a screenshot.
 - `bench/preview/preview.sh` renders any surface beside the live shell
   without touching it. Targets: settings, popup, knob, clicks, agents,
-  voices, gallery, details, detailshots, folders, notes, shared, tools,
-  persist. Options include `--state FILE`, `--theme`, `--live-config` and
+  voices, gallery (every ui/ piece; `--arg narrow,long`, `danger`, `keys`),
+  confirms (every DangerButton, cancelled then confirmed), details,
+  detailshots, folders, notes, shared, tools, persist. Options include `--state FILE`, `--theme`, `--live-config` and
   `--arg '{"page":…}'`. It never moves the real pointer.
 
 ### 5.1 Pages (`pages/`)
@@ -296,6 +297,21 @@ Notes and collaboration exist only for Claude Code and Codex
 | Component | What |
 |---|---|
 | `AgentCard.qml` | One agent's card frame on the Agents page. |
+| `AdvancedSection.qml` | Collapsed "Advanced (N)" fold for fine-tuning. |
+| `AgentTabs.qml` | One tab per agent with a state dot; one row that scrolls at nine. |
+| `Card.qml`, `CardGrid.qml` | Titled box (optionally foldable); two across from 520 px of page, one when narrower. |
+| `ChatBubble.qml` | One turn as a left or right bubble; plain, selectable text. |
+| `CompactSelector.qml` | "Label: value ▾" mini selector; a disabled one says why. |
+| `DangerButton.qml` | ⚠ button whose first click arms an inline "Really …? Cancel / Do it" strip; 6 s or Escape disarms; Cancel has focus; the action runs only in `onConfirmed`. |
+| `DraggableCard.qml`, `DropLane.qml`, `UndoToast.qml` | Drag moves, Ctrl+drag copies, a "Move to…" menu as the keyboard way; a lane can refuse with a reason; Undo for 10 s. They only ask: the page moves. |
+| `HeaderStrip.qml`, `Pill.qml` | Foldable agent header (dot, name, pills, caret); small toned label. |
+| `Hint.qml`, `Tip.qml` | One plain line with the detail in a tooltip; the shared themed tooltip. |
+| `MenuList.qml` | Pick-one popup list with keyboard walking, headings and disabled entries with reasons. |
+| `ModelPicker.qml` | Model and effort joined in one control. |
+| `StageBlock.qml` | A numbered pipeline stage with a connector line. |
+| `StatTile.qml`, `MiniBars.qml` | One Overview number; per-hour bars with a readout line. |
+| `SearchField.qml` | Search box (debounced, Escape clears) with filter chips. |
+| `ToggleChips.qml` | Row of on/off (optionally inherit) chips; a disabled chip says why. |
 | `EndpointEditor.qml` | Endpoint URL/model/key/test editor. |
 | `ExchangeItem.qml` | One exchange in the conversation view; agent-to-agent questions folded to one line. |
 | `FileEditor.qml` | The one editor for each folder file; Keep/Revert for outside edits, base-stamp conflicts. |

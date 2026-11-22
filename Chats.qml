@@ -30,7 +30,6 @@ Item {
   property var chat: ({})
   property string note: ""
   property bool renaming: false
-  property bool confirmDelete: false
 
   readonly property string dir: s.dataHome + "/agentvoice/chats"
   readonly property bool sessionOpen: selected === "session"
@@ -178,7 +177,7 @@ Item {
   function open(id) {
     view.selected = id
     view.renaming = false
-    view.confirmDelete = false
+    deleteButton.disarm()
     view.note = ""
     if (id !== "session") chatFile.reload()
   }
@@ -525,16 +524,15 @@ Item {
         width: parent.width
         layoutDirection: Qt.RightToLeft
         spacing: Style.space(6)
-        Button {
+        DangerButton {
           visible: view.s.historyRows.count > 0
-          text: view.s.confirmClear ? "Clear it all?" : "Clear"
+          text: "Clear"
+          question: "Clear this session's conversation?"
+          confirmText: "Clear"
+          foreground: view.s.foreground
+          urgent: view.s.urgent
           fontFamily: view.s.fontFamily
-          bordered: true
-          onClicked: {
-            if (!view.s.confirmClear) { view.s.confirmClear = true; return }
-            view.s.confirmClear = false
-            view.s.clearSession()
-          }
+          onConfirmed: view.s.clearSession()
         }
         SendButton {
           visible: view.s.historyRows.count > 0
@@ -664,14 +662,15 @@ Item {
           fontFamily: view.s.fontFamily
           onClicked: view.run("export", [view.chat.id])
         }
-        Button {
-          text: view.confirmDelete ? "Delete it?" : "Delete"
-          bordered: true
-          foreground: view.confirmDelete ? view.s.urgent : view.s.foreground
+        DangerButton {
+          id: deleteButton
+          text: "Delete"
+          question: "Really delete this chat?"
+          confirmText: "Delete"
+          foreground: view.s.foreground
+          urgent: view.s.urgent
           fontFamily: view.s.fontFamily
-          onClicked: {
-            if (!view.confirmDelete) { view.confirmDelete = true; deleteTimeout.restart(); return }
-            view.confirmDelete = false
+          onConfirmed: {
             view.run("delete", [view.chat.id])
             view.open("session")
           }
@@ -716,7 +715,6 @@ Item {
         font.pixelSize: Style.font.caption
       }
     }
-    Timer { id: deleteTimeout; interval: 4000; onTriggered: view.confirmDelete = false }
 
     ListView {
       id: chatList

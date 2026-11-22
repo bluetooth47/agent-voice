@@ -15,6 +15,9 @@
 #   - settings: `omarchy` on PATH is a stub that logs `omarchy bar set ...` to
 #     <out>.writes instead of writing shell.json, so clicking around a preview
 #     changes nothing real. Everything else passes through to the real one;
+#   - installers: the floating-terminal launcher is a stub that logs what it
+#     was handed to <out>.writes, so Repair, Install and Remove Agent Voice
+#     run nothing from a preview;
 #   - agent folders: `agentvoice agents ...` runs this checkout's agentfs.py
 #     with XDG_DATA_HOME in the scratch directory, so an instructions box
 #     saved in a preview writes nothing any real agent reads. A target finds
@@ -160,6 +163,18 @@ if [ -n "$state" ]; then
                WAYLAND_DISPLAY="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/${WAYLAND_DISPLAY:-wayland-0}")
 fi
 
+# The floating terminal runs installers: Repair, Install, the verifier
+# trainer, and Remove Agent Voice (`install.sh --uninstall`). A preview that
+# clicks one of those -- the confirms target confirms the removal on purpose
+# -- must never run it, so in every mode the launcher only logs what it was
+# handed (M1).
+cat > "$tmp/bin/omarchy-launch-floating-terminal-with-presentation" <<STUB
+#!/usr/bin/env bash
+printf 'floating-terminal %s\n' "\$*" >> '$out.writes'
+exit 0
+STUB
+chmod +x "$tmp/bin/omarchy-launch-floating-terminal-with-presentation"
+
 # `agentvoice agents ...` writes the agent folders, which hold what every
 # agent is told (merged plan, Phase 10). In a preview it always runs this
 # checkout's agentfs.py against a scratch data folder, whatever the mode, so
@@ -189,7 +204,13 @@ case "\${1:-}" in
   chats)
     # Saved chats: from the scratch data folder under --scratch-data, so
     # sharing a chat in a preview touches no real one; else as before.
-    if [ '$scratch' = 1 ]; then XDG_DATA_HOME='$tmp/data' exec '$repo/bin/agentvoice' "\$@"; fi ;;
+    if [ '$scratch' = 1 ]; then XDG_DATA_HOME='$tmp/data' exec '$repo/bin/agentvoice' "\$@"; fi
+    # Without it, a Delete clicked in a preview would delete a real chat.
+    if [ "\${2:-}" = delete ]; then printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0; fi ;;
+  history)
+    # Clearing this session's conversation is real and has no undo; a
+    # preview's Clear button only logs it (M1). Reading passes through.
+    if [ "\${2:-}" = clear ]; then printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0; fi ;;
   start|stop|restart|toggle|enable|disable|mic|open-mic|interrupt|lock|unlock|type|talk|talk-end|permit|wake-test|calibrate|pass|tasks)
     printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0 ;;
 esac
