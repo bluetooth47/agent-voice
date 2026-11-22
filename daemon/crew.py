@@ -88,6 +88,9 @@ class Persona:
         self.replay = ""
         #: The next turn was heard on the open microphone, without a name.
         self.open_turn = False
+        #: Phase M4: "…, goodbye" was said while this turn worked, so it
+        #: opens no follow-up window when it ends.
+        self.ends_pending = False
         #: The session handed to a terminal, while that terminal may still
         #: hold it: voice does not touch it until it is closed.
         self.terminal: str | None = None

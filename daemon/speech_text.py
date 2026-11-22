@@ -574,16 +574,19 @@ COMMANDS = (
         effect="Listens without the wake word until it is closed or nothing "
                "is said for a while.",
         where=_ALL, phrases=_OPEN_MIC,
+        # Not "open mic", which is a noun as often as not ("jazz and open
+        # mic", "an open mic night"): only the forms that are instructions.
         in_sentence=("keep listening", "keep on listening", "stay listening",
-                     "open mic", "open the mic", "keep the mic open",
-                     "leave the mic open"),
+                     "open the mic", "keep the mic open", "leave the mic open"),
         cli="agentvoice open-mic on [AGENT_ID]", said="Open mic on."),
     Command(
         id="close_mic", label="Close the open mic",
         effect="Closes the open mic: back to the wake word.",
         where=frozenset({"alone", "start", "end"}), phrases=_CLOSE_MIC,
-        in_sentence=("stop listening", "close the mic", "close mic", "mic off",
-                     "turn the mic off", "stop the open mic", "end the open mic"),
+        # Not "mic off" or "close mic": "camera on, mic off" is said in
+        # every meeting.
+        in_sentence=("stop listening", "close the mic", "turn the mic off",
+                     "stop the open mic", "end the open mic"),
         cli="agentvoice open-mic off", said="Open mic off.", ends=True),
     Command(
         id="handoff", label="Move to a terminal",
@@ -722,16 +725,37 @@ _FILLER = _JOINERS | _TRAILING | _POLITE | frozenset({
     "all", "right", "hi", "hello", "great", "cool", "perfect", "good", "fine",
     "sure", "thats", "it",
 })
+#: In the clause before, these turn what follows around: "under no
+#: circumstances, keep listening", "I don't know, stop listening".
+_NEGATIONS = frozenset({
+    "no", "not", "never", "dont", "doesnt", "didnt", "wont", "cant", "cannot",
+    "shouldnt", "wouldnt", "couldnt", "isnt", "arent", "wasnt", "nobody",
+    "nothing", "neither", "nor", "without", "stop",
+})
+#: After a command and a comma, these still begin its object: "stop
+#: listening, to that song".
+_OBJECT_STARTS = frozenset({"to", "for", "at", "with", "about", "on", "in",
+                            "of", "from", "into", "until", "till"})
+#: The first words of a phrase that is plainly an instruction. Without any
+#: punctuation, only these count at a clause cue.
+_VERBS = frozenset({"keep", "stay", "stop", "close", "turn", "end", "leave",
+                    "start", "lets", "open"})
 #: The clause before ends in one of these: what follows is quoted, not said
-#: to us. "He said, keep listening." "The button says: open mic."
+#: to us. "He said, keep listening." "The button says: open the mic."
 _REPORTING = frozenset({
-    "say", "says", "said", "saying", "tell", "tells", "told", "telling",
-    "ask", "asks", "asked", "asking", "hear", "hears", "heard", "call",
-    "calls", "called", "mean", "means", "meant", "word", "words", "phrase",
-    "command", "like", "write", "wrote", "type", "typed", "read", "reads",
-    "shout", "shouted", "yell", "yelled", "whisper", "whispered", "go",
-    "goes", "went", "reply", "replied", "answer", "answered", "quote",
-    "sing", "sings", "sang", "song", "titled", "named", "lyrics", "sign",
+    "said", "says", "saying", "told", "telling", "heard", "shouted", "yelled",
+    "whispered", "replied", "answered", "means", "meant", "word", "words",
+    "phrase", "command", "quote", "lyrics", "sings", "sang", "song", "titled",
+    "named", "called", "goes",
+})
+#: Verbs that introduce a quotation only right before the break -- "I'll
+#: type: keep listening" -- and are ordinary instructions anywhere else in
+#: the clause: "read me the list, and keep listening".
+_REPORTING_LAST = frozenset({
+    "say", "tell", "tells", "ask", "asks", "asked", "asking", "hear", "hears",
+    "call", "calls", "mean", "write", "writes", "wrote", "type", "types",
+    "typed", "read", "reads", "reply", "answer", "go", "went", "like",
+    "shout", "yell", "whisper", "sing",
 })
 
 #: "continue the chat about X." inside a sentence: the topic runs to the
@@ -782,7 +806,10 @@ def _hits(words: list[str]) -> list[tuple[int, int, Command]]:
 
 def _clean_rest(rest: str, names) -> str:
     """`rest` tidied at the cut, or "" when nothing in it says anything."""
-    rest = rest.strip().strip(",;:-‐‑‒–— ").strip()
+    rest = rest.strip().lstrip(".!?…,;: ")
+    if not _SIGNED.match(rest):
+        rest = rest.lstrip("-‐‑‒–— ")
+    rest = rest.rstrip(",;:-‐‑‒–— ").strip()
     words = [w.lower().replace("'", "").replace("’", "")
              for w in _WORD.findall(rest)]
     named = {w for n in names for w in str(n).lower().split()}
@@ -800,13 +827,16 @@ def _continue_in_sentence(text: str) -> tuple[str, str, str] | None:
     m = _CONTINUE_TOPIC.match(after)
     if m:
         body = after[m.end():]
-        for stop in re.finditer(r"[.!?;:](?=\s)", body):
+        # At the end of a sentence only -- a colon is as likely a title's
+        # ("the chat about Star Trek: Voyager") -- and with more than a word
+        # after it, which a title's tail rarely is.
+        for stop in re.finditer(r"[.!?](?=\s)", body):
             word = re.search(r"(\w+)\W*$", body[:stop.start()])
             word = word.group(1).lower() if word else ""
             if stop.group() == "." and (len(word) == 1 or word in _ABBREVIATIONS):
                 continue
             about = _normalize(body[:stop.start()])
-            if not about:
+            if not about or len(_WORD.findall(body[stop.end():])) < 2:
                 return None
             return (about,
                     _normalize(text[head.start("verb"):head.end() + m.end() + stop.start()]),
@@ -816,6 +846,22 @@ def _continue_in_sentence(text: str) -> tuple[str, str, str] | None:
     if m:
         return "", _normalize(text[head.start("verb"):head.end()]), m.group("rest")
     return None
+
+
+def _norm_words(text: str) -> list[str]:
+    return [w.lower().replace("'", "").replace("’", "") for w in _WORD.findall(text)]
+
+
+def _rest_competes(rest: str, names) -> bool:
+    """Whether what is left holds a command of its own: a whole clause of it
+    that is one by the rules before M4 ("keep listening. Stop. Read the
+    notes."), or another command's in-sentence words. Checked on the rest
+    as cut, before filler is tidied away -- "That's it" is filler to a
+    request and a goodbye on its own."""
+    if _hits(_norm_words(rest)):
+        return True
+    clauses = [c for c in re.split(r"[.!?;:,…]+|\s[-‐‑‒–—]+\s|[–—]", rest) if c.strip()]
+    return any(_exact(c, names) is not None for c in [rest, *clauses])
 
 
 def _in_sentence(text: str, allowed: frozenset, names) -> Found | None:
@@ -836,13 +882,6 @@ def _in_sentence(text: str, allowed: frozenset, names) -> Found | None:
 
     punctuated = any(_BREAK.search(gap(k)) for k in range(1, n))
 
-    found = []          # (where, start_char, end_char, phrase, command, arg)
-    hits = _hits(words)
-    cont = _continue_in_sentence(text) if "start" in allowed else None
-    if cont is not None:
-        about, phrase, rest = cont
-        found.append(("start", None, None, phrase, command("continue_chat"),
-                      about, rest))
     # Quotation marks open and close across the gaps; a phrase that begins
     # inside a quote is somebody else's words.
     quoted = []
@@ -857,6 +896,17 @@ def _in_sentence(text: str, allowed: frozenset, names) -> Found | None:
                 inside = False
         quoted.append(inside)
 
+    found = []          # (where, start, end, phrase, command, arg, extra)
+    hits = _hits(words)
+    cont = _continue_in_sentence(text) if "start" in allowed else None
+    if cont is not None:
+        about, phrase, rest = cont
+        # A quotation that opens on it is a quotation (Codex review of M4):
+        # '"Continue the chat. What did we decide?"'.
+        where = None if quoted[0] or any(ch in _QUOTES for ch in gap(0)) else "start"
+        found.append((where, None, None, phrase, command("continue_chat"),
+                      about, rest))
+
     def joiner(x: int) -> bool:
         w = words[x]
         if w in _JOINERS or w in named:
@@ -865,9 +915,21 @@ def _in_sentence(text: str, allowed: frozenset, names) -> Found | None:
             return x > 0 and words[x - 1] in _POLITE
         return w in _POLITE and x + 1 < n and words[x + 1] == "you"
 
+    def clause_before(k: int) -> list[str]:
+        """The words of the clause before word k, back to the break before
+        it -- across a comma, colon or dash only. Across the end of a
+        sentence nothing carries: "I heard you. Keep listening." """
+        if k <= 0 or _SENTENCE_BREAK.search(gap(k)):
+            return []
+        x = k - 1
+        while x > 0 and not _BREAK.search(gap(x)):
+            x -= 1
+        return words[x:k]
+
     for i, j, cmd in hits:
+        phrase = " ".join(words[i:j])
         if quoted[i] or any(ch in _QUOTES for ch in gap(i) + gap(j)):
-            found.append((None, i, j, " ".join(words[i:j]), cmd, "", ""))
+            found.append((None, i, j, phrase, cmd, "", ""))
             continue
         # Before: back over joiners to where the clause starts.
         k = i
@@ -876,24 +938,26 @@ def _in_sentence(text: str, allowed: frozenset, names) -> Found | None:
             k -= 1
         at_start = all(joiner(x) for x in range(i))
         joined = words[k:i]
+        cued = False
         if at_start:
             before = True
         elif punctuated:
             before = bool(_BREAK.search(gap(k)))
         else:
-            before = any(w in _CUES_BEFORE for w in joined)
-        # Said, told, called...: the clause before introduces a quotation.
-        # Across a comma or a colon -- "she told me: stop listening" -- and
-        # not across the end of a sentence: "I heard you. Keep listening."
-        if not at_start and k > 0 and not _SENTENCE_BREAK.search(gap(k)):
-            x = k - 1
-            while x >= max(0, k - 3):
-                if words[x] in _REPORTING:
-                    before = False
-                    break
-                if x > 0 and _BREAK.search(gap(x)):
-                    break
-                x -= 1
+            before = cued = any(w in _CUES_BEFORE for w in joined)
+        if not at_start:
+            # The clause before can still be the one in charge: a verb of
+            # saying introduces a quotation ("she told everyone in the
+            # room, keep listening"), a negation reaches across a comma
+            # ("under no circumstances, keep listening"). A bare "no" in a
+            # clause of its own is an answer, not a negation of what
+            # follows: "No, keep listening."
+            prior = clause_before(k)
+            if any(w in _REPORTING for w in prior) or (
+                    prior and prior[-1] in _REPORTING_LAST):
+                before = False
+            if prior not in (["no"], ["no", "no"]) and any(w in _NEGATIONS for w in prior):
+                before = False
         # After: over "please" and the like to where the clause ends.
         m = j
         while m < n and words[m] in _TRAILING \
@@ -903,10 +967,13 @@ def _in_sentence(text: str, allowed: frozenset, names) -> Found | None:
         if at_end:
             after = True
         elif punctuated:
-            after = bool(_BREAK.search(gap(m)))
+            # A comma is not enough when an object follows it anyway:
+            # "stop listening, to that song".
+            after = bool(_BREAK.search(gap(m))) and words[m] not in _OBJECT_STARTS
         else:
             # Right after the phrase, before "then" was walked over.
             after = j < n and words[j] in _CUES_AFTER
+            cued = cued or after
         # "Keep listening? Why would I?" is a question about it, not a
         # request -- unless asked as one: "can you keep listening?"
         asked = "?" in gap(m) and not any(
@@ -924,8 +991,13 @@ def _in_sentence(text: str, allowed: frozenset, names) -> Found | None:
             where = "clause"
         else:
             where = None
-        found.append((where, i, j, " ".join(words[i:j]), cmd, "",
-                      (k, m)))
+        # With no punctuation to go on, "and" joins nouns as readily as
+        # clauses ("the venue hosts jazz and open mic"): there only a
+        # phrase that is plainly an instruction counts.
+        if where is not None and cued and not (at_start and at_end) \
+                and words[i] not in _VERBS:
+            where = None
+        found.append((where, i, j, phrase, cmd, "", (k, m)))
 
     # One command, at one place, or nothing: two of them -- or one said
     # twice, or the same words where they cannot fire -- is not something
@@ -940,19 +1012,21 @@ def _in_sentence(text: str, allowed: frozenset, names) -> Found | None:
     else:
         k, m = extra
         if where == "start":
-            rest = text[spans[m][0]:] if m < n else ""
+            # From just after the command, so that a sign survives the cut:
+            # "Keep listening. -5 degrees is what I measured."
+            rest = text[spans[m - 1][1]:] if m < n else ""
         elif where == "end":
-            rest = text[:spans[k - 1][1]] if k > 0 else ""
+            # With the question mark, or full stop, that ended it.
+            rest = (text[:spans[k - 1][1]] + re.sub(r"[^.!?…]", "", gap(k))[:1]
+                    if k > 0 else "")
         else:
             rest = (text[:spans[k - 1][1]] + gap(m).rstrip() + " "
                     + text[spans[m][0]:])
-    rest = _clean_rest(rest, names)
     # Whatever is left must not be a command of its own either: "keep
     # listening. Stop." is two things, and neither wins.
-    if rest and (_exact(rest, names) is not None
-                 or _hits([w.lower().replace("'", "").replace("’", "")
-                           for w in _WORD.findall(rest)])):
+    if _rest_competes(rest, names):
         return None
+    rest = _clean_rest(rest, names)
     if cmd.id == "continue_chat" and not rest:
         return None         # all of it was the topic: the rule before M4's
     return Found(cmd, where, rest=rest, arg=arg, phrase=phrase)
@@ -1006,7 +1080,14 @@ def heard_back(phrase: str, said: str) -> bool:
     is how the agent's own voice, picked up by the microphone, would bring
     a command into a transcript."""
     p, s = _normalize(phrase).split(), _normalize(said).split()
-    return bool(p) and any(s[i:i + len(p)] == p for i in range(len(s) - len(p) + 1))
+    if not p:
+        return False
+    if any(s[i:i + len(p)] == p for i in range(len(s) - len(p) + 1)):
+        return True
+    # Spelt one way when said, the other when heard: "goodbye", "good bye".
+    # Not for a word as short as "no", which is inside "know" and "now".
+    joined = "".join(p)
+    return len(joined) >= 4 and joined in "".join(s)
 
 
 def table(names_by_agent=None, mode: str = "alone") -> dict:

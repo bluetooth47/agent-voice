@@ -65,4 +65,17 @@ Stop the music, and keep the lights on.
 Full stop at the end of the line, please.
 Move this to the trash.
 # A command's words inside a chat's topic: still two commands' words.
-Continue the chat about the open mic. What did we decide?
+Continue the chat about how to keep listening. What did we decide?
+# From the first review (Codex, M4): each fired before it was fixed.
+The venue hosts jazz and open mic
+Under no circumstances, keep listening.
+She told everyone in the room, keep listening.
+Stop listening, to that song.
+"Continue the chat. What did we decide?"
+Keep listening. Stop. Read the notes.
+Keep listening. That's it.
+Camera on, mic off.
+New chat and email are both down
+I don't know, stop listening.
+# No punctuation, and no clause cue before it: a statement, not a request.
+The best advice I got was keep listening

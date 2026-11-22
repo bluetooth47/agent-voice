@@ -79,7 +79,9 @@ Panel {
   property bool micMuted: false
   readonly property bool micOff: vState === "off" || micMuted
   // Which listening window "followup" is: "open" for the open microphone,
-  // "followup" after a reply (M2). "" from a daemon that does not say.
+  // "followup" after a reply (M2), "undo" for the seconds after "…, stop
+  // listening" in which "no" puts the open mic back (M4: open mic is off
+  // then, so it reads STILL LISTENING). "" from a daemon that does not say.
   property string vWindow: ""
 
   // --- the readout (phase M3) ---------------------------------------------------

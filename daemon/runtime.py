@@ -466,7 +466,10 @@ class Config:
             return {}
         out = {}
         for key, (section, name) in TOML_ALIASES.items():
-            value = (raw.get(section) or {}).get(name)
+            table = raw.get(section)
+            # `wake = "x"` is valid TOML and no table: skipped, not a crash
+            # in every Config() (Codex review of M4).
+            value = table.get(name) if isinstance(table, dict) else None
             if value is not None:
                 out[key] = value
         # The file writes a float and __getitem__ reads the percent, which is

@@ -173,7 +173,11 @@ This file is the entry point (`main()`), and its structure is:
     new/continue chat act inside the agent's turn (`answer(command=…)` →
     `chat_in_sentence()`). The rest of the sentence goes to the agent once.
     `take_undo()` puts an open-mic switch back on "no" or "cancel that"
-    within `UNDO_S` (3s) of the turn that carried the rest.
+    within `UNDO_S` (3s) of the turn that carried the rest, under the same
+    guards, and only if no other switch happened since (`_open_mic_gen`).
+    After "…, stop listening" nothing listens without the wake word, so the
+    frame loop opens an `undo` capture for those seconds (`undo_due()`)
+    that takes nothing but an undo.
 - **`Daemon.run()`** is the frame loop. It reads 100ms PipeWire frames via
   `sounddevice` (imported *inside* `run()` so tests can fake it). Each frame
   goes through gate → wake → capture (endpointing) → transcribe →

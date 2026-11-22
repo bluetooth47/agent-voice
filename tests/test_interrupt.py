@@ -237,6 +237,7 @@ def test_cancel_that_undoes_the_open_mic_and_is_still_a_stop(daemon, monkeypatch
 
     from speech_text import is_stop_command
     monkeypatch.setattr(daemon, "publish_agent", lambda: None)
+    daemon.agent = FakeAgent([])        # an agent to send the rest to
     found = daemon.sentence_command(daemon._main, "Take notes, and keep listening.", {},
                                     heard_at=time.time())
     daemon.undo_clock(found)

@@ -362,8 +362,12 @@ that song", "keep listening to me"), after "don't", in quoted or reported
 speech ("he said, keep listening"), as a question ("keep listening?"), when
 two commands are in one sentence, in a typed message, while something else
 is recording, on the agent's own voice heard back, or while the screen is
-locked. Stop, full stop, take over and moving to a terminal still work only
-said on their own. `agentvoice commands` lists every phrase, where it counts
+locked. Inside a sentence only the forms that are plainly instructions
+count: "keep listening", "open the mic", "stop listening", "turn the mic
+off", not "open mic" or "mic off", which are as often nouns ("camera on,
+mic off"). After "…, stop listening" it listens for three seconds for "no"
+and nothing else. Stop, full stop, take over and moving to a terminal still
+work only said on their own. `agentvoice commands` lists every phrase, where it counts
 and what it says, with each agent's wake phrase (`--json` for scripts).
 
 **Move this to a terminal.** Say "Theo, move this to a terminal" and the

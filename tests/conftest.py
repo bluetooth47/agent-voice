@@ -53,10 +53,14 @@ def _no_recorder_probe(monkeypatch):
     running the suite too. A command found inside a sentence asks before it
     fires (phase M4, `Daemon.recording_elsewhere`), and without this every
     such test would run the developer's pw-dump -- passing or failing by
-    whether they were dictating. test_commands keeps the real method."""
+    whether they were dictating. test_commands keeps the real methods."""
     import wake_listen
     monkeypatch.setattr(wake_listen.Daemon, "recording_elsewhere",
                         lambda self: False)
+    # And whether the screen is locked: asked afresh before a command fires,
+    # it would otherwise ask the compositor of whoever runs the suite.
+    monkeypatch.setattr(wake_listen.Daemon, "locked_now",
+                        lambda self: self.locked)
 
 
 @pytest.fixture

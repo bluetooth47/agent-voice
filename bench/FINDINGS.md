@@ -1714,16 +1714,17 @@ Measured 2026-11-21 on phase-m4 with `speech_text.find_command`, which is
 pure: no microphone, no model. Two inputs.
 
 **The synthetic corpus** (`tests/fixtures/commands/`), written for the policy
-table: 33 sentences a command is meant to fire inside, 56 that hold a
+table: 38 sentences a command is meant to fire inside, 67 that hold a
 command's words and must not (an object after the verb, a negation, quoted
 or reported speech, a question, two commands, and ordinary sentences such
-as "there's an open mic night on Friday").
+as "there's an open mic night on Friday"). Ten of the 67 are the misfires
+the first Codex review found against the first version (each fired then).
 
 | mode | meant to fire, fired | must not fire, fired |
 |---|---|---|
-| alone | 0 / 33 | 0 / 56 |
-| edges | 30 / 33 | 0 / 56 |
-| clause | 33 / 33 | 0 / 56 |
+| alone | 0 / 38 | 0 / 67 |
+| edges | 35 / 38 | 0 / 67 |
+| clause | 38 / 38 | 0 / 67 |
 
 The three that need `clause` are the ones with the command mid-sentence,
 the user's own example among them. Written by the same hand as the
@@ -1736,21 +1737,26 @@ transcript was printed or read by anyone):
 ```
 transcripts scanned: 213
 commands said on their own (as before M4): 0
-held a command's words inside a sentence: 5  {'close_mic': 1, 'goodbye': 1, 'open_mic': 5}
+held a command's words inside a sentence: 3  {'close_mic': 1, 'goodbye': 1, 'open_mic': 2}
  alone: would fire inside a sentence 0
  edges: would fire inside a sentence 0
 clause: would fire inside a sentence 0
 ```
 
+(The first version's in-sentence phrases included "open mic", "close mic"
+and "mic off"; with them, 5 transcripts held a command's words, and still
+none fired. They were dropped after the first review, as nouns as often as
+commands.)
+
 So none of the 213 requests that reached an agent would have fired a
-command in any mode, and the 5 that held a command's words were all
+command in any mode, and the 3 that held a command's words were all
 refused. A saved chat holds only what went to the agent -- a command said on
 its own never does, hence the 0 -- so these are exactly the sentences a
-command could have misfired on. Whether any of the 5 was *meant* as a
+command could have misfired on. Whether any of the 3 was *meant* as a
 command (a miss, which is bug A) is for the user to label:
 `bench/commands_scan.py --sample FILE`, set `meant`, then `--labels FILE`.
 Not done: unattended, and the transcripts are the user's to read.
 
 Default: **`edges`**, open question 4's default. The measured false-trigger
 counts are 0 for both `edges` and `clause`, so they do not favour `clause`;
-labelling the 5 is what could.
+labelling the 3 is what could.
