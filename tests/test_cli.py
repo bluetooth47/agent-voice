@@ -70,3 +70,13 @@ def test_the_usage_line_names_every_command():
 def test_a_start_clears_systemds_start_limit_first():
     block = re.search(r"^  start\)\n(.*?)\n    ;;", CLI.read_text(), re.M | re.S).group(1)
     assert block.index("reset-failed") < block.index("systemctl --user start")
+
+
+def test_an_isolated_python_writes_no_bytecode():
+    """`-I` implies `-E`, which drops PYTHONDONTWRITEBYTECODE: without `-B`
+    the card client wrote daemon/__pycache__ during the check's run, and
+    only a tree with no .pyc yet (agentvoice-deploy's fresh worktree)
+    showed it (M7)."""
+    for line in CLI.read_text().splitlines():
+        if '"$PY" -I' in line:
+            assert " -B " in line, line

@@ -281,7 +281,11 @@ case "${1:-status}" in
     # its stdin a pipe from that shell carrying the card's one-use nonce and
     # digest -- so the nonce is read from stdin, never argv. An allow from
     # anywhere else is refused and the question is denied. `exec`, so the
-    # process the daemon checks is the one the overlay started.
+    # process the daemon checks is the one the overlay started. `-I` keeps
+    # the environment's PYTHON* variables out of a security check; `-B`
+    # because -I also drops PYTHONDONTWRITEBYTECODE, and the check's run
+    # must write nothing in the tree (found by agentvoice-deploy's fresh
+    # worktree, which had no .pyc to hide it).
     id="${2:-}"; verdict="${3:-deny}"
     # The id is checked rather than trusted, as it always was.
     if [[ ! $id =~ ^[0-9a-f]{12}$ ]] || [[ ! $verdict =~ ^(allow|allow-session|deny)$ ]]; then
@@ -291,7 +295,7 @@ case "${1:-status}" in
     REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
     PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
     [[ -x $PY ]] || { echo "no agentvoice Python at $PY; run install.sh" >&2; exit 1; }
-    exec "$PY" -I "$REPO/daemon/cards.py" answer "$id" "$verdict"
+    exec "$PY" -I -B "$REPO/daemon/cards.py" answer "$id" "$verdict"
     ;;
   pending)
     # A permission request waiting for an answer, as JSON; {} when none is.
@@ -307,9 +311,9 @@ case "${1:-status}" in
     PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
     [[ -x $PY ]] || { echo '{}'; exit 0; }
     if [[ -n $want ]]; then
-      exec "$PY" -I "$REPO/daemon/cards.py" show "$want"
+      exec "$PY" -I -B "$REPO/daemon/cards.py" show "$want"
     fi
-    exec "$PY" -I "$REPO/daemon/cards.py" show
+    exec "$PY" -I -B "$REPO/daemon/cards.py" show
     ;;
   calibrate)
     # Whether the user can be heard over the speaker is a property of the
