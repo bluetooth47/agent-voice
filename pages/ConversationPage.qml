@@ -36,8 +36,18 @@ Column {
     }
     return "custom"
   }
+  // Moved on once a minute while the page is shown, so the line below is
+  // worked out again after midnight even if nothing else changes.
+  property real minuteTick: 0
+  Timer {
+    interval: 60000
+    repeat: true
+    running: page.visible
+    onTriggered: page.minuteTick = Date.now()
+  }
   // "Cut 3 turns off at this limit today, the last at 16:58." -- or nothing.
   readonly property string limitLine: {
+    var tick = minuteTick
     var h = s.vLimitHits || {}
     // Today's by the date it was counted on, not by whether the daemon
     // has rolled it over: it does that on its idle poll, which a mute

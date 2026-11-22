@@ -1142,3 +1142,12 @@ def test_the_page_and_the_popup_read_the_new_fields_safely():
     assert 'voice.collabLine = d.collab ? String(d.collab)' in panel
     assert ': d.notice ? String(d.notice) : ""' in panel
     assert "voice.micMuted = d.muted === true" in panel
+
+
+def test_the_limit_line_is_worked_out_again_after_midnight():
+    """A binding is not re-read when the date changes (Codex review of M2):
+    a minute tick it reads makes it."""
+    page = (ROOT / "pages" / "ConversationPage.qml").read_text()
+    assert "interval: 60000" in page and "page.minuteTick = Date.now()" in page
+    line = page[page.index("readonly property string limitLine"):]
+    assert line.index("minuteTick") < line.index("formatDate")

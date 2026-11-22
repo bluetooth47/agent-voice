@@ -136,6 +136,10 @@ def daemon(cfg_factory):
     saved = (signal.getsignal(signal.SIGUSR1), signal.getsignal(signal.SIGUSR2))
     d = Daemon(cfg_factory(echoTailMs=0), pipe=None, state=StateFile(),
                speaker=FakeSpeaker(), agent=FakeAgent())
+    # "The settings on disk", for code that reads them fresh rather than
+    # through d.cfg (collaboration calls; the flag catch-up before a turn,
+    # M2): in a test they are the test's own settings, not the sandbox's.
+    d.fresh_config = lambda: d.cfg
     yield d
     signal.signal(signal.SIGUSR1, saved[0])
     signal.signal(signal.SIGUSR2, saved[1])

@@ -512,6 +512,9 @@ def crew(daemon):
     daemon._main.name = "computer"
     daemon._main.agent = SlowAgent(["Main one.", "Main two."])
     daemon._main.speaker = Voice("main", log)
+    # The settings they were built from: an agent the settings do not have
+    # is one that was deleted, and takes no new turn (M2).
+    daemon.cfg._values["voiceAgents"] = [{"name": "jarvis"}, {"name": "friday"}]
     for name in ("jarvis", "friday"):
         p = daemon.crew[name] = Persona(name, {"name": name, "id": name,
                                                "label": name.title()})

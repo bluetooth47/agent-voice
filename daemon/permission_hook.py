@@ -809,39 +809,51 @@ def revoke(session: str) -> bool:
     session that was carried over. Before M2 the session itself was dropped,
     which took the grant's meaning with it.
 
-    False -- the folder could not be listed, or a grant for this session
-    could not be removed -- makes the daemon drop the session after all,
-    which is the other way to make the grant mean nothing (Codex review of
-    M2: a grant left behind by a failed unlink was otherwise still honoured
-    on the next turn). A file nothing can read is skipped: `granted()`, as
-    the same user, cannot read it either, so it grants nothing. Never
-    raises: the caller is the idle poll."""
+    False -- the folder could not be listed, a grant file could not be read
+    or a grant for this session could not be removed -- makes the daemon
+    drop the session after all, which is the other way to make the grant
+    mean nothing (Codex review of M2: a grant left behind was otherwise
+    still honoured on the next turn). A file nothing can parse is skipped:
+    `granted()` cannot parse it either, so it grants nothing. Never raises:
+    the caller is the idle poll."""
     if not _SESSION.fullmatch(session or ""):
         return True                 # granted() refuses such an id outright
     try:
-        entries = list(os.scandir(GRANTS))
-    except FileNotFoundError:
-        return True
-    except OSError:
-        return False
-    cleared = True
-    for entry in entries:
-        if not entry.name.endswith(".grant"):
-            continue
         try:
-            if not entry.is_file(follow_symlinks=False):
-                continue            # granted() refuses anything but a file
-            record = json.loads(Path(entry.path).read_text())
-        except (OSError, ValueError):
-            continue
-        if isinstance(record, dict) and record.get("session") == session:
+            entries = list(os.scandir(GRANTS))
+        except FileNotFoundError:
+            return True
+        cleared = True
+        for entry in entries:
+            if not entry.name.endswith(".grant"):
+                continue
             try:
-                os.unlink(entry.path)
+                if not entry.is_file(follow_symlinks=False):
+                    continue        # granted() refuses anything but a file
+                text = Path(entry.path).read_text()
             except FileNotFoundError:
-                pass
+                continue            # gone already
             except OSError:
+                # Unreadable now is not unreadable to the next hook: a read
+                # that fails for a moment may succeed for it (Codex review).
                 cleared = False
-    return cleared
+                continue
+            try:
+                record = json.loads(text)
+            except Exception:
+                # Nothing parses it -- granted() catches the same failure,
+                # RecursionError included -- so it grants nothing.
+                continue
+            if isinstance(record, dict) and record.get("session") == session:
+                try:
+                    os.unlink(entry.path)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    cleared = False
+        return cleared
+    except Exception:
+        return False                # unsure: the daemon drops the session
 
 
 def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, str]:

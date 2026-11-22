@@ -2244,34 +2244,29 @@ class Daemon:
             p.agent.cancel()                # its warm process holds the old chat
         because = sessions.why(reason, program_label(program) or program)
         print(f"  {YEL}agent “{label}”: new conversation — {because}{OFF}", flush=True)
-        self._notices[p.id or ""] = (f"{label}: new chat — {because}.",
-                                     getattr(p, "turn_id", 0), time.time())
+        # Replaced, never changed in place: turn threads read it in
+        # _compose() while this thread writes it (Codex review of M2).
+        self._notices = {**self._notices, p.id or "": (
+            f"{label}: new chat — {because}.", getattr(p, "turn_id", 0),
+            time.time())}
         self._recompose()
         return False
 
     def flags_moved(self, p: Persona, cfg) -> bool:
-        """Whether the settings in `cfg` give `p` another level or folder
-        than its running adapter was built under: adapter_stale(), which
-        collaboration calls already use, plus a level that moved without
-        moving the hook (Ask and Edits). False for an agent the settings no
-        longer have -- the idle poll removes it -- and for an endpoint,
-        which runs nothing here."""
+        """Whether the settings in `cfg` have moved `p` away from what its
+        running adapter was built under: adapter_stale() -- a level, Ask and
+        Edits included, or a folder -- or an extra agent the settings no
+        longer have (deleted or switched off), which the idle poll removes.
+        False for an endpoint, which runs nothing here."""
         have = p.agent
         if have is None or hasattr(have, "base_url"):
             return False
-        if p is self._main:
-            level = cfg.level_for(getattr(have, "name", "") or "")
-            seen = getattr(self, "_main_level", None)
-        else:
-            spec = cfg.agent_by_id(p.id)
-            if spec is None:
-                return False
-            level, seen = spec["level"], (p.spec or {}).get("level")
-        return (seen is not None and level != seen) or bool(self.adapter_stale(p, cfg))
+        return bool(self.adapter_stale(p, cfg))
 
-    def catch_up_flags(self, p: Persona) -> None:
+    def catch_up_flags(self, p: Persona) -> bool:
         """Before `p`'s next turn starts: if its level or folder moved since
-        its adapter was built, apply that now (Codex review of M2).
+        its adapter was built, apply that now (Codex review of M2). False if
+        doing so found `p` deleted or switched off: it takes no new turn.
 
         The idle poll rebuilds an agent only while it is idle. One that was
         busy when the level was lowered, then stopped -- by its name, a
@@ -2283,25 +2278,28 @@ class Daemon:
         thread only, where a refresh belongs."""
         if threading.current_thread() is not threading.main_thread() \
                 or getattr(self, "pipe", None) is None:
-            return
-        if self.flags_moved(p, self.fresh_config()):
-            print(f"  {CYA}agent “{p.label or p.name or 'main'}”: settings "
-                  f"changed while it worked — applying them first{OFF}", flush=True)
-            self.refresh()
+            return True
+        if not self.flags_moved(p, self.fresh_config()):
+            return True
+        print(f"  {CYA}agent “{p.label or p.name or 'main'}”: settings "
+              f"changed while it worked — applying them first{OFF}", flush=True)
+        self.refresh()
+        return p.main or self.crew.get(p.id) is p
 
     def expire_notices(self) -> bool:
         """Drop each notice once its agent has answered a turn since, or is
         gone, or it is an hour old. True if any went. From refresh(), on the
         run loop's thread, like everything else that rewrites the context."""
         gone = []
-        for key, (_line, turn, at) in self._notices.items():
+        notices = self._notices
+        for key, (_line, turn, at) in notices.items():
             p = self._persona_by_id(key)
             if (p is None or time.time() - at > 3600
                     or (getattr(p, "turn_id", 0) > turn
                         and not getattr(p, "answering", False))):
                 gone.append(key)
-        for key in gone:
-            del self._notices[key]
+        if gone:
+            self._notices = {k: v for k, v in notices.items() if k not in gone}
         return bool(gone)
 
     def instructions_for(self, persona_id: str, legacy) -> str:
@@ -4322,11 +4320,19 @@ class Daemon:
         if p is self._main:
             level = cfg.level_for(getattr(have, "name", "") or "")
             folder = cfg.get_str("projectDir")
+            seen = getattr(self, "_main_level", None)
         else:
             spec = cfg.agent_by_id(p.id)
             if spec is None:
                 return True
             level, folder = spec["level"], spec["projectDir"]
+            seen = (p.spec or {}).get("level")
+        # A level that moved without moving the hook (Ask and Edits) is still
+        # a change the idle poll has not applied: its grants are withdrawn
+        # there, so nothing may start on the old ones first (Codex review of
+        # M2, which found collaboration calls starting turns in that gap).
+        if seen is not None and level != seen:
+            return True
         want_ask = level != "trusted"
         if getattr(have, "ask_permission", want_ask) != want_ask:
             return True
@@ -4984,7 +4990,13 @@ class Daemon:
         # where a refresh belongs.
         if threading.current_thread() is threading.main_thread():
             self.catch_up_one(p)
-            self.catch_up_flags(p)
+            if not self.catch_up_flags(p):
+                # Deleted or switched off while the request was being said:
+                # its old adapter, perhaps a trusted one, takes no new turn
+                # (Codex review of M2).
+                print(f"  {YEL}agent “{p.label}” is no longer set up; "
+                      f"not sending{OFF}", flush=True)
+                return False
         p.interrupt.clear()
         p.follow_up = False
         p.turn_error = ""           # collab: this turn's own, not the last one's

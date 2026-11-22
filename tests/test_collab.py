@@ -495,7 +495,7 @@ def crew(daemon, tmp_path):
     # The fakes run in "/p" whatever the settings say, which would read as a
     # folder change at every dispatch; applying a moved level or folder
     # before a turn is tested on real adapters in test_sessions.py (M2).
-    d.catch_up_flags = lambda p: None
+    d.catch_up_flags = lambda p: True
     for spec in AGENTS[:2]:
         p = d.crew[spec["id"]] = Persona(spec["name"], spec)
         p.agent = SlowAgent([f"{spec['label']} here."])

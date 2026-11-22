@@ -187,7 +187,10 @@ This file is the entry point (`main()`), and its structure is:
   Edits included (`permission_hook.revoke`; if one cannot be removed the
   session is dropped instead). `catch_up_flags()` applies a level or folder
   that moved while an agent was busy before its next turn starts
-  (`dispatch()`, and the single-agent path before `answer()`).
+  (`dispatch()`, and the single-agent path before `answer()`), and refuses
+  the turn of an agent deleted or switched off meanwhile. `adapter_stale()`
+  (also what collaboration calls check) counts a level that moved without
+  moving the hook, Ask ↔ Edits.
 - **Chimes (M2, bug J).** `chime(name, why)` logs `chime: NAME (why)` for
   every sound played. A wake for the agent the open microphone is already
   listening for re-arms silently (`listening_for`).

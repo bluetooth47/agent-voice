@@ -444,3 +444,83 @@ class TestReviewPassOne:
         crew.reconcile_crew()
         assert p.session_id is None
         assert "project folder changed" in notice_of(crew)
+
+
+# --- the Codex review of M2, pass 2 ---------------------------------------------
+
+class TestReviewPassTwo:
+    @pytest.fixture(autouse=True)
+    def grants(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(hook, "GRANTS", tmp_path / "grants")
+        return tmp_path / "grants"
+
+    def test_a_grant_file_that_cannot_be_read_now_is_not_cleared(self, grants, monkeypatch):
+        """Unreadable to the daemon for a moment is not unreadable to the
+        next hook: unsure, so the session goes."""
+        _grant(monkeypatch)
+        (only,) = list(grants.iterdir())
+        only.chmod(0o000)
+        try:
+            assert hook.revoke(SID) is False
+        finally:
+            only.chmod(0o600)
+
+    def test_a_file_nothing_can_parse_neither_raises_nor_grants(self, grants, monkeypatch):
+        _grant(monkeypatch)
+        (grants / "deep.grant").write_text("[" * 100_000 + "]" * 100_000)
+        (grants / "deep.grant").chmod(0o600)
+        assert hook.revoke(SID) is True
+        assert not hook.granted(SID)
+
+    def test_anything_unexpected_is_unsure(self, monkeypatch):
+        _grant(monkeypatch)
+
+        def boom(*a, **k):
+            raise RuntimeError("anything at all")
+        monkeypatch.setattr(hook.os, "scandir", boom)
+        assert hook.revoke(SID) is False
+
+    def test_an_agent_deleted_while_it_was_spoken_to_gets_no_turn(self, crew, monkeypatch,
+                                                                  cfg_factory):
+        p = crew.crew["sora"]
+        monkeypatch.setattr(crew, "fresh_config", lambda: cfg_factory(voiceAgents=[]))
+
+        def refresh():
+            crew.cfg._values["voiceAgents"] = []
+            crew.reconcile_crew()
+        monkeypatch.setattr(crew, "refresh", refresh)
+        monkeypatch.setattr(crew, "publish_agent", lambda: None)
+        FakeClaude.turns.clear()
+        assert crew.dispatch(p, "do it", {}) is False
+        assert FakeClaude.turns == [] and "sora" not in crew.crew
+
+    def test_edits_to_ask_is_stale_for_a_collaboration_call(self, crew, cfg_factory):
+        """Collaboration calls start turns from other threads and ask
+        adapter_stale() first: a level moved without moving the hook has to
+        count there too, or a call lands before the grant is withdrawn."""
+        crew.cfg._values["voiceAgents"] = [{"name": "sora", "agent": "claude",
+                                            "level": "edits"}]
+        crew.reconcile_crew()
+        p = crew.crew["sora"]
+        lowered = cfg_factory(voiceAgents=[{"name": "sora", "agent": "claude",
+                                            "level": "ask"}])
+        assert crew.adapter_stale(p, lowered)
+        assert not crew.adapter_stale(p, crew.cfg)
+
+    def test_the_main_agents_level_counts_there_too(self, main, cfg_factory):
+        main.cfg._values["permissions"] = {"claude": "edits"}
+        main.reconcile_agent()
+        lowered = cfg_factory(mainProgram="claude", permissions={"claude": "ask"},
+                              agentModels={"claude": "haiku"})
+        assert main.adapter_stale(main._main, lowered)
+
+    def test_notices_are_replaced_never_changed_in_place(self, main):
+        """Turn threads read them in _compose() while the run loop writes."""
+        before = main._notices
+        main.cfg._values["projectDir"] = str(main.tmp / "elsewhere")
+        main.reconcile_agent()
+        assert before == {} and main._notices is not before
+        added = main._notices
+        main._main.turn_id += 1
+        assert main.expire_notices()
+        assert len(added) == 1 and main._notices is not added
