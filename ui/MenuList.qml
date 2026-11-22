@@ -52,6 +52,14 @@ QQC.Popup {
       if (usable(entries[i])) { cursor = i; list.positionViewAtIndex(i, ListView.Contain); return }
     }
   }
+  // Whether the window's focus is inside this menu, or nowhere: the cases
+  // where closing should hand focus back to the opener.
+  function heldFocus() {
+    var item = list.Window.activeFocusItem
+    if (!item) return true
+    for (var i = item; i; i = i.parent) if (i === list) return true
+    return false
+  }
   function choose(i) {
     if (i < 0 || i >= entries.length || !usable(entries[i])) return
     var v = valueOf(entries[i])

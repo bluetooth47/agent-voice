@@ -64,9 +64,16 @@ def blank(src: str, strings: bool = True) -> str:
                 if src[j] == "\n" and c != "`":
                     break
                 if c == "`" and src.startswith("${", j):
+                    # Braces inside a string in the expression do not count:
+                    # `${"}" + clearSession()}` (Codex review, M1).
                     depth, k = 1, j + 2
                     while k < n and depth:
-                        depth += {"{": 1, "}": -1}.get(src[k], 0)
+                        if src[k] in "\"'":
+                            q, k = src[k], k + 1
+                            while k < n and src[k] != q:
+                                k += 2 if src[k] == "\\" else 1
+                        else:
+                            depth += {"{": 1, "}": -1}.get(src[k], 0)
                         k += 1
                     keep.append((j + 2, k - 1))
                     j = k
@@ -76,6 +83,10 @@ def blank(src: str, strings: bool = True) -> str:
                 for k in range(i + 1, min(j, n)):
                     if src[k] != "\n" and not any(a <= k < b for a, b in keep):
                         out[k] = " "
+                # The expression itself is cleaned the same way, so a string
+                # in it hides its braces and a comment its words.
+                for a, b in keep:
+                    out[a:b] = list(blank(src[a:b], strings))
             i = j + 1
             last = c
             continue
@@ -159,13 +170,14 @@ class Scanned:
         """The QML signal handler (`onConfirmed`, `onClicked`, ...) or JS
         function `pos` is inside: the innermost block header naming one, or
         a single-line handler on the same line. "" if neither."""
-        # A handler written on the call's own line, `onClicked: x()`, or
-        # after a brace on it, `Button { onClicked: x() }`.
-        line = self.line_of(pos)
-        segment = line[line.rfind("{") + 1:] if "{" in line else line
-        own = re.match(r"\s*(on[A-Z]\w*)\s*:", segment)
+        # A handler written on the call's own line before it: `onClicked:
+        # x()`, `Button { onClicked: x() }`, `DangerButton { id: d;
+        # onConfirmed: x() }`. Only the text before the call is read, and
+        # the last handler started there (after a brace, a semicolon or the
+        # line's start) is the one it belongs to.
+        own = re.findall(r"(?:^|[{;])\s*(on[A-Z]\w*)\s*:", self.line_of(pos))
         if own:
-            return own.group(1)
+            return own[-1]
         for brace in self.enclosing(pos):
             h = self.header(brace)
             m = re.search(r"\b(on[A-Z]\w*)\s*:\s*(?:function\s*\([^)]*\)\s*)?$", h)

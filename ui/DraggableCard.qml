@@ -158,7 +158,12 @@ Rectangle {
     drag.target: ghost
     drag.threshold: Style.space(6)
     onPressed: function(mouse) {
-      card.copying = (mouse.modifiers & Qt.ControlModifier) !== 0
+      card.copying = card.allowCopy && (mouse.modifiers & Qt.ControlModifier) !== 0
+      // The hotspot is where the card was grabbed, so the lane under the
+      // pointer is the lane it lands in, wherever on a wide card it was
+      // picked up (Codex review, M1).
+      ghost.Drag.hotSpot.x = mouse.x
+      ghost.Drag.hotSpot.y = mouse.y
       // Lifted out of the page, so a Flickable's clip or a lane's
       // bounds cannot cut the ghost off mid-drag.
       var top = card.Window.contentItem
@@ -169,9 +174,9 @@ Rectangle {
         ghost.y = p.y
       }
     }
-    onPositionChanged: function(mouse) { card.copying = (mouse.modifiers & Qt.ControlModifier) !== 0 }
+    onPositionChanged: function(mouse) { card.copying = card.allowCopy && (mouse.modifiers & Qt.ControlModifier) !== 0 }
     onReleased: function(mouse) {
-      card.copying = (mouse.modifiers & Qt.ControlModifier) !== 0
+      card.copying = card.allowCopy && (mouse.modifiers & Qt.ControlModifier) !== 0
       if (ghost.Drag.active) ghost.Drag.drop()
       ghost.parent = card
       ghost.x = 0
@@ -198,8 +203,6 @@ Rectangle {
     z: 1000
     Drag.active: dragArea.drag.active
     Drag.keys: [card.dragKey]
-    Drag.hotSpot.x: Style.space(12)
-    Drag.hotSpot.y: height / 2
     Text {
       x: Style.space(12)
       anchors.verticalCenter: parent.verticalCenter
@@ -220,9 +223,19 @@ Rectangle {
     fontFamily: card.fontFamily
     onPicked: function(v) {
       if (v === "") return
-      var copy = v.indexOf("copy:") === 0
-      card.moveRequested(v.slice(5), copy)
+      // Checked against the lanes as they are now, not as they were when
+      // the menu opened: a lane may have been disabled, or copying turned
+      // off, while it was open (Codex review, M1).
+      var now = card.menuEntries()
+      for (var i = 0; i < now.length; i++) {
+        if (now[i].value === v && now[i].enabled !== false) {
+          card.moveRequested(v.slice(5), v.indexOf("copy:") === 0)
+          return
+        }
+      }
     }
-    onClosed: card.forceActiveFocus()
+    // Back to the card only if the focus was left in the menu or nowhere:
+    // a click on another control to dismiss it keeps that control's focus.
+    onClosed: if (menu.heldFocus()) card.forceActiveFocus()
   }
 }

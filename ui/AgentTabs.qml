@@ -58,10 +58,17 @@ FocusScope {
     else if (e.key === Qt.Key_End && agents.length > 0) { picked(String(agents[agents.length - 1].id)); e.accepted = true }
   }
 
-  onCurrentChanged: Qt.callLater(function() {
-    var i = tabs.indexOf(tabs.current)
-    if (i >= 0) list.positionViewAtIndex(i, ListView.Contain)
-  })
+  function reveal() {
+    Qt.callLater(function() {
+      var i = tabs.indexOf(tabs.current)
+      if (i >= 0) list.positionViewAtIndex(i, ListView.Contain)
+    })
+  }
+  // The chosen tab stays in view when it changes, when the list arrives or
+  // is reordered, and when the row is resized.
+  onCurrentChanged: reveal()
+  onAgentsChanged: reveal()
+  onWidthChanged: reveal()
 
   ListView {
     id: list
@@ -81,8 +88,13 @@ FocusScope {
       readonly property bool chosen: String(modelData.id) === tabs.current
       anchors.verticalCenter: parent ? parent.verticalCenter : undefined
       text: String(modelData.label || modelData.id)
-      iconText: "●"
-      iconSize: Style.font.caption
+      // Room on the left for the state dot, drawn below in the agent's
+      // tone (Button colours its own icon with the text colour).
+      readonly property real dotSize: Style.space(7)
+      readonly property real dotRoom: dotSize + Style.spacing.controlGap
+      leftAlign: true
+      leftPadding: horizontalPadding + dotRoom
+      implicitWidth: label0.implicitWidth + horizontalPadding * 2 + dotRoom + Style.space(4)
       selected: chosen
       hasCursor: tabs.activeFocus && chosen
       bordered: true
@@ -91,6 +103,23 @@ FocusScope {
       fontFamily: tabs.fontFamily
       tooltipText: String(modelData.tooltip || "")
       onClicked: { tabs.forceActiveFocus(); tabs.picked(String(modelData.id)) }
+      // Measures the label as Button draws it (bold when chosen).
+      Text {
+        id: label0
+        visible: false
+        text: tab.text
+        font.family: tabs.fontFamily
+        font.pixelSize: Style.font.body
+        font.bold: tab.chosen
+      }
+      Rectangle {
+        x: tab.horizontalPadding + Style.space(2)
+        anchors.verticalCenter: parent.verticalCenter
+        width: tab.dotSize
+        height: width
+        radius: width / 2
+        color: tabs.toneColor(String(tab.modelData.tone || "idle"))
+      }
     }
   }
 

@@ -193,6 +193,16 @@ def test_the_scanner_sees_a_confirmation_go_missing():
     clears = [hacked.handler_of(p) for p in hacked.calls(call("clearSession"))]
     assert clears.count("onConfirmed") == 1 and len(clears) == 2, clears
 
+    # A brace inside a string in ${...} does not end the expression, and
+    # a handler is the last one started before the call on its line
+    # (Codex review pass 2, M1).
+    more = ("\n  Text { text: `${\"}\" + view.s.clearSession()}` }"
+            "\n  DangerButton { id: d; onConfirmed: view.s.clearSession() }"
+            "\n  DangerButton { onConfirmed: x() } Button { onClicked: view.s.clearSession() }\n")
+    hacked = scanned(chats[:chats.rindex("}")] + more + "}\n")
+    clears = [hacked.handler_of(p) for p in hacked.calls(call("clearSession"))]
+    assert clears == ["onConfirmed", "", "onConfirmed", "onClicked"], clears
+
 
 def test_no_building_block_writes_a_setting_by_name():
     """ui/ holds pieces that know no setting: a `put("key"` there would be a

@@ -152,6 +152,6 @@ FocusScope {
       if (sel.holding) holdTimer.restart()
       sel.committed(v)
     }
-    onClosed: sel.forceActiveFocus()
+    onClosed: if (menu.heldFocus()) sel.forceActiveFocus()
   }
 }

@@ -75,6 +75,8 @@ FocusScope {
   }
 
   Timer { id: whyTimer; interval: 6000; onTriggered: chips.why = "" }
+  // A shorter list must not leave the cursor on a chip that is gone.
+  onOptionsChanged: cursor = Math.max(0, Math.min(cursor, options.length - 1))
 
   activeFocusOnTab: true
   implicitHeight: column.implicitHeight

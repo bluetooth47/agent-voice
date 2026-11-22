@@ -5,7 +5,8 @@ import qs.Ui
 
 // "Moved summarise to Sora.  Undo (8)" -- the way back from a move, for ten
 // seconds. Hovering it stops the clock, so somebody reaching for Undo is
-// not beaten to it.
+// not beaten to it; the clock counts real elapsed time otherwise, so a
+// stalled event loop cannot stretch the offer past its deadline.
 //
 // It only offers: undo() is emitted and the page does the undoing, because
 // only the page knows what was moved and from where. When the time runs out
@@ -28,6 +29,7 @@ Rectangle {
   property string fontFamily: Style.font.family
 
   property real remainingMs: 0
+  property real lastTick: 0
   readonly property int remainingS: Math.ceil(remainingMs / 1000)
 
   signal undo()
@@ -36,28 +38,43 @@ Rectangle {
   function show(message) {
     text = message
     remainingMs = timeoutMs
+    lastTick = Date.now()
     shown = true
     tick.restart()
   }
   function dismiss() {
+    // Undo is about to be hidden: a focus left on it would go nowhere.
+    if (undoButton.activeFocus) {
+      var next = undoButton.nextItemInFocusChain(true)
+      if (next && next !== undoButton) next.forceActiveFocus()
+    }
     tick.stop()
     shown = false
+  }
+  // Spends the time that really passed since the last look, unless the
+  // pointer is resting on the toast. True while the offer still stands.
+  function stillOpen() {
+    var now = Date.now()
+    if (!hover.hovered) remainingMs -= now - lastTick
+    lastTick = now
+    if (remainingMs > 0) return true
+    if (shown) { dismiss(); expired() }
+    return false
   }
 
   Timer {
     id: tick
     interval: 250
     repeat: true
-    onTriggered: {
-      if (hover.hovered) return
-      toast.remainingMs -= interval
-      if (toast.remainingMs <= 0) { toast.dismiss(); toast.expired() }
-    }
+    onTriggered: toast.stillOpen()
   }
   HoverHandler { id: hover }
 
   visible: shown
-  implicitWidth: row.implicitWidth + Style.space(20)
+  // From the children's natural widths: the message is narrowed to fit the
+  // toast, so the row's laid-out width would only repeat the last answer.
+  implicitWidth: message.implicitWidth + undoButton.implicitWidth + closeText.implicitWidth
+                 + row.spacing * 2 + Style.space(20)
   implicitHeight: row.implicitHeight + Style.space(12)
   radius: Style.cornerRadius
   color: Commons.Color.popups.background
@@ -73,7 +90,8 @@ Rectangle {
     width: parent.width - Style.space(20)
     spacing: Style.space(10)
     Text {
-      width: Math.min(implicitWidth, parent.width - undoButton.width - closeText.width - parent.spacing * 2)
+      id: message
+      width: Math.max(0, Math.min(implicitWidth, parent.width - undoButton.width - closeText.width - parent.spacing * 2))
       anchors.verticalCenter: parent.verticalCenter
       text: toast.text
       textFormat: Text.PlainText
@@ -91,7 +109,8 @@ Rectangle {
       foreground: toast.foreground
       fontFamily: toast.fontFamily
       onClicked: {
-        if (!toast.shown) return
+        // Checked at the moment of the click, not at the last tick.
+        if (!toast.shown || !toast.stillOpen()) return
         toast.dismiss()
         toast.undo()
       }

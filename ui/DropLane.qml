@@ -70,6 +70,9 @@ Rectangle {
     anchors.fill: parent
     keys: [lane.dragKey]
     onEntered: function(drag) { lane.refusal = lane.judge(drag.source) }
+    // Again as it moves: Ctrl pressed or let go over the lane changes a
+    // move into a copy, which the lane may judge differently.
+    onPositionChanged: function(drag) { lane.refusal = lane.judge(drag.source) }
     onExited: lane.refusal = ""
     onDropped: function(ev) {
       var src = ev.source

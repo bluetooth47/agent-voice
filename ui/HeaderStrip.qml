@@ -49,6 +49,14 @@ FocusScope {
     expanded = !expanded
     toggled(expanded)
   }
+  // Folded while something in the body had the focus (a field being
+  // edited, a programmatic collapse): the focus comes to the strip rather
+  // than staying on a hidden control.
+  onExpandedChanged: {
+    if (expanded) return
+    for (var i = strip.Window.activeFocusItem; i; i = i.parent)
+      if (i === inner) { bar.forceActiveFocus(); return }
+  }
 
   implicitHeight: column.implicitHeight
   height: implicitHeight

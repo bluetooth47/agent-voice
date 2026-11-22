@@ -32,6 +32,12 @@ Column {
   signal toggled(bool expanded)
 
   function flip() { expanded = !expanded; toggled(expanded) }
+  // As HeaderStrip: folding never leaves the focus on a hidden control.
+  onExpandedChanged: {
+    if (expanded) return
+    for (var i = section.Window.activeFocusItem; i; i = i.parent)
+      if (i === inner) { head.forceActiveFocus(); return }
+  }
 
   spacing: Style.space(8)
 

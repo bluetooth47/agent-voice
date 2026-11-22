@@ -114,4 +114,10 @@ Rectangle {
     expanded = !expanded
     toggled(expanded)
   }
+  // As HeaderStrip: folding never leaves the focus on a hidden control.
+  onExpandedChanged: {
+    if (expanded) return
+    for (var i = card.Window.activeFocusItem; i; i = i.parent)
+      if (i === inner) { head.forceActiveFocus(); return }
+  }
 }
