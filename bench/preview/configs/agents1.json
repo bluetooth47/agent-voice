@@ -1,0 +1,37 @@
+{
+  "bar": {
+    "layout": {
+      "left": [],
+      "center": [],
+      "right": [
+        {
+          "id": "duaneoca.agentvoice",
+          "phrase": "theo",
+          "engine": "vosk",
+          "mainName": "Theo",
+          "agentModels": {
+            "claude": "opus"
+          },
+          "agentEfforts": {
+            "claude": "high"
+          },
+          "permissions": {
+            "claude": "edits"
+          },
+          "projectDir": "~/Projects/demo",
+          "voice": "lessac-medium",
+          "voiceSpeed": 110,
+          "speakReplies": true,
+          "mainTools": {
+            "browser": "off"
+          },
+          "mainCollaboration": "announce",
+          "desktopTools": true,
+          "browserTools": true,
+          "omarchySkill": true,
+          "narration": "brief"
+        }
+      ]
+    }
+  }
+}

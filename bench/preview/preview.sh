@@ -43,6 +43,10 @@
 #                  way it does on the real shell. The round trip is where
 #                  rebuild bugs live (a card shutting on every save); the
 #                  real shell.json is still never touched.
+#   --config FILE  --live-config, starting from FILE instead of a copy of the
+#                  real shell.json (bench/preview/configs/ holds synthetic
+#                  ones), so a screenshot or a clicks log holds no real
+#                  agent, folder or setting and is the same on any machine
 #   --scratch-data the overlay reads a scratch data folder (saved chats,
 #                  agent folders) seeded by targets/TARGET.seed.py when there
 #                  is one, so a screenshot holds no real conversation
@@ -55,7 +59,7 @@ repo=$(cd "$here/../.." && pwd)
 shell_src="${OMARCHY_PATH:-/usr/share/omarchy}/shell"
 themes="${OMARCHY_PATH:-/usr/share/omarchy}/themes"
 
-theme="" out="" size="" wait=3 shots=1 gap=1.5 arg="" keep=0 state="" live=0 scratch=0
+theme="" out="" size="" wait=3 shots=1 gap=1.5 arg="" keep=0 state="" live=0 scratch=0 cfgfile=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --theme) theme=$2; shift 2 ;;
@@ -68,8 +72,9 @@ while [ $# -gt 0 ]; do
     --state) state=$(realpath "$2"); shift 2 ;;
     --keep) keep=1; shift ;;
     --live-config) live=1; shift ;;
+    --config) cfgfile=$(realpath "$2"); live=1; shift 2 ;;
     --scratch-data) scratch=1; shift ;;
-    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
     -*) echo "unknown option: $1" >&2; exit 2 ;;
     *) break ;;
   esac
@@ -127,7 +132,7 @@ if [ "$live" -eq 1 ]; then
   for f in "$real_cfg"/omarchy/*; do
     [ "$(basename "$f")" = shell.json ] || ln -s "$f" "$tmp/config/omarchy/"
   done
-  cp "$real_cfg/omarchy/shell.json" "$tmp/config/omarchy/shell.json"
+  cp "${cfgfile:-$real_cfg/omarchy/shell.json}" "$tmp/config/omarchy/shell.json"
   cp "$tmp/config/omarchy/shell.json" "$out.shell.json.before"
   config_env=(XDG_CONFIG_HOME="$tmp/config")
   # `omarchy bar set ID KEY VALUE --json`: VALUE is JSON.

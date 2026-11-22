@@ -7,7 +7,8 @@
 // harness's screenshot at --wait finds it still running.
 //   grep PREVIEW /tmp/n.log; cat /tmp/n.writes
 //
-// The notes knob on the main card and on Sora's (Read only, then May write,
+// The notes knob on the main agent's and on Sora's Collaboration & notes
+// card (Read only, then May write,
 // watching mainNotesWrite and her entry's notesWrite); Sora's Notes tab on
 // Agent details (a seeded note and a dropped file listed, the note opened,
 // edited and saved, a save refused because the note changed underneath and
@@ -39,9 +40,11 @@ ShellRoot {
       if (ok) passed++; else failed++
       console.warn("PREVIEW " + (ok ? "PASS " : "FAIL ") + what)
     }
+    // Skips the hidden and the fully transparent (SegmentedChoice's
+    // measuring copy of its chips, M5).
     function find(item, test) {
-      if (!item) return null
-      if (item.visible !== false && test(item)) return item
+      if (!item || item.visible === false || item.opacity === 0) return null
+      if (test(item)) return item
       var kids = item.children || []
       for (var i = 0; i < kids.length; i++) {
         var hit = find(kids[i], test)
@@ -59,13 +62,13 @@ ShellRoot {
       }
       input.mouseClick(item, item.width / 2, item.height / 2, Qt.LeftButton, Qt.NoModifier, -1)
     }
+    // An agent's strip on the Agents page (M5), by id; "main" for the main
+    // agent.
     function card(id) {
-      return find(content(), function(i) {
-        return i.switchedOff !== undefined && (id === "main" ? i.isDefault === true : i.agentId === id)
-      })
+      return find(content(), function(i) { return i.agentId === id && i.pg !== undefined })
     }
     function switches(id) {
-      return find(card(id), function(i) { return i.globals !== undefined && i.notesPicked !== undefined })
+      return find(card(id), function(i) { return i.part === "collab" && i.notesPicked !== undefined })
     }
     function notesRow(sw) {
       return find(sw, function(i) { return i.label === "Notes" && i.reset !== undefined })

@@ -181,12 +181,19 @@ def test_the_endpoint_is_what_the_main_agent_runs_on():
     agent again.
     """
     agents = page("Agents")
-    card = agents[agents.index("id: mainCard"):agents.index("Repeater {")]
-    assert '"endpointUrl"' in card and '"endpointModel"' in card
-    assert '"endpointIsAgent"' in card
-    runs_on = card[card.index('label: "Runs on"'):]
-    runs_on = runs_on[:runs_on.index("\n    }")]
-    assert "page.runOn(" in runs_on
+    # Since M5 every agent is one block: the main agent's endpoint is its
+    # Endpoint card, written through putMainEndpoint, which names each key.
+    put_main = agents[agents.index("function putMainEndpoint("):]
+    put_main = put_main[:put_main.index("\n  }")]
+    for key in ("endpointUrl", "endpointModel", "endpointIsAgent"):
+        assert f's.put("{key}", value)' in put_main, key
+    assert "if (blk.isMain) blk.pg.putMainEndpoint(key, value)" in agents
+    runs_on = agents[agents.index('label: "Runs on"'):]
+    runs_on = runs_on[:runs_on.index("\n        }")]
+    assert 'blk.write("agent", v)' in runs_on
+    assert 'value: "omarchy"' in runs_on
+    write = agents[agents.index("function writeField("):]
+    assert 'case "agent": runOn(value); break' in write[:write.index("\n  }")]
     # The choice itself, shared by the picker and its reset.
     run_on = agents[agents.index("function runOn("):]
     run_on = run_on[:run_on.index("\n  }")]

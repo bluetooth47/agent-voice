@@ -4,14 +4,14 @@
 //   preview.sh --live-config --wait 80 --out /tmp/t tools
 //   grep PREVIEW /tmp/t.log; cat /tmp/t.writes
 //
-// Opens the main card's "Tools & collaboration", turns its browser off and
-// back to "same as every agent" (watching mainTools and the Rule of Two
-// warning), opens Sora's group from a deep link and turns her desktop tools
-// off, checks a Codex agent's browser row says why instead of offering a
-// switch, then reads Sora's Tools & skills tab (her switch, her own skill
-// hiding the communal one of the same name) and Communal's Skills tab (a
-// malformed skill listed with its problem). Synthetic skills only, in the
-// scratch data folder; shell.json is a scratch copy.
+// On the main agent's Tools card (M5: chips that cycle every agent → on →
+// off), turns its browser on, off and back to "every agent" (watching
+// mainTools and the Rule of Two warning), opens Sora from a deep link and
+// turns her desktop tools off, checks a Codex agent's browser chip says why
+// instead of switching, then reads Sora's Tools & skills tab (her switch,
+// her own skill hiding the communal one of the same name) and Communal's
+// Skills tab (a malformed skill listed with its problem). Synthetic skills
+// only, in the scratch data folder; shell.json is a scratch copy.
 import QtQuick
 import QtTest
 import Quickshell
@@ -36,9 +36,11 @@ ShellRoot {
       if (ok) passed++; else failed++
       console.warn("PREVIEW " + (ok ? "PASS " : "FAIL ") + what)
     }
+    // Skips the hidden and the fully transparent (SegmentedChoice's
+    // measuring copy of its chips, M5).
     function find(item, test) {
-      if (!item) return null
-      if (item.visible !== false && test(item)) return item
+      if (!item || item.visible === false || item.opacity === 0) return null
+      if (test(item)) return item
       var kids = item.children || []
       for (var i = 0; i < kids.length; i++) {
         var hit = find(kids[i], test)
@@ -56,22 +58,26 @@ ShellRoot {
       }
       input.mouseClick(item, item.width / 2, item.height / 2, Qt.LeftButton, Qt.NoModifier, -1)
     }
+    // An agent's strip on the Agents page (M5), by id; "main" for the main
+    // agent.
     function card(id) {
-      return find(content(), function(i) {
-        return i.switchedOff !== undefined && (id === "main" ? i.isDefault === true : i.agentId === id)
-      })
+      return find(content(), function(i) { return i.agentId === id && i.pg !== undefined })
     }
     function switches(id) {
-      return find(card(id), function(i) { return i.globals !== undefined && i.picked !== undefined })
+      return find(card(id), function(i) { return i.part === "tools" && i.picked !== undefined })
     }
-    function header(sw) {
-      return find(sw, function(i) { return i.clicked !== undefined && String(i.text).indexOf("Tools & collaboration") >= 0 })
+    function chips(sw) { return find(sw, function(i) { return i.chipStates !== undefined }) }
+    function chip(sw, label) {
+      return find(sw, function(i) { return i.clicked !== undefined && i.text !== undefined && String(i.text).indexOf(label) === 0 })
     }
-    function row(sw, label) {
-      return find(sw, function(i) { return i.label === label && i.reset !== undefined && i.why !== undefined })
-    }
-    function chip(sw, label, text) {
-      return find(row(sw, label), function(i) { return i.clicked !== undefined && i.text === text })
+    function toolsCard(id) { return find(card(id), function(i) { return i.title === "Tools" && i.highlighted !== undefined }) }
+    // Clicks a chip until it reads `want` (the cycle is every agent → on →
+    // off), one click per write.
+    function clickTo(sw, key, label, want) {
+      var order = ["inherit", "on", "off"]
+      var now = chips(sw) ? chips(sw).stateOf(key) : ""
+      var n = (order.indexOf(want) - order.indexOf(now) + 3) % 3
+      for (var k = 0; k < n; k++) overlay.click(overlay.chip(sw, label), label + " → " + want)
     }
     function indexOf(id) {
       for (var i = 0; i < overlay.voiceAgents.length; i++)
@@ -110,54 +116,56 @@ ShellRoot {
         switch (overlay.step) {
         case 1:
           c = overlay.card("main")
-          overlay.check(c !== null, "the main card is open")
+          overlay.check(c !== null && c.expanded, "the main agent is open")
           overlay.theoWarning = c ? c.warning : ""
-          overlay.check(c && (c.warning !== "") === (overlay.setting("browserTools", false) === true),
+          sw = overlay.switches("main")
+          // Whatever the config starts with: the warning is there exactly when
+          // the browser it has is on, at Trust everything, on Claude Code.
+          overlay.check(c && sw && (c.warning !== "") === (sw.effective("browser") && c.level === "trusted" && c.program === "claude"),
                         "the Rule of Two warning shows exactly when its browser is on at Trust everything (" +
                         (c ? c.warning.slice(0, 40) : "") + ")")
-          sw = overlay.switches("main")
-          overlay.check(sw && !sw.expanded && overlay.row(sw, "Browser") === null, "its tool switches start shut")
-          overlay.click(overlay.header(sw), "the main card's Tools header")
+          overlay.check(sw !== null && overlay.chips(sw) !== null, "its tool chips are on its Tools card")
+          overlay.clickTo(sw, "browser", "Browser", "off")
           break
         case 2:
-          sw = overlay.switches("main")
-          overlay.check(sw && sw.expanded && overlay.row(sw, "Browser") !== null, "clicking the header opens them")
-          overlay.click(overlay.chip(sw, "Browser", "Off"), "main Browser Off")
-          break
-        case 3:
           var mt = overlay.setting("mainTools", {})
-          overlay.check(mt && mt.browser === "off", "Off writes mainTools.browser = off (" + JSON.stringify(mt) + ")")
+          overlay.check(mt && mt.browser === "off", "the chip writes mainTools.browser = off (" + JSON.stringify(mt) + ")")
           c = overlay.card("main")
           overlay.check(c && c.warning === "", "with its browser off the warning goes")
           sw = overlay.switches("main")
-          r = overlay.row(sw, "Browser")
-          overlay.check(r && r.changed && r.hint.indexOf("Off for this agent") === 0, "the row says it is its own choice (" + (r ? r.hint : "") + ")")
-          overlay.click(overlay.chip(sw, "Browser", "Same as every agent"), "main Browser inherit")
+          overlay.check(sw && sw.source("browser") === "off, this agent's own", "the card says it is its own choice (" + (sw ? sw.source("browser") : "") + ")")
+          overlay.clickTo(sw, "browser", "Browser", "inherit")
+          break
+        case 3:
           break
         case 4:
           mt = overlay.setting("mainTools", {})
-          overlay.check(mt && mt.browser === undefined, "Same as every agent removes the key (" + JSON.stringify(mt) + ")")
+          overlay.check(mt && mt.browser === undefined, "every agent removes the key (" + JSON.stringify(mt) + ")")
           c = overlay.card("main")
-          overlay.check(c && c.warning === overlay.theoWarning, "the warning is back as it was")
+          overlay.check(c && (c.warning !== "") === (overlay.setting("browserTools", false) === true && c.level === "trusted" && c.program === "claude"),
+                        "following every agent, the warning follows the browser for every agent")
           overlay.goTo("agents", "sora", "tools")
           break
         case 5:
           sw = overlay.switches("sora")
-          overlay.check(sw && sw.expanded, "the deep link opened Sora's card and her tool switches")
-          overlay.click(overlay.chip(sw, "Desktop tools", "Off"), "Sora Desktop Off")
+          overlay.check(sw && overlay.card("sora").expanded && overlay.toolsCard("sora").highlighted,
+                        "the deep link opened Sora and marked her Tools card")
+          overlay.clickTo(sw, "desktop", "Desktop tools", "off")
           break
         case 6:
           var i = overlay.indexOf("sora")
           var tools = i >= 0 ? (overlay.voiceAgents[i] || {}).tools : undefined
-          overlay.check(tools && tools.desktop === "off", "Off writes her entry's tools.desktop (" + JSON.stringify(tools) + ")")
+          overlay.check(tools && tools.desktop === "off", "the chip writes her entry's tools.desktop (" + JSON.stringify(tools) + ")")
           overlay.goTo("agents", "jarvis-ajc", "tools")
           break
         case 7:
           sw = overlay.switches("jarvis-ajc")
-          r = sw ? overlay.row(sw, "Browser") : null
-          overlay.check(r && r.why.indexOf("Only Claude Code") === 0 && overlay.chip(sw, "Browser", "On") === null,
-                        "a Codex agent's browser row says why instead of offering a switch (" + (r ? r.why : "") + ")")
-          overlay.check(overlay.chip(sw, "Desktop tools", "On") !== null, "its desktop tools can be switched")
+          var opts = sw && overlay.chips(sw) ? overlay.chips(sw).options : []
+          var br = opts.filter(function(o) { return o.value === "browser" })[0]
+          var dk = opts.filter(function(o) { return o.value === "desktop" })[0]
+          overlay.check(br && String(br.disabledReason).indexOf("Only Claude Code") === 0,
+                        "a Codex agent's browser chip says why instead of switching (" + (br ? br.disabledReason : "") + ")")
+          overlay.check(dk && dk.disabledReason === "", "its desktop tools can be switched")
           overlay.goTo("agentdetails", "sora", "tools")
           break
         case 8:
@@ -186,8 +194,8 @@ ShellRoot {
                         "Change on her Agents card")
           break
         case 11:
-          overlay.check(overlay.page === "agents" && overlay.switches("sora") && overlay.switches("sora").expanded,
-                        "the link back opens her card's tool switches")
+          overlay.check(overlay.page === "agents" && overlay.card("sora") && overlay.card("sora").expanded &&
+                        overlay.toolsCard("sora").highlighted, "the link back opens her and marks her Tools card")
           overlay.goTo("communal", "", "skills")
           break
         case 12:
@@ -203,16 +211,20 @@ ShellRoot {
           overlay.goTo("agents", "sora", "tools")
           break
         case 14:
-          sw = overlay.switches("sora")
-          overlay.click(overlay.header(sw), "Sora's Tools header, to shut it")
+          c = overlay.card("sora")
+          if (c) {
+            overlay.pageScroll.contentY = Math.max(0, c.mapToItem(overlay.content(), 0, 0).y - 40)
+            console.warn("PREVIEW click Sora's strip, to shut her")
+            input.mouseClick(c, c.width / 2, 12, Qt.LeftButton, Qt.NoModifier, -1)
+          }
           break
         case 15:
-          overlay.check(overlay.switches("sora") && !overlay.switches("sora").expanded, "a click shuts the group")
+          overlay.check(overlay.card("sora") && !overlay.card("sora").expanded, "a click shuts her")
           overlay.goTo("agents", "sora", "tools")
           break
         case 16:
-          overlay.check(overlay.switches("sora") && overlay.switches("sora").expanded,
-                        "and the deep link opens it again")
+          overlay.check(overlay.card("sora") && overlay.card("sora").expanded,
+                        "and the deep link opens her again")
           console.warn("PREVIEW DONE " + overlay.passed + " passed, " + overlay.failed + " failed")
           Qt.quit()
           break

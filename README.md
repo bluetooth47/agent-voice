@@ -406,7 +406,10 @@ Super+Space is Omarchy's application launcher and stays that way.
 ### More than one agent
 
 Settings → **Agents** → **Add an agent** adds agents beside the main one,
-up to eight.
+up to eight. Each agent is one line there (its state, name, wake phrase,
+program and model, effort, voice and speed, and permission level), and
+opens into cards: Identity, Permissions, Voice, Tools, Collaboration &
+notes, and Agent, plus Endpoint for an agent that runs on one.
 Each is woken by its own name and has its own program, model, effort,
 voice, permission level and folder, and its own conversation. Say
 "computer" for the main agent and "jarvis" for the one called jarvis.
@@ -476,7 +479,10 @@ of turns remembered.
 
 ### On the desktop
 
-Settings → **Agents** → **On the desktop**.
+Settings → **Communal** → **Tools**, for every agent. Each agent's own
+**Tools** card on the Agents page can turn any of these on or off for that
+agent alone, and says which it has and whether that is its own choice or
+the one for every agent.
 
 **Desktop tools** (off by default) gives Claude Code agents an MCP server
 of Agent Voice's own (`daemon/desktop_mcp.py`). With it they can open an

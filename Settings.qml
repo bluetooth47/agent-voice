@@ -54,7 +54,7 @@ Item {
   // Which settings page, and which agent's card to open on the Agents page.
   property string page: "overview"
   property string focusAgent: ""
-  // With focusAgent: open that card's "Tools & collaboration" too (Phase 13).
+  // With focusAgent: mark that agent's Tools card (Phase 13; a card since M5).
   property bool focusTools: false
   // The agent and tab Agent details shows, kept for the session so leaving
   // the page and coming back finds them where they were.
@@ -869,7 +869,7 @@ Item {
       else if (validTab) detailsTab = tab
       focusAgent = ""
     } else {
-      if (page === "communal" && (tab === "rules" || tab === "skills" || tab === "notes" || tab === "chats")) communalTab = tab
+      if (page === "communal" && /^(rules|tools|skills|notes|chats)$/.test(String(tab || ""))) communalTab = tab
       focusTools = page === "agents" && tab === "tools"
       focusAgent = ""
       focusAgent = agent || ""
@@ -1173,16 +1173,20 @@ Item {
   // starting another stops the first, and the same button stops it.
   property string samplePlaying: ""
   property string sampleNext: ""
-  function playSample(v) {
+  property int sampleNextPace: 0
+  // `speed` (optional, 50-200): an agent's own pace, from its card's ▶ Test.
+  function playSample(v, speed) {
     if (!/^([a-z]{2}_[A-Z]{2}-)?[a-z][a-z0-9_]*-(x_low|low|medium|high)$/.test(String(v))) return
+    var pace = Math.round(Number(speed))
+    if (!(pace >= 50 && pace <= 200)) pace = Number(root.setting("voiceSpeed", 100)) || 100
     if (sampler.running) {
       root.sampleNext = root.samplePlaying === v ? "" : v
+      root.sampleNextPace = pace
       sampler.running = false
       return
     }
     root.samplePlaying = v
-    sampler.command = ["agentvoice", "voice", "sample", v,
-                       String(Number(root.setting("voiceSpeed", 100)) || 100)]
+    sampler.command = ["agentvoice", "voice", "sample", v, String(pace)]
     sampler.running = true
   }
   function stopSample() { root.sampleNext = ""; sampler.running = false }
@@ -1193,8 +1197,9 @@ Item {
       root.samplePlaying = ""
       if (root.sampleNext !== "") {
         var v = root.sampleNext
+        var pace = root.sampleNextPace
         root.sampleNext = ""
-        Qt.callLater(function() { root.playSample(v) })
+        Qt.callLater(function() { root.playSample(v, pace) })
       }
     }
   }

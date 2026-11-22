@@ -79,15 +79,25 @@ def test_only_the_file_editor_runs_agents_write():
 def test_the_agents_card_shows_a_summary_and_links_to_the_editor():
     page = text("pages/AgentsPage.qml")
     assert "FileEditor {" not in page and "InstructionsBox {" not in page
-    assert page.count("Edit in Agent details →") == 2
-    assert page.count("page.folderSummary(") == 2
+    # Once: since M5 the main agent and the extra ones are one block.
+    assert page.count("Edit in Agent details →") == 1
+    assert page.count("pg.folderSummary(") == 1
 
 
 # --- what the pages may write ---------------------------------------------------
 
-@pytest.mark.parametrize("rel", ["pages/AgentDetailsPage.qml", "pages/CommunalPage.qml"])
-def test_the_new_pages_write_no_setting(rel):
-    assert not re.search(r"\b(put|putMap)\(", text(rel)), rel
+def test_agent_details_writes_no_setting():
+    assert not re.search(r"\b(put|putMap)\(", text("pages/AgentDetailsPage.qml"))
+
+
+def test_communal_writes_only_the_tools_for_every_agent():
+    """Communal wrote no setting until M5 moved the three switches for every
+    agent there (bug E). Those three, and nothing else: the rules, skills and
+    notes are files, written through the CLI."""
+    page = text("pages/CommunalPage.qml")
+    keys = re.findall(r'\b(?:put|putMap)\("(\w+)"', page)
+    assert sorted(keys) == ["browserTools", "desktopTools", "omarchySkill"]
+    assert len(re.findall(r"\b(?:put|putMap)\(", page)) == 3
 
 
 def test_the_folder_operations_write_only_the_agent_list():

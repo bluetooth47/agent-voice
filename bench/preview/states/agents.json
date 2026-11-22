@@ -1,0 +1,127 @@
+{
+ "state": "listening",
+ "level_db": -44,
+ "agent": "claude",
+ "level": "edits",
+ "levels": [
+  "ask",
+  "edits",
+  "trusted"
+ ],
+ "posture": "edits source files without asking",
+ "remembers": true,
+ "overriding": "",
+ "governed": true,
+ "verifier": false,
+ "takes_model": true,
+ "model": "opus",
+ "efforts": [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max"
+ ],
+ "effort": "high",
+ "who": "",
+ "live": {
+  "sora": "thinking",
+  "hazel": "listening"
+ },
+ "crew": [
+  {
+   "id": "sora",
+   "name": "sora",
+   "efforts": [
+    "low",
+    "medium",
+    "high"
+   ],
+   "levels": [
+    "ask",
+    "edits",
+    "trusted"
+   ],
+   "takes_model": true,
+   "posture": "asks before every change",
+   "problem": "",
+   "voice": "Amy"
+  },
+  {
+   "id": "hazel",
+   "name": "hazel",
+   "efforts": [
+    "low",
+    "medium",
+    "high",
+    "xhigh"
+   ],
+   "levels": [
+    "ask",
+    "edits",
+    "trusted"
+   ],
+   "takes_model": true,
+   "posture": "nothing is asked",
+   "problem": "",
+   "voice": "Alba"
+  },
+  {
+   "id": "echo-local",
+   "name": "echo",
+   "efforts": [],
+   "levels": [
+    "ask"
+   ],
+   "takes_model": false,
+   "posture": "",
+   "problem": "",
+   "voice": "Lessac"
+  },
+  {
+   "id": "atlas",
+   "name": "atlas",
+   "efforts": [],
+   "levels": [
+    "ask",
+    "trusted"
+   ],
+   "takes_model": true,
+   "posture": "read-only",
+   "problem": "",
+   "voice": "Lessac"
+  },
+  {
+   "id": "max",
+   "name": "max",
+   "efforts": [],
+   "levels": [
+    "ask",
+    "edits",
+    "trusted"
+   ],
+   "takes_model": false,
+   "posture": "asks before every change",
+   "problem": "",
+   "voice": "Lessac"
+  },
+  {
+   "id": "sage",
+   "name": "sage",
+   "efforts": [
+    "low",
+    "medium",
+    "high"
+   ],
+   "levels": [
+    "ask",
+    "edits",
+    "trusted"
+   ],
+   "takes_model": true,
+   "posture": "edits source files without asking",
+   "problem": "",
+   "voice": "Lessac"
+  }
+ ]
+}

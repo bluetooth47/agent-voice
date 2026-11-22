@@ -853,7 +853,8 @@ def test_the_bench_skills_variant_keeps_the_agents_own_skills(cfg_factory, monke
 
 def test_cards_and_groups_ask_rather_than_assign_when_clicked():
     """`expanded` stays bound to the page, so a deep link can reopen them."""
-    for f in ("ui/AgentCard.qml", "ui/ToolSwitches.qml"):
+    # AgentCard went in M5; the strips' own test is in test_agents_page.py.
+    for f in ("ui/HeaderStrip.qml", "ui/ToolSwitches.qml"):
         text = (ROOT / f).read_text()
         assert ".expanded = " not in text, f
     page = (ROOT / "pages/AgentsPage.qml").read_text()

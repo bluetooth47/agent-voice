@@ -1,0 +1,130 @@
+{
+  "bar": {
+    "layout": {
+      "left": [],
+      "center": [],
+      "right": [
+        {
+          "id": "duaneoca.agentvoice",
+          "phrase": "theo",
+          "engine": "vosk",
+          "mainName": "Theo",
+          "agentModels": {
+            "claude": "opus"
+          },
+          "agentEfforts": {
+            "claude": "high"
+          },
+          "permissions": {
+            "claude": "edits"
+          },
+          "projectDir": "~/Projects/demo",
+          "voice": "lessac-medium",
+          "voiceSpeed": 110,
+          "speakReplies": true,
+          "mainTools": {
+            "browser": "off"
+          },
+          "mainCollaboration": "announce",
+          "desktopTools": true,
+          "browserTools": true,
+          "omarchySkill": true,
+          "narration": "brief",
+          "voiceAgents": [
+            {
+              "id": "sora",
+              "name": "sora",
+              "label": "Sora",
+              "agent": "claude",
+              "model": "sonnet",
+              "effort": "medium",
+              "voice": "amy-medium",
+              "speed": 0,
+              "narration": "",
+              "level": "ask",
+              "projectDir": "",
+              "tools": {
+                "desktop": "on"
+              },
+              "collaboration": "ask",
+              "notesWrite": "deny",
+              "acceptsWork": false,
+              "futureField": {
+                "kept": [
+                  1,
+                  2
+                ]
+              }
+            },
+            {
+              "id": "hazel",
+              "name": "hazel",
+              "label": "Hazel",
+              "agent": "codex",
+              "model": "",
+              "effort": "",
+              "voice": "en_GB-alba-medium",
+              "speed": 120,
+              "narration": "off",
+              "level": "trusted",
+              "projectDir": "~/Projects/hazel"
+            },
+            {
+              "id": "echo-local",
+              "name": "echo",
+              "label": "Echo (local)",
+              "agent": "endpoint",
+              "endpointUrl": "http://localhost:11434/v1",
+              "endpointModel": "llama3.2",
+              "endpointIsAgent": false,
+              "endpointTimeoutS": 0,
+              "endpointHistoryTurns": 8,
+              "voice": "",
+              "speed": 0,
+              "level": "ask"
+            },
+            {
+              "id": "nova",
+              "name": "nova",
+              "label": "",
+              "agent": "gemini",
+              "model": "",
+              "effort": "",
+              "voice": "",
+              "speed": 0,
+              "level": "ask",
+              "enabled": false
+            },
+            {
+              "id": "atlas",
+              "name": "atlas",
+              "label": "Atlas",
+              "agent": "agy",
+              "level": "ask"
+            },
+            {
+              "id": "max",
+              "name": "max",
+              "label": "Max",
+              "agent": "copilot",
+              "speed": 130,
+              "narration": "detailed",
+              "level": "ask"
+            },
+            {
+              "id": "sage",
+              "name": "sage",
+              "label": "Sage, the long-named research assistant",
+              "agent": "claude",
+              "model": "haiku",
+              "effort": "low",
+              "level": "edits",
+              "projectDir": "~/Projects/a/very/long/path/to/research/notes",
+              "collaboration": "off"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

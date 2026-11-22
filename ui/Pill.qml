@@ -4,7 +4,7 @@ import qs.Commons as Commons
 
 // A small rounded label: "codex", "edits", "quarantined", "3 skills".
 //
-// `tone` as StatusCard and AgentCard spell it: "idle" (dim), "active"
+// `tone` as StatusCard and HeaderStrip spell it: "idle" (dim), "active"
 // (the text colour), "busy" (accent) or "alert" (urgent). Plain text: a pill
 // often shows a name somebody typed.
 Rectangle {

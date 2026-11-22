@@ -533,8 +533,10 @@ def test_the_page_edits_the_folder_files_through_the_cli():
     assert "target: page.folderTarget" in DETAILS
     # The Agents page edits no file any more: its cards link to Agent details.
     assert "FileEditor {" not in PAGE and "InstructionsBox {" not in PAGE
-    assert 'page.s.goTo("agentdetails", "main")' in PAGE
-    assert 'page.s.goTo("agentdetails", card.agentId)' in PAGE
+    # One link, in the block every agent is drawn with ("main" for the main
+    # agent's id since M5).
+    assert 'blk.s.goTo("agentdetails", blk.agentId)' in PAGE
+    assert 'agentId: isMain ? "main"' in PAGE
 
 
 def test_adding_and_removing_an_agent_go_through_its_folder():

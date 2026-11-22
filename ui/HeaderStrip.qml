@@ -29,6 +29,11 @@ FocusScope {
   property bool expanded: false
   property bool foldable: true
   property bool dimmed: false
+  // Shown under the strip, folded or open: `problem` (urgent) when something
+  // stops the agent working, `warning` (accent) for a risk that stops
+  // nothing, as the Agents page's old AgentCard drew them.
+  property string problem: ""
+  property string warning: ""
 
   property color foreground: Commons.Color.foreground
   property color accent: Commons.Color.accent
@@ -44,8 +49,13 @@ FocusScope {
 
   signal toggled(bool expanded)
 
+  // `controlled`: the caller owns `expanded` (a binding, as on the Agents
+  // page, where a save or a deep link must not find it overwritten), so a
+  // click only asks, through toggled(), and the binding answers.
+  property bool controlled: false
   function flip() {
     if (!foldable) return
+    if (controlled) { toggled(!expanded); return }
     expanded = !expanded
     toggled(expanded)
   }
@@ -180,6 +190,27 @@ FocusScope {
         cursorShape: Qt.PointingHandCursor
         onClicked: { bar.forceActiveFocus(); strip.flip() }
       }
+    }
+
+    Text {
+      width: parent.width
+      visible: strip.problem !== ""
+      text: "⚠  " + strip.problem
+      textFormat: Text.PlainText
+      wrapMode: Text.WordWrap
+      color: strip.urgent
+      font.family: strip.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+    Text {
+      width: parent.width
+      visible: strip.warning !== ""
+      text: "⚠  " + strip.warning
+      textFormat: Text.PlainText
+      wrapMode: Text.WordWrap
+      color: strip.accent
+      font.family: strip.fontFamily
+      font.pixelSize: Style.font.caption
     }
 
     Column {

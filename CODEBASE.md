@@ -330,17 +330,23 @@ Notes and collaboration exist only for Claude Code and Codex
   without touching it. Targets: settings, popup, knob, clicks, agents,
   voices, gallery (every ui/ piece; `--arg narrow,long`, `danger`, `keys`),
   confirms (every DangerButton, cancelled then confirmed), details,
-  detailshots, folders, notes, shared, tools, persist. Options include `--state FILE`, `--theme`, `--live-config` and
-  `--arg '{"page":…}'`. It never moves the real pointer.
+  detailshots, folders, notes, shared, tools, persist, and since M5
+  agentclicks (the same actions on the old and new Agents page, to diff the
+  writes) and agentshots (one scene per shot; `--arg '{"width":560}'` draws
+  the narrow layout, `'{"keys":true}'` walks the page by keyboard). Options
+  include `--state FILE`, `--theme`, `--live-config`, `--config FILE` (a
+  synthetic shell.json from `bench/preview/configs/`, so nothing real is
+  shown or written) and `--arg '{"page":…}'`. It never moves the real
+  pointer.
 
 ### 5.1 Pages (`pages/`)
 
 | Page | What |
 |---|---|
 | `OverviewPage.qml` | Status and quick links. |
-| `AgentsPage.qml` | Agent cards (wake phrase, name, program, model, effort, voice, speed, permission, project folder, endpoint, enabled) with a one-line instructions summary linking to Agent details, and a "Tools & collaboration" group (tool switches, notes write, collaboration level, accepts work). Global tool settings at the foot. |
+| `AgentsPage.qml` | One `AgentBlock` per agent, the main one included (M5): a `HeaderStrip` (state dot, name, wake phrase, pills for level, program · model, effort, voice · speed) that unfolds into a `CardGrid` of cards: Identity (name and wake phrase, runs on, `ModelPicker`), Endpoint (endpoint agents), Permissions, Voice (▶ Test plays the agent's voice at its speed), Tools (`ToolSwitches` part `tools`: chips with where each value comes from), Collaboration & notes (part `collab`), Agent (on/off, wake model, the folder summary linking to Agent details, remove). Every write goes through `writeField(index, field, value)`, which names each key and field; `test_agents_page.py` runs those functions in node. The tools for every agent are on Communal → Tools since M5 (bug E). |
 | `AgentDetailsPage.qml` | One agent's folder (Phase 12). Tabs: Personality & instructions (role, personality, instructions editors + prompt preview), Tools & skills, Notes, Chats, Advanced (open/export folder, remove, trash with restore). Writes no settings. |
-| `CommunalPage.qml` | Tabs: Rules & defaults, Skills, Notes, Chats (multi-agent conversations). States plainly that rules are text, not enforcement. |
+| `CommunalPage.qml` | Tabs: Rules & defaults, Tools (desktop tools, browser and Omarchy skill for every agent; moved from the Agents page in M5), Skills, Notes, Chats (multi-agent conversations). States plainly that rules are text, not enforcement. Writes only those three settings. |
 | `ListeningPage.qml` | Wake engine, thresholds, gate, Advanced wake tab. |
 | `VoicePage.qml` | Voice, speed, voice library. |
 | `ConversationPage.qml` | Turn timing, follow-up, open mic, narration, barge-in. |
@@ -351,7 +357,6 @@ Notes and collaboration exist only for Claude Code and Codex
 
 | Component | What |
 |---|---|
-| `AgentCard.qml` | One agent's card frame on the Agents page. |
 | `AdvancedSection.qml` | Collapsed "Advanced (N)" fold for fine-tuning. |
 | `AgentTabs.qml` | One tab per agent with a state dot; one row that scrolls at nine. |
 | `Card.qml`, `CardGrid.qml` | Titled box (optionally foldable); two across from 520 px of page, one when narrower. |
@@ -359,7 +364,7 @@ Notes and collaboration exist only for Claude Code and Codex
 | `CompactSelector.qml` | "Label: value ▾" mini selector; a disabled one says why. |
 | `DangerButton.qml` | ⚠ button whose first click arms an inline "Really …? Cancel / Do it" strip; 6 s or Escape disarms; Cancel has focus; the action runs only in `onConfirmed`. |
 | `DraggableCard.qml`, `DropLane.qml`, `UndoToast.qml` | Drag moves, Ctrl+drag copies, a "Move to…" menu as the keyboard way; a lane can refuse with a reason; Undo for 10 s. They only ask: the page moves. |
-| `HeaderStrip.qml`, `Pill.qml` | Foldable agent header (dot, name, pills, caret); small toned label. |
+| `HeaderStrip.qml`, `Pill.qml` | Foldable agent header (dot, name, pills, caret, a problem and a warning line shown folded or open); `controlled` makes a click ask through `toggled()` rather than assign, so the caller's binding survives. Small toned label. |
 | `Hint.qml`, `Tip.qml` | One plain line with the detail in a tooltip; the shared themed tooltip. |
 | `MenuList.qml` | Pick-one popup list with keyboard walking, headings and disabled entries with reasons. |
 | `ModelPicker.qml` | Model and effort joined in one control. |
@@ -376,7 +381,7 @@ Notes and collaboration exist only for Claude Code and Codex
 | `PageHeader.qml` | Page title row. |
 | `PromptPreview.qml` | What an agent is told, piece by piece, each labelled with its source. Read only. |
 | `ReadoutLines.qml` | M3: the locked readout, two fixed-height slots (last answer, dim with an accent bar; what is being said now, bright), each showing the end of its text, PlainText. Used by the HUD and the popup. |
-| `SegmentedChoice.qml` | Segmented enum control. |
+| `SegmentedChoice.qml` | Segmented enum control; `wrap: true` (with a width set) lets the chips wrap in a half-width card. |
 | `SendSheet.qml` | "Send to another agent": target, editable brief, what goes with it; sends via `agentvoice pass`. |
 | `SettingRow.qml` | One setting on one line. |
 | `SettingsStore.qml` | The single copy of the widget's settings; `put()` writes through `omarchy bar set`. |
@@ -384,7 +389,7 @@ Notes and collaboration exist only for Claude Code and Codex
 | `StatusCard.qml` | Boxed status line with a state chip. |
 | `TabStrip.qml` | Tabs across the top of a page. |
 | `ToggleRow.qml` | A SettingRow with a switch. |
-| `ToolSwitches.qml` | Per-agent desktop/browser/Omarchy switches (inherit/on/off), or why a program cannot use one. |
+| `ToolSwitches.qml` | One agent's tools and collaboration, as two cards (`part: "tools"` or `"collab"`): desktop/browser/Omarchy chips (every agent/on/off) with where each value comes from, or why a program cannot use one; collaboration, takes work, notes. Holds the program tables test_tools_skills checks against agentfs. |
 | `VoiceLibraryRow.qml` | One voice in the library. |
 | `VoiceSlider.qml` | Snapping slider for a setting. |
 

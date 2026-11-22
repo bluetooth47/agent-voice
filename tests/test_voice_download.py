@@ -27,14 +27,21 @@ DAEMON = (ROOT / "daemon" / "wake_listen.py").read_text()
 # only these caught it.
 
 def _voice_dropdown() -> str:
-    start = VOICE.index('page.s.put("voice", v)')
+    start = VOICE.index('blk.write("voice", v)')
     return VOICE[VOICE.rindex("Dropdown {", 0, start):VOICE.index("}", start)]
 
 
+def _voice_writes() -> str:
+    """The voice cases of the Agents page's writeField, main and extra (M5)."""
+    body = VOICE[VOICE.index("function writeField("):]
+    body = body[:body.index("\n  }")]
+    return "\n".join(line for line in body.splitlines() if 'case "voice"' in line)
+
+
 def _download_offer() -> str:
-    start = VOICE.index("visible: page.s.voiceMissing(page.mainVoice)")
+    start = VOICE.index('visible: blk.voice !== "" && blk.s.voiceMissing(blk.voice)')
     return VOICE[VOICE.rindex("Column {", 0, start):
-                 VOICE.index("\n    }", start)]
+                 VOICE.index("\n        }", start)]
 
 
 def _function(name: str) -> str:
@@ -44,12 +51,16 @@ def _function(name: str) -> str:
 
 def test_a_voice_that_is_not_on_disk_can_be_downloaded():
     """Choosing it is the request; the button is the way back if that failed."""
-    assert "page.s.chooseVoice(v)" in _voice_dropdown(), "choosing must fetch it"
+    # Every agent's dropdown writes through writeField (M5), and both of its
+    # voice cases, the main agent's and an extra one's, fetch what they set.
+    assert "blk.write(\"voice\", v)" in _voice_dropdown()
+    writes = _voice_writes()
+    assert 's.put("voice", value); s.chooseVoice(value)' in writes, "choosing must fetch it"
+    assert 'updateAgent(index, "voice", value); s.chooseVoice(value)' in writes, \
+        "an extra agent's voice goes through the same path"
     assert "root.fetchVoice" in _function("chooseVoice")
     offer = _download_offer()
-    assert "page.s.fetchVoice" in offer, "and there must be a way to retry"
-    # An extra agent's voice goes through the same path.
-    assert "page.s.chooseVoice(v)" in page("Agents")
+    assert "blk.s.fetchVoice(blk.voice)" in offer, "and there must be a way to retry"
 
 
 def test_the_voice_name_is_named_on_the_command_line():
@@ -105,7 +116,7 @@ def test_every_launcher_argument_is_quoted():
 
 
 def test_the_offer_appears_only_when_it_is_missing():
-    assert "voiceMissing(page.mainVoice)" in _download_offer()
+    assert "voiceMissing(blk.voice)" in _download_offer()
     missing = _function("voiceMissing")
     assert "< 0" in missing, "shown when the voice is absent from the list"
     assert "voicesOnDisk.length > 0" in missing, \

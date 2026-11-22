@@ -5,27 +5,35 @@ import qs.Ui
 import ".."
 import "../ui"
 
-// Every agent, as the same card.
+// Every agent, the same way (feedback item 8, master plan M5): a header
+// strip per agent -- state dot, name, wake phrase, what it runs on, effort,
+// voice and speed, permission level -- that unfolds into cards, two across
+// when there is room: Identity, Endpoint (endpoint agents only),
+// Permissions, Voice, Tools, Collaboration & notes, Agent.
 //
-// The main agent and the extra ones used to be drawn two different ways in
-// three different boxes: the main one's model, effort and permission level
-// as loose controls under "project folder and permissions", the API
-// endpoint near the bottom of the page, and the extra agents as cards under
-// "more agents". Now each is one card with the same rows in the same order,
-// and the endpoint is what the main agent *runs on* rather than a section of
-// its own -- which is what it always was: set both boxes and it answers
-// instead of Omarchy's default.
+// The main agent and the extra ones are one component, `AgentBlock`, below.
+// They used to be two copies of every row, which is how they drifted apart.
+// What differs is where a value is stored: the main agent's settings are
+// top-level keys (some per program, in maps), an extra agent's are fields of
+// its entry in `voiceAgents`. Every write goes through `writeField`, which
+// names each key and field in its source, so the one-page tests can see the
+// page that writes it.
 //
 // Settings are per agent because each is a judgement about one program: a
 // model name means something to one CLI and nothing to the next, and a
 // permission level that followed `omarchy default agent` would hand the
 // next agent a decision nobody made about it.
+//
+// The tools every agent gets were the "On the desktop" group at the foot of
+// this page, where they read as the last agent's (bug E). They are on
+// Communal → Tools now; each agent's Tools card says which it has and where
+// that comes from.
 Column {
   id: page
 
   required property var s
 
-  spacing: Style.space(14)
+  spacing: Style.space(10)
 
   // --- the main agent's per-program settings ------------------------------------
   // Stored keyed by program in three maps, so switching Omarchy's default
@@ -62,15 +70,16 @@ Column {
 
   readonly property string mainVoice: String(s.setting("voice", "lessac-medium"))
   readonly property bool mainSpeaks: s.setting("speakReplies", true) === true
+  readonly property int mainSpeed: Number(s.setting("voiceSpeed", 100)) || 100
   readonly property string mainModel: mapValue("agentModels", page.main)
   readonly property string mainEffort: mapValue("agentEfforts", page.main)
   // What is saved for this agent, else what the daemon says is in force.
   readonly property string mainLevel: mapValue("permissions", page.main) || s.permissionLevel
 
-  // --- which cards are open ---------------------------------------------------
-  // Kept here, by agent name, not on the cards. A card's own `expanded` was
-  // a binding to focusAgent that the header click overwrote, so any time a
-  // card was rebuilt it came back shut -- and every save rebuilt them all.
+  // --- which agents are open ----------------------------------------------------
+  // Kept here, by agent id ("main" for the main agent), not on the strips. A
+  // strip's own `expanded` was a binding the header click overwrote, so any
+  // time one was rebuilt it came back shut -- and every save rebuilt them all.
   property var openCards: ({})
   function isOpen(key) { return openCards[key] === true }
   function setOpen(key, open) {
@@ -82,17 +91,17 @@ Column {
     openCards = all
   }
   // A deep link ({page: "agents", agent: "sarah"}), a new agent, a rename.
+  // {..., tab: "tools"} also marks that agent's Tools card (focusTools).
   Connections {
     target: page.s
     function onFocusAgentChanged() { page.openLinked() }
   }
-  // Which card starts open: the one linked to, else the main card when it is
+  // Which agent starts open: the one linked to, else the main one when it is
   // the only one. Decided once the settings have loaded, not at creation --
-  // before that every list reads empty, so the main card always opened.
+  // before that every list reads empty, so the main agent always opened.
   function openLinked() {
     if (s.focusAgent === "") return
     setOpen(s.focusAgent, true)
-    if (s.focusTools) setOpen("tools:" + s.focusAgent, true)
   }
   property bool openingDecided: false
   function decideOpening() {
@@ -110,6 +119,10 @@ Column {
   // --- the extra agents -------------------------------------------------------
   function saveAgents(list) { s.put("voiceAgents", list) }
 
+  // One field of one entry. Every other field of that entry, and every other
+  // entry, is copied as it was -- including fields this build does not know,
+  // so a newer build's settings survive an edit here (test_agents_page.py
+  // runs this function and compares the rest byte for byte).
   function updateAgent(index, key, value) {
     var list = []
     for (var i = 0; i < s.voiceAgents.length; i++) {
@@ -163,9 +176,9 @@ Column {
   function removeAgent(index) { s.folders.remove(index) }
   function undoRemove() { s.folders.undo() }
 
-  // What is in an agent's folder, in one line, for the card: the files are
-  // edited on Agent details, never here (one editor per file). Sizes only,
-  // from the daemon while it runs, else from the overlay's own read.
+  // What is in an agent's folder, in one line, for the Agent card: the files
+  // are edited on Agent details, never here (one editor per file). Sizes
+  // only, from the daemon while it runs, else from the overlay's own read.
   function folderSummary(id, legacy) {
     var mine = s.serviceActive ? s.vAgentFiles[id] : undefined
     var f = mine || s.folders.folders[id]
@@ -191,9 +204,9 @@ Column {
   }
 
   // --- tool switches (merged plan, Phase 13) ----------------------------------
-  // Each agent's own, beating the settings for every agent at the foot of
-  // this page. Written as inherit / on / off; inherit is written by leaving
-  // the key out, so an entry nobody changed stays as it was.
+  // Each agent's own, beating the settings for every agent on Communal →
+  // Tools. Written as inherit / on / off; inherit is written by leaving the
+  // key out, so an entry nobody changed stays as it was.
   readonly property var toolGlobals: ({
     desktop: s.setting("desktopTools", false) === true,
     browser: s.setting("browserTools", false) === true,
@@ -236,39 +249,86 @@ Column {
            "Turning its browser off, or asking first, takes the risk away."
   }
 
-  // `named` leaves the program out, for the main card, whose title is it.
-  function summary(program, model, effort, level, levels, named) {
-    var parts = named ? [] : [s.programLabel(program) || "no agent"]
-    if (model !== "") parts.push(model)
-    if (effort !== "") parts.push(s.effortNames[effort] || effort)
-    parts.push(s.levelLabel(level, levels).toLowerCase())
-    return parts.join(" · ")
+  // --- every write, by agent and field ------------------------------------------
+  // index -1 is the main agent. Each key and each field is named, so the page
+  // that writes it says so in its source (test_settings_pages.py's
+  // FIELD_HOMES reads these). Values arrive already cleaned by the control.
+  function writeField(index, field, value) {
+    if (index < 0) {
+      switch (field) {
+      case "label": s.put("mainName", value); break
+      case "name": s.put("phrase", value); break
+      case "agent": runOn(value); break
+      case "model": setModel(value); break
+      case "effort": setEffort(value); break
+      case "level": setLevel(value); break
+      case "voice": s.put("voice", value); s.chooseVoice(value); break
+      case "speed": s.put("voiceSpeed", value); break
+      case "projectDir": s.put("projectDir", value); break
+      case "notesWrite": s.put("mainNotesWrite", value); break
+      case "collaboration": s.put("mainCollaboration", value); break
+      case "acceptsWork": s.put("mainAcceptsWork", value); break
+      }
+      return
+    }
+    switch (field) {
+    case "enabled": updateAgent(index, "enabled", value); break
+    case "label": updateAgent(index, "label", value); break
+    case "name": updateAgent(index, "name", value); break
+    case "agent": updateAgent(index, "agent", value); break
+    case "model": updateAgent(index, "model", value); break
+    case "effort": updateAgent(index, "effort", value); break
+    case "level": updateAgent(index, "level", value); break
+    case "voice": updateAgent(index, "voice", value); s.chooseVoice(value); break
+    case "speed": updateAgent(index, "speed", value); break
+    case "narration": updateAgent(index, "narration", value); break
+    case "projectDir": updateAgent(index, "projectDir", value); break
+    case "notesWrite": putAgentNotes(index, value); break
+    case "collaboration": putAgentCollab(index, value); break
+    case "acceptsWork": putAgentAccepts(index, value); break
+    }
+  }
+  function writeTool(index, key, value) {
+    if (index < 0) putMainTool(key, value)
+    else putAgentTool(index, key, value)
+  }
+  // The EndpointEditor's edited(key, value), for the main agent; an extra
+  // agent's goes straight to updateAgent with the key it was given.
+  function putMainEndpoint(key, value) {
+    switch (key) {
+    case "endpointUrl": s.put("endpointUrl", value); break
+    case "endpointModel": s.put("endpointModel", value); break
+    case "endpointIsAgent": s.put("endpointIsAgent", value); break
+    case "endpointTimeoutS": s.put("endpointTimeoutS", value); break
+    case "endpointHistoryTurns": s.put("endpointHistoryTurns", value); break
+    }
   }
 
-  // "Runs on" for the main card. Chosen locally until both endpoint boxes
+  // "Runs on" for the main agent. Chosen locally until both endpoint boxes
   // are filled, because a half-filled endpoint is not in use.
   property bool endpointChosen: s.usingEndpoint || String(s.setting("endpointUrl", "")) !== ""
-  property bool customModel: false
-  onMainChanged: customModel = false
   // The main agent's own program; "" follows Omarchy's default.
   readonly property string mainProgram: String(s.setting("mainProgram", ""))
   function runOn(v) {
     if (v === "endpoint") { page.endpointChosen = true; return }
     page.endpointChosen = false
-    page.customModel = false
     var program = v === "omarchy" ? "" : v
     if (program !== page.mainProgram) page.s.put("mainProgram", program)
     // Clearing both is what hands the turn back from an endpoint.
     if (String(page.s.setting("endpointUrl", "")) !== "") page.s.put("endpointUrl", "")
     if (String(page.s.setting("endpointModel", "")) !== "") page.s.put("endpointModel", "")
   }
-  // A move to "trusted" waits here for a second click.
+  // A move to "trusted" waits here for a second click, by agent id.
   property string trustPending: ""
+
+  readonly property var levelTones: ({ trusted: "alert", edits: "busy" })
+  readonly property var programChoices: page.s.programOptions.map(function(o) {
+    return o.value === "endpoint" ? { value: "endpoint", label: "OpenAI-compatible endpoint" } : o })
 
   PageHeader {
     width: parent.width
     title: "Agents"
-    subtitle: "Who answers, what each one may do, and where. Click a card to open it."
+    subtitle: "Who answers, what each one may do, and where. Click an agent to open it."
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
   }
@@ -285,963 +345,763 @@ Column {
     font.pixelSize: Style.font.caption
   }
 
-  // --- the main agent -----------------------------------------------------------
-  AgentCard {
-    id: mainCard
-    width: parent.width
-    readonly property string st: page.s.agentStatus("")
-    name: page.s.mainLabel
-    wakeName: page.s.activePhrase
-    isDefault: true
-    summary: page.endpointChosen
-             ? "Endpoint · " + String(page.s.setting("endpointModel", "") || "no model yet") + " · " +
-               String(page.s.setting("endpointUrl", "") || "no address yet")
-             : page.summary(page.main, page.mainModel, page.mainEffort, page.mainLevel, page.s.agentLevels, false)
-    status: st
-    tone: page.s.statusTone(st)
-    problem: !page.endpointChosen && page.main === ""
-             ? "No default agent is set. Choose one with `omarchy default agent`."
-             : page.s.projectDir.trim() === "" && page.mainLevel === "edits" && !page.endpointChosen
-               ? "No project folder, so “edits are fine” has nothing to be inside: every change is asked about."
-               : ""
-    warning: page.endpointChosen ? ""
-             : page.ruleOfTwo(page.main, page.mainLevel, page.s.setting("mainTools", {}))
-    expanded: page.isOpen("main")
-    onToggled: function(open) { page.setOpen("main", open) }
-    foreground: page.s.foreground
-    fontFamily: page.s.fontFamily
+  // --- one agent ------------------------------------------------------------------
+  // agentIndex -1 is the main agent. Inline components do not see the page's
+  // ids, so the page comes in as `pg`.
+  component AgentBlock: HeaderStrip {
+    id: blk
 
-    Text {
-      width: parent.width
-      wrapMode: Text.WordWrap
-      text: "Always on: something has to answer “" + page.s.activePhrase + "”. To silence everything, mute the microphone or stop the service."
-      textFormat: Text.PlainText
-      color: page.s.dim
-      font.family: page.s.fontFamily
-      font.pixelSize: Style.font.caption
+    required property var pg
+    property int agentIndex: -1
+
+    readonly property var s: pg.s
+    readonly property bool isMain: agentIndex < 0
+    readonly property var entry: isMain ? ({}) : (s.voiceAgents[agentIndex] || ({}))
+    // What everything else knows it by; see Settings.agentId.
+    readonly property string agentId: isMain ? "main" : s.agentId(entry)
+    readonly property string label: isMain ? s.mainLabel : s.agentLabel(entry)
+    readonly property string wake: isMain ? s.activePhrase : String(entry.name || "")
+    readonly property var info: isMain ? ({}) : s.crewInfo(agentId)
+    readonly property string program: isMain ? (pg.endpointChosen ? "endpoint" : pg.main)
+                                             : String(entry.agent || "claude")
+    readonly property bool endpoint: program === "endpoint"
+    // The value the "Runs on" list shows: the main agent has Omarchy's
+    // default as a choice of its own.
+    readonly property string runsOn: isMain ? (pg.endpointChosen ? "endpoint" : (pg.mainProgram || "omarchy"))
+                                            : program
+    readonly property string model: isMain ? pg.mainModel : String(entry.model || "")
+    readonly property string effort: isMain ? pg.mainEffort : String(entry.effort || "")
+    readonly property var efforts: isMain ? s.vEfforts : (Array.isArray(info.efforts) ? info.efforts : [])
+    readonly property var levels: isMain ? s.agentLevels
+                                         : (Array.isArray(info.levels) ? info.levels : ["ask", "edits", "trusted"])
+    readonly property string level: isMain ? pg.mainLevel : String(entry.level || "ask")
+    readonly property string posture: isMain ? s.vPosture : String(info.posture || "")
+    // "" for an extra agent is "same as the main agent".
+    readonly property string voice: isMain ? pg.mainVoice : String(entry.voice || "")
+    readonly property string voiceHeard: voice !== "" ? voice : pg.mainVoice
+    // 0 (or nothing) for an extra agent is "same as the main agent".
+    readonly property int speed: isMain ? pg.mainSpeed : Number(entry.speed || 0)
+    readonly property int speedHeard: speed > 0 ? speed : pg.mainSpeed
+    readonly property string projectDir: isMain ? s.projectDir : String(entry.projectDir || "")
+    readonly property var tools: isMain ? s.setting("mainTools", {}) : (entry.tools || ({}))
+    // Exactly "allow" is allow; anything else is what the daemon reads as
+    // deny (runtime.notes_choice), so the switch never says more. A missing
+    // field on an extra agent is "allow".
+    readonly property string notesWrite: isMain
+        ? (s.setting("mainNotesWrite", "allow") === "allow" ? "allow" : "deny")
+        : (entry.notesWrite === undefined || entry.notesWrite === "allow" ? "allow" : "deny")
+    readonly property string collaboration: isMain ? String(s.setting("mainCollaboration", "announce"))
+        : (entry.collaboration === undefined ? "announce" : String(entry.collaboration))
+    readonly property bool acceptsWork: isMain ? s.setting("mainAcceptsWork", true) !== false
+                                               : entry.acceptsWork !== false
+    // Missing means on, so lists from before the switch keep every agent.
+    readonly property bool on: isMain || entry.enabled !== false
+    readonly property string st: s.agentStatus(isMain ? "" : agentId)
+    property bool customModel: false
+    onProgramChanged: customModel = false
+
+    function write(field, value) { pg.writeField(agentIndex, field, value) }
+    function modelProblem() {
+      if (isMain && pg.main === "") return "No default agent is set."
+      if (isMain) return s.serviceActive && !s.vTakesModel ? pg.main + " does not take a model from here." : ""
+      return info.takes_model === false ? s.programLabel(program) + " does not take a model from here." : ""
     }
 
-    SettingRow {
+    width: pg.width
+    controlled: true
+    expanded: pg.isOpen(agentId)
+    onToggled: function(open) { pg.setOpen(blk.agentId, open) }
+    dimmed: !on
+    name: label || "New agent"
+    status: (wake !== "" ? "“" + wake + "” · " : "") + (on ? st : "switched off")
+    tone: on ? s.statusTone(st) : "idle"
+    // Most important first: the first pill is the last to give way.
+    pills: {
+      var out = []
+      if (!endpoint)
+        out.push({ text: s.levelLabel(level, levels).toLowerCase(), tone: pg.levelTones[level] || "idle",
+                   tooltip: "Permission: " + s.levelLabel(level, levels) + (posture !== "" ? " (in force: " + posture + ")" : "") })
+      var runs = endpoint ? "Endpoint" : (s.programLabel(program) || "no agent")
+      var m = endpoint ? String(isMain ? s.setting("endpointModel", "") : (entry.endpointModel || "")) : model
+      out.push({ text: runs + (m !== "" ? " · " + m : ""),
+                 tooltip: isMain && !endpoint && pg.mainProgram === "" ? "Omarchy's default coding agent" : "What it runs on" })
+      if (!endpoint && effort !== "")
+        out.push({ text: s.effortNames[effort] || effort, tooltip: "Effort" })
+      out.push({ text: pg.mainSpeaks ? s.voiceName(voiceHeard) + " · " + speedHeard + "%" : "silent",
+                 tooltip: !pg.mainSpeaks ? "Replies are not spoken."
+                          : "Voice and speaking speed" +
+                            (!isMain && voice === "" ? "; the voice follows the main agent" : "") +
+                            (!isMain && speed === 0 ? "; the speed follows the main agent" : "") })
+      return out
+    }
+    problem: !on ? ""
+             : isMain
+               ? (!pg.endpointChosen && pg.main === ""
+                  ? "No default agent is set. Choose one with `omarchy default agent`."
+                  : s.projectDir.trim() === "" && pg.mainLevel === "edits" && !pg.endpointChosen
+                    ? "No project folder, so “edits are fine” has nothing to be inside: every change is asked about."
+                    : "")
+               : String(info.problem || "") !== "" ? String(info.problem)
+               : wake !== "" && !/^[a-z]+( [a-z]+){0,2}$/.test(wake)
+                 ? "A wake phrase is one to three plain words, letters only." : ""
+    warning: on && !endpoint ? pg.ruleOfTwo(program, level, tools) : ""
+    foreground: s.foreground
+    fontFamily: s.fontFamily
+
+    CardGrid {
       width: parent.width
-      stacked: true
-      label: "Name"
-      hint: "What it is called on screen, in saved chats and in the Agents panel. Any text. Empty uses the wake phrase."
-      changed: page.s.changed("mainName")
-      foreground: page.s.foreground
-      fontFamily: page.s.fontFamily
-      onReset: page.s.resetKey("mainName")
-      TextField {
-        text: String(page.s.setting("mainName", ""))
-        placeholderText: page.s.capitalised(page.s.activePhrase)
-        foreground: page.s.foreground
-        font.family: page.s.fontFamily
-        onEditingFinished: {
-          var v = page.s.cleanLabel(text)
-          if (v !== String(page.s.setting("mainName", ""))) page.s.put("mainName", v)
+
+      // --- Identity --------------------------------------------------------------
+      Card {
+        title: "Identity"
+        foreground: blk.s.foreground
+        fontFamily: blk.s.fontFamily
+
+        Text {
+          width: parent.width
+          visible: blk.isMain
+          wrapMode: Text.WordWrap
+          text: "Always on: something has to answer “" + blk.s.activePhrase + "”."
+          textFormat: Text.PlainText
+          color: blk.s.dim
+          font.family: blk.s.fontFamily
+          font.pixelSize: Style.font.caption
         }
-      }
-    }
 
-    // One dropdown per engine rather than one that swaps its options.
-    // Swapping left the previous engine's value displayed -- picking "hey
-    // claude" under Vosk and then switching engines still showed "hey
-    // claude", which openWakeWord has no model for.
-    SettingRow {
-      width: parent.width
-      visible: !page.s.owwLive
-      stacked: true
-      label: "Wake phrase"
-      hint: "What you say to start a turn with this agent. One to three plain words, such as a name. Press Enter to save."
-      changed: page.s.changed("phrase")
-      foreground: page.s.foreground
-      fontFamily: page.s.fontFamily
-      onReset: page.s.resetKey("phrase")
-      TextField {
-        text: page.s.setting("phrase", "hey computer")
-        placeholderText: "a name or phrase — the words that wake it"
-        foreground: page.s.foreground
-        font.family: page.s.fontFamily
-        onEditingFinished: {
-          // Same rule as the extra agents' names: one to three plain words.
-          var v = text.trim().toLowerCase().replace(/\s+/g, " ")
-          if (!/^[a-z']+( [a-z']+){0,2}$/.test(v)) { text = page.s.setting("phrase", "hey computer"); return }
-          if (v !== page.s.setting("phrase", "hey computer")) page.s.put("phrase", v)
-        }
-      }
-    }
+        // Name and wake phrase side by side when the card is wide enough.
+        Grid {
+          id: names
+          width: parent.width
+          columns: width >= Style.space(200) ? 2 : 1
+          columnSpacing: Style.space(10)
+          rowSpacing: Style.space(8)
+          readonly property real cell: columns === 2 ? (width - columnSpacing) / 2 : width
 
-    SettingRow {
-      width: parent.width
-      visible: page.s.owwLive
-      stacked: true
-      label: "Wake phrase"
-      hint: "Only these ship pretrained. Another phrase means training your own model, on Listening."
-      changed: page.s.changed("owwModel")
-      foreground: page.s.foreground
-      fontFamily: page.s.fontFamily
-      onReset: page.s.resetKey("owwModel")
-      Dropdown {
-        showLabel: false
-        fontFamily: page.s.fontFamily
-        foreground: page.s.foreground
-        options: page.s.owwOptions
-        value: page.s.setting("owwModel", "hey_jarvis")
-        onChanged: function(v) { page.s.put("owwModel", v) }
-      }
-    }
+          SettingRow {
+            width: names.cell
+            stacked: true
+            label: "Name"
+            hint: "Shown on screen."
+            help: "What it is called on screen, in saved chats and in the Agents panel. Any text, " +
+                  "up to 40 characters. Empty uses the wake phrase."
+            changed: blk.isMain ? blk.s.changed("mainName") : blk.s.cleanLabel(blk.entry.label) !== ""
+            foreground: blk.s.foreground
+            fontFamily: blk.s.fontFamily
+            onReset: blk.isMain ? blk.s.resetKey("mainName") : blk.write("label", "")
+            TextField {
+              text: blk.isMain ? String(blk.s.setting("mainName", "")) : blk.s.cleanLabel(blk.entry.label)
+              placeholderText: blk.s.capitalised(blk.wake) || "a name to show"
+              foreground: blk.s.foreground
+              font.family: blk.s.fontFamily
+              onEditingFinished: {
+                var v = blk.s.cleanLabel(text)
+                var was = blk.isMain ? String(blk.s.setting("mainName", "")) : blk.s.cleanLabel(blk.entry.label)
+                if (v !== was) blk.write("label", v)
+              }
+            }
+          }
 
-    SettingRow {
-      width: parent.width
-      stacked: true
-      label: "Runs on"
-      hint: page.endpointChosen
-            ? "Any OpenAI-compatible endpoint: Ollama, LM Studio, vLLM, OpenAI, xAI, Hermes."
-            : page.mainProgram === ""
-              ? "Omarchy's default coding agent, which `omarchy default agent` changes."
-              : "Its own choice, whatever Omarchy's default agent is."
-      changed: page.mainProgram !== "" || page.endpointChosen
-      foreground: page.s.foreground
-      fontFamily: page.s.fontFamily
-      onReset: page.runOn("omarchy")
-      // A dropdown: seven choices do not fit on one row of chips.
-      Dropdown {
-        width: parent.width
-        showLabel: false
-        // The same programs an extra agent can run, after Omarchy's default.
-        options: [{ value: "omarchy", label: "Omarchy's default" + (page.s.defaultAgent ? " (" + page.s.programLabel(page.s.defaultAgent) + ")" : "") }]
-                 .concat(page.s.programOptions.map(function(o) {
-                   return o.value === "endpoint" ? { value: "endpoint", label: "OpenAI-compatible endpoint" } : o }))
-        value: page.endpointChosen ? "endpoint" : (page.mainProgram || "omarchy")
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        onChanged: function(v) { page.runOn(v) }
-      }
-    }
-
-    // --- running on an endpoint ---
-    Column {
-      width: parent.width
-      visible: page.endpointChosen
-      spacing: Style.space(10)
-
-      EndpointEditor {
-        width: parent.width
-        url: String(page.s.setting("endpointUrl", ""))
-        model: String(page.s.setting("endpointModel", ""))
-        isAgent: page.s.setting("endpointIsAgent", false) === true
-        timeoutS: Number(page.s.setting("endpointTimeoutS", 0))
-        historyTurns: Number(page.s.setting("endpointHistoryTurns", 8))
-        foreground: page.s.foreground
-        urgent: page.s.urgent
-        fontFamily: page.s.fontFamily
-        // Each key named, so the page that writes it says so in its source.
-        onEdited: function(key, value) {
-          switch (key) {
-          case "endpointUrl": page.s.put("endpointUrl", value); break
-          case "endpointModel": page.s.put("endpointModel", value); break
-          case "endpointIsAgent": page.s.put("endpointIsAgent", value); break
-          case "endpointTimeoutS": page.s.put("endpointTimeoutS", value); break
-          case "endpointHistoryTurns": page.s.put("endpointHistoryTurns", value); break
+          SettingRow {
+            width: names.cell
+            stacked: true
+            label: "Wake phrase"
+            hint: blk.isMain && blk.s.owwLive ? "A wake model, under Agent." : "What wakes it."
+            help: (blk.isMain ? "What you say to start a turn with this agent, such as a name. "
+                              : "What you say to wake it. Changing it keeps the conversation. ") +
+                  "One to three plain words; Enter saves."
+            changed: blk.isMain && !blk.s.owwLive && blk.s.changed("phrase")
+            foreground: blk.s.foreground
+            fontFamily: blk.s.fontFamily
+            onReset: blk.s.resetKey("phrase")
+            TextField {
+              visible: !(blk.isMain && blk.s.owwLive)
+              text: blk.isMain ? blk.s.setting("phrase", "hey computer") : blk.wake
+              placeholderText: blk.isMain ? "a name or phrase — the words that wake it" : "the word that wakes it"
+              foreground: blk.s.foreground
+              font.family: blk.s.fontFamily
+              onEditingFinished: {
+                var v = text.trim().toLowerCase().replace(/\s+/g, " ")
+                if (blk.isMain) {
+                  // The main phrase is checked here; an extra agent's is
+                  // saved as typed and its header says what is wrong.
+                  if (!/^[a-z']+( [a-z']+){0,2}$/.test(v)) { text = blk.s.setting("phrase", "hey computer"); return }
+                  if (v !== blk.s.setting("phrase", "hey computer")) blk.write("name", v)
+                } else if (v !== blk.wake) blk.write("name", v)
+              }
+            }
+            Text {
+              visible: blk.isMain && blk.s.owwLive
+              text: blk.s.capitalised(blk.s.activePhrase)
+              textFormat: Text.PlainText
+              color: blk.s.foreground
+              font.family: blk.s.fontFamily
+            }
           }
         }
-      }
-      Text {
-        width: parent.width
-        wrapMode: Text.WordWrap
-        visible: page.s.vOverriding !== "" || !page.s.vGoverned
-        text: (page.s.vOverriding !== ""
-               ? "⚠  Answering instead of " + page.s.vOverriding + ", Omarchy's default. "
-               : "⚠  ") +
-              "It works on its own machine, in a directory it chooses: the project " +
-              "folder and permission level here reach nothing over there. Restrain " +
-              "it where it runs."
-        textFormat: Text.PlainText
-        color: page.s.urgent
-        font.family: page.s.fontFamily
-        font.pixelSize: Style.font.caption
-      }
-    }
 
-    // --- running on Omarchy's agent ---
-    Column {
-      width: parent.width
-      visible: !page.endpointChosen
-      spacing: Style.space(10)
-
-      SettingRow {
-        width: parent.width
-        stacked: true
-        label: "Model"
-        hint: "Only for voice; your other sessions keep their own. Changing it starts a new conversation."
-        disabledReason: page.main === "" ? "No default agent is set."
-                        : page.s.serviceActive && !page.s.vTakesModel
-                          ? page.main + " does not take a model from here." : ""
-        changed: page.mainModel !== ""
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        onReset: page.setModel("")
-        Column {
-          spacing: Style.space(6)
+        SettingRow {
+          width: parent.width
+          stacked: true
+          label: "Runs on"
+          hint: blk.endpoint ? "Any OpenAI-compatible endpoint: Ollama, LM Studio, vLLM, OpenAI, xAI, Hermes."
+                : blk.isMain && blk.pg.mainProgram === "" ? "Omarchy's default, which `omarchy default agent` changes."
+                : "Its own program, whatever Omarchy's default agent is."
+          changed: blk.isMain ? (blk.pg.mainProgram !== "" || blk.pg.endpointChosen) : blk.program !== "claude"
+          foreground: blk.s.foreground
+          fontFamily: blk.s.fontFamily
+          onReset: { blk.customModel = false; blk.write("agent", blk.isMain ? "omarchy" : "claude") }
+          // A dropdown: seven choices do not fit on one row of chips.
           Dropdown {
             width: parent.width
             showLabel: false
-            fontFamily: page.s.fontFamily
-            foreground: page.s.foreground
-            options: page.s.agentModelChoices(page.main, page.mainModel)
-            value: page.customModel ? "__other__" : page.mainModel
+            options: blk.isMain
+                     ? [{ value: "omarchy", label: "Omarchy's default" +
+                          (blk.s.defaultAgent ? " (" + blk.s.programLabel(blk.s.defaultAgent) + ")" : "") }]
+                       .concat(blk.pg.programChoices)
+                     : blk.pg.programChoices
+            value: blk.runsOn
+            foreground: blk.s.foreground
+            fontFamily: blk.s.fontFamily
             onChanged: function(v) {
-              if (v === "__other__") { page.customModel = true; return }
-              page.customModel = false
-              if (v !== page.mainModel) page.setModel(v)
+              if (v === blk.runsOn) return
+              blk.customModel = false
+              blk.write("agent", v)
             }
           }
-          TextField {
+        }
+
+        // The model and its effort, joined: effort means nothing without the
+        // model it belongs to. Only the levels the model in force takes,
+        // which the daemon publishes.
+        SettingRow {
+          width: parent.width
+          visible: !blk.endpoint
+          stacked: true
+          label: "Model"
+          hint: blk.effort !== "" && blk.efforts.length > 0 && blk.efforts.indexOf(blk.effort) < 0
+                ? "⚠  The effort saved is not one this model takes, so the default is in use."
+                : "Only for voice. A new model starts a new conversation; effort keeps it."
+          help: "Your other sessions keep their own model. Effort is how hard it thinks before answering."
+          foreground: blk.s.foreground
+          fontFamily: blk.s.fontFamily
+          Column {
             width: parent.width
-            visible: page.customModel
-            text: page.mainModel
-            placeholderText: "type a model name or full model id"
-            foreground: page.s.foreground
-            font.family: page.s.fontFamily
-            onEditingFinished: {
-              if (text.trim() !== page.mainModel) page.setModel(text)
+            spacing: Style.space(6)
+            ModelPicker {
+              models: blk.s.agentModelChoices(blk.program, blk.model)
+              model: blk.customModel ? "__other__" : blk.model
+              modelReason: blk.modelProblem()
+              efforts: blk.efforts.length > 0 ? blk.s.effortChoices(blk.efforts) : []
+              effort: blk.efforts.indexOf(blk.effort) >= 0 ? blk.effort : ""
+              effortReason: blk.efforts.length > 0 ? ""
+                            : blk.s.serviceActive ? "This model takes no effort level."
+                            : "Shown once the service is running, for a model that takes one."
+              foreground: blk.s.foreground
+              accent: blk.s.accent
+              fontFamily: blk.s.fontFamily
+              onModelCommitted: function(v) {
+                if (v === "__other__") { blk.customModel = true; return }
+                blk.customModel = false
+                if (v !== blk.model) blk.write("model", v)
+              }
+              onEffortCommitted: function(v) { if (v !== blk.effort) blk.write("effort", v) }
+            }
+            TextField {
+              width: parent.width
+              visible: blk.customModel
+              text: blk.model
+              placeholderText: "type a model name or full model id"
+              foreground: blk.s.foreground
+              font.family: blk.s.fontFamily
+              onEditingFinished: {
+                if (text.trim() !== blk.model) blk.write("model", text.trim())
+              }
+            }
+            Text {
+              width: parent.width
+              wrapMode: Text.WordWrap
+              visible: blk.model !== ""
+                       && !/^[A-Za-z0-9][A-Za-z0-9._:\/@\[\]-]{0,127}$/.test(blk.model)
+              text: "⚠  Not accepted as a model name, so the default is in use."
+              color: blk.s.urgent
+              font.family: blk.s.fontFamily
+              font.pixelSize: Style.font.caption
             }
           }
+        }
+      }
+
+      // --- Endpoint (endpoint agents only) -----------------------------------------
+      // The model, effort, permission and folder rows do not apply to one:
+      // agentvoice offers an endpoint no tools.
+      Card {
+        visible: blk.endpoint
+        title: "Endpoint"
+        foreground: blk.s.foreground
+        fontFamily: blk.s.fontFamily
+
+        EndpointEditor {
+          width: parent.width
+          url: String(blk.isMain ? blk.s.setting("endpointUrl", "") : (blk.entry.endpointUrl || ""))
+          model: String(blk.isMain ? blk.s.setting("endpointModel", "") : (blk.entry.endpointModel || ""))
+          isAgent: blk.isMain ? blk.s.setting("endpointIsAgent", false) === true : blk.entry.endpointIsAgent === true
+          timeoutS: Number(blk.isMain ? blk.s.setting("endpointTimeoutS", 0) : (blk.entry.endpointTimeoutS || 0))
+          historyTurns: blk.isMain ? Number(blk.s.setting("endpointHistoryTurns", 8))
+                        : blk.entry.endpointHistoryTurns === undefined ? 8 : Number(blk.entry.endpointHistoryTurns)
+          foreground: blk.s.foreground
+          urgent: blk.s.urgent
+          fontFamily: blk.s.fontFamily
+          onEdited: function(key, value) { if (blk.isMain) blk.pg.putMainEndpoint(key, value); else blk.pg.updateAgent(blk.agentIndex, key, value) }
+        }
+        // An extra agent's endpoint has no folder of ours (the daemon reports
+        // it as not governed), so this always applies to one.
+        Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          visible: !blk.isMain || blk.s.vOverriding !== "" || !blk.s.vGoverned
+          text: (blk.isMain && blk.s.vOverriding !== ""
+                 ? "⚠  Answering instead of " + blk.s.vOverriding + ", Omarchy's default. " : "⚠  ") +
+                "It works on its own machine, in a directory it chooses: the project " +
+                "folder and permission level here reach nothing over there. Restrain " +
+                "it where it runs."
+          textFormat: Text.PlainText
+          color: blk.s.urgent
+          font.family: blk.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+
+      // --- Permissions -----------------------------------------------------------
+      // The directory and what is allowed in it are one decision, not two: a
+      // permission level with no root to apply to means nothing.
+      Card {
+        visible: !blk.endpoint
+        title: "Permissions"
+        foreground: blk.s.foreground
+        fontFamily: blk.s.fontFamily
+
+        SettingRow {
+          width: parent.width
+          stacked: true
+          label: "Level"
+          hint: blk.level === "trusted"
+                ? (blk.isMain ? "Nothing is asked. A spoken sentence can edit files and run commands here with nothing able to stop it."
+                              : "Nothing is asked. A sentence starting with “" + blk.wake + "” can edit files and run commands in its folder.")
+                : blk.level === "edits"
+                  ? "Source files in its folder are edited without asking. Commands, the network and anything outside still ask."
+                  : blk.levels.indexOf("edits") < 0 && blk.s.serviceActive
+                    ? (blk.isMain ? blk.pg.main : blk.s.programLabel(blk.program)) +
+                      " cannot put a question on screen, so it is held read-only and may refuse work rather than ask."
+                    : "Every change is asked about on screen. An unanswered question is denied." +
+                      (blk.isMain ? "" : " Its own level: what you allow the main agent does not carry over.")
+          help: (blk.posture !== "" ? "In force: " + blk.posture + ".\n\n" : "") +
+                "Reading is free except for keys, credentials and shell history. Under " +
+                "“edits”, files that make something else run — .git/hooks, .envrc, " +
+                ".claude/settings.json — still ask. Your home directory is not accepted " +
+                "as a project: it holds the file this level is stored in."
+          disabledReason: blk.isMain && blk.pg.main === "" ? "No default agent is set." : ""
+          foreground: blk.s.foreground
+          fontFamily: blk.s.fontFamily
+          Column {
+            width: parent.width
+            spacing: Style.space(6)
+            SegmentedChoice {
+              wrap: true
+              width: parent.width
+              options: blk.s.levelChoices(blk.levels)
+              value: blk.pg.trustPending === blk.agentId ? "trusted" : blk.level
+              foreground: blk.s.foreground
+              accent: blk.level === "trusted" ? blk.s.urgent : blk.s.accent
+              fontFamily: blk.s.fontFamily
+              onCommitted: function(v) {
+                if (v === "trusted") { blk.pg.trustPending = blk.agentId; return }
+                blk.pg.trustPending = ""
+                blk.write("level", v)
+              }
+            }
+            Flow {
+              width: parent.width
+              visible: blk.pg.trustPending === blk.agentId
+              spacing: Style.space(10)
+              Text {
+                width: Math.min(implicitWidth, parent.width)
+                wrapMode: Text.WordWrap
+                text: blk.isMain ? "Let a spoken sentence run anything here?"
+                                 : "Let a spoken sentence run anything in its folder?"
+                color: blk.s.urgent
+                font.family: blk.s.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              Button {
+                text: "Trust it"
+                bordered: true
+                foreground: blk.s.urgent
+                accent: blk.s.urgent
+                fontFamily: blk.s.fontFamily
+                onClicked: { blk.pg.trustPending = ""; blk.write("level", "trusted") }
+              }
+              Button {
+                text: "Cancel"
+                bordered: true
+                foreground: blk.s.foreground
+                fontFamily: blk.s.fontFamily
+                onClicked: blk.pg.trustPending = ""
+              }
+            }
+          }
+        }
+
+        SettingRow {
+          width: parent.width
+          stacked: true
+          label: "Project folder"
+          hint: "Where it works. A new folder starts a new conversation."
+          help: "History is kept per project, so changing the folder starts afresh."
+          changed: blk.isMain ? blk.s.changed("projectDir") : blk.projectDir !== ""
+          foreground: blk.s.foreground
+          fontFamily: blk.s.fontFamily
+          onReset: blk.isMain ? blk.s.resetKey("projectDir") : blk.write("projectDir", "")
+          TextField {
+            text: blk.projectDir
+            placeholderText: blk.isMain ? "~  (your home directory)" : "its folder  (empty: your home directory)"
+            foreground: blk.s.foreground
+            font.family: blk.s.fontFamily
+            onEditingFinished: {
+              if (text !== blk.projectDir) blk.write("projectDir", text.trim())
+            }
+          }
+        }
+      }
+
+      // --- Voice -----------------------------------------------------------------
+      Card {
+        title: "Voice"
+        foreground: blk.s.foreground
+        fontFamily: blk.s.fontFamily
+
+        SettingRow {
+          width: parent.width
+          stacked: true
+          label: "Voice"
+          // "" (same as the main agent) is never missing: the main voice is
+          // what it would download, and that row says so on its own agent.
+          hint: blk.voice !== "" && blk.s.voiceMissing(blk.voice) ? "Not on this machine yet — choosing it downloads it (about 60MB)."
+                : !blk.isMain && blk.voice === "" ? "Follows the main agent (" + blk.s.voiceName(blk.pg.mainVoice) + ")."
+                : "Which Piper voice it speaks in."
+          disabledReason: blk.pg.mainSpeaks ? "" : "Replies are not spoken."
+          changed: blk.isMain ? blk.s.changed("voice") : blk.voice !== ""
+          foreground: blk.s.foreground
+          fontFamily: blk.s.fontFamily
+          onReset: {
+            if (blk.isMain) { blk.s.resetKey("voice"); blk.s.chooseVoice(blk.s.defaults.voice || "") }
+            else blk.write("voice", "")
+          }
+          Row {
+            width: parent.width
+            spacing: Style.space(8)
+            Dropdown {
+              width: parent.width - testButton.width - parent.spacing
+              showLabel: false
+              fontFamily: blk.s.fontFamily
+              foreground: blk.s.foreground
+              options: blk.isMain ? blk.s.voiceOptions
+                                  : [{ label: "Same as the main agent", value: "" }].concat(blk.s.voiceOptions)
+              value: blk.voice
+              onChanged: function(v) { if (v !== blk.voice) blk.write("voice", v) }
+            }
+            // About a minute of the voice it would speak in, at its own pace.
+            Button {
+              id: testButton
+              readonly property bool playing: blk.s.samplePlaying === blk.voiceHeard
+              anchors.verticalCenter: parent.verticalCenter
+              text: playing ? "■ Stop" : "▶ Test"
+              bordered: true
+              focusable: true
+              enabled: blk.pg.mainSpeaks && !blk.s.voiceMissing(blk.voiceHeard)
+              tooltipText: !blk.pg.mainSpeaks ? "Replies are not spoken."
+                           : blk.s.voiceMissing(blk.voiceHeard) ? "Not on this machine yet."
+                           : playing ? "Stop the sample" : "Hear about a minute of this voice at its speed"
+              foreground: blk.s.foreground
+              fontFamily: blk.s.fontFamily
+              onClicked: blk.s.playSample(blk.voiceHeard, blk.speedHeard)
+            }
+          }
+        }
+
+        // Choosing the voice already starts the download. This is for
+        // afterwards: a download declined, a terminal closed, no network at
+        // the time. Without it the only way back would be to pick a
+        // different voice and pick this one again.
+        Column {
+          width: parent.width
+          spacing: Style.space(6)
+          visible: blk.voice !== "" && blk.s.voiceMissing(blk.voice)
+
           Text {
             width: parent.width
             wrapMode: Text.WordWrap
-            visible: page.mainModel !== ""
-                     && !/^[A-Za-z0-9][A-Za-z0-9._:\/@\[\]-]{0,127}$/.test(page.mainModel)
-            text: "⚠  Not accepted as a model name, so the default is in use."
-            color: page.s.urgent
-            font.family: page.s.fontFamily
+            text: "“" + blk.s.voiceName(blk.voice) + "” is not on this machine, so it is " +
+                  "speaking in one that is."
+            textFormat: Text.PlainText
+            color: blk.s.urgent
+            font.family: blk.s.fontFamily
             font.pixelSize: Style.font.caption
           }
+          Button {
+            // Names the voice, as the dropdown does. Passing no name left it
+            // to install.sh to read the setting, which is a race the flag
+            // exists to avoid.
+            text: "Try the download again…"
+            bordered: true
+            foreground: blk.s.foreground
+            fontFamily: blk.s.fontFamily
+            onClicked: blk.s.fetchVoice(blk.voice)
+          }
         }
-      }
 
-      // Only the levels the model in force takes: the daemon publishes them.
-      SettingRow {
-        width: parent.width
-        stacked: true
-        label: "Effort"
-        hint: page.mainEffort !== "" && page.s.vEfforts.length > 0
-              && page.s.vEfforts.indexOf(page.mainEffort) < 0
-              ? "⚠  The level saved is not one this model takes, so the default is in use."
-              : "How hard it thinks before answering. Changing it keeps the conversation."
-        disabledReason: page.s.vEfforts.length > 0 ? ""
-                        : page.s.serviceActive ? "This model takes no effort level."
-                        : "Shown once the service is running, for a model that takes one."
-        changed: page.mainEffort !== ""
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        onReset: page.setEffort("")
-        SegmentedChoice {
-          options: page.s.effortChoices(page.s.vEfforts)
-          value: page.s.vEfforts.indexOf(page.mainEffort) >= 0 ? page.mainEffort : ""
-          foreground: page.s.foreground
-          fontFamily: page.s.fontFamily
-          onCommitted: function(v) { page.setEffort(v) }
+        KnobRow {
+          width: parent.width
+          visible: blk.isMain
+          foreground: blk.s.foreground; fontFamily: blk.s.fontFamily
+          label: "Speaking speed"
+          description: "Agents set to \"same as the main agent\" follow this one."
+          help: "A percent of the voice's natural pace: 100 is as recorded, 150 is half " +
+                "again as fast. Piper stretches or squeezes each sound, so it stays the " +
+                "same voice rather than going higher. Takes effect from the next reply " +
+                "with nothing reloaded. Double-click the slider for 100."
+          enabled: blk.pg.mainSpeaks
+          value: blk.s.setting("voiceSpeed", 100)
+          defaultValue: blk.s.defaults.voiceSpeed !== undefined ? blk.s.defaults.voiceSpeed : 100
+          changed: blk.s.changed("voiceSpeed")
+          minimum: 50; maximum: 200; stepSize: 5
+          unit: "%"
+          onCommitted: function(v) { blk.write("speed", Math.round(v)) }
+          onReset: blk.s.resetKey("voiceSpeed")
         }
-      }
 
-      SettingRow {
-        width: parent.width
-        stacked: true
-        label: "Permission"
-        hint: page.mainLevel === "trusted"
-              ? "Nothing is asked. A spoken sentence can edit files and run commands here with nothing able to stop it."
-              : page.mainLevel === "edits"
-                ? "Source files in the folder are edited without asking. Commands, the network and anything outside still ask."
-                : page.s.agentLevels.indexOf("edits") < 0 && page.s.serviceActive
-                  ? page.main + " cannot put a question on screen, so it is held read-only and may refuse work rather than ask."
-                  : "Every change is asked about on screen. An unanswered question is denied."
-        help: (page.s.vPosture !== "" ? "In force: " + page.s.vPosture + ".\n\n" : "") +
-              "Reading is free except for keys, credentials and shell history. Under " +
-              "“edits”, files that make something else run — .git/hooks, .envrc, " +
-              ".claude/settings.json — still ask. Your home directory is not accepted " +
-              "as a project: it holds the file this level is stored in."
-        disabledReason: page.main === "" ? "No default agent is set." : ""
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        Column {
-          spacing: Style.space(6)
+        SettingRow {
+          width: parent.width
+          visible: !blk.isMain
+          stacked: true
+          label: "Speaking speed"
+          hint: blk.speed > 0 ? "Its own pace, whatever the main agent's is."
+                              : "Follows the main agent (" + blk.pg.mainSpeed + "%)."
+          changed: blk.speed > 0
+          foreground: blk.s.foreground
+          fontFamily: blk.s.fontFamily
+          onReset: blk.write("speed", 0)
+          Column {
+            width: parent.width
+            spacing: Style.space(6)
+            SegmentedChoice {
+              width: parent.width
+              wrap: true
+              options: [
+                { value: "main", label: "Same as the main agent" },
+                { value: "own", label: "Its own" }
+              ]
+              value: blk.speed > 0 ? "own" : "main"
+              foreground: blk.s.foreground
+              fontFamily: blk.s.fontFamily
+              onCommitted: function(v) {
+                if (v === "own" && blk.speed === 0) blk.write("speed", blk.pg.mainSpeed)
+                else if (v === "main" && blk.speed > 0) blk.write("speed", 0)
+              }
+            }
+            KnobRow {
+              width: parent.width
+              visible: blk.speed > 0
+              foreground: blk.s.foreground; fontFamily: blk.s.fontFamily
+              label: "Speed"
+              value: blk.speed > 0 ? blk.speed : 100
+              defaultValue: 100
+              minimum: 50; maximum: 200; stepSize: 5
+              unit: "%"
+              onCommitted: function(v) {
+                if (Math.round(v) !== blk.speed) blk.write("speed", Math.round(v))
+              }
+            }
+          }
+        }
+
+        SettingRow {
+          width: parent.width
+          visible: !blk.isMain
+          stacked: true
+          label: "Talk while it works"
+          hint: String(blk.entry.narration || "") === ""
+                ? "Follows Conversation (" + String(blk.s.setting("narration", "off")) + ")."
+                : "Its own choice, whatever the main setting is."
+          changed: String(blk.entry.narration || "") !== ""
+          foreground: blk.s.foreground
+          fontFamily: blk.s.fontFamily
+          onReset: blk.write("narration", "")
           SegmentedChoice {
             width: parent.width
-            options: page.s.levelChoices(page.s.agentLevels)
-            value: page.trustPending === "main" ? "trusted" : page.mainLevel
-            foreground: page.s.foreground
-            accent: page.mainLevel === "trusted" ? page.s.urgent : page.s.accent
-            fontFamily: page.s.fontFamily
+            wrap: true
+            options: [
+              { value: "", label: "Same as main" },
+              { value: "off", label: "Off" },
+              { value: "brief", label: "Brief" },
+              { value: "detailed", label: "Detailed" }
+            ]
+            value: String(blk.entry.narration || "")
+            foreground: blk.s.foreground
+            fontFamily: blk.s.fontFamily
             onCommitted: function(v) {
-              if (v === "trusted") { page.trustPending = "main"; return }
-              page.trustPending = ""
-              page.setLevel(v)
-            }
-          }
-          Row {
-            visible: page.trustPending === "main"
-            spacing: Style.space(10)
-            Text {
-              anchors.verticalCenter: parent.verticalCenter
-              text: "Let a spoken sentence run anything here?"
-              color: page.s.urgent
-              font.family: page.s.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-            Button {
-              text: "Trust it"
-              bordered: true
-              foreground: page.s.urgent
-              accent: page.s.urgent
-              fontFamily: page.s.fontFamily
-              onClicked: { page.trustPending = ""; page.setLevel("trusted") }
-            }
-            Button {
-              text: "Cancel"
-              bordered: true
-              foreground: page.s.foreground
-              fontFamily: page.s.fontFamily
-              onClicked: page.trustPending = ""
+              if (v !== String(blk.entry.narration || "")) blk.write("narration", v)
             }
           }
         }
       }
 
-      // The directory and what is allowed in it are one decision, not two:
-      // a permission level with no root to apply to means nothing.
-      SettingRow {
-        width: parent.width
-        stacked: true
-        label: "Project folder"
-        hint: "Where it works. Changing it starts a new conversation, because history is kept per project."
-        changed: page.s.changed("projectDir")
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        onReset: page.s.resetKey("projectDir")
-        TextField {
-          text: page.s.projectDir
-          placeholderText: "~  (your home directory)"
-          foreground: page.s.foreground
-          font.family: page.s.fontFamily
-          onEditingFinished: {
-            if (text !== page.s.projectDir) page.s.put("projectDir", text.trim())
+      // --- Tools -----------------------------------------------------------------
+      Card {
+        title: "Tools"
+        subtitle: "Its own switch beats the one for every agent."
+        // A deep link with tab "tools" points here.
+        highlighted: blk.s.focusTools && blk.s.focusAgent === blk.agentId
+        foreground: blk.s.foreground
+        fontFamily: blk.s.fontFamily
+
+        ToolSwitches {
+          width: parent.width
+          part: "tools"
+          choices: blk.tools
+          globals: blk.pg.toolGlobals
+          program: blk.program
+          foreground: blk.s.foreground
+          accent: blk.s.accent
+          urgent: blk.s.urgent
+          fontFamily: blk.s.fontFamily
+          onPicked: function(key, value) { blk.pg.writeTool(blk.agentIndex, key, value) }
+          onSharedAsked: blk.s.goTo("communal", "", "tools")
+        }
+      }
+
+      // --- Collaboration & notes -------------------------------------------------
+      Card {
+        title: "Collaboration & notes"
+        foreground: blk.s.foreground
+        fontFamily: blk.s.fontFamily
+
+        ToolSwitches {
+          width: parent.width
+          part: "collab"
+          program: blk.program
+          notesWrite: blk.notesWrite
+          collaboration: blk.collaboration
+          acceptsWork: blk.acceptsWork
+          foreground: blk.s.foreground
+          accent: blk.s.accent
+          urgent: blk.s.urgent
+          fontFamily: blk.s.fontFamily
+          onNotesPicked: function(value) { blk.write("notesWrite", value) }
+          onCollaborationPicked: function(value) { blk.write("collaboration", value) }
+          onAcceptsWorkPicked: function(value) { blk.write("acceptsWork", value) }
+        }
+      }
+
+      // --- Agent -----------------------------------------------------------------
+      Card {
+        title: "Agent"
+        foreground: blk.s.foreground
+        fontFamily: blk.s.fontFamily
+
+        ToggleRow {
+          width: parent.width
+          visible: !blk.isMain
+          label: "On"
+          hint: blk.on ? "Off keeps every setting here, but its wake phrase stops waking it and it leaves the popup and the Agents panel. A turn it is running is stopped."
+                       : "Switched off: saying “" + blk.wake + "” does nothing. Every setting is kept."
+          checked: blk.on
+          foreground: blk.s.foreground
+          fontFamily: blk.s.fontFamily
+          onToggled: blk.write("enabled", !blk.on)
+        }
+
+        Text {
+          width: parent.width
+          visible: blk.isMain
+          wrapMode: Text.WordWrap
+          text: "To silence everything, mute the microphone or stop the service."
+          textFormat: Text.PlainText
+          color: blk.s.dim
+          font.family: blk.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+
+        // One dropdown per engine rather than one that swaps its options:
+        // swapping left the previous engine's value displayed.
+        SettingRow {
+          width: parent.width
+          visible: blk.isMain && blk.s.owwLive
+          stacked: true
+          label: "Wake model"
+          hint: "Only these ship pretrained. Another phrase means training your own model, on Listening."
+          changed: blk.s.changed("owwModel")
+          foreground: blk.s.foreground
+          fontFamily: blk.s.fontFamily
+          onReset: blk.s.resetKey("owwModel")
+          Dropdown {
+            showLabel: false
+            fontFamily: blk.s.fontFamily
+            foreground: blk.s.foreground
+            options: blk.s.owwOptions
+            value: blk.s.setting("owwModel", "hey_jarvis")
+            onChanged: function(v) { blk.s.put("owwModel", v) }
           }
         }
-      }
-    }
 
-    // In agents/main/ (merged plan, Phases 10 and 12), edited on Agent
-    // details: one editor per file.
-    SettingRow {
-      width: parent.width
-      label: "Role, personality and instructions"
-      hint: page.folderSummary("main", page.s.setting("agentInstructions", ""))
-      foreground: page.s.foreground
-      fontFamily: page.s.fontFamily
-      Button {
-        text: "Edit in Agent details →"
-        bordered: true
-        focusable: true
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        onClicked: page.s.goTo("agentdetails", "main")
-      }
-    }
+        // In agents/<id>/ (merged plan, Phases 10 and 12), edited on Agent
+        // details: one editor per file.
+        SettingRow {
+          width: parent.width
+          stacked: true
+          label: "Role, personality and instructions"
+          hint: blk.pg.folderSummary(blk.agentId, blk.isMain ? blk.s.setting("agentInstructions", "") : blk.entry.instructions)
+          foreground: blk.s.foreground
+          fontFamily: blk.s.fontFamily
+          Button {
+            text: "Edit in Agent details →"
+            bordered: true
+            focusable: true
+            foreground: blk.s.foreground
+            fontFamily: blk.s.fontFamily
+            onClicked: blk.s.goTo("agentdetails", blk.agentId)
+          }
+        }
 
-    ToolSwitches {
-      width: parent.width
-      choices: page.s.setting("mainTools", {})
-      globals: page.toolGlobals
-      program: page.endpointChosen ? "endpoint" : page.main
-      expanded: page.isOpen("tools:main")
-      foreground: page.s.foreground
-      fontFamily: page.s.fontFamily
-      onToggled: function(open) { page.setOpen("tools:main", open) }
-      onPicked: function(key, value) { page.putMainTool(key, value) }
-      // Exactly "allow" is allow; anything else is what the daemon reads as
-      // deny (runtime.notes_choice), so the switch never says more.
-      notesWrite: page.s.setting("mainNotesWrite", "allow") === "allow" ? "allow" : "deny"
-      onNotesPicked: function(value) { page.s.put("mainNotesWrite", value) }
-      collaboration: page.s.setting("mainCollaboration", "announce")
-      onCollaborationPicked: function(value) { page.s.put("mainCollaboration", value) }
-      acceptsWork: page.s.setting("mainAcceptsWork", true) !== false
-      onAcceptsWorkPicked: function(value) { page.s.put("mainAcceptsWork", value) }
-    }
-
-    SettingRow {
-      width: parent.width
-      stacked: true
-      label: "Voice"
-      hint: page.s.voiceMissing(page.mainVoice) ? "Not on this machine yet — choosing a voice downloads it (about 60MB)."
-                                            : "Which Piper voice this agent speaks in."
-      disabledReason: page.mainSpeaks ? "" : "Replies are not spoken."
-      changed: page.s.changed("voice")
-      foreground: page.s.foreground
-      fontFamily: page.s.fontFamily
-      onReset: { page.s.resetKey("voice"); page.s.chooseVoice(page.s.defaults.voice || "") }
-      Dropdown {
-        showLabel: false
-        fontFamily: page.s.fontFamily
-        foreground: page.s.foreground
-        options: page.s.voiceOptions
-        value: page.mainVoice
-        onChanged: function(v) {
-          if (v === page.mainVoice) return
-          page.s.put("voice", v)
-          page.s.chooseVoice(v)
+        DangerButton {
+          visible: !blk.isMain
+          maxWidth: parent.width
+          // The button does not wrap; a long name is said in the question.
+          text: blk.label !== "" && blk.label.length <= 16 ? "Remove " + blk.label : "Remove this agent"
+          question: "Really remove " + (blk.label || "this agent") + "?"
+          confirmText: "Remove"
+          foreground: blk.s.foreground
+          urgent: blk.s.urgent
+          fontFamily: blk.s.fontFamily
+          onConfirmed: blk.pg.removeAgent(blk.agentIndex)
         }
       }
-    }
-
-    // Choosing the voice already starts the download. This is for
-    // afterwards: a download declined, a terminal closed, no network at the
-    // time. Without it the only way back would be to pick a different voice
-    // and pick this one again.
-    Column {
-      width: parent.width
-      spacing: Style.space(6)
-      visible: page.s.voiceMissing(page.mainVoice)
-
-      Text {
-        width: parent.width
-        wrapMode: Text.WordWrap
-        text: "“" + page.s.voiceName(page.mainVoice) + "” is not on this machine, so it is " +
-              "speaking in one that is."
-        textFormat: Text.PlainText
-        color: page.s.urgent
-        font.family: page.s.fontFamily
-        font.pixelSize: Style.font.caption
-      }
-      Button {
-        // Names the voice, as the dropdown does. Passing no name left it to
-        // install.sh to read the setting, which is a race the flag exists
-        // to avoid.
-        text: "Try the download again…"
-        bordered: true
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        onClicked: page.s.fetchVoice(page.mainVoice)
-      }
-    }
-
-    KnobRow {
-      width: parent.width
-      foreground: page.s.foreground; fontFamily: page.s.fontFamily
-      label: "Speaking speed"
-      description: "Its pace. Agents set to \"same as the main agent\" follow this one."
-      help: "A percent of the voice's natural pace: 100 is as recorded, 150 is half " +
-            "again as fast. Piper stretches or squeezes each sound, so it stays the " +
-            "same voice rather than going higher. Takes effect from the next reply " +
-            "with nothing reloaded. Double-click the slider for 100."
-      enabled: page.mainSpeaks
-      value: page.s.setting("voiceSpeed", 100)
-      defaultValue: page.s.defaults.voiceSpeed !== undefined ? page.s.defaults.voiceSpeed : 100
-      changed: page.s.changed("voiceSpeed")
-      minimum: 50; maximum: 200; stepSize: 5
-      unit: "%"
-      onCommitted: function(v) { page.s.put("voiceSpeed", Math.round(v)) }
-      onReset: page.s.resetKey("voiceSpeed")
     }
   }
+
+  // --- the main agent -----------------------------------------------------------
+  AgentBlock { pg: page }
 
   // --- the extra agents ---------------------------------------------------------
   // By count, not by the list. `s.voiceAgents` is a new array after every
   // save of any setting, and a Repeater handed a new array rebuilds every
-  // delegate: each card shut, a dropdown open inside it vanished, a half-typed
-  // name was lost. A count that has not changed rebuilds nothing.
+  // delegate: each agent shut, a dropdown open inside it vanished, a
+  // half-typed name was lost. A count that has not changed rebuilds nothing.
   Repeater {
     model: page.s.voiceAgents.length
-
-    delegate: AgentCard {
-      id: card
+    delegate: AgentBlock {
       required property int index
-      readonly property var modelData: page.s.voiceAgents[card.index] || ({})
-
-      readonly property string agentName: String(modelData.name || "")
-      // What everything else knows it by; see Settings.agentId.
-      readonly property string agentId: page.s.agentId(modelData)
-      readonly property string label: page.s.agentLabel(modelData)
-      readonly property string program: String(modelData.agent || "claude")
-      readonly property string model: String(modelData.model || "")
-      readonly property string effort: String(modelData.effort || "")
-      // 0 (or nothing) is "same as the main agent".
-      readonly property int speed: Number(modelData.speed || 0)
-      readonly property string level: String(modelData.level || "ask")
-      readonly property var info: page.s.crewInfo(card.agentId)
-      readonly property var efforts: Array.isArray(card.info.efforts) ? card.info.efforts : []
-      readonly property var levels: Array.isArray(card.info.levels) ? card.info.levels : ["ask", "edits", "trusted"]
-      readonly property string st: page.s.agentStatus(card.agentId)
-      // Missing means on, so lists from before the switch keep every agent.
-      readonly property bool on: card.modelData.enabled !== false
-      property bool customModel: false
-
-      width: page.width
-      name: card.label || "New agent"
-      wakeName: card.agentName
-      summary: card.program === "endpoint"
-               ? "Endpoint · " + String(card.modelData.endpointModel || "no model yet") + " · " +
-                 String(card.modelData.endpointUrl || "no address yet")
-               : page.summary(card.program, card.model, card.effort, card.level, card.levels)
-      status: card.on ? card.st : "switched off"
-      tone: card.on ? page.s.statusTone(card.st) : "idle"
-      switchedOff: !card.on
-      problem: !card.on ? ""
-               : String(card.info.problem || "") !== "" ? String(card.info.problem)
-               : card.agentName !== "" && !/^[a-z]+( [a-z]+){0,2}$/.test(card.agentName)
-                 ? "A wake phrase is one to three plain words, letters only." : ""
-      warning: card.on ? page.ruleOfTwo(card.program, card.level, card.modelData.tools) : ""
-      expanded: page.isOpen(card.agentId)
-      onToggled: function(open) { page.setOpen(card.agentId, open) }
-      foreground: page.s.foreground
-      fontFamily: page.s.fontFamily
-
-      ToggleRow {
-        width: parent.width
-        label: "On"
-        hint: card.on ? "Off keeps every setting here, but its wake phrase stops waking it and it leaves the popup and the Agents panel. A turn it is running is stopped."
-                      : "Switched off: saying “" + card.agentName + "” does nothing. Every setting is kept."
-        checked: card.on
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        onToggled: page.updateAgent(card.index, "enabled", !card.on)
-      }
-
-      SettingRow {
-        width: parent.width
-        stacked: true
-        label: "Name"
-        hint: "What it is called on screen, in saved chats and in the Agents panel. Any text. Empty uses the wake phrase."
-        changed: page.s.cleanLabel(card.modelData.label) !== ""
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        onReset: page.updateAgent(card.index, "label", "")
-        TextField {
-          text: page.s.cleanLabel(card.modelData.label)
-          placeholderText: page.s.capitalised(card.agentName) || "a name to show"
-          foreground: page.s.foreground
-          font.family: page.s.fontFamily
-          onEditingFinished: {
-            var v = page.s.cleanLabel(text)
-            if (v !== page.s.cleanLabel(card.modelData.label)) page.updateAgent(card.index, "label", v)
-          }
-        }
-      }
-
-      SettingRow {
-        width: parent.width
-        stacked: true
-        label: "Wake phrase"
-        hint: "What you say to wake it. One to three plain words. Changing it keeps the conversation."
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        TextField {
-          text: card.agentName
-          placeholderText: "the word that wakes it"
-          foreground: page.s.foreground
-          font.family: page.s.fontFamily
-          onEditingFinished: {
-            var v = text.trim().toLowerCase().replace(/\s+/g, " ")
-            if (v !== card.agentName) page.updateAgent(card.index, "name", v)
-          }
-        }
-      }
-
-      // The same dropdown as the main card's "Runs on", less Omarchy's
-      // default: an extra agent always names its program.
-      SettingRow {
-        width: parent.width
-        stacked: true
-        label: "Runs on"
-        hint: card.program === "endpoint"
-              ? "Any OpenAI-compatible endpoint: Ollama, LM Studio, vLLM, OpenAI, xAI, Hermes."
-              : "Its own program, whatever Omarchy's default agent is."
-        changed: card.program !== "claude"
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        onReset: { card.customModel = false; page.updateAgent(card.index, "agent", "claude") }
-        Dropdown {
-          width: parent.width
-          showLabel: false
-          options: page.s.programOptions.map(function(o) {
-            return o.value === "endpoint" ? { value: "endpoint", label: "OpenAI-compatible endpoint" } : o })
-          value: card.program
-          foreground: page.s.foreground
-          fontFamily: page.s.fontFamily
-          onChanged: function(v) {
-            if (v === card.program) return
-            card.customModel = false
-            page.updateAgent(card.index, "agent", v)
-          }
-        }
-      }
-
-      // Its own OpenAI-compatible endpoint (plan 7b). The model, effort,
-      // permission and folder rows below do not apply to one: agentvoice
-      // offers an endpoint no tools.
-      Column {
-        width: parent.width
-        visible: card.program === "endpoint"
-        spacing: Style.space(10)
-
-        EndpointEditor {
-          width: parent.width
-          url: String(card.modelData.endpointUrl || "")
-          model: String(card.modelData.endpointModel || "")
-          isAgent: card.modelData.endpointIsAgent === true
-          timeoutS: Number(card.modelData.endpointTimeoutS || 0)
-          historyTurns: card.modelData.endpointHistoryTurns === undefined ? 8
-                        : Number(card.modelData.endpointHistoryTurns)
-          foreground: page.s.foreground
-          urgent: page.s.urgent
-          fontFamily: page.s.fontFamily
-          onEdited: function(key, value) { page.updateAgent(card.index, key, value) }
-        }
-        // An endpoint has no folder of ours (the daemon reports it as not
-        // governed), so this always applies, unlike on the main card.
-        Text {
-          width: parent.width
-          wrapMode: Text.WordWrap
-          text: "⚠  It works on its own machine, in a directory it chooses: the project " +
-                "folder and permission level here reach nothing over there. Restrain " +
-                "it where it runs."
-          textFormat: Text.PlainText
-          color: page.s.urgent
-          font.family: page.s.fontFamily
-          font.pixelSize: Style.font.caption
-        }
-      }
-
-      SettingRow {
-        width: parent.width
-        stacked: true
-        label: "Model"
-        visible: card.program !== "endpoint"
-        hint: "Only for voice; your other sessions keep their own. Changing it starts a new conversation."
-        disabledReason: card.info.takes_model === false
-                        ? page.s.programLabel(card.program) + " does not take a model from here." : ""
-        changed: card.model !== ""
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        onReset: page.updateAgent(card.index, "model", "")
-        Column {
-          spacing: Style.space(6)
-          Dropdown {
-            width: parent.width
-            showLabel: false
-            fontFamily: page.s.fontFamily
-            foreground: page.s.foreground
-            options: page.s.agentModelChoices(card.program, card.model)
-            value: card.customModel ? "__other__" : card.model
-            onChanged: function(v) {
-              if (v === "__other__") { card.customModel = true; return }
-              card.customModel = false
-              if (v !== card.model) page.updateAgent(card.index, "model", v)
-            }
-          }
-          TextField {
-            width: parent.width
-            visible: card.customModel
-            text: card.model
-            placeholderText: "type a model name or full model id"
-            foreground: page.s.foreground
-            font.family: page.s.fontFamily
-            onEditingFinished: {
-              if (text.trim() !== card.model) page.updateAgent(card.index, "model", text.trim())
-            }
-          }
-          Text {
-            width: parent.width
-            wrapMode: Text.WordWrap
-            visible: card.model !== ""
-                     && !/^[A-Za-z0-9][A-Za-z0-9._:\/@\[\]-]{0,127}$/.test(card.model)
-            text: "⚠  Not accepted as a model name, so the default is in use."
-            color: page.s.urgent
-            font.family: page.s.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-        }
-      }
-
-      SettingRow {
-        width: parent.width
-        stacked: true
-        label: "Effort"
-        visible: card.program !== "endpoint"
-        hint: card.effort !== "" && card.efforts.length > 0 && card.efforts.indexOf(card.effort) < 0
-              ? "⚠  The level saved is not one this model takes, so the default is in use."
-              : "How hard it thinks before answering. Changing it keeps the conversation."
-        disabledReason: card.efforts.length > 0 ? ""
-                        : page.s.serviceActive ? "This model takes no effort level."
-                        : "Shown once the service is running, for a model that takes one."
-        changed: card.effort !== ""
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        onReset: page.updateAgent(card.index, "effort", "")
-        SegmentedChoice {
-          options: page.s.effortChoices(card.efforts)
-          value: card.efforts.indexOf(card.effort) >= 0 ? card.effort : ""
-          foreground: page.s.foreground
-          fontFamily: page.s.fontFamily
-          onCommitted: function(v) { page.updateAgent(card.index, "effort", v) }
-        }
-      }
-
-      SettingRow {
-        width: parent.width
-        stacked: true
-        label: "Permission"
-        visible: card.program !== "endpoint"
-        hint: card.level === "trusted"
-              ? "Nothing is asked. A sentence starting with “" + card.agentName +
-                "” can edit files and run commands in its folder."
-              : card.level === "edits"
-                ? "Source files in its folder are edited without asking. Commands, the network and anything outside still ask."
-                : card.levels.indexOf("edits") < 0 && page.s.serviceActive
-                  ? page.s.programLabel(card.program) + " cannot put a question on screen, so it is held read-only and may refuse work rather than ask."
-                  : "Every change is asked about on screen. An unanswered question is denied. Its own level: what you allow the main agent does not carry over."
-        help: (String(card.info.posture || "") !== "" ? "In force: " + card.info.posture + ".\n\n" : "") +
-              "Reading is free except for keys, credentials and shell history. Under " +
-              "“edits”, files that make something else run — .git/hooks, .envrc, " +
-              ".claude/settings.json — still ask. Your home directory is not accepted " +
-              "as a project: it holds the file this level is stored in."
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        Column {
-          spacing: Style.space(6)
-          SegmentedChoice {
-            width: parent.width
-            options: page.s.levelChoices(card.levels)
-            value: page.trustPending === card.agentId ? "trusted" : card.level
-            foreground: page.s.foreground
-            accent: card.level === "trusted" ? page.s.urgent : page.s.accent
-            fontFamily: page.s.fontFamily
-            onCommitted: function(v) {
-              if (v === "trusted") { page.trustPending = card.agentId; return }
-              page.trustPending = ""
-              page.updateAgent(card.index, "level", v)
-            }
-          }
-          Row {
-            visible: page.trustPending === card.agentId
-            spacing: Style.space(10)
-            Text {
-              anchors.verticalCenter: parent.verticalCenter
-              text: "Let a spoken sentence run anything in its folder?"
-              color: page.s.urgent
-              font.family: page.s.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-            Button {
-              text: "Trust it"
-              bordered: true
-              foreground: page.s.urgent
-              accent: page.s.urgent
-              fontFamily: page.s.fontFamily
-              onClicked: { page.trustPending = ""; page.updateAgent(card.index, "level", "trusted") }
-            }
-            Button {
-              text: "Cancel"
-              bordered: true
-              foreground: page.s.foreground
-              fontFamily: page.s.fontFamily
-              onClicked: page.trustPending = ""
-            }
-          }
-        }
-      }
-
-      SettingRow {
-        width: parent.width
-        stacked: true
-        label: "Project folder"
-        visible: card.program !== "endpoint"
-        hint: "Where it works. Changing it starts a new conversation, because history is kept per project."
-        changed: String(card.modelData.projectDir || "") !== ""
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        onReset: page.updateAgent(card.index, "projectDir", "")
-        TextField {
-          text: String(card.modelData.projectDir || "")
-          placeholderText: "its folder  (empty: your home directory)"
-          foreground: page.s.foreground
-          font.family: page.s.fontFamily
-          onEditingFinished: {
-            if (text !== String(card.modelData.projectDir || ""))
-              page.updateAgent(card.index, "projectDir", text.trim())
-          }
-        }
-      }
-
-      // In agents/<id>/, edited on Agent details (Phase 12).
-      SettingRow {
-        width: parent.width
-        label: "Role, personality and instructions"
-        hint: page.folderSummary(card.agentId, card.modelData.instructions)
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        Button {
-          text: "Edit in Agent details →"
-          bordered: true
-          focusable: true
-          foreground: page.s.foreground
-          fontFamily: page.s.fontFamily
-          onClicked: page.s.goTo("agentdetails", card.agentId)
-        }
-      }
-
-      ToolSwitches {
-        width: parent.width
-        choices: card.modelData.tools || ({})
-        globals: page.toolGlobals
-        program: card.program
-        expanded: page.isOpen("tools:" + card.agentId)
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        onToggled: function(open) { page.setOpen("tools:" + card.agentId, open) }
-        onPicked: function(key, value) { page.putAgentTool(card.index, key, value) }
-        // A missing key is "allow"; anything else written there is "deny"
-        // (runtime.notes_choice), so the switch shows what the daemon reads.
-        notesWrite: card.modelData.notesWrite === undefined || card.modelData.notesWrite === "allow"
-                    ? "allow" : "deny"
-        onNotesPicked: function(value) { page.putAgentNotes(card.index, value) }
-        collaboration: card.modelData.collaboration === undefined ? "announce" : String(card.modelData.collaboration)
-        onCollaborationPicked: function(value) { page.putAgentCollab(card.index, value) }
-        acceptsWork: card.modelData.acceptsWork !== false
-        onAcceptsWorkPicked: function(value) { page.putAgentAccepts(card.index, value) }
-      }
-
-      SettingRow {
-        width: parent.width
-        stacked: true
-        label: "Voice"
-        hint: page.s.voiceMissing(String(card.modelData.voice || ""))
-              ? "Not on this machine yet — choosing a voice downloads it (about 60MB)."
-              : "Which Piper voice this agent speaks in."
-        disabledReason: page.mainSpeaks ? "" : "Replies are not spoken."
-        changed: String(card.modelData.voice || "") !== ""
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        onReset: page.updateAgent(card.index, "voice", "")
-        Dropdown {
-          showLabel: false
-          fontFamily: page.s.fontFamily
-          foreground: page.s.foreground
-          options: [{ label: "Same as the main agent", value: "" }].concat(page.s.voiceOptions)
-          value: String(card.modelData.voice || "")
-          onChanged: function(v) {
-            if (v === String(card.modelData.voice || "")) return
-            page.updateAgent(card.index, "voice", v)
-            page.s.chooseVoice(v)
-          }
-        }
-      }
-
-      // As on the main card: a way back after a declined or failed download.
-      Column {
-        width: parent.width
-        spacing: Style.space(6)
-        visible: String(card.modelData.voice || "") !== ""
-                 && page.s.voiceMissing(String(card.modelData.voice || ""))
-
-        Text {
-          width: parent.width
-          wrapMode: Text.WordWrap
-          text: "“" + page.s.voiceName(String(card.modelData.voice || "")) + "” is not on this machine, so it is " +
-                "speaking in one that is."
-          textFormat: Text.PlainText
-          color: page.s.urgent
-          font.family: page.s.fontFamily
-          font.pixelSize: Style.font.caption
-        }
-        Button {
-          text: "Try the download again…"
-          bordered: true
-          foreground: page.s.foreground
-          fontFamily: page.s.fontFamily
-          onClicked: page.s.fetchVoice(String(card.modelData.voice || ""))
-        }
-      }
-
-      SettingRow {
-        width: parent.width
-        stacked: true
-        label: "Speaking speed"
-        hint: card.speed > 0 ? "Its own pace, whatever the main agent's is."
-                             : "Follows the main agent (" + Number(page.s.setting("voiceSpeed", 100)) + "%)."
-        changed: card.speed > 0
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        onReset: page.updateAgent(card.index, "speed", 0)
-        Column {
-          spacing: Style.space(6)
-          SegmentedChoice {
-            options: [
-              { value: "main", label: "Same as the main agent" },
-              { value: "own", label: "Its own" }
-            ]
-            value: card.speed > 0 ? "own" : "main"
-            foreground: page.s.foreground
-            fontFamily: page.s.fontFamily
-            onCommitted: function(v) {
-              if (v === "own" && card.speed === 0)
-                page.updateAgent(card.index, "speed", Number(page.s.setting("voiceSpeed", 100)) || 100)
-              else if (v === "main" && card.speed > 0)
-                page.updateAgent(card.index, "speed", 0)
-            }
-          }
-          KnobRow {
-            width: parent.width
-            visible: card.speed > 0
-            foreground: page.s.foreground; fontFamily: page.s.fontFamily
-            label: "Speed"
-            value: card.speed > 0 ? card.speed : 100
-            defaultValue: 100
-            minimum: 50; maximum: 200; stepSize: 5
-            unit: "%"
-            onCommitted: function(v) {
-              if (Math.round(v) !== card.speed) page.updateAgent(card.index, "speed", Math.round(v))
-            }
-          }
-        }
-      }
-
-      SettingRow {
-        width: parent.width
-        stacked: true
-        label: "Talk while it works"
-        hint: String(card.modelData.narration || "") === ""
-              ? "Follows Conversation (" + String(page.s.setting("narration", "off")) + ")."
-              : "Its own choice, whatever the main setting is."
-        changed: String(card.modelData.narration || "") !== ""
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        onReset: page.updateAgent(card.index, "narration", "")
-        SegmentedChoice {
-          options: [
-            { value: "", label: "Same as main" },
-            { value: "off", label: "Off" },
-            { value: "brief", label: "Brief" },
-            { value: "detailed", label: "Detailed" }
-          ]
-          value: String(card.modelData.narration || "")
-          foreground: page.s.foreground
-          fontFamily: page.s.fontFamily
-          onCommitted: function(v) {
-            if (v !== String(card.modelData.narration || "")) page.updateAgent(card.index, "narration", v)
-          }
-        }
-      }
-
-      DangerButton {
-        maxWidth: parent.width
-        text: "Remove " + (card.label || "this agent")
-        question: "Really remove " + (card.label || "this agent") + "?"
-        confirmText: "Remove"
-        foreground: page.s.foreground
-        urgent: page.s.urgent
-        fontFamily: page.s.fontFamily
-        onConfirmed: page.removeAgent(card.index)
-      }
+      pg: page
+      agentIndex: index
     }
   }
 
@@ -1307,78 +1167,13 @@ Column {
     font.family: page.s.fontFamily
   }
 
-  // What every agent gets on the desktop (plan 12a, 12b), whichever program
-  // runs it, unless its card's "Tools & collaboration" says otherwise
-  // (Phase 13).
-  SettingsGroup {
-    width: parent.width
-    title: "ON THE DESKTOP"
+  // Where the switches for every agent went (bug E).
+  Button {
+    text: "Tools for every agent: Communal → Tools ›"
+    focusable: true
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
-
-    Text {
-      width: parent.width
-      wrapMode: Text.WordWrap
-      text: "For every agent, unless its card's “Tools & collaboration” says otherwise."
-      color: page.s.dim
-      font.family: page.s.fontFamily
-      font.pixelSize: Style.font.caption
-    }
-
-    ToggleRow {
-      width: parent.width
-      label: "Desktop tools"
-      hint: "Claude Code agents can open apps, move and close windows, switch workspaces, " +
-            "play and pause, change the volume, notify, use the clipboard and see the screen."
-      help: "Each tool goes through the agent's own permission level, like anything " +
-            "else it does: listing windows is free, a change is asked about below " +
-            "Trusted, reading the clipboard is asked about below Trusted, and a " +
-            "screenshot is asked about every time, at every level. Locking the screen " +
-            "or suspending works only when you said so in that request.
-
-" +
-            "Apps are opened by the name the launcher shows, never as a command."
-      checked: page.s.setting("desktopTools", false) === true
-      changed: page.s.changed("desktopTools")
-      foreground: page.s.foreground
-      fontFamily: page.s.fontFamily
-      onToggled: page.s.put("desktopTools", !checked)
-      onReset: page.s.resetKey("desktopTools")
-    }
-
-    ToggleRow {
-      width: parent.width
-      label: "Browser"
-      hint: "Claude Code agents can use Claude in Chrome: your own browser, signed in as you."
-      help: "Reading pages, finding things and scrolling follow the agent's permission " +
-            "level. Anything whose own description says it sends, buys, posts, books, " +
-            "deletes or the like, running code in a page, uploading a file, and any " +
-            "click that does not say what it does are asked about at every level, " +
-            "Trusted and \u201callow all in this chat\u201d included. The question is " +
-            "said out loud as well as shown.\n\nNeeds the Claude in Chrome extension."
-      checked: page.s.setting("browserTools", false) === true
-      changed: page.s.changed("browserTools")
-      foreground: page.s.foreground
-      fontFamily: page.s.fontFamily
-      onToggled: page.s.put("browserTools", !checked)
-      onReset: page.s.resetKey("browserTools")
-    }
-
-    ToggleRow {
-      width: parent.width
-      label: "Omarchy skill"
-      hint: "Agents know this machine's omarchy commands and keybindings, so “open a " +
-            "scratchpad” or “next background” is one command, not a search."
-      help: "Built from the commands installed here at install time, and again when " +
-            "Omarchy updates. Claude Code loads it as a skill for the voice session only; " +
-            "Codex, Gemini, Antigravity and Copilot get a shorter list in their " +
-            "instructions. Endpoints get nothing: they run nothing on this machine."
-      checked: page.s.setting("omarchySkill", true) === true
-      changed: page.s.changed("omarchySkill")
-      foreground: page.s.foreground
-      fontFamily: page.s.fontFamily
-      onToggled: page.s.put("omarchySkill", !checked)
-      onReset: page.s.resetKey("omarchySkill")
-    }
+    fontSize: Style.font.caption
+    onClicked: page.s.goTo("communal", "", "tools")
   }
 }

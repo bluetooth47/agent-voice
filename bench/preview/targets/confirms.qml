@@ -43,9 +43,11 @@ ShellRoot {
     }
     function countWrites() { writes.running = true }
 
+    // Skips the hidden and the fully transparent (SegmentedChoice's
+    // measuring copy of its chips, M5).
     function find(item, test) {
-      if (!item) return null
-      if (item.visible !== false && test(item)) return item
+      if (!item || item.visible === false || item.opacity === 0) return null
+      if (test(item)) return item
       var kids = item.children || []
       for (var i = 0; i < kids.length; i++) {
         var hit = find(kids[i], test)

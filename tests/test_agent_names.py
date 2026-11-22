@@ -257,4 +257,4 @@ def test_the_page_keeps_every_agent_s_id():
     s = (ROOT / "Settings.qml").read_text()
     assert "function agentId(" in s
     assert "copy.id = s.agentId(a)" in page
-    assert 'page.updateAgent(card.index, "label"' in page
+    assert 'updateAgent(index, "label"' in page

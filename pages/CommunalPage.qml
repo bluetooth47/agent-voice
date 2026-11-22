@@ -6,7 +6,8 @@ import qs.Ui
 import ".."
 import "../ui"
 
-// What agents share: the communal rules and defaults (Phase 12), shared
+// What agents share: the communal rules and defaults (Phase 12), the tools
+// every agent gets (moved here from the Agents page in M5, bug E), shared
 // skills (Phase 13), shared notes (Phase 14) and conversations with more
 // than one agent (Phase 15).
 //
@@ -41,11 +42,11 @@ Column {
     fontFamily: page.s.fontFamily
   }
 
-  readonly property string tab: ["skills", "notes", "chats"].includes(s.communalTab) ? s.communalTab : "rules"
+  readonly property string tab: ["tools", "skills", "notes", "chats"].includes(s.communalTab) ? s.communalTab : "rules"
   TabStrip {
     width: parent.width
-    options: [{ id: "rules", label: "Rules & defaults" }, { id: "skills", label: "Skills" },
-              { id: "notes", label: "Notes" }, { id: "chats", label: "Chats" }]
+    options: [{ id: "rules", label: "Rules & defaults" }, { id: "tools", label: "Tools" },
+              { id: "skills", label: "Skills" }, { id: "notes", label: "Notes" }, { id: "chats", label: "Chats" }]
     current: page.tab
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
@@ -183,6 +184,81 @@ Column {
       }
     }
   }
+  }
+
+  // --- Tools (plan 12a, 12b; moved here in M5) --------------------------------------
+  // What every agent gets on the desktop, whichever program runs it. They
+  // were the "On the desktop" group at the foot of the Agents page, which
+  // read as settings of the last agent above it (bug E). Same keys, same
+  // controls; each agent's Tools card can still say otherwise for itself.
+  Column {
+    width: parent.width
+    spacing: Style.space(12)
+    visible: page.tab === "tools"
+
+    Text {
+      width: parent.width
+      wrapMode: Text.WordWrap
+      text: "For every agent. An agent's own switch beats this: each agent's Tools card, on the " +
+            "Agents page, says which it has and where that comes from."
+      color: page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    ToggleRow {
+      width: parent.width
+      label: "Desktop tools"
+      hint: "Claude Code agents can open apps, move and close windows, switch workspaces, " +
+            "play and pause, change the volume, notify, use the clipboard and see the screen."
+      help: "Each tool goes through the agent's own permission level, like anything " +
+            "else it does: listing windows is free, a change is asked about below " +
+            "Trusted, reading the clipboard is asked about below Trusted, and a " +
+            "screenshot is asked about every time, at every level. Locking the screen " +
+            "or suspending works only when you said so in that request.\n\n" +
+            "Apps are opened by the name the launcher shows, never as a command."
+      checked: page.s.setting("desktopTools", false) === true
+      changed: page.s.changed("desktopTools")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onToggled: page.s.put("desktopTools", !checked)
+      onReset: page.s.resetKey("desktopTools")
+    }
+
+    ToggleRow {
+      width: parent.width
+      label: "Browser"
+      hint: "Claude Code agents can use Claude in Chrome: your own browser, signed in as you."
+      help: "Reading pages, finding things and scrolling follow the agent's permission " +
+            "level. Anything whose own description says it sends, buys, posts, books, " +
+            "deletes or the like, running code in a page, uploading a file, and any " +
+            "click that does not say what it does are asked about at every level, " +
+            "Trusted and \u201callow all in this chat\u201d included. The question is " +
+            "said out loud as well as shown.\n\nNeeds the Claude in Chrome extension."
+      checked: page.s.setting("browserTools", false) === true
+      changed: page.s.changed("browserTools")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onToggled: page.s.put("browserTools", !checked)
+      onReset: page.s.resetKey("browserTools")
+    }
+
+    ToggleRow {
+      width: parent.width
+      label: "Omarchy skill"
+      hint: "Agents know this machine's omarchy commands and keybindings, so “open a " +
+            "scratchpad” or “next background” is one command, not a search."
+      help: "Built from the commands installed here at install time, and again when " +
+            "Omarchy updates. Claude Code loads it as a skill for the voice session only; " +
+            "Codex, Gemini, Antigravity and Copilot get a shorter list in their " +
+            "instructions. Endpoints get nothing: they run nothing on this machine."
+      checked: page.s.setting("omarchySkill", true) === true
+      changed: page.s.changed("omarchySkill")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onToggled: page.s.put("omarchySkill", !checked)
+      onReset: page.s.resetKey("omarchySkill")
+    }
   }
 
   // --- Skills (Phase 13) ------------------------------------------------------------
