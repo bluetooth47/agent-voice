@@ -801,7 +801,9 @@ Column {
   // catalog`, the daemon's own resolution: each tool switched on or off (its
   // own switch, or the setting for every agent), whether its program can use
   // it and why not, and whether it asks first at its level; then its skills.
-  // The switches themselves are on its Agents card.
+  // Since M10 this is the home of an agent's own tool switches, written
+  // through `s.setAgentTool` (the Agents card shows a summary), and of the
+  // tools found on this machine (tooldetect.py).
   property var catalog: null
   property string catalogError: ""
   function loadCatalog() {
@@ -812,6 +814,52 @@ Column {
     cataloger.running = true
   }
   Timer { id: catalogDelay; interval: 250; onTriggered: page.loadCatalog() }
+
+  // A found tool's switch (M10). Off, and back to every agent when that is
+  // off, are written at once; anything that turns it on -- On, or following
+  // every agent while that is on -- first shows what it runs and asks
+  // (ToolConfirm), and is written only from its onConfirmed.
+  property string confirming: ""
+  property string confirmValue: ""
+  function askTool(id, v) {
+    var row = null
+    var rows = toolsTab.c ? toolsTab.c.detected || [] : []
+    for (var i = 0; i < rows.length; i++) if (rows[i].id === id) row = rows[i]
+    if (row === null) return
+    var turnsOn = v === "on" || (v === "inherit" && row.shared === "on" && !row.shared_changed)
+    if (turnsOn && row.can && row.fp !== "") {
+      if (v === row.choice && !row.changed && row.on) return
+      page.confirmValue = v
+      page.confirming = id
+      return
+    }
+    page.confirming = ""
+    if (v === "on") return            // cannot be used, or nothing to approve
+    if (v !== row.choice || row.changed) page.s.setAgentTool(page.target, id, v)
+  }
+  // One line: what it has, and where that comes from.
+  function toolStatus(r) {
+    if (!r.can) return r.why_not
+    if (r.changed)
+      return "Changed since you turned it on, so it is off until you turn it on again."
+    if (r.on) {
+      var live = r.live === "connected" ? " · running in its last session"
+                 : r.live !== "" ? " · " + r.live + " in its last session" : ""
+      return "On" + (r.choice === "inherit" ? ", as for every agent" : ", " + page.name + "'s own") + live
+    }
+    if (r.choice === "off") return "Off, " + page.name + "'s own switch"
+    if (r.shared_changed) return "Off: changed since it was turned on for every agent"
+    return "Off, as for every agent"
+  }
+  Process {
+    id: rescanner
+    command: ["agentvoice", "tools", "scan", "--rescan", "--json"]
+    onRunningChanged: if (!running) page.loadCatalog()
+  }
+  Process {
+    id: dismisser
+    onRunningChanged: if (!running) page.loadCatalog()
+  }
   // The commands read shell.json from disk, which the store writes after
   // the page already shows a change: read again once a save has landed
   // (Phase 13 review: a switch could show its old value after saving).
@@ -897,53 +945,309 @@ Column {
       font.pixelSize: Style.font.caption
     }
 
+    // --- off since this version (M10) ---------------------------------------------
+    // Before M10 Claude Code also loaded every MCP server in the person's own
+    // settings, Codex every server in its config.toml, and a shell could run
+    // any CLI unasked. Now an agent starts with only what is switched on for
+    // it. Listed once, each with Turn on; Dismiss hides the list (a state
+    // file, never shell.json).
+    Rectangle {
+      width: parent.width
+      visible: toolsTab.c !== null && (toolsTab.c.notice || []).length > 0
+      implicitHeight: noticeBody.implicitHeight + Style.space(16)
+      height: visible ? implicitHeight : 0
+      radius: Style.cornerRadius
+      color: Qt.rgba(page.s.accent.r, page.s.accent.g, page.s.accent.b, 0.08)
+      border.width: 1
+      border.color: Qt.rgba(page.s.accent.r, page.s.accent.g, page.s.accent.b, 0.4)
+      Column {
+        id: noticeBody
+        x: Style.space(8)
+        y: Style.space(8)
+        width: parent.width - Style.space(16)
+        spacing: Style.space(6)
+        Text {
+          width: parent.width
+          text: "Off since this version"
+          color: page.s.foreground
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.body
+          font.bold: true
+        }
+        Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          textFormat: Text.PlainText
+          text: page.name + " now starts with only the tools switched on for it. Before this " +
+                "version " + (toolsTab.c && toolsTab.c.program === "codex"
+                              ? "Codex also started every MCP server in its config.toml"
+                              : "Claude Code also loaded every MCP server in your own settings") +
+                ", and could run any command-line tool unasked. These are off for " + page.name +
+                " until you turn them on:"
+          color: page.s.dim
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Repeater {
+          model: toolsTab.c ? toolsTab.c.notice || [] : []
+          Flow {
+            required property var modelData
+            width: noticeBody.width
+            spacing: Style.space(8)
+            Text {
+              text: modelData.name + (modelData.kind === "cli" ? " (command-line tool)" : " (MCP server)")
+              textFormat: Text.PlainText
+              color: page.s.foreground
+              font.family: page.s.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            Button {
+              text: "Turn on for " + page.name
+              focusable: true
+              foreground: page.s.foreground
+              fontFamily: page.s.fontFamily
+              fontSize: Style.font.caption
+              tooltipText: "Shows what it runs and asks first. It is listed under Found on this machine."
+              onClicked: page.askTool(modelData.id, "on")
+            }
+          }
+        }
+        Button {
+          text: "Dismiss"
+          focusable: true
+          enabled: !dismisser.running
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          fontSize: Style.font.caption
+          tooltipText: "Hide this list. Each tool stays off, and stays under Found on this machine."
+          onClicked: {
+            dismisser.command = ["agentvoice", "tools", "dismiss", page.target]
+            dismisser.running = true
+          }
+        }
+      }
+    }
+
+    // --- built in -----------------------------------------------------------------
+    Text {
+      width: parent.width
+      visible: toolsTab.c !== null
+      text: "Built in"
+      color: page.s.foreground
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.body
+      font.bold: true
+    }
     Repeater {
       model: toolsTab.c ? toolsTab.c.tools : []
       SettingRow {
         required property var modelData
         width: parent.width
+        stacked: true
         label: modelData.label
         hint: !modelData.can ? modelData.why_not
-              : !modelData.on ? ""
-              : modelData.asks + (modelData.how !== "" ? " " + modelData.how : "")
+              : ((modelData.on ? "On" : "Off") +
+                 (modelData.choice === "inherit" ? ", as for every agent (Communal → Tools)" : ", " + page.name + "'s own") +
+                 (modelData.on && modelData.asks !== "" ? ". " + modelData.asks : ".") +
+                 (modelData.on && modelData.how !== "" ? " " + modelData.how : ""))
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
-        Text {
-          text: !modelData.can ? "Cannot use"
-                : (modelData.on ? "On" : "Off") +
-                  (modelData.choice === "inherit" ? ", as for every agent" : ", its own switch")
-          textFormat: Text.PlainText
-          color: modelData.can && modelData.on ? page.s.foreground : page.s.dim
-          font.family: page.s.fontFamily
-          font.pixelSize: Style.font.caption
+        SegmentedChoice {
+          width: parent.width
+          wrap: true
+          enabled: modelData.can
+          options: [
+            { value: "inherit", label: "As every agent (" + (modelData.global ? "on" : "off") + ")" },
+            { value: "on", label: "On" },
+            { value: "off", label: "Off" }
+          ]
+          value: modelData.choice
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          onCommitted: function(v) { if (v !== modelData.choice) page.s.setAgentTool(page.target, modelData.key, v) }
         }
       }
     }
     SettingRow {
       readonly property var collab: toolsTab.c ? toolsTab.c.collab : undefined
+      readonly property var notes: toolsTab.c ? toolsTab.c.notes : undefined
 
       width: parent.width
       visible: !!collab
-      label: "Collaboration"
+      label: "Notes and other agents"
       hint: {
         if (!collab) return ""
         var levelWords = { off: "Off", ask: "Ask me first", announce: "Announce", allow: "Quietly" }
         var status = collab.can_start
                      ? page.name + " can start collaboration: " + (levelWords[collab.level] || levelWords.ask)
                      : page.name + " can be asked; " + page.name + " can't ask others."
-        return [status, collab.can_start ? collab.says : collab.why_not, collab.receives]
+        return [notes && notes.can ? (notes.write === "allow" ? "Notes: may write." : "Notes: read only.") : "",
+                status, collab.can_start ? collab.says : collab.why_not, collab.receives]
                .filter(Boolean).join("\n")
       }
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
     }
     Button {
-      text: "Change on " + page.name + "'s Agents card →"
+      text: "Collaboration and notes: " + page.name + "'s Agents card →"
       focusable: true
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
       fontSize: Style.font.caption
       onClicked: page.s.goTo("agents", page.target, "tools")
+    }
+
+    // --- found on this machine (M10) ----------------------------------------------
+    Flow {
+      width: parent.width
+      visible: toolsTab.c !== null
+      spacing: Style.space(8)
+      topPadding: Style.space(8)
+      Text {
+        text: "Found on this machine"
+        color: page.s.foreground
+        font.family: page.s.fontFamily
+        font.pixelSize: Style.font.body
+        font.bold: true
+      }
+      Button {
+        text: rescanner.running ? "Scanning…" : "Rescan"
+        focusable: true
+        enabled: !rescanner.running
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        fontSize: Style.font.caption
+        tooltipText: "Read the MCP servers in Claude Code's and Codex's settings, and look for the " +
+                     "command-line tools, again. Reads files only; starts nothing."
+        onClicked: rescanner.running = true
+      }
+    }
+    Text {
+      width: parent.width
+      visible: toolsTab.c !== null
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: "Each is off until you switch it on. An MCP server is enforced: Claude Code starts with " +
+            "only the ones switched on, and Codex with the rest switched off. A command-line tool is " +
+            "told, not enforced: " + page.name + " is told whether it may use it, but a shell can " +
+            "still run anything installed." +
+            (toolsTab.c && String(toolsTab.c.detected_note || "") !== "" ? " " + toolsTab.c.detected_note : "")
+      color: page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+    Text {
+      width: parent.width
+      readonly property var scan: toolsTab.c ? toolsTab.c.scan || {} : {}
+      visible: toolsTab.c !== null && (String(scan.error || "") !== "" || (scan.problems || []).length > 0 ||
+                                       scan.keyed === false || (toolsTab.c.detected || []).length === 0)
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: String(scan.error || "") !== "" ? "Could not look: " + scan.error + ". Nothing found is on."
+            : scan.keyed === false ? "The key that approvals are checked with cannot be read, so nothing found can be on."
+            : (toolsTab.c && (toolsTab.c.detected || []).length === 0 ? "Nothing found: no MCP server in Claude Code's or Codex's settings, and none of the command-line tools Agent Voice looks for." : "") +
+              ((scan.problems || []).length > 0 ? " Not read: " + scan.problems.join("; ") + "." : "")
+      color: String(scan.error || "") !== "" || scan.keyed === false ? page.s.urgent : page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+    Repeater {
+      model: toolsTab.c ? toolsTab.c.detected || [] : []
+      Column {
+        id: found
+        required property var modelData
+        width: toolsTab.width
+        spacing: Style.space(4)
+        readonly property bool trusted: toolsTab.c && toolsTab.c.level === "trusted"
+
+        SettingRow {
+          width: parent.width
+          stacked: true
+          label: found.modelData.name + (found.modelData.kind === "cli" ? " · command-line tool" : " · MCP server")
+          hint: page.toolStatus(found.modelData)
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          SegmentedChoice {
+            width: parent.width
+            wrap: true
+            holdMs: 400
+            enabled: found.modelData.can || found.modelData.choice !== "inherit"
+            options: [
+              { value: "inherit", label: "As every agent (" + found.modelData.shared + ")" },
+              { value: "on", label: "On" },
+              { value: "off", label: "Off" }
+            ]
+            value: found.modelData.changed ? "" : found.modelData.choice
+            foreground: page.s.foreground
+            fontFamily: page.s.fontFamily
+            onCommitted: function(v) { page.askTool(found.modelData.id, v) }
+          }
+        }
+        Text {
+          width: parent.width
+          visible: found.modelData.can && found.modelData.asks !== ""
+          wrapMode: Text.WordWrap
+          textFormat: Text.PlainText
+          text: found.modelData.asks + (found.modelData.kind === "cli" ? " Told, not enforced." : "")
+          color: found.modelData.asks.indexOf("⚠") === 0 ? page.s.urgent : page.s.dim
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Text {
+          width: parent.width
+          wrapMode: Text.WrapAnywhere
+          textFormat: Text.PlainText
+          maximumLineCount: 4
+          elide: Text.ElideRight
+          text: found.modelData.defs.map(function(d) {
+            return (d.source !== "" ? d.source : d.where) + (d.project !== "" ? " (for " + d.project + ")" : "") +
+                   (found.modelData.kind === "mcp" ? ": " + d.command : "")
+          }).join("\n")
+          color: page.s.dim
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        ToolConfirm {
+          width: parent.width
+          visible: page.confirming === found.modelData.id
+          title: (page.confirmValue === "inherit" ? "Follow every agent, which turns " : "Turn ") +
+                 found.modelData.name + " on for " + page.name + "?"
+          lines: [
+            { label: found.modelData.kind === "cli" ? "Command" : "Runs",
+              value: found.modelData.defs.map(function(d) { return d.command }).join("\n") },
+            { label: "Defined in", value: found.modelData.defs.map(function(d) {
+                return d.source !== "" ? d.source + " (" + d.where + ")" : d.where }).join("\n") },
+            { label: "Who gets it",
+              value: page.confirmValue === "inherit"
+                     ? page.name + ", from the switch for every agent (Communal → Tools)"
+                     : page.name + " only. Other agents keep their own switches." }
+          ]
+          warning: (found.trusted ? page.name + " is at Trusted, so it " +
+                                    (found.modelData.kind === "cli" ? "runs it" : "calls its tools") +
+                                    " without asking. " : "") +
+                   (found.modelData.kind === "mcp" ? "What a tool server returns is outside text: " +
+                    page.name + "'s notes and answers are marked so." : "")
+          confirmText: "Turn on"
+          foreground: page.s.foreground
+          accent: page.s.accent
+          urgent: page.s.urgent
+          fontFamily: page.s.fontFamily
+          onConfirmed: {
+            page.s.setAgentTool(page.target, found.modelData.id,
+                                page.confirmValue === "inherit" ? "inherit" : "on:" + found.modelData.fp)
+            page.confirming = ""
+          }
+          onCancelled: page.confirming = ""
+          // Turn on from the notice opens this further down: bring it up.
+          onShown: Qt.callLater(function() {
+            var f = page.s.pageScroll
+            if (!f || !f.contentItem) return
+            var y = mapToItem(f.contentItem, 0, 0).y
+            if (y < f.contentY || y + height > f.contentY + f.height)
+              f.contentY = Math.max(0, Math.min(y - Style.space(80), f.contentHeight - f.height))
+          })
+        }
+      }
     }
 
     Text {

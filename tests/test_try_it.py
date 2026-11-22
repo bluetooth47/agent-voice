@@ -460,8 +460,9 @@ def test_claude_with_no_tools_gets_none_and_the_draft_stays_out_of_argv(rundir):
 
 
 def test_an_ordinary_claude_turn_is_unchanged_by_no_tools():
+    # --strict-mcp-config is on every turn since M10; --tools "" only here.
     argv = ClaudeCode(ask_permission=True)._argv("x", None)
-    assert "--tools" not in argv and "--strict-mcp-config" not in argv
+    assert "--tools" not in argv and argv.count("--strict-mcp-config") == 1
 
 
 def test_the_run_loop_takes_a_try_only_between_captures():

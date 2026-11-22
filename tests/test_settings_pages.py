@@ -99,7 +99,9 @@ FIELD_HOMES: dict[str, tuple[str | None, str | None]] = {
     "speed": ("AgentsPage.qml", "voiceSpeed"),
     "narration": ("AgentsPage.qml", "narration"),
     "projectDir": ("AgentsPage.qml", "projectDir"),
-    "tools": ("AgentsPage.qml", "mainTools"),
+    # Since M10 through the overlay's setAgentTool, called from Agent
+    # details' Tools & skills only (OVERLAY_HOMES below).
+    "tools": ("AgentDetailsPage.qml", "mainTools"),
     "notesWrite": ("AgentsPage.qml", "mainNotesWrite"),
     "collaboration": ("AgentsPage.qml", "mainCollaboration"),
     "acceptsWork": ("AgentsPage.qml", "mainAcceptsWork"),
@@ -124,6 +126,9 @@ VIA_PIECE = {"EndpointEditor": ("endpointUrl", "endpointModel", "endpointIsAgent
 # documented exception (module docstring); its level picker went in M3.
 OUTSIDE_WRITERS: dict[tuple[str, str], set[str]] = {
     ("Settings.qml", "function assignVoice"): {"voice", "voiceAgents", "field:voice"},
+    # Phase M10: an agent's own tool switches, the one overlay function the
+    # Tools & skills tab writes them through.
+    ("Settings.qml", "function setAgentTool"): {"mainTools", "voiceAgents", "field:tools"},
     ("Settings.qml", "function trainVerifier"): {"engine"},
     ("AgentFolders.qml", "function saveAgents"): {"voiceAgents"},
     ("Panel.qml", "*"): {"voice"},
@@ -132,7 +137,32 @@ OUTSIDE_WRITERS: dict[tuple[str, str], set[str]] = {
 DEFAULTS_ONLY = {"agentEfforts", "agentModels", "mainTools", "permissions",
                  "voiceAgents", "wakeAlsoSounds",
                  # Phase M8: two lists, written on the Crew map page.
-                 "crewLinks", "crewQuarantine"}
+                 "crewLinks", "crewQuarantine",
+                 # Phase M10: the found tools for every agent, a map written
+                 # on Communal → Tools.
+                 "sharedTools"}
+
+# A key or an agent field whose one writer is an overlay function, and the
+# one page that calls it (phase M10). The page is its home: a call from any
+# other page is a second home.
+OVERLAY_HOMES: dict[str, tuple[str, str]] = {
+    "mainTools": ("setAgentTool", "AgentDetailsPage.qml"),
+    "field:tools": ("setAgentTool", "AgentDetailsPage.qml"),
+}
+
+
+def _overlay_callers(fn: str) -> set[str]:
+    """The pages (and ui/ pieces) that call `s.<fn>(`."""
+    from qml_scan import overlay_qml, scan
+    out = set()
+    for path in overlay_qml():
+        if path.name == "Settings.qml":
+            continue
+        src = scan(path)
+        for m in re.finditer(r"\b" + re.escape(fn) + r"\(", src.nocomment):
+            if src.clean[m.start()] == src.src[m.start()]:
+                out.add(("ui/" if path.parent.name == "ui" else "") + path.name)
+    return out
 
 
 def _defaults_only() -> set[str]:
@@ -188,6 +218,11 @@ def _field_writers() -> dict[str, set[str]]:
                 continue
             h = s.handler_of(m.start())
             found.setdefault(m.group(1), set()).add(f"{where} {h}")
+        # An overlay function that writes one agent field (phase M10).
+        for key, (fn, _) in OVERLAY_HOMES.items():
+            if key.startswith("field:") and path.name != "Settings.qml" and \
+                    re.search(r"\b" + re.escape(fn) + r"\(", s.nocomment):
+                found.setdefault(key[6:], set()).add(where)
         # A piece whose edited(key, value) is handed to updateAgent.
         for name, fields in pieces.items():
             for m in re.finditer(r"\b" + name + r"\s*\{", s.clean):
@@ -222,10 +257,27 @@ def test_every_agent_field_is_written_on_exactly_one_page():
     assert wrong == {}, wrong
 
 
+def _key_writers(key: str) -> list[str]:
+    """_writers, plus the pages calling the overlay function that is the
+    key's one writer (OVERLAY_HOMES)."""
+    out = set(_writers(key))
+    if key in OVERLAY_HOMES:
+        out |= _overlay_callers(OVERLAY_HOMES[key][0])
+    return sorted(out)
+
+
 def test_every_main_twin_and_defaults_only_key_is_written_on_exactly_one_page():
     keys = {twin for _, twin in FIELD_HOMES.values() if twin} | DEFAULTS_ONLY
-    wrong = {k: _writers(k) for k in sorted(keys) if len(_writers(k)) != 1}
+    wrong = {k: _key_writers(k) for k in sorted(keys) if len(_key_writers(k)) != 1}
     assert wrong == {}, wrong
+
+
+def test_an_overlay_home_is_called_from_its_page_alone():
+    """setAgentTool has one caller page (phase M10): a second page calling
+    it is a second home for every agent's tools, which the twin test above
+    would also catch -- this names it."""
+    for key, (fn, page) in OVERLAY_HOMES.items():
+        assert _overlay_callers(fn) == {page}, (key, _overlay_callers(fn))
 
 
 def test_settings_written_outside_the_pages_go_through_named_functions():

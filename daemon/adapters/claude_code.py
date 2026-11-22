@@ -26,7 +26,8 @@ from pathlib import Path
 from typing import Iterator
 
 from .base import (
-    Adapter, Chunk, Drain, SPOKEN_STYLE, Watchdog, installed, prompt_file, stop_tree,
+    Adapter, Chunk, Drain, SPOKEN_STYLE, Watchdog, installed, private_config_file,
+    prompt_file, stop_tree,
 )
 
 #: Every tool. The hook's `matcher` is also the limit of what the permission
@@ -233,6 +234,19 @@ class ClaudeCode(Adapter):
         self.skill_dir: str | None = None
         #: Claude in Chrome (plan 12d), from browserTools.
         self.browser_tools = False
+        #: The MCP servers found on this machine that this agent is switched
+        #: on for (phase M10): {name in the config: definition}, set by the
+        #: daemon from tooldetect.delivery. Read when the process starts.
+        self.detected_servers: dict = {}
+        #: The CLIs found here and switched off for it: refused by a deny
+        #: rule in the plain forms (`gh`, `gh pr list`, a path, a && chain),
+        #: which `sh -c` gets past -- the reason the row says "told, not
+        #: enforced" (tests/fixtures/tools/claude-deny-rules.json).
+        self.clis_denied: tuple = ()
+        #: What the last process said it started, from its init event:
+        #: [{"name", "status"}] (tooldetect.live_servers). For the Tools &
+        #: skills tab and M16.
+        self.live_servers: list | None = None
         #: Applied only when the model takes it: see efforts().
         self.effort = effort
         self.spoken = spoken
@@ -263,7 +277,7 @@ class ClaudeCode(Adapter):
         _LIVE.add(self)
 
     @classmethod
-    def _hook_settings(cls, named: str = "", matcher: str = "") -> str:
+    def _hook_settings(cls, named: str = "", matcher: str = "", deny=()) -> str:
         """A PreToolUse hook, passed inline as JSON.
 
         `--settings` takes a JSON string and loads it *in addition to* the
@@ -286,7 +300,15 @@ class ClaudeCode(Adapter):
         if named:
             parts.append(named)
         command = " ".join(shlex.quote(part) for part in parts)
-        return json.dumps({"hooks": {"PreToolUse": [{
+        extra = {}
+        if deny:
+            # A CLI switched off (phase M10): its plain forms refused by
+            # Claude Code itself, even when the hook answers allow. The
+            # exact name and the name with arguments, never a ":*" prefix,
+            # which could catch a longer name ("gh" and "ghc").
+            extra["permissions"] = {"deny": [rule for name in deny
+                                             for rule in (f"Bash({name})", f"Bash({name} *)")]}
+        return json.dumps({**extra, "hooks": {"PreToolUse": [{
             "matcher": matcher or GUARDED_TOOLS,
             # ".*" -- every tool, with permission_hook.py deciding which ones
             # are free. A matcher that named the dangerous tools left every
@@ -336,7 +358,13 @@ class ClaudeCode(Adapter):
             # Try it (phase M6): a sentence and nothing else. No built-in
             # tool, and no MCP server -- not even the user's own, which
             # `claude -p` otherwise loads from their settings.
-            argv += ["--tools", "", "--strict-mcp-config"]
+            argv += ["--tools", ""]
+        # Only the servers Agent Voice names, always (phase M10). Without
+        # this `claude -p` also loads every server in the user's own
+        # settings, every project's .mcp.json -- unapproved -- and every
+        # plugin's, which made a switch saying "off" untrue. Recorded both
+        # ways in tests/fixtures/tools/claude-strict-mcp.json.
+        argv.append("--strict-mcp-config")
         if getattr(self, "ephemeral", False):
             # A quiet side turn (Phase 16, ask_agent): nothing kept on disk.
             argv.append("--no-session-persistence")
@@ -347,8 +375,10 @@ class ClaudeCode(Adapter):
         elif head:
             # The user's own words: off argv, into a private file.
             argv += ["--append-system-prompt-file", prompt_file(head)]
+        detected = {} if self.no_tools else dict(self.detected_servers or {})
+        deny = () if self.no_tools else tuple(self.clis_denied or ())
         if self.ask_permission:
-            argv += ["--settings", self._hook_settings(self.named)]
+            argv += ["--settings", self._hook_settings(self.named, deny=deny)]
         else:
             # Trusted, but a click in a signed-in browser can still buy or
             # post, and a write to the agents' orders (the communal rules,
@@ -357,7 +387,14 @@ class ClaudeCode(Adapter):
             from permission_hook import BROWSER_MATCHER, TRUSTED_MATCHER
             matcher = TRUSTED_MATCHER if self.browser_tools else \
                 TRUSTED_MATCHER[len(BROWSER_MATCHER) + 1:]
-            argv += ["--settings", self._hook_settings(self.named, matcher)]
+            if detected:
+                # And the servers found on this machine (phase M10): not to
+                # ask -- the hook allows them at Trusted -- but so a switch
+                # turned off reaches this process at its next call, before
+                # the idle process is let go.
+                import re as _re
+                matcher += "|" + "|".join(f"mcp__{_re.escape(k)}__.*" for k in sorted(detected))
+            argv += ["--settings", self._hook_settings(self.named, matcher, deny=deny)]
         servers: dict = {}
         if self.desktop_tools and not self.no_tools:
             # Agent Voice's desktop tools (plan 12a), as this agent: the
@@ -370,8 +407,14 @@ class ClaudeCode(Adapter):
             # condition: never the desktop tools'. One config for both.
             import crew_mcp
             servers.update(crew_mcp.servers(self.name, self.named, browser=self.browser_tools))
+        for key, spec in sorted(detected.items()):
+            # Found on this machine and switched on for this agent (M10),
+            # as its own settings define it. Never one of ours by name.
+            servers.setdefault(key, spec)
         if servers:
-            argv += ["--mcp-config", json.dumps({"mcpServers": servers})]
+            # In a 0600 file, never inline: a detected server's definition
+            # can carry an API key, and argv is world readable.
+            argv += ["--mcp-config", private_config_file({"mcpServers": servers})]
         if self.skill_dir and not self.no_tools:
             # The Omarchy skill (plan 12b), loaded as a plugin for this
             # process only: nothing is written into ~/.claude.
@@ -534,6 +577,11 @@ class ClaudeCode(Adapter):
 
                 kind = msg.get("type")
 
+                if kind == "system" and msg.get("subtype") == "init":
+                    # Which servers this process started (phase M10): names
+                    # and status only.
+                    from tooldetect import live_servers
+                    self.live_servers = live_servers(msg.get("mcp_servers"))
                 if kind != "result":
                     yield from parse_line(msg)
 

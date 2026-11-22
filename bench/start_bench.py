@@ -100,7 +100,14 @@ def extras(ad, cfg, named=""):
 #: "full" fills every budget with synthetic text -- rules, defaults,
 #: personality and instructions to their limits, and eight roster lines of
 #: 380 characters -- the most the folders can ever add.
-VARIANTS = ("none", "folders", "full", "skills", "nocrew")
+VARIANTS = ("none", "folders", "full", "skills", "nocrew", "loose", "strict", "strict3")
+#: Phase M10: "loose" is "folders" without --strict-mcp-config, the argv
+#: before M10, under which Claude Code also starts every server in the
+#: user's own settings and the project's .mcp.json; "strict" is "folders"
+#: as the daemon starts it now with nothing found switched on; "strict3"
+#: adds three found servers switched on (bench/stub_mcp.py, which answers
+#: and does nothing), so what a switch costs is measured on any machine.
+STUB_MCP = Path(__file__).resolve().with_name("stub_mcp.py")
 #: "nocrew" (Phase 14) is "folders" without the notes server, which since
 #: Phase 14 every Claude and Codex agent is started with: the Phase 13
 #: argv, to interleave against "folders" for the cost of one more server.
@@ -191,9 +198,17 @@ def build(spec, cfg, cwd, variant="folders"):
         ad.level = level
     ad.instructions = spec["instructions"]
     extras(ad, cfg, spec["named"])
-    assign_parts(ad, spec, cfg, "folders" if variant == "nocrew" else variant)
+    assign_parts(ad, spec, cfg, "folders" if variant in ("nocrew", "loose", "strict", "strict3")
+                 else variant)
     if variant == "nocrew":
         ad.crew_tools = False
+    if variant == "loose" and hasattr(ad, "detected_servers"):
+        real = ad._argv
+        ad._argv = lambda text, sid: [w for w in real(text, sid) if w != "--strict-mcp-config"]
+    if variant == "strict3" and hasattr(ad, "detected_servers"):
+        ad.detected_servers = {f"timing-{i}": {"command": sys.executable,
+                                               "args": ["-I", str(STUB_MCP), f"timing-{i}"]}
+                               for i in range(3)}
     return ad
 
 

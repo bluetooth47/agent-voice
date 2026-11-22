@@ -1,0 +1,72 @@
+{
+ "recorded": "2026-11-22, claude 2.1.330 (haiku), phase M10 spike. A PreToolUse hook on every tool that always answers allow (as Agent Voice's does at Trusted, or at Ask after a yes), plus permissions.deny in --settings. spikecli is a stub on PATH that appends its arguments to a marker file.",
+ "deny_rules": [
+  "Bash(spikecli:*)",
+  "Bash(spikecli *)",
+  "mcp__spike-file__ping"
+ ],
+ "first_turn": {
+  "tool_uses": [
+   "Bash: spikecli hello",
+   "ToolSearch",
+   "ToolSearch"
+  ],
+  "results": [
+   "Permission to use Bash with command spikecli hello has been denied.",
+   "No matching deferred tools found",
+   "No matching deferred tools found"
+  ],
+  "permission_denials": [
+   "Bash"
+  ],
+  "spikecli_ran": false
+ },
+ "forms": [
+  {
+   "command": "spikecli a",
+   "denied": true
+  },
+  {
+   "command": "/tmp/m10-spike/bin/spikecli b",
+   "denied": true
+  },
+  {
+   "command": "sh -c 'spikecli c'",
+   "denied": false
+  },
+  {
+   "command": "true && spikecli d",
+   "denied": true
+  }
+ ],
+ "spikecli_ran_with": [
+  "c"
+ ],
+ "conclusion": "The deny rule holds against an allowing hook for the plain command, an absolute path and a && chain, and a deny on an MCP tool name hides that tool. sh -c gets past it, so a CLI switch is told, not enforced.",
+ "space_form_only": {
+  "deny_rules": [
+   "Bash(spikecli)",
+   "Bash(spikecli *)"
+  ],
+  "forms": [
+   {
+    "command": "spikecli a",
+    "denied": true
+   },
+   {
+    "command": "/tmp/m10-spike/bin/spikecli b",
+    "denied": true
+   },
+   {
+    "command": "true && spikecli d",
+    "denied": true
+   },
+   {
+    "command": "spikecli",
+    "denied": true
+   }
+  ],
+  "spikecli_ran": false,
+  "note": "the two rules Agent Voice writes for a CLI that is switched off; no ':*' prefix rule, which could match a longer name"
+ }
+}

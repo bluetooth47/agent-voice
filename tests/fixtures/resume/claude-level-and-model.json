@@ -1,7 +1,7 @@
 {
- "recorded": "2026-11-21, phase M2, bin: Claude Code 2.1.330",
+ "recorded": "2026-11-22, phase M10 (again: --strict-mcp-config is on every turn now), bin: Claude Code 2.1.330",
  "how": "three real turns, each on a new adapter object as reconcile_agent builds one; crew/desktop MCP servers off; reduced to the fields the adapter reads (tests/test_adapters.py replays them)",
- "marker": "PELICAN-6920",
+ "marker": "PELICAN-4356",
  "turns": [
   {
    "level": "ask",
@@ -19,6 +19,7 @@
     "--permission-mode",
     "auto",
     "--no-chrome",
+    "--strict-mcp-config",
     "--settings",
     "<hook settings, matcher=.*>",
     "--model",
@@ -28,7 +29,7 @@
     {
      "type": "system",
      "subtype": "init",
-     "session_id": "27092f9b-fae6-4387-96a3-150bb1cc98f4",
+     "session_id": "2cedb29e-2e06-4a0c-8f0a-6297e245463c",
      "model": "claude-haiku-5-5"
     },
     {
@@ -72,7 +73,7 @@
      "type": "result",
      "subtype": "success",
      "is_error": false,
-     "session_id": "27092f9b-fae6-4387-96a3-150bb1cc98f4",
+     "session_id": "2cedb29e-2e06-4a0c-8f0a-6297e245463c",
      "result": "OK",
      "num_turns": 1
     }
@@ -82,7 +83,7 @@
   {
    "level": "trusted",
    "model": "sonnet",
-   "resumed": "27092f9b-fae6-4387-96a3-150bb1cc98f4",
+   "resumed": "2cedb29e-2e06-4a0c-8f0a-6297e245463c",
    "argv": [
     "claude",
     "-p",
@@ -95,10 +96,11 @@
     "--permission-mode",
     "auto",
     "--no-chrome",
+    "--strict-mcp-config",
     "--settings",
     "<hook settings, matcher=Bash|Write|Edit|MultiEdit|NotebookEdit>",
     "--resume",
-    "27092f9b-fae6-4387-96a3-150bb1cc98f4",
+    "2cedb29e-2e06-4a0c-8f0a-6297e245463c",
     "--model",
     "sonnet"
    ],
@@ -106,7 +108,7 @@
     {
      "type": "system",
      "subtype": "init",
-     "session_id": "27092f9b-fae6-4387-96a3-150bb1cc98f4",
+     "session_id": "2cedb29e-2e06-4a0c-8f0a-6297e245463c",
      "model": "claude-sonnet-5-5"
     },
     {
@@ -130,7 +132,7 @@
       "type": "content_block_delta",
       "delta": {
        "type": "text_delta",
-       "text": "PELICAN-6920"
+       "text": "PELICAN-4356"
       }
      }
     },
@@ -150,17 +152,17 @@
      "type": "result",
      "subtype": "success",
      "is_error": false,
-     "session_id": "27092f9b-fae6-4387-96a3-150bb1cc98f4",
-     "result": "PELICAN-6920",
+     "session_id": "2cedb29e-2e06-4a0c-8f0a-6297e245463c",
+     "result": "PELICAN-4356",
      "num_turns": 1
     }
    ],
-   "reply": "PELICAN-6920"
+   "reply": "PELICAN-4356"
   },
   {
    "level": "ask",
    "model": "haiku",
-   "resumed": "27092f9b-fae6-4387-96a3-150bb1cc98f4",
+   "resumed": "2cedb29e-2e06-4a0c-8f0a-6297e245463c",
    "argv": [
     "claude",
     "-p",
@@ -173,10 +175,11 @@
     "--permission-mode",
     "auto",
     "--no-chrome",
+    "--strict-mcp-config",
     "--settings",
     "<hook settings, matcher=.*>",
     "--resume",
-    "27092f9b-fae6-4387-96a3-150bb1cc98f4",
+    "2cedb29e-2e06-4a0c-8f0a-6297e245463c",
     "--model",
     "haiku"
    ],
@@ -184,7 +187,7 @@
     {
      "type": "system",
      "subtype": "init",
-     "session_id": "27092f9b-fae6-4387-96a3-150bb1cc98f4",
+     "session_id": "2cedb29e-2e06-4a0c-8f0a-6297e245463c",
      "model": "claude-haiku-5-5"
     },
     {
@@ -208,7 +211,7 @@
       "type": "content_block_delta",
       "delta": {
        "type": "text_delta",
-       "text": "PELICAN-6920"
+       "text": "PELICAN-4356"
       }
      }
     },
@@ -228,12 +231,12 @@
      "type": "result",
      "subtype": "success",
      "is_error": false,
-     "session_id": "27092f9b-fae6-4387-96a3-150bb1cc98f4",
-     "result": "PELICAN-6920",
+     "session_id": "2cedb29e-2e06-4a0c-8f0a-6297e245463c",
+     "result": "PELICAN-4356",
      "num_turns": 1
     }
    ],
-   "reply": "PELICAN-6920"
+   "reply": "PELICAN-4356"
   }
  ]
 }

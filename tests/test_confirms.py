@@ -147,15 +147,32 @@ def test_a_chat_is_deleted_only_through_the_confirmed_run():
 
 def test_the_buttons_that_confirm_are_danger_buttons():
     """onConfirmed is DangerButton's signal; a handler of that name on
-    anything else would satisfy the test above without a confirmation."""
+    anything else would satisfy the test above without a confirmation.
+    The one other: ToolConfirm (phase M10), the question before a tool
+    found on this machine is switched on, whose handlers may only write a
+    tool switch -- never one of the destructive commands above."""
     wrong = []
     for path in overlay_qml():
         s = scan(path)
         for m in re.finditer(r"\bonConfirmed\s*:", s.clean):
             el = s.element_of(m.start())
-            if el != "DangerButton":
+            if el == "ToolConfirm":
+                body = s.src[m.end():m.end() + 400].split("onCancelled")[0]
+                if not re.search(r"\b(setAgentTool|putShared)\(", body) or \
+                        re.search(r"agents\W+trash|chats\W+delete|--uninstall|remove|reset", body):
+                    wrong.append(f"{path.relative_to(ROOT)}:{s.lineno(m.start())} ToolConfirm "
+                                 f"doing something other than a tool switch")
+            elif el != "DangerButton":
                 wrong.append(f"{path.relative_to(ROOT)}:{s.lineno(m.start())} on {el}")
     assert wrong == [], wrong
+
+
+def test_tool_confirm_says_yes_only_from_its_own_button():
+    s = scan(ROOT / "ui" / "ToolConfirm.qml")
+    emits = [m.start() for m in re.finditer(r"\bconfirmed\(\)", s.clean)
+             if not s.clean[max(0, m.start() - 7):m.start()].endswith("signal ")]
+    assert [s.handler_of(p) for p in emits] == ["onClicked"]
+    assert "cancelButton.forceActiveFocus()" in s.src and "Keys.onEscapePressed" in s.src
 
 
 def test_the_danger_button_runs_its_action_only_on_the_second_step():

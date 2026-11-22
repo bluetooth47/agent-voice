@@ -74,7 +74,10 @@ class TestDecide:
 
     def test_an_mcp_tool_is_asked_about(self, monkeypatch):
         """These are the user's own servers -- send mail, post to Slack,
-        write a calendar -- and they never reached this file before."""
+        write a calendar -- and they never reached this file before. Since
+        M10 one nobody switched on is refused outright (it should not even
+        be loaded); one switched on is asked about below Trusted
+        (test_tool_controls.py)."""
         monkeypatch.setattr(hook, "TIMEOUT", 0.3)
         assert hook.decide("mcp__mail__send", {"to": "x"})[0] == "deny"
 

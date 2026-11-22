@@ -8,10 +8,12 @@ import qs.Ui
 // (master plan M5): `part: "tools"` or `part: "collab"`. Both halves share
 // the tables below, which is why they are one piece.
 //
-// Tools: desktop tools, the browser and the Omarchy commands, as chips that
-// cycle "every agent" → on → off. Each chip's line underneath says what the
-// agent has *and where that comes from* -- an inherited "off" is the setting
-// for every agent (Communal → Tools), not a missing control.
+// Tools: what the agent has of the desktop tools, the browser and the
+// Omarchy commands, *and where that comes from* -- an inherited "off" is the
+// setting for every agent (Communal → Tools), not a missing control -- and
+// how many tools found on this machine are switched on for it. Read only
+// since M10: an agent's own switches live on Agent details → Tools & skills
+// (the one writer, `s.setAgentTool`), which `detailsAsked` opens.
 //
 // A tool this agent's program cannot use stays visible as a disabled chip
 // that says why: a control that does nothing must say why. Which programs
@@ -22,8 +24,9 @@ import qs.Ui
 //     part: "tools"                        // or "collab"
 //     choices: entry.tools || {}           // key -> "inherit" | "on" | "off"
 //     globals: { desktop: true, browser: false, omarchySkill: true }
+//     shared: s.setting("sharedTools", {})   // the found tools for every agent (M10)
 //     program: "claude"
-//     onPicked: function(key, value) { ... }
+//     onDetailsAsked: s.goTo("agentdetails", agentId, "tools")
 //     onSharedAsked: s.goTo("communal", "", "tools")
 //     notesWrite: entry.notesWrite || "allow"   // "allow" | "deny" (Phase 14)
 //     onNotesPicked: function(value) { ... }
@@ -52,8 +55,12 @@ Column {
   property color dim: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.6)
   property string fontFamily: Style.font.family
 
-  signal picked(string key, string value)
-  // The link to the switches for every agent; the page knows where they are.
+  // The found tools' switches for every agent (sharedTools), to count the
+  // ones this agent follows.
+  property var shared: ({})
+  // The links to its own switches and to the ones for every agent; the page
+  // knows where they are.
+  signal detailsAsked()
   signal sharedAsked()
   // "allow" or "deny": notesWrite / mainNotesWrite.
   property string notesWrite: "allow"
@@ -132,12 +139,32 @@ Column {
       tooltip: "This machine's omarchy commands and keybindings, so “open a scratchpad” is one command." }
   ]
 
+  // How many tools found on this machine are switched on for it, by the
+  // settings alone: its own "on:…" entries, and the ones for every agent it
+  // does not switch off. Whether each still matches what was approved, and
+  // whether its program can use it, is on Agent details.
+  readonly property int foundOn: {
+    var own = (choices && typeof choices === "object") ? choices : {}
+    var all = (shared && typeof shared === "object") ? shared : {}
+    var n = 0, seen = {}
+    var keys = Object.keys(own).concat(Object.keys(all))
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i]
+      if (seen[k] || !/^(mcp|cli):/.test(k)) continue
+      seen[k] = true
+      var v = own[k] !== undefined ? own[k] : all[k]
+      if (/^on:[0-9a-f]{32}$/.test(String(v))) n++
+    }
+    return n
+  }
+
   // What it has now, in one line (the header's tooltip).
   readonly property string summary: {
     var on = []
     for (var i = 0; i < rows.length; i++)
       if (effective(rows[i].key) && whyNot(rows[i].key) === "") on.push(rows[i].short)
     var out = on.length > 0 ? on.join(", ") : "no tools"
+    if (foundOn > 0) out += " · " + foundOn + " found on this machine"
     if (notesWhyNot === "" && notesDenied) out += " · notes read only"
     if (collabWhyNot === "") {
       if (collabLevel === "off") out += " · collaboration off"
@@ -151,23 +178,7 @@ Column {
   width: parent ? parent.width : 0
   spacing: Style.space(8)
 
-  // --- tools ---------------------------------------------------------------------
-  ToggleChips {
-    width: parent.width
-    visible: sw.part === "tools"
-    allowInherit: true
-    inheritLabel: "every agent"
-    options: sw.rows.map(function(r) {
-      return { value: r.key, label: r.label, tooltip: r.tooltip, disabledReason: sw.whyNot(r.key) } })
-    chipStates: ({ desktop: sw.choice("desktop"), browser: sw.choice("browser"),
-                   omarchySkill: sw.choice("omarchySkill") })
-    inherited: sw.globals
-    foreground: sw.foreground
-    accent: sw.accent
-    urgent: sw.urgent
-    fontFamily: sw.fontFamily
-    onToggled: function(value, state) { if (state !== sw.choice(value)) sw.picked(value, state) }
-  }
+  // --- tools (read only since M10) -----------------------------------------------
   Column {
     width: parent.width
     visible: sw.part === "tools"
@@ -178,22 +189,43 @@ Column {
         required property var modelData
         width: parent.width
         text: modelData.label + ": " + sw.source(modelData.key)
-        detail: sw.whyNot(modelData.key)
+        detail: sw.whyNot(modelData.key) !== "" ? sw.whyNot(modelData.key) : modelData.tooltip
         foreground: sw.foreground
         fontFamily: sw.fontFamily
       }
     }
+    Hint {
+      width: parent.width
+      text: "Found on this machine: " + (sw.foundOn === 0 ? "none switched on"
+                                          : sw.foundOn + " switched on")
+      detail: "MCP servers in Claude Code's and Codex's own settings, and command-line tools " +
+              "such as gh. Each is off until it is switched on, for this agent or for every agent."
+      foreground: sw.foreground
+      fontFamily: sw.fontFamily
+    }
   }
-  Button {
+  Flow {
+    width: parent.width
     visible: sw.part === "tools"
-    text: "For every agent: Communal → Tools ›"
-    focusable: true
-    foreground: sw.foreground
-    fontFamily: sw.fontFamily
-    fontSize: Style.font.caption
-    tooltipText: "A chip set here beats the setting for every agent, for this agent only. " +
-                 "A change applies from its next turn, in the same conversation."
-    onClicked: sw.sharedAsked()
+    spacing: Style.space(8)
+    Button {
+      text: "Change on Agent details › Tools & skills"
+      focusable: true
+      foreground: sw.foreground
+      fontFamily: sw.fontFamily
+      fontSize: Style.font.caption
+      tooltipText: "This agent's own switches, which beat the ones for every agent, and the tools " +
+                   "found on this machine. A change applies from its next turn, in the same conversation."
+      onClicked: sw.detailsAsked()
+    }
+    Button {
+      text: "For every agent: Communal → Tools ›"
+      focusable: true
+      foreground: sw.foreground
+      fontFamily: sw.fontFamily
+      fontSize: Style.font.caption
+      onClicked: sw.sharedAsked()
+    }
   }
 
   // --- collaboration and notes -----------------------------------------------------

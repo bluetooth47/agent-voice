@@ -5,6 +5,7 @@ audio, and nothing in the voice loop knows which agent answered.
 """
 from __future__ import annotations
 
+import json
 import os
 import signal
 import threading
@@ -316,6 +317,13 @@ class Adapter(ABC):
     #: the skill itself (--plugin-dir); an endpoint runs nothing here.
     takes_skill_text: bool = True
 
+    #: The command-line tools found on this machine (phase M10) that this
+    #: agent may use, and the found ones switched off for it. Told in one
+    #: line of the preamble (cli_line), never enforced: set by the daemon
+    #: between turns, from the switches and the scan.
+    clis_on: tuple = ()
+    clis_off: tuple = ()
+
     #: The pieces from the agent folders (merged plan, Phase 11), as
     #: agentfs.parts_from() builds them: communal rules and defaults, this
     #: agent's personality and display name, and the roster of the others.
@@ -333,7 +341,9 @@ class Adapter(ABC):
         5. the user's standing instructions;
         6. the skills index, then the Omarchy commands, for a backend that
            takes them (Claude Code loads both as skills instead);
-        7. the other agents here, as information.
+        7. the command-line tools found here, which it may use and which
+           are switched off (phase M10), for a backend that runs commands;
+        8. the other agents here, as information.
 
         A piece with nothing in it leaves no header, so with every folder
         empty and no other agent this is byte for byte the old preamble.
@@ -355,6 +365,9 @@ class Adapter(ABC):
             out.append(SKILLS_HEAD + index)
         if self.skill_text and self.takes_skill_text and self.has_tools:
             out.append(self.skill_text)
+        clis = cli_line(self.clis_on, self.clis_off) if self.has_tools else ""
+        if clis:
+            out.append(clis)
         others = [line for line in (p.get("roster") or []) if line]
         if others:
             out.append(ROSTER_HEAD + "\n".join(f"- {line}" for line in others))
@@ -511,6 +524,60 @@ def prompt_file(text: str) -> str:
             f.write(text)
         os.replace(tmp, path)
     return str(path)
+
+
+#: Config files written by private_config_file, by a digest of their
+#: content, so the same servers reuse one file for the life of the daemon.
+_PRIVATE_FILES: dict[str, str] = {}
+
+
+def private_config_file(config: dict) -> str:
+    """`config` as JSON in a file only this user can read, for a CLI that
+    takes its MCP servers from a file (phase M10). Returns the path.
+
+    A server's definition can hold an API key (its environment, headers,
+    URL or arguments), and argv is readable by every local account through
+    /proc -- so the servers travel by path, never inline. Unlike
+    prompt_file the name is random, not the content's hash: the path is in
+    argv, and a hash of a file holding a short secret beside guessable text
+    is a dictionary attack waiting to happen. Reused while the content is
+    the same and the file is still there."""
+    import hashlib
+    import secrets
+    from paths import RUNTIME_DIR
+    body = json.dumps(config, sort_keys=True)
+    digest = hashlib.sha256(body.encode()).hexdigest()
+    have = _PRIVATE_FILES.get(digest)
+    if have and os.path.isfile(have):
+        return have
+    folder = RUNTIME_DIR / "prompts"
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = folder / f"mcp-{secrets.token_hex(10)}.json"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(body)
+    _PRIVATE_FILES[digest] = str(path)
+    return str(path)
+
+
+def cli_line(on, off) -> str:
+    """The one line an agent is told about the command-line tools found on
+    this machine (phase M10): which it may use, and which are switched off.
+    Told, not enforced: a shell can run anything on PATH (the recording in
+    tests/fixtures/tools/claude-deny-rules.json). Empty when there are none."""
+    on = [n for n in on if n]
+    off = [n for n in off if n]
+    parts = []
+    if on:
+        parts.append("you may use " + ", ".join(on))
+    if off:
+        parts.append(", ".join(off) + (" is" if len(off) == 1 else " are")
+                     + " switched off for you in Agent Voice: do not run "
+                     + ("it" if len(off) == 1 else "them")
+                     + "; if one is needed, say it is switched off on your Tools & skills tab")
+    if not parts:
+        return ""
+    return "Command-line tools found on this machine: " + "; ".join(parts) + "."
 
 
 def speech_safe(text: str) -> str:

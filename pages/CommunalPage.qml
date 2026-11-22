@@ -7,7 +7,8 @@ import ".."
 import "../ui"
 
 // What agents share: the communal rules and defaults (Phase 12), the tools
-// every agent gets (moved here from the Agents page in M5, bug E), shared
+// every agent gets (moved here from the Agents page in M5, bug E; the tools
+// found on this machine since M10, `sharedTools`), shared
 // skills (Phase 13), shared notes (Phase 14) and conversations with more
 // than one agent (Phase 15).
 //
@@ -190,7 +191,8 @@ Column {
   // What every agent gets on the desktop, whichever program runs it. They
   // were the "On the desktop" group at the foot of the Agents page, which
   // read as settings of the last agent above it (bug E). Same keys, same
-  // controls; each agent's Tools card can still say otherwise for itself.
+  // controls; each agent's own switch (Agent details since M10) can still
+  // say otherwise for itself.
   Column {
     width: parent.width
     spacing: Style.space(12)
@@ -199,8 +201,8 @@ Column {
     Text {
       width: parent.width
       wrapMode: Text.WordWrap
-      text: "For every agent. An agent's own switch beats this: each agent's Tools card, on the " +
-            "Agents page, says which it has and where that comes from."
+      text: "For every agent. An agent's own switch beats this: those are on Agent details → " +
+            "Tools & skills, and each agent's Tools card on the Agents page says what it has."
       color: page.s.dim
       font.family: page.s.fontFamily
       font.pixelSize: Style.font.caption
@@ -259,6 +261,226 @@ Column {
       onToggled: page.s.put("omarchySkill", !checked)
       onReset: page.s.resetKey("omarchySkill")
     }
+
+    // --- found on this machine (M10) --------------------------------------------
+    // Each MCP server in Claude Code's and Codex's own settings, and each
+    // command-line tool Agent Voice looks for, with "on for every agent":
+    // `sharedTools`, tool id -> "on:<fingerprint>" or "off". Off until
+    // switched on; turning one on shows what it runs first (ToolConfirm) and
+    // is written only from its onConfirmed. A personal off always wins.
+    Flow {
+      width: parent.width
+      spacing: Style.space(8)
+      topPadding: Style.space(8)
+      Text {
+        text: "Found on this machine"
+        color: page.s.foreground
+        font.family: page.s.fontFamily
+        font.pixelSize: Style.font.body
+        font.bold: true
+      }
+      Button {
+        text: toolScan.running ? "Scanning…" : "Rescan"
+        focusable: true
+        enabled: !toolScan.running
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        fontSize: Style.font.caption
+        tooltipText: "Read the MCP servers in Claude Code's and Codex's settings, and look for the " +
+                     "command-line tools, again. Reads files only; starts nothing."
+        onClicked: page.scanTools(true)
+      }
+    }
+    Text {
+      width: parent.width
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: "On here is on for every agent whose program can use it, unless its own switch on Agent " +
+            "details says off. An MCP server is enforced; a command-line tool is told, not enforced " +
+            "(the agent is told whether it may use it; a shell can still run anything installed). " +
+            "An agent at Trusted uses what it has without asking."
+      color: page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+    Text {
+      width: parent.width
+      visible: page.toolError !== "" || (page.toolList !== null && page.toolList.tools.length === 0)
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: page.toolError !== "" ? "Could not look: " + page.toolError
+            : "Nothing found: no MCP server in Claude Code's or Codex's settings, and none of the " +
+              "command-line tools Agent Voice looks for."
+      color: page.toolError !== "" ? page.s.urgent : page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+    Repeater {
+      model: page.toolList ? page.toolList.tools : []
+      Column {
+        id: shared
+        required property var modelData
+        width: parent.width
+        spacing: Style.space(4)
+        readonly property string value: page.sharedValue(modelData.id)
+        readonly property bool approved: modelData.fp !== "" && value === "on:" + modelData.fp
+        readonly property bool changed: value.indexOf("on:") === 0 && !approved
+
+        ToggleRow {
+          width: parent.width
+          label: shared.modelData.name + (shared.modelData.kind === "cli" ? " · command-line tool" : " · MCP server")
+          hint: !shared.modelData.found ? shared.modelData.name + " is not on PATH."
+                : shared.changed ? "Changed since it was turned on, so it is off until it is turned on again."
+                : shared.approved ? "On for every agent that can use it, unless its own switch says off."
+                : "Off for every agent, unless its own switch says on."
+          checked: shared.approved
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          onToggled: {
+            if (shared.approved) { page.confirmingTool = ""; page.putShared(shared.modelData.id, "off") }
+            else if (shared.modelData.found && shared.modelData.fp !== "") page.confirmingTool = shared.modelData.id
+          }
+        }
+        Text {
+          width: parent.width
+          wrapMode: Text.WrapAnywhere
+          textFormat: Text.PlainText
+          maximumLineCount: 4
+          elide: Text.ElideRight
+          text: shared.modelData.defs.map(function(d) {
+            return (d.source !== "" ? d.source : d.where) + (d.project !== "" ? " (for " + d.project + ")" : "") +
+                   (shared.modelData.kind === "mcp" ? ": " + d.command : "")
+          }).join("\n") + (shared.modelData.kind === "mcp"
+                            ? "\nFor " + shared.modelData.backends.map(function(b) {
+                                return b === "claude" ? "Claude Code" : b === "codex" ? "Codex" : b }).join(" and ") + " agents."
+                            : "")
+          color: page.s.dim
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        ToolConfirm {
+          width: parent.width
+          visible: page.confirmingTool === shared.modelData.id
+          title: "Turn " + shared.modelData.name + " on for every agent?"
+          lines: [
+            { label: shared.modelData.kind === "cli" ? "Command" : "Runs",
+              value: shared.modelData.defs.map(function(d) { return d.command }).join("\n") },
+            { label: "Defined in", value: shared.modelData.defs.map(function(d) {
+                return d.source !== "" ? d.source + " (" + d.where + ")" : d.where }).join("\n") },
+            { label: "Who gets it",
+              value: "Every agent whose program can use it (" + page.told + " now told these), " +
+                     "except one whose own switch says off." }
+          ]
+          warning: "An agent at Trusted " + (shared.modelData.kind === "cli" ? "runs it" : "calls its tools") +
+                   " without asking." + (shared.modelData.kind === "mcp"
+                     ? " What a tool server returns is outside text: notes and answers are marked so." : "")
+          confirmText: "Turn on for every agent"
+          foreground: page.s.foreground
+          accent: page.s.accent
+          urgent: page.s.urgent
+          fontFamily: page.s.fontFamily
+          onConfirmed: {
+            page.putShared(shared.modelData.id, "on:" + shared.modelData.fp)
+            page.confirmingTool = ""
+          }
+          onCancelled: page.confirmingTool = ""
+        }
+      }
+    }
+    SettingRow {
+      width: parent.width
+      stacked: true
+      label: "Add a command-line tool by name"
+      hint: page.addNote !== "" ? page.addNote
+            : "One Agent Voice does not look for. It is listed above, off, once it is found on PATH."
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      Flow {
+        width: parent.width
+        spacing: Style.space(8)
+        TextField {
+          id: cliName
+          width: Math.min(parent.width, Style.space(220))
+          placeholderText: "e.g. rclone"
+          foreground: page.s.foreground
+          font.family: page.s.fontFamily
+          onAccepted: page.addCli(text)
+        }
+        Button {
+          text: "Add"
+          bordered: true
+          focusable: true
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          onClicked: page.addCli(cliName.text)
+        }
+      }
+    }
+  }
+
+  // The found tools (M10), from `agentvoice tools scan --json`.
+  property var toolList: null
+  property string toolError: ""
+  property string confirmingTool: ""
+  property string addNote: ""
+  Timer { id: toolDelay; interval: 300; onTriggered: if (page.tab === "tools") page.scanTools(false) }
+  Connections {
+    target: page.s.store
+    function onSaved(key) { if (key === "sharedTools") toolDelay.restart() }
+  }
+  function scanTools(force) {
+    if (toolScan.running) { toolDelay.restart(); return }
+    toolScan.command = ["agentvoice", "tools", "scan", "--json"].concat(force ? ["--rescan"] : [])
+    toolScan.running = true
+  }
+  Process {
+    id: toolScan
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var d
+        try { d = JSON.parse(String(text)) } catch (e) { return }
+        if (!d || !Array.isArray(d.tools)) return
+        page.toolError = ""
+        page.toolList = d
+      }
+    }
+    stderr: StdioCollector {
+      onStreamFinished: {
+        var t = String(text).trim()
+        if (t !== "") page.toolError = t.split("\n").pop()
+      }
+    }
+  }
+  function sharedValue(id) {
+    var m = page.s.setting("sharedTools", {})
+    var v = (m && typeof m === "object") ? m[id] : undefined
+    return typeof v === "string" ? v : ""
+  }
+  // One key of sharedTools, the rest as it was.
+  function putShared(id, value) {
+    var current = page.s.setting("sharedTools", {})
+    var all = {}
+    if (current && typeof current === "object" && !Array.isArray(current)) {
+      var keys = Object.keys(current)
+      for (var k = 0; k < keys.length; k++)
+        Object.defineProperty(all, keys[k], { value: current[keys[k]], enumerable: true,
+                                              writable: true, configurable: true })
+    }
+    Object.defineProperty(all, id, { value: value, enumerable: true, writable: true, configurable: true })
+    page.s.put("sharedTools", all)
+  }
+  // A CLI by name: written as off, which is how the scan learns to look for
+  // it (a "cli:" key in any tools map).
+  function addCli(raw) {
+    var name = String(raw || "").trim().toLowerCase()
+    if (!/^[a-z0-9][a-z0-9._+-]{0,31}$/.test(name)) {
+      page.addNote = "A name is letters, digits, dots, dashes, plus or underscore, as you would type it."
+      return
+    }
+    if (page.sharedValue("cli:" + name) !== "") { page.addNote = name + " is listed already."; return }
+    page.addNote = ""
+    cliName.text = ""
+    page.putShared("cli:" + name, "off")
   }
 
   // --- Skills (Phase 13) ------------------------------------------------------------
@@ -270,8 +492,8 @@ Column {
   readonly property string skillWatch: page.watch + JSON.stringify(s.vAgentFiles) +
                                        JSON.stringify(s.folders.folders)
   onSkillWatchChanged: skillDelay.restart()
-  onTabChanged: if (tab === "skills") loadSkills()
-  Component.onCompleted: if (tab === "skills") loadSkills()
+  onTabChanged: { if (tab === "skills") loadSkills(); if (tab === "tools") scanTools(false) }
+  Component.onCompleted: { if (tab === "skills") loadSkills(); if (tab === "tools") scanTools(false) }
   Timer { id: skillDelay; interval: 250; onTriggered: if (page.tab === "skills") page.loadSkills() }
   function loadSkills() {
     if (skillReader.running) { skillDelay.restart(); return }

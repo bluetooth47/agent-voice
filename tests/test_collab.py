@@ -2105,7 +2105,7 @@ class TestDelegate:
         prompt = d._main.agent.sent[-1][0]
         assert prompt.index("The result of the task you gave Sora") < prompt.index("and now?")
         assert "The user now says:\nand now?" in prompt
-        assert "Sora here." in prompt and "may contain text from a web page" in prompt
+        assert "Sora here." in prompt and "may contain outside text" in prompt
         d.dispatch(d._main, "again", {})
         _idle(d)
         assert "The result of the task" not in d._main.agent.sent[-1][0]
@@ -2398,7 +2398,7 @@ class TestAsk:
         set_agent(d, "sora", tools={"browser": "on"})
         with in_turn(d, "main"):
             got = call(d, "main", "ask_agent", {"to": "sora", "question": "x"})
-        assert "may contain text from a web page" in got["text"]
+        assert "may contain outside text" in got["text"]
 
 
 # --- messages (A16-5) ------------------------------------------------------------------

@@ -140,6 +140,28 @@ def codex_models() -> list[dict]:
     return out
 
 
+def config_servers() -> list[str]:
+    """The MCP servers in Codex's own config.toml, by name, read now: only
+    the names `-c mcp_servers.<name>.enabled=false` can carry (others are
+    shown as not switchable on the Tools & skills tab). Bounded; a file
+    that cannot be read names none, and then Codex reads it no better."""
+    import re
+    import tomllib
+    try:
+        with open(_codex_home() / "config.toml", "rb") as f:
+            data = f.read(512 * 1024 + 1)
+        if len(data) > 512 * 1024:
+            return []
+        table = tomllib.loads(data.decode("utf-8")).get("mcp_servers")
+    except (OSError, ValueError, UnicodeDecodeError, RecursionError):
+        return []
+    if not isinstance(table, dict):
+        return []
+    return sorted(n for n, spec in table.items()
+                  if isinstance(n, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", n)
+                  and isinstance(spec, dict))[:200]
+
+
 def codex_default_model() -> str:
     """The model in Codex's own config.toml, which it uses when given none."""
     try:
@@ -175,6 +197,10 @@ class Codex(Adapter):
         #: The notes tools (crew_mcp.py, Phase 14): always, since Codex can
         #: take an MCP server; guarded on this agent's own level.
         self.crew_tools = True
+        #: The servers in Codex's own config.toml this agent is switched on
+        #: for (phase M10), by name, set by the daemon. Every other server
+        #: there is started with enabled=false: see _argv.
+        self.mcp_on: frozenset = frozenset()
         self.effort = effort
         self.spoken = spoken
         self.cwd = cwd
@@ -224,6 +250,16 @@ class Codex(Adapter):
             # because in `exec` it cannot ask and refuses every change.
             from desktop_mcp import codex_config
             argv += codex_config(self.name, self.named, guard=not self.full_auto)
+        for name in config_servers():
+            if name not in self.mcp_on:
+                # Found in the user's own config.toml and not switched on
+                # for this agent (phase M10): Codex would start it otherwise.
+                # Read now, not from the last scan, so a server added since
+                # is off from its first turn -- and only names that are
+                # there, because naming one that is not stops Codex from
+                # starting at all ("invalid transport"). Recorded in
+                # tests/fixtures/tools/codex-mcp-enabled.json.
+                argv += ["-c", f"mcp_servers.{name}.enabled=false"]
         if self.crew_tools:
             # Below Trusted the notes server asks for itself (--guard), on
             # Codex's own level, not on the desktop server's condition: with

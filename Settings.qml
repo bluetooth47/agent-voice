@@ -1376,6 +1376,59 @@ Item {
     }
     root.chooseVoice(v)
   }
+  // One agent's tool switch (master plan, M10): the one way any page sets
+  // an agent's own tools -- the three built in (desktop, browser,
+  // omarchySkill: "inherit" / "on" / "off") and each tool found on this
+  // machine ("mcp:<server>" or "cli:<name>": "inherit" / "off" /
+  // "on:<fingerprint>", the definition it approves). "inherit" leaves the key
+  // out, so an entry nobody changed stays as it was. Every other field of
+  // that agent, and every other agent, is copied as it was, fields this
+  // build does not know included. Called from Agent details' Tools & skills
+  // only (test_tool_controls.py counts the callers).
+  function setAgentTool(agentId, key, value) {
+    var builtin = ["desktop", "browser", "omarchySkill"].indexOf(key) >= 0
+    var detected = /^(mcp:[A-Za-z0-9][A-Za-z0-9._:@+-]{0,95}|cli:[a-z0-9][a-z0-9._+-]{0,31})$/.test(key)
+    if (!builtin && !detected) return false
+    var ok = value === "inherit" || value === "off" ||
+             (builtin ? value === "on" : /^on:[0-9a-f]{32}$/.test(String(value)))
+    if (!ok) return false
+    function edited(current) {
+      var all = {}
+      if (current && typeof current === "object" && !Array.isArray(current)) {
+        var keys = Object.keys(current)
+        for (var k = 0; k < keys.length; k++)
+          Object.defineProperty(all, keys[k], { value: current[keys[k]], enumerable: true,
+                                                writable: true, configurable: true })
+      }
+      if (value === "inherit") delete all[key]
+      else Object.defineProperty(all, key, { value: value, enumerable: true, writable: true,
+                                             configurable: true })
+      return all
+    }
+    if (agentId === "" || agentId === "main") {
+      root.put("mainTools", edited(root.setting("mainTools", {})))
+      return true
+    }
+    var list = [], found = false
+    for (var i = 0; i < root.voiceAgents.length; i++) {
+      var a = root.voiceAgents[i] || {}
+      var copy = {}
+      var names = Object.keys(a)
+      for (var n = 0; n < names.length; n++)
+        Object.defineProperty(copy, names[n], { value: a[names[n]], enumerable: true,
+                                                writable: true, configurable: true })
+      copy.id = root.agentId(a)
+      if (copy.id === agentId) {
+        copy.tools = edited(a.tools)
+        found = true
+      }
+      list.push(copy)
+    }
+    if (!found) return false
+    root.put("voiceAgents", list)
+    return true
+  }
+
   // Who speaks in `v` now: "main" and the display names of extra agents.
   function voiceUsers(v) {
     var out = []

@@ -193,6 +193,29 @@ if [ ! -x "$tmp/bin/agentvoice.rest" ]; then
   printf '#!/usr/bin/env bash\nexec %q "$@"\n' "${real_agentvoice:-false}" > "$tmp/bin/agentvoice.rest"
   chmod +x "$tmp/bin/agentvoice.rest"
 fi
+# The tools found on this machine (M10) are read from Claude Code's and
+# Codex's own settings and PATH. A preview never reads the real ones (a
+# screenshot would show the person's own servers): `agentvoice agents` and
+# `agentvoice tools` see a synthetic machine instead -- three Claude Code
+# servers (one with a made-up key in its environment, which must never be
+# drawn), one Codex server, and a PATH holding only two fake CLIs and what
+# bin/agentvoice itself needs.
+mkdir -p "$tmp/claude" "$tmp/codex" "$tmp/toolpath" "$tmp/run"
+cat > "$tmp/claude/.claude.json" <<'JSON'
+{"mcpServers": {
+  "github": {"type": "stdio", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"],
+             "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_PREVIEWFAKE0000000000"}},
+  "linear": {"type": "http", "url": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer PREVIEWFAKE"}},
+  "desktop-control": {"type": "stdio", "command": "python3", "args": ["-I", "/opt/desktop-control/server.py"]}},
+ "projects": {}}
+JSON
+printf '[mcp_servers.filesystem]\ncommand = "npx"\nargs = ["-y", "@modelcontextprotocol/server-filesystem", "/srv"]\n' > "$tmp/codex/config.toml"
+for c in gh stripe; do printf '#!/bin/sh\nexit 0\n' > "$tmp/toolpath/$c"; chmod +x "$tmp/toolpath/$c"; done
+for c in bash dirname readlink python3; do
+  w=$(command -v "$c" || true); [ -n "$w" ] && ln -sf "$w" "$tmp/toolpath/$c"
+done
+tools_env="CLAUDE_CONFIG_DIR='$tmp/claude' CODEX_HOME='$tmp/codex' XDG_RUNTIME_DIR='$tmp/run' XDG_STATE_HOME='$tmp/xdgstate' PATH='$tmp/toolpath'"
+
 # Starting, stopping or toggling the real service, typing to a real agent or
 # answering its permission question is never what a preview means, and since
 # Phase 10 a start also migrates the real agent folders: those are logged and
@@ -207,7 +230,10 @@ case "\${1:-}" in
     if [ "\${2:-}" = export ] && [ \$# -eq 3 ]; then
       mkdir -p '$tmp/exports'; set -- "\$@" '$tmp/exports'
     fi
-    XDG_DATA_HOME='$tmp/data' exec '$repo/bin/agentvoice' "\$@" ;;
+    env XDG_DATA_HOME='$tmp/data' $tools_env '$repo/bin/agentvoice' "\$@"; exit \$? ;;
+  tools)
+    # The tools found on this machine (M10): the synthetic one above.
+    env XDG_DATA_HOME='$tmp/data' $tools_env '$repo/bin/agentvoice' "\$@"; exit \$? ;;
   chats)
     # Saved chats: from the scratch data folder under --scratch-data, so
     # sharing a chat in a preview touches no real one; else as before.

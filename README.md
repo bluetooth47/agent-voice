@@ -537,10 +537,11 @@ of turns remembered.
 
 ### On the desktop
 
-Settings → **Communal** → **Tools**, for every agent. Each agent's own
-**Tools** card on the Agents page can turn any of these on or off for that
-agent alone, and says which it has and whether that is its own choice or
-the one for every agent.
+Settings → **Communal** → **Tools**, for every agent. An agent's own
+switches are on **Agent details** → **Tools & skills**, where any of these
+can be turned on or off for that agent alone; its **Tools** card on the
+Agents page says which it has and whether that is its own choice or the
+one for every agent.
 
 **Desktop tools** (off by default) gives Claude Code agents an MCP server
 of Agent Voice's own (`daemon/desktop_mcp.py`). With it they can open an
@@ -578,6 +579,43 @@ only, and nothing is written into `~/.claude`. Codex, Gemini, Antigravity
 and Copilot get a shorter list in their instructions. With it, Claude
 named three version-specific commands exactly; without it, one
 (FINDINGS §31).
+
+### Tools found on this machine
+
+Agent Voice looks for the MCP servers your coding agents are set up with --
+in Claude Code's own settings (`~/.claude.json`, a project's `.mcp.json`,
+enabled plugins) and Codex's `~/.codex/config.toml` -- and for command-line
+tools that reach an account or a service (`gh`, `aws`, `docker`, `stripe`
+and the like, plus any you add by name). It reads those files and never
+starts anything to find out. Each one is a switch on **Agent details** →
+**Tools & skills** (for one agent) and **Communal** → **Tools** (for
+every agent); an agent's own off always wins.
+
+**Everything found is off until you switch it on.** Before this, a Claude
+Code agent quietly loaded every MCP server in your own settings, and a
+project's `.mcp.json` without asking; now Claude Code is started with
+`--strict-mcp-config` and only the servers switched on for that agent, and
+Codex with the rest of its config's servers switched off. The first time
+you open an agent's Tools & skills tab it lists what it had before and is
+now off, each with **Turn on**.
+
+Turning one on shows what it runs, where it is defined and who gets it,
+and asks. A switch approves that definition: if the server's command,
+arguments or environment change later, it is off again and says "changed
+since you turned it on". A server's definition (it can carry an API key)
+goes to Claude Code in a private file, never on the command line, and is
+never logged.
+
+What "on" means, as measured with real turns (`tests/fixtures/tools/`):
+an MCP server below Trusted asks before each call on Claude Code, and is
+refused by Codex itself (it cannot ask); at Trusted it runs without asking,
+and the switch says so. A command-line tool is **told, not enforced**: the
+agent is told which it may use and which are switched off, and Claude Code
+also refuses the plain command for one that is off -- but `sh -c` gets past
+that, so the page never calls it enforced. An agent with a found server on
+has its notes and answers marked as possibly holding outside text, like
+the browser. Gemini, Antigravity and Copilot still start the MCP servers in
+their own settings; their tab says so.
 
 ### In Omarchy's Agents panel
 

@@ -402,7 +402,7 @@ def test_a_read_is_information_with_its_source_named():
     assert out.index("--- note ---") < out.index("Ignore") < out.index("--- end of note ---")
     assert "web pages" not in out
     out = crew_mcp.wrap({**note, "tainted": True}, "x", {})
-    assert "may contain text from web pages" in out
+    assert "may contain outside text" in out
 
 
 def test_a_read_is_cut_at_8000_and_says_so():
@@ -534,7 +534,7 @@ def test_a_claude_writer_with_the_browser_taints(monkeypatch):
     as_agent(monkeypatch, "claude", "sora")
     crew_mcp.call("notes_append", {"scope": "communal", "name": "n", "text": "x"})
     assert notes.read_note("communal", "n")["tainted"]
-    assert "may contain text from web pages" in crew_mcp.call(
+    assert "may contain outside text" in crew_mcp.call(
         "notes_read", {"scope": "communal", "name": "n"})
 
 
@@ -725,13 +725,13 @@ def test_claude_gets_one_config_holding_both_servers():
     a.desktop_tools = True
     argv = a._argv("", None)
     assert argv.count("--mcp-config") == 1
-    servers = json.loads(argv[argv.index("--mcp-config") + 1])["mcpServers"]
+    servers = json.loads(Path(argv[argv.index("--mcp-config") + 1]).read_text())["mcpServers"]
     assert set(servers) == {"agentvoice-desktop", "agentvoice-crew"}
     assert servers["agentvoice-crew"]["args"][1:] == ["claude", "sora"]
     main = ClaudeCode()
     main.browser_tools = True
     argv = main._argv("", None)
-    crew = json.loads(argv[argv.index("--mcp-config") + 1])["mcpServers"]["agentvoice-crew"]
+    crew = json.loads(Path(argv[argv.index("--mcp-config") + 1]).read_text())["mcpServers"]["agentvoice-crew"]
     assert crew["args"][1:] == ["claude", "--browser"]   # no id: the main agent
 
 

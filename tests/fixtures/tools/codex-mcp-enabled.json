@@ -1,0 +1,57 @@
+{
+ "recorded": "2026-11-22, codex-cli 0.171.0 (gpt-5.6-luna, low effort, --ephemeral), phase M10 spike. spike-codex is a stub MCP server added with -c, which leaves a marker when started or called.",
+ "on": {
+  "flags": [],
+  "started": [
+   "spike-codex.started"
+  ]
+ },
+ "off": {
+  "flags": [
+   "-c",
+   "mcp_servers.spike-codex.enabled=false",
+   "-c",
+   "mcp_servers.node_repl.enabled=false"
+  ],
+  "started": []
+ },
+ "unknown_name": {
+  "flags": [
+   "-c",
+   "mcp_servers.cua_repl.enabled=false"
+  ],
+  "codex_says": "Error: failed to load bootstrap configuration / invalid transport in `mcp_servers.cua_repl`",
+  "note": "a server not defined in config.toml (here one of Codex's own) cannot be named: Codex will not start"
+ },
+ "clear_all": {
+  "flags": [
+   "-c",
+   "mcp_servers={}"
+  ],
+  "note": "merged, not replaced: every server stayed enabled in `codex mcp list`"
+ },
+ "call_below_trusted": {
+  "flags": [],
+  "item": {
+   "type": "mcp_tool_call",
+   "server": "spike-codex",
+   "tool": "ping",
+   "status": "failed",
+   "error": {
+    "message": "MCP tool call requires approval, but approval policy is never"
+   }
+  }
+ },
+ "call_at_trusted": {
+  "flags": [
+   "--approve-for-me"
+  ],
+  "item": {
+   "type": "mcp_tool_call",
+   "server": "spike-codex",
+   "tool": "ping",
+   "status": "completed"
+  },
+  "called": true
+ }
+}

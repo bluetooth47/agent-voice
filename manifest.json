@@ -89,6 +89,7 @@
       "browserTools": false,
       "omarchySkill": true,
       "mainTools": {},
+      "sharedTools": {},
       "mainNotesWrite": "allow",
       "mainCollaboration": "announce",
       "mainAcceptsWork": true,

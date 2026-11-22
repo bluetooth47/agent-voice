@@ -29,6 +29,7 @@
 #   agentvoice tasks [cancel ID]   collaboration tasks between agents
 #   agentvoice crew check < lists  may the Crew map save these crew links and
 #                                  this quarantine (one JSON line on stdin)
+#   agentvoice tools scan [--json] the MCP servers and CLIs found on this machine
 #   agentvoice commands [--json]   every spoken command, and the wake phrases
 #   agentvoice try AGENT < draft   one sentence in AGENT's voice, on a draft
 #                                  personality (Agent details' Try it)
@@ -385,6 +386,18 @@ case "${1:-status}" in
     shift
     exec "$PY" "$REPO/daemon/collab.py" crew "$@"
     ;;
+  tools)
+    # The tools found on this machine (phase M10): MCP servers in Claude
+    # Code's and Codex's own settings, and CLIs on PATH. Reads files only;
+    # never starts a tool, never prints a secret value.
+    #   agentvoice tools scan [--json] [--rescan]
+    #   agentvoice tools dismiss AGENT     hide AGENT's "now off" notice
+    REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+    PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+    [[ -x $PY ]] || PY=python3
+    shift
+    exec "$PY" "$REPO/daemon/tooldetect.py" "$@"
+    ;;
   chats)
     # Saved conversations (saveChats). The daemon holds which chat each
     # agent is in, so continuing or starting one is a command to it; the
@@ -498,7 +511,7 @@ case "${1:-status}" in
     active && echo yes || echo no
     ;;
   *)
-    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|try|interrupt|hud-preview|monitor|calibrate|voice|permit|pending|history|chats|pass|tasks|crew|agents|endpoint|open-mic|commands|wake-test|status|is-active]" >&2
+    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|try|interrupt|hud-preview|monitor|calibrate|voice|permit|pending|history|chats|pass|tasks|crew|tools|agents|endpoint|open-mic|commands|wake-test|status|is-active]" >&2
     exit 2
     ;;
 esac

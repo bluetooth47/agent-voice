@@ -52,8 +52,8 @@ def run_js(script: str):
 
 
 PAGE_FUNCTIONS = ["copyEntry", "mapValue", "putMap", "setLevel", "setModel", "setEffort", "saveAgents",
-                  "updateAgent", "toolMap", "putMainTool", "putAgentTool", "putAgentNotes",
-                  "putAgentCollab", "putAgentAccepts", "writeField", "writeTool",
+                  "updateAgent", "putAgentNotes",
+                  "putAgentCollab", "putAgentAccepts", "writeField",
                   "putMainEndpoint", "runOn"]
 
 
@@ -181,25 +181,16 @@ def test_saving_one_field_of_one_agent_leaves_everything_else_byte_identical():
     assert _check_extra_writes(results, calls) == []
 
 
-@needs_node
-def test_a_tool_switch_changes_one_key_of_one_agents_tools():
-    cases = [('writeTool(0, "browser", "on")', {"desktop": "on", "browser": "on"}),
-             ('writeTool(0, "desktop", "inherit")', {}),
-             ('writeTool(0, "desktop", "off")', {"desktop": "off"}),
-             ('writeTool(1, "omarchySkill", "off")', {"omarchySkill": "off"})]
-    results = harness(AGENTS, {}, [c for c, _ in cases])
-    for (call, tools), r in zip(cases, results):
-        index = int(call.split("(")[1].split(",")[0])
-        assert [k for k, _ in r["puts"]] == ["voiceAgents"], call
-        # The whole list, against a copy with only that change: a write that
-        # dropped an agent would pass a neighbour-by-neighbour zip (Codex
-        # review, M5).
-        want = json.loads(json.dumps(AGENTS))
-        if tools:
-            want[index]["tools"] = tools
-        else:
-            want[index]["tools"] = {}
-        assert json.dumps(r["puts"][0][1]) == json.dumps(want), call
+def test_the_page_no_longer_writes_an_agents_tools():
+    """Phase M10: an agent's own tool switches have one home, Agent details'
+    Tools & skills, through `s.setAgentTool` (test_tool_controls.py runs
+    it). The Agents card shows a summary and links there."""
+    from qml_scan import scan
+    src = scan(PAGE).nocomment
+    assert 'put("mainTools"' not in src
+    assert not re.search(r'updateAgent\([^)]*"tools"', src)
+    assert "setAgentTool" not in src
+    assert 'onDetailsAsked: blk.s.goTo("agentdetails", blk.agentId, "tools")' in src
 
 
 @needs_node
@@ -255,8 +246,6 @@ MAIN_WRITES = [
     ('writeField(-1, "agent", "codex")', [["mainProgram", "codex"]]),
     ('writeField(-1, "agent", "omarchy")', []),
     ('writeField(-1, "agent", "endpoint")', []),
-    ('writeTool(-1, "browser", "inherit")', [["mainTools", {}]]),
-    ('writeTool(-1, "desktop", "on")', [["mainTools", {"browser": "off", "desktop": "on"}]]),
     ('putMainEndpoint("endpointUrl", "http://x/v1")', [["endpointUrl", "http://x/v1"]]),
     ('putMainEndpoint("endpointHistoryTurns", 3)', [["endpointHistoryTurns", 3]]),
 ]

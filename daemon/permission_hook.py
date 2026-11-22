@@ -194,8 +194,9 @@ def browser_consequence(tool_name: str, tool_input: dict) -> str:
     return ""
 
 
-#: Everything else is asked about, including every `mcp__*` tool the user has
-#: configured, WebSearch, WebFetch, Task and Skill. That is the point of the
+#: Everything else is asked about, including every `mcp__*` tool of a server
+#: found on this machine and switched on for this agent (one switched off is
+#: refused: detected_refusal), WebSearch, WebFetch, Task and Skill. That is the point of the
 #: `.*` matcher in adapters/claude_code.py: before it, those never reached
 #: this process and ran under `--permission-mode auto` while the settings
 #: screen said "asks before every change".
@@ -546,6 +547,44 @@ def _chain() -> str:
         return collab.chain_text(chain) if chain else ""
     except Exception:
         return ""
+
+
+#: Server prefixes that are Agent Voice's own (or Claude in Chrome's,
+#: switched by browserTools): judged by their own rules, never as found.
+_OWN_PREFIXES = (DESKTOP_PREFIX, CREW_PREFIX, BROWSER_PREFIX)
+
+
+def detected_refusal(tool_name: str) -> str:
+    """Why a call to an MCP server that is not Agent Voice's own is refused,
+    or "" when its switch is on for this agent (phase M10).
+
+    Claude Code is started with only the servers Agent Voice names
+    (--strict-mcp-config): its own, Claude in Chrome, and the ones found on
+    this machine that this agent was switched on for, under the name
+    tooldetect.server_key gives them. Its process keeps what it started with
+    until it is let go, so a switch turned off meanwhile is held here, at the
+    call, read fresh. Any other server is one nobody switched on. Settings
+    that cannot be read, an agent the settings do not have or now running
+    another program, and any failure here switch nothing on."""
+    if not tool_name.startswith("mcp__") or tool_name.startswith(_OWN_PREFIXES):
+        return ""
+    try:
+        from runtime import Config
+        import tooldetect
+        cfg = Config()
+        named = _named()
+        if named:
+            spec = cfg.agent_by_id(named)
+            agent = sys.argv[1] if len(sys.argv) > 1 else ""
+            if spec is None or spec.get("agent") != agent:
+                return "this agent's tool switches cannot be read, so its found tools are off."
+        keys = tooldetect.switched_on_keys(cfg, named)
+    except Exception:
+        return "its tool switches cannot be read, so the tools found on this machine are off."
+    if any(tool_name.startswith(f"mcp__{k}__") for k in keys):
+        return ""
+    return ("that tool server is switched off for this agent in Agent Voice "
+            "(Agent details, Tools & skills).")
 
 
 def _named() -> str:
@@ -935,6 +974,12 @@ def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, st
     why = orders_write(tool_name, tool_input)
     if why:
         return _ask(tool_name, tool_input, note=why, session="")
+
+    # A server found on this machine (phase M10), before the grant: "allow
+    # all in this chat" is not an answer to a tool switched off since.
+    why = detected_refusal(tool_name)
+    if why:
+        return "deny", why
 
     desktop = tool_name[len(DESKTOP_PREFIX):] if tool_name.startswith(DESKTOP_PREFIX) else ""
     if desktop in DESKTOP_READ_ONLY or desktop in DESKTOP_SELF_ASKED:

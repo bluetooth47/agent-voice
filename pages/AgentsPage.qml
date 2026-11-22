@@ -27,7 +27,9 @@ import "../ui"
 // The tools every agent gets were the "On the desktop" group at the foot of
 // this page, where they read as the last agent's (bug E). They are on
 // Communal → Tools now; each agent's Tools card says which it has and where
-// that comes from.
+// that comes from. Since M10 that card only reads: an agent's own tool
+// switches, and the tools found on this machine, are set on Agent details →
+// Tools & skills (`s.setAgentTool`), which the card links to.
 Column {
   id: page
 
@@ -215,25 +217,15 @@ Column {
 
   // --- tool switches (merged plan, Phase 13) ----------------------------------
   // Each agent's own, beating the settings for every agent on Communal →
-  // Tools. Written as inherit / on / off; inherit is written by leaving the
-  // key out, so an entry nobody changed stays as it was.
+  // Tools. Read here for the Tools card's summary and the Rule of Two; since
+  // M10 they are written on Agent details → Tools & skills only, through
+  // `s.setAgentTool`.
   readonly property var toolGlobals: ({
     desktop: s.setting("desktopTools", false) === true,
     browser: s.setting("browserTools", false) === true,
     omarchySkill: s.setting("omarchySkill", true) === true
   })
-  function toolMap(current, key, value) {
-    var all = {}
-    if (current && typeof current === "object")
-      for (var k in current) all[k] = current[k]
-    if (value === "inherit") delete all[key]
-    else all[key] = value
-    return all
-  }
-  function putMainTool(key, value) { s.put("mainTools", toolMap(s.setting("mainTools", {}), key, value)) }
-  function putAgentTool(index, key, value) {
-    updateAgent(index, "tools", toolMap((s.voiceAgents[index] || {}).tools, key, value))
-  }
+  readonly property var sharedTools: s.setting("sharedTools", {})
   // Leave out the keys for the notes and collaboration defaults.
   function putAgentNotes(index, value) {
     updateAgent(index, "notesWrite", value === "allow" ? undefined : "deny")
@@ -250,13 +242,26 @@ Column {
   // (Phase 14) does not lift it: at Trust everything a Claude agent can
   // still rewrite the communal rules and skills with a shell command
   // (Phase 13 review).
+  // Since M10 an MCP server found on this machine and switched on counts as
+  // outside content too: what it returns is text nobody here wrote.
   function ruleOfTwo(program, level, choices) {
-    var c = (choices && typeof choices === "object") ? choices.browser : undefined
-    var browser = c === "on" || (c !== "off" && toolGlobals.browser)
-    if (!browser || program !== "claude" || level !== "trusted") return ""
-    return "It reads web pages, acts without asking, and can change what the other agents are " +
-           "told (the communal rules, skills and notes). A page could steer it into doing that. " +
-           "Turning its browser off, or asking first, takes the risk away."
+    var own = (choices && typeof choices === "object") ? choices : {}
+    var c = own.browser
+    var browser = program === "claude" && (c === "on" || (c !== "off" && toolGlobals.browser))
+    var shared = (sharedTools && typeof sharedTools === "object") ? sharedTools : {}
+    var server = false
+    var keys = Object.keys(own).concat(Object.keys(shared))
+    for (var i = 0; i < keys.length; i++) {
+      if (keys[i].indexOf("mcp:") !== 0) continue
+      var v = own[keys[i]] !== undefined ? own[keys[i]] : shared[keys[i]]
+      if (/^on:[0-9a-f]{32}$/.test(String(v))) server = true
+    }
+    server = server && (program === "claude" || program === "codex")
+    if ((!browser && !server) || level !== "trusted") return ""
+    var what = browser && server ? "web pages and a tool server's output" : browser ? "web pages" : "a tool server's output"
+    return "It reads " + what + ", acts without asking, and can change what the other agents are " +
+           "told (the communal rules, skills and notes). Outside text could steer it into doing that. " +
+           "Turning " + (browser ? "its browser" : "the server") + " off, or asking first, takes the risk away."
   }
 
   // --- every write, by agent and field ------------------------------------------
@@ -297,10 +302,6 @@ Column {
     case "collaboration": putAgentCollab(index, value); break
     case "acceptsWork": putAgentAccepts(index, value); break
     }
-  }
-  function writeTool(index, key, value) {
-    if (index < 0) putMainTool(key, value)
-    else putAgentTool(index, key, value)
   }
   // The EndpointEditor's edited(key, value), for the main agent; an extra
   // agent's goes straight to updateAgent with the key it was given.
@@ -987,7 +988,7 @@ Column {
       // --- Tools -----------------------------------------------------------------
       Card {
         title: "Tools"
-        subtitle: "Its own switch beats the one for every agent."
+        subtitle: "Its switches are on Agent details."
         // A deep link with tab "tools" points here.
         highlighted: blk.s.focusTools && blk.s.focusAgent === blk.agentId
         foreground: blk.s.foreground
@@ -998,12 +999,13 @@ Column {
           part: "tools"
           choices: blk.tools
           globals: blk.pg.toolGlobals
+          shared: blk.pg.sharedTools
           program: blk.program
           foreground: blk.s.foreground
           accent: blk.s.accent
           urgent: blk.s.urgent
           fontFamily: blk.s.fontFamily
-          onPicked: function(key, value) { blk.pg.writeTool(blk.agentIndex, key, value) }
+          onDetailsAsked: blk.s.goTo("agentdetails", blk.agentId, "tools")
           onSharedAsked: blk.s.goTo("communal", "", "tools")
         }
       }

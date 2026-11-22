@@ -1572,6 +1572,19 @@ PROGRAM_LABELS = {"claude": "Claude Code", "codex": "Codex", "gemini": "Gemini",
                   "endpoint": "An endpoint"}
 
 
+#: Programs that read MCP servers from settings of their own, which the
+#: detector does not read and the adapters do not switch (phase M10): said on
+#: the Tools & skills tab rather than left for the list to imply.
+UNMANAGED_MCP = {
+    "gemini": "Gemini also starts the MCP servers in its own settings (~/.gemini/settings.json); "
+              "Agent Voice does not switch those.",
+    "agy": "Antigravity also starts the MCP servers in its own settings; Agent Voice does not "
+           "switch those.",
+    "copilot": "Copilot also starts the MCP servers in its own settings; Agent Voice does not "
+               "switch those.",
+}
+
+
 def program_of(agent_id: str, cfg) -> str:
     """The program an agent runs, as Omarchy spells it, "endpoint" for an
     OpenAI-compatible endpoint, "" when none is chosen. The main agent's is
@@ -1718,11 +1731,29 @@ def catalog(agent_id: str, cfg) -> dict:
     entries = skill_set(own, skills(COMMUNAL))
     if delivery == "none":
         entries = [{**s, "delivered": False} for s in entries]
+    # Phase M10: the tools found on this machine, as this agent has them.
+    # A scan that fails lists nothing (and says why): nothing is on then.
+    import tooldetect
+    spec = None if me == MAIN else next((a for a in cfg.all_agents() if a["id"] == me), None)
+    project = cfg.get_str("projectDir") if me == MAIN else str((spec or {}).get("projectDir") or "")
+    try:
+        scanned = tooldetect.scan_cached(cfg)
+        detected = tooldetect.rows(cfg, "" if me == MAIN else me, program, level, project,
+                                   scanned, tooldetect.read_live())
+        scan = {"problems": scanned.get("problems") or [], "files_read": scanned.get("files_read", 0),
+                "ms": scanned.get("ms", 0), "keyed": bool(scanned.get("keyed")), "error": ""}
+    except Exception as e:      # noqa: BLE001 -- shown on the tab
+        detected = []
+        scan = {"problems": [], "files_read": 0, "ms": 0, "keyed": False,
+                "error": f"the scan failed ({type(e).__name__})"}
     return {"agent": me, "program": program, "program_label": _label(program),
             "level": level, "tools": tools, "notes": notes_row, "collab": collab_row,
             "skills": entries,
             "delivery": delivery, "delivery_how": how,
-            "skills_asks": _commands_ask(program, level) if delivery != "none" else ""}
+            "skills_asks": _commands_ask(program, level) if delivery != "none" else "",
+            "detected": detected, "scan": scan,
+            "notice": tooldetect.notice(me, detected),
+            "detected_note": UNMANAGED_MCP.get(program, "")}
 
 
 def parts(agent_id: str, cfg, live_ids=None) -> dict:

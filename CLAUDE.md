@@ -236,7 +236,7 @@ reloads a model on every poll. Miss the third and the fix waits for something
 unrelated to be touched, which is how "switching engines and back" became
 folklore for "make it notice".
 
-## Eight ways this fails open, and the rules that close them
+## Nine ways this fails open, and the rules that close them
 
 Each of these was a real path from "somebody said something near the
 microphone" to "something ran". They are listed because every one of them is
@@ -323,6 +323,21 @@ cancels running work whose link or quarantine moved. A new way for one
 agent to reach another -- chat search (M20), announcements (M27) -- calls
 `crew_links.refusal` at each of those points, and an unreadable list
 refuses it.
+
+**A switch that says off has to be off where the CLI looks.** `claude -p`
+starts every MCP server in the user's own settings, every project's
+`.mcp.json` (unapproved) and every plugin's, whatever Agent Voice passes, so
+until M10 a Claude agent had servers nobody had switched on for it. Every
+Claude turn now carries `--strict-mcp-config` and only the servers named in
+a 0600 file (`base.private_config_file`; a definition can hold a key, argv
+is world readable), and Codex gets `enabled=false` for every config.toml
+server not switched on -- named only when the file has it, because naming
+one that is not there stops Codex from starting. A switch says "enforced"
+only where a recorded turn shows it (`tests/fixtures/tools/`): a CLI is
+"told, not enforced", because Claude's deny rules stop `gh` and not `sh -c
+'gh'`. A new way to hand an agent a tool goes through `tooldetect.delivery`
+and the hook's `detected_refusal`, and is off until a switch approves its
+fingerprint.
 
 **A transcript and a model reply are untrusted input to the UI.** Any `Text`
 showing one needs `textFormat: Text.PlainText`: `AutoText` renders anything

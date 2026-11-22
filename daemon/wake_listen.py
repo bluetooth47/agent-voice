@@ -3171,6 +3171,26 @@ class Daemon:
             agent = self.agent if p.main else p.agent
             if agent is not None and not p.busy:
                 self.apply_extras(agent, p)
+        self.publish_live_tools(agents)
+
+    def publish_live_tools(self, agents) -> None:
+        """Which MCP servers each Claude agent's last process said it
+        started (its init event), for the Tools & skills tab's "running"
+        (phase M10; M16 reads it too). Written only when it changed."""
+        live = {}
+        for p in agents:
+            agent = self.agent if p.main else p.agent
+            servers = getattr(agent, "live_servers", None)
+            if servers is not None:
+                live["main" if p.main else (p.id or "")] = {"servers": servers}
+        if live == getattr(self, "_live_tools", {}):
+            return
+        self._live_tools = live
+        try:
+            import tooldetect
+            tooldetect.write_live(live)
+        except Exception:
+            pass
 
     def _rebuild_skill(self) -> None:
         try:
@@ -3229,6 +3249,37 @@ class Daemon:
         cache[fid] = (key, got, retry)
         return got
 
+    def detected_for(self, agent, p) -> dict:
+        """What `agent` (persona `p`'s) is handed from the tools found on
+        this machine (phase M10, tooldetect.delivery): servers for Claude
+        Code, the config.toml servers Codex may start, and the CLIs it is
+        told it may use and told are off. Anything that goes wrong hands it
+        nothing, and says so once: a tool is off until it is shown to be on."""
+        empty = {"servers": {}, "mcp_on": [], "clis_on": [], "clis_off": []}
+        program = getattr(agent, "name", "") or ""
+        if not program:
+            return empty
+        try:
+            import tooldetect
+            agent_id = getattr(p, "id", "") or ""
+            if getattr(p, "main", False) or p is None:
+                agent_id, project = "", self.cfg.get_str("projectDir")
+            else:
+                project = str((getattr(p, "spec", None) or {}).get("projectDir") or "")
+            scanned, defs = tooldetect.scan_cached(self.cfg, with_defs=True)
+            got = tooldetect.delivery(self.cfg, agent_id, program, project, scanned, defs)
+            on: list = []
+            if program == "codex":
+                names = {d["name"] for d in defs if d["backend"] == "codex"}
+                on = sorted(names - set(got["codex_off"]))
+            return {"servers": got["servers"], "mcp_on": on,
+                    "clis_on": got["clis_on"], "clis_off": got["clis_off"]}
+        except Exception as e:      # never worth a turn; never a tool given on a guess
+            who = getattr(p, "label", "") or "main"
+            self.say_once(f"detected-{who}", f"  {YEL}tools found on this machine: not given to "
+                                              f"“{who}” ({type(e).__name__}){OFF}")
+            return empty
+
     def apply_extras(self, agent, p=None) -> bool:
         """Give `agent` (persona `p`'s) the desktop tools, the browser, the
         Omarchy skill and its skills, as its switches ask (Phase 13; before
@@ -3268,6 +3319,23 @@ class Daemon:
                 agent.collab_listed = want
             elif agent.collab_listed != want:
                 agent.collab_listed, changed = want, True
+        # Phase M10: the tools found on this machine, as this agent's own
+        # switches, the ones for every agent and each tool's fingerprint now
+        # say. All read when a process starts, so a change lets the idle
+        # one go, like the rest; a Claude process still running is held by
+        # the permission hook, which refuses a server switched off since.
+        got = self.detected_for(agent, p)
+        for attr, want in (("detected_servers", got["servers"]),
+                           ("clis_denied", tuple(got["clis_off"])),
+                           ("mcp_on", frozenset(got["mcp_on"]))):
+            if hasattr(agent, attr) and getattr(agent, attr) != want:
+                setattr(agent, attr, want)
+                changed = True
+        if getattr(agent, "has_tools", False):
+            for attr, want in (("clis_on", tuple(got["clis_on"])), ("clis_off", tuple(got["clis_off"]))):
+                if getattr(agent, attr, ()) != want:
+                    setattr(agent, attr, want)
+                    changed = True
         if changed:
             try:
                 agent.cancel()
@@ -3279,6 +3347,14 @@ class Daemon:
                     if getattr(agent, a, False)]
             if skill_on and (getattr(agent, "skill_dir", None) or getattr(agent, "skill_text", "")):
                 have.append("omarchy")
+            # Counts only: a server's or a CLI's name can say what the
+            # person uses, and names are on the page, not in the journal.
+            found = len(getattr(agent, "detected_servers", None) or {}) + \
+                len(getattr(agent, "mcp_on", None) or ())
+            if found:
+                have.append(f"{found} found server{'s' if found != 1 else ''}")
+            if getattr(agent, "clis_on", ()):
+                have.append(f"{len(agent.clis_on)} CLI{'s' if len(agent.clis_on) != 1 else ''}")
             folder = getattr(agent, "skill_dir", None)
             who = getattr(p, "label", "") or getattr(p, "name", "") or "main"
             print(f"  {DIM}tools for “{who}”: {' · '.join(have) or 'none'}"

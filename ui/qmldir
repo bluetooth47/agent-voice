@@ -38,6 +38,7 @@ TabStrip 1.0 TabStrip.qml
 Tip 1.0 Tip.qml
 ToggleChips 1.0 ToggleChips.qml
 ToggleRow 1.0 ToggleRow.qml
+ToolConfirm 1.0 ToolConfirm.qml
 ToolSwitches 1.0 ToolSwitches.qml
 UndoToast 1.0 UndoToast.qml
 VoiceLibraryRow 1.0 VoiceLibraryRow.qml

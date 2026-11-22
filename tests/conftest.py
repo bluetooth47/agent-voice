@@ -64,6 +64,25 @@ def _no_recorder_probe(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_cli_settings(monkeypatch, tmp_path_factory):
+    """Which MCP servers and CLIs are on a machine is a fact about the
+    machine too (phase M10, tooldetect.py). Without this a catalog, a Codex
+    argv or a delivery would read the developer's own ~/.claude.json,
+    ~/.codex/config.toml and PATH, and pass or fail by what they have
+    installed -- on a runner, nothing. A test that wants something there
+    sets these itself (a test's own setenv wins), or passes roots and a
+    PATH to tooldetect directly."""
+    base = tmp_path_factory.mktemp("cli-settings")
+    (base / "claude").mkdir()
+    (base / "codex").mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(base / "claude"))
+    monkeypatch.setenv("CODEX_HOME", str(base / "codex"))
+    import tooldetect
+    monkeypatch.setattr(tooldetect, "default_path", lambda: "")
+    tooldetect._MEMO.clear()
+
+
+@pytest.fixture(autouse=True)
 def card_desk(monkeypatch):
     """A fresh in-process desk for approval cards (phase M7), as the daemon
     installs one: `permission_hook.ask_card` posts to it instead of a socket.

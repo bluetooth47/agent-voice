@@ -51,6 +51,7 @@ class TestConfigAgents:
             "name": "jarvis", "id": "jarvis", "label": "Jarvis", "agent": "claude", "model": "sonnet",
             "effort": "high", "voice": "amy-medium", "speed": 0, "narration": "", "instructions": "", "level": "edits",
             "tools": {"desktop": "inherit", "browser": "inherit", "omarchySkill": "inherit"},
+            "detected": {},
             "notesWrite": "allow", "collaboration": "announce", "acceptsWork": True,
             "projectDir": "~/code", "endpoint": None}]
 

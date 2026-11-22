@@ -1,0 +1,121 @@
+{
+ "recorded": "2026-11-22, claude 2.1.330 (haiku), phase M10 spike, in a scratch folder holding a project .mcp.json (server spike-proj) with the user's own ~/.claude.json server desktop-control present. Every server named spike-* is a stub that leaves a marker file when started or called.",
+ "loose": {
+  "flags": [
+   "--mcp-config",
+   "<inline JSON: spike-file>"
+  ],
+  "init": {
+   "mcp_servers": [
+    {
+     "name": "desktop-control",
+     "status": "connected",
+     "source": "user"
+    },
+    {
+     "name": "spike-proj",
+     "status": "connected",
+     "source": "project"
+    },
+    {
+     "name": "spike-file",
+     "status": "connected",
+     "source": "dynamic"
+    }
+   ],
+   "mcp_tools": [
+    "mcp__desktop-control__click",
+    "mcp__desktop-control__cursor_position",
+    "mcp__desktop-control__key",
+    "mcp__desktop-control__move",
+    "mcp__desktop-control__screenshot",
+    "mcp__desktop-control__type",
+    "mcp__spike-file__ping",
+    "mcp__spike-proj__ping"
+   ],
+   "permissionMode": "auto"
+  },
+  "started": [
+   "spike-file.started",
+   "spike-proj.started"
+  ]
+ },
+ "strict": {
+  "flags": [
+   "--strict-mcp-config",
+   "--mcp-config",
+   "<0600 file: spike-file>",
+   "--settings",
+   "{\"skillOverrides\":{\"minecraft\":\"off\"}}"
+  ],
+  "init": {
+   "mcp_servers": [
+    {
+     "name": "spike-file",
+     "status": "connected",
+     "source": "dynamic"
+    }
+   ],
+   "mcp_tools": [
+    "mcp__spike-file__ping"
+   ],
+   "permissionMode": "auto"
+  },
+  "started": [
+   "spike-file.started"
+  ],
+  "skills_left_out": [
+   "minecraft"
+  ]
+ },
+ "plugin_loose": {
+  "flags": [
+   "--plugin-dir",
+   "<plugin with .mcp.json: spike-plug>"
+  ],
+  "init": {
+   "mcp_servers": [
+    {
+     "name": "plugin:spikeplug:spike-plug",
+     "status": "pending",
+     "source": "plugin"
+    },
+    {
+     "name": "desktop-control",
+     "status": "pending",
+     "source": "user"
+    },
+    {
+     "name": "spike-proj",
+     "status": "pending",
+     "source": "project"
+    }
+   ]
+  },
+  "started": [
+   "spike-plug.started",
+   "spike-proj.started"
+  ]
+ },
+ "plugin_strict": {
+  "flags": [
+   "--strict-mcp-config",
+   "--mcp-config",
+   "<0600 file: spike-file>",
+   "--plugin-dir",
+   "<same plugin>"
+  ],
+  "init": {
+   "mcp_servers": [
+    {
+     "name": "spike-file",
+     "status": "connected",
+     "source": "dynamic"
+    }
+   ]
+  },
+  "started": [
+   "spike-file.started"
+  ]
+ }
+}

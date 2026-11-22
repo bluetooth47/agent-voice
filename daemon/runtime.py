@@ -119,6 +119,33 @@ def tool_choices(raw) -> dict[str, str]:
             for k in TOOL_GLOBALS}
 
 
+#: A detected tool's switch (phase M10), kept in the same tools maps as the
+#: three built-in switches: the key is the tool id, the value "off" or
+#: "on:<fingerprint>" -- the definition it approved. A missing key inherits
+#: (sharedTools, then off).
+DETECTED_KEY = re.compile(r"(?:mcp:[A-Za-z0-9][A-Za-z0-9._:@+-]{0,95}|cli:[a-z0-9][a-z0-9._+-]{0,31})")
+APPROVAL = re.compile(r"on:[0-9a-f]{32}")
+#: More than anyone switches by hand; a map past it is read only so far.
+MAX_DETECTED = 256
+
+
+def detected_choices(raw) -> dict[str, str]:
+    """The detected-tool switches in a tools map, cleaned: each key a tool
+    id, each value "off" or "on:<fingerprint>". A value that is there but is
+    neither reads as "off" -- somebody meant to say something, and a switch
+    that cannot be read keeps the tool away. Keys that are no tool id (the
+    built-in switches among them) are left out."""
+    out: dict[str, str] = {}
+    if not isinstance(raw, dict):
+        return out
+    for key, value in raw.items():
+        if len(out) >= MAX_DETECTED:
+            break
+        if isinstance(key, str) and DETECTED_KEY.fullmatch(key):
+            out[key] = value if isinstance(value, str) and APPROVAL.fullmatch(value) else "off"
+    return out
+
+
 def speed_pct(value, fallback: int = 100) -> int:
     """A speaking speed as a whole percent inside the bounds, or `fallback`.
 
@@ -275,6 +302,13 @@ DEFAULTS = {
     # desktop / browser / omarchySkill to inherit, on or off. Extra agents
     # keep theirs in their entry, as `tools`.
     "mainTools": {},
+    # Phase M10: the tools found on this machine (MCP servers in the CLIs'
+    # own settings, and CLIs on PATH) that every agent gets, by tool id
+    # ("mcp:<server>", "cli:<name>") to "on:<fingerprint>" or "off". Empty is
+    # everything found off: a tool is off until somebody switches it on, and
+    # a switch approves one definition (tooldetect.fingerprint). An agent's
+    # own entry in its tools map beats this. Written on Communal → Tools.
+    "sharedTools": {},
     # Whether the main agent may write notes (merged plan, Phase 14): allow
     # or deny. Extra agents keep theirs in their entry, as `notesWrite`.
     "mainNotesWrite": "allow",
@@ -759,6 +793,8 @@ class Config:
                 "level": level if level in ("ask", "edits", "trusted") else "ask",
                 # Its tool switches as written, each inherit / on / off.
                 "tools": tool_choices(entry.get("tools")),
+                # Its switches for the tools found on this machine (M10).
+                "detected": detected_choices(entry.get("tools")),
                 # Whether it may write notes: allow or deny (Phase 14).
                 "notesWrite": notes_choice(entry, "notesWrite"),
                 # What it may start with other agents, and whether it takes
@@ -798,6 +834,26 @@ class Config:
             own = (spec or {}).get("tools") or tool_choices(None)
         return {k: (own[k] == "on" if own[k] != "inherit" else self.get_bool(g))
                 for k, g in TOOL_GLOBALS.items()}
+
+    def tool_switches(self, agent_id: str | None) -> tuple[dict, dict]:
+        """This agent's own switches for the tools found on this machine,
+        and the ones for every agent (`sharedTools`), each cleaned by
+        detected_choices (phase M10). Which tools are on also needs the
+        fingerprint of each one now: tooldetect.rows() joins the two.
+
+        Nothing is switched on when the settings cannot be read (a switch
+        the person turned off may be in the part that cannot be read), and
+        for an agent the settings do not have: nobody's decision is behind
+        it. Read fresh by whoever asks."""
+        if not self.settings_readable():
+            return {}, {}
+        shared = detected_choices(self["sharedTools"])
+        if not agent_id or agent_id == "main":
+            return detected_choices(self["mainTools"]), shared
+        spec = next((a for a in self.all_agents() if a["id"] == agent_id), None)
+        if spec is None:
+            return {}, {}
+        return dict(spec.get("detected") or {}), shared
 
     def settings_readable(self) -> bool:
         """False when shell.json exists and this widget's entry could not be

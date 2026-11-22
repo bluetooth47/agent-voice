@@ -369,15 +369,18 @@ def test_claude_gets_the_server_and_the_skill_only_when_on():
     argv = a._argv("", None)
     assert "--plugin-dir" not in argv
     # Only the notes server (Phase 14), which does not wait for desktopTools.
-    config = json.loads(argv[argv.index("--mcp-config") + 1])
+    # The config travels as a private file since M10, never inline.
+    config = json.loads(Path(argv[argv.index("--mcp-config") + 1]).read_text())
     assert list(config["mcpServers"]) == ["agentvoice-crew"]
     a.desktop_tools, a.skill_dir = True, "/skills/here"
     argv = a._argv("", None)
-    config = json.loads(argv[argv.index("--mcp-config") + 1])
+    config = json.loads(Path(argv[argv.index("--mcp-config") + 1]).read_text())
     server = config["mcpServers"]["agentvoice-desktop"]
     assert server["args"][1:] == ["claude", "nova-k3f"]
     assert argv[argv.index("--plugin-dir") + 1] == "/skills/here"
-    assert "--strict-mcp-config" not in argv      # the user's servers stay
+    # Since M10 only the servers Agent Voice names: the user's own are
+    # switched on per agent (tests/test_tool_controls.py).
+    assert "--strict-mcp-config" in argv
 
 
 def test_other_backends_get_the_short_list_in_their_instructions():

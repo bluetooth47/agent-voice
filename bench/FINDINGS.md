@@ -1761,3 +1761,104 @@ Not done: unattended, and the transcripts are the user's to read.
 Default: **`edges`**, open question 4's default. The measured false-trigger
 counts are 0 for both `edges` and `clause`, so they do not favour `clause`;
 labelling the 3 is what could.
+
+## 44. M10: what Claude Code and Codex really load, and what a tool switch costs
+
+Measured 2026-11-22 on the i7-1185G7 with `claude` 2.1.330 (Haiku) and
+`codex-cli` 0.171.0 (gpt-5.6-luna, low effort), in a scratch folder. Every
+server named `spike-*` is a stub that leaves a marker file when it is
+started or called, so "loaded" and "ran" are files, not a model's say-so.
+Recordings: `tests/fixtures/tools/` (replayed by `test_tool_controls.py`).
+
+### Which MCP servers a `claude -p` turn starts
+
+| flags | servers in the init event (source) | started |
+|---|---|---|
+| Agent Voice's before M10: inline `--mcp-config`, no strict | `desktop-control` (user, `~/.claude.json`), `spike-proj` (project `.mcp.json`, never approved), `spike-file` (dynamic) | all three |
+| `--strict-mcp-config --mcp-config <0600 file>` | `spike-file` (dynamic) only | only it |
+| loose, plus `--plugin-dir` holding a plugin with `.mcp.json` | `plugin:spikeplug:spike-plug` (plugin), the user's, the project's | all |
+| strict, plus that `--plugin-dir` | `spike-file` only (the plugin itself still loads) | only it |
+
+So before M10 every Claude agent loaded the user's own servers and any
+project's `.mcp.json` unasked -- a switch saying "off" could not have been
+true. No claude.ai connector appeared in a `-p` turn on this machine, with
+or without strict. `--mcp-config` takes a file path, which is how the
+servers now travel (0600, random name; argv is world readable).
+
+**Skills** (for M11): `--settings '{"skillOverrides":{"minecraft":"off"}}'`
+left exactly that skill out of the init event's list (34 → 33), merged with
+the user's own `skillOverrides` (which already turn two off).
+`--disable-slash-commands` drops them all.
+
+### Whether `permissions.deny` holds at every Agent Voice level
+
+A PreToolUse hook on every tool that always answers **allow** (what
+Agent Voice's hook does at Trusted, and at Ask after a yes), plus
+`permissions.deny` in `--settings`; `spikecli` a stub on PATH that records
+each run:
+
+| command the model ran | deny `Bash(spikecli:*)` + `Bash(spikecli *)` | deny `Bash(spikecli)` + `Bash(spikecli *)` |
+|---|---|---|
+| `spikecli a` | denied | denied |
+| `/tmp/m10-spike/bin/spikecli b` | denied | denied |
+| `true && spikecli d` | denied | denied |
+| `spikecli` | -- | denied |
+| `sh -c 'spikecli c'` | **ran** | -- |
+
+The hook's allow does not override a deny rule (`permission_denials` lists
+it), and a deny on an MCP tool's name hides the tool from the model
+entirely. But `sh -c` gets past a Bash rule, so **a CLI switch is told,
+not enforced**, on every backend; for Claude, a CLI switched off also gets
+the two space-form rules (never `:*`, which could catch a longer name), as
+a speed bump the page does not call enforcement.
+
+### Codex
+
+| | result |
+|---|---|
+| a stub added with `-c mcp_servers.spike-codex.command=…` | started |
+| the same plus `-c mcp_servers.spike-codex.enabled=false` (and `node_repl.enabled=false`) | not started |
+| `-c mcp_servers.cua_repl.enabled=false`, a server not in config.toml | Codex will not start: "invalid transport in `mcp_servers.cua_repl`" |
+| `-c 'mcp_servers={}'` | merged, not replaced: every server still enabled |
+| an MCP call with no `--approve-for-me` (Agent Voice below Trusted) | `failed`: "MCP tool call requires approval, but approval policy is never" |
+| the same with `--approve-for-me` (Trusted) | ran, no question |
+
+So Codex is switched per server with `enabled=false`, named only when its
+config.toml has it, read at each turn; Codex's own bundled servers
+(`codex_app`, `cua_repl`) are not in that file and not offered. Below
+Trusted Codex refuses MCP calls itself; at Trusted they run unasked.
+
+### The scan
+
+`agentvoice tools scan` on this machine (`~/.claude.json` 185 KB, one
+Claude server, one Codex server, three curated CLIs on PATH): **3 files read
+of 4 tried**, full scan median **9.1 ms** (max 14.0, n=25); from the cache
+in the same process 0.22 ms, from the cache file in another process
+0.54 ms. The idle poll pays the cached cost; `~/.claude.json` is rewritten
+by every Claude session, so a scan follows each turn.
+
+### What strict mode and three switched-on servers cost a turn (S on Sora)
+
+`bench/start_bench.py --agent sora --runs 20 --variants loose,strict,strict3`,
+interleaved run by run; Sora is Claude Haiku at Ask (as in §37). `loose` is
+the argv before M10 (no `--strict-mcp-config`, so this machine's
+`desktop-control` from `~/.claude.json` also starts); `strict` is what the
+daemon starts now with nothing found switched on; `strict3` adds three
+switched-on servers (`bench/stub_mcp.py`, which answers and does nothing).
+Raw: `bench/baselines/m10-strict-mcp.json`. Load average 0.61 at the start
+and 1.20 at the end (no test run during it; one 1-second scan timing).
+
+| Sora, 20 runs each | loose (before M10) | strict (M10, none on) | strict + 3 on |
+|---|---|---|---|
+| cold, median / p95 | 3.06 / 4.41s | **2.49 / 3.60s** | 2.81 / 4.61s |
+| warm, median / p95 | 1.47 / 2.42s | **1.41 / 2.27s** | 1.75 / 2.47s |
+
+Strict mode is cheaper, not dearer: 0.57s off the cold median, because the
+user's own server is no longer started for every agent; warm, where the
+process has already paid for its servers, the two are within noise (0.06s).
+Each switched-on server is a process Claude Code waits for: three cost
+0.32s cold and 0.34s warm on the median against strict alone, still at or
+under the loose median cold. The warm cost was not expected (a warm process
+has started them before the turn); likely the larger tool list each turn
+carries, possibly noise at n=20 -- not investigated further. No gate rests
+on this; it is what a switch costs.
