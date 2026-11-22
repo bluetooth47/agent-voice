@@ -3476,3 +3476,36 @@ class TestCodexPass2:
         _release(d)
         _idle(d)
         assert last_task(d).state == "refused" and not dispatched(d, "sora")
+
+
+class TestBrokenLinksOnly:
+    """Found live in M8: a broken crewLinks refuses every call an agent
+    starts, and nothing that depends only on the quarantine."""
+
+    def test_a_pass_the_person_starts_still_goes(self, m8):
+        d = m8
+        links(d, "broken by hand")
+        t = d.collab.pass_conversation(d._main, "sora", entry="cli", brief="b")
+        _release(d)
+        _idle(d)
+        assert t.state != "refused" and dispatched(d, "sora")
+
+    def test_the_cli_still_passes(self, tmp_path, cfg_factory):
+        cfg = cfg_factory(voiceAgents=AGENTS, crewLinks="broken")
+        assert collab.cli_pass(["sora"], io.StringIO("b"), io.StringIO(), cfg=cfg,
+                               root=tmp_path) == 0
+
+    def test_a_quarantine_is_still_carried_out(self, m8):
+        d = m8
+        sora = d.crew["sora"]
+        sora.session_id = "old"
+        links(d, "broken by hand")
+        quarantine(d, ["sora"])
+        d.collab.tick()
+        assert sora.session_id is None and not d.collab.is_quarantined("hazel")
+
+    def test_but_every_agent_call_is_refused_with_the_reason(self, m8):
+        d = m8
+        links(d, "broken by hand")
+        got = act(d, "main", "sora", "ask_agent")
+        assert not got["ok"] and "can't be read" in got["text"]

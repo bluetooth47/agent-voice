@@ -881,9 +881,16 @@ class Config:
         return crew.links if crew.ok else None
 
     def quarantined(self) -> frozenset | None:
-        """The ids in `crewQuarantine`, or None when it cannot be read."""
-        crew = self.crew()
-        return crew.quarantined if crew.ok else None
+        """The ids in `crewQuarantine`, or None when it -- or the settings
+        themselves -- cannot be read. Not through crew(): a broken
+        `crewLinks` refuses every call, but must not make the quarantine
+        unreadable too, which would hide every agent's crew tools (so no
+        call could even say why it was refused) and stop every agent's
+        communal notes (found live in M8)."""
+        if not self.settings_readable():
+            return None
+        import crew_links
+        return crew_links.parse_quarantine(self._values.get("crewQuarantine", []))[0]
 
     def main_endpoint(self) -> dict | None:
         """The main agent's endpoint, cleaned like an extra agent's, or None

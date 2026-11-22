@@ -165,6 +165,17 @@ def test_missing_keys_are_nobody_linked_and_nobody_held(cfg_factory):
     assert cfg.crew_links() == [] and cfg.quarantined() == frozenset()
 
 
+def test_a_broken_link_list_leaves_the_quarantine_readable(cfg_factory):
+    """Found live in M8: a malformed crewLinks made quarantined() None,
+    which hid every agent's crew tools -- no call could then say it was
+    refused -- and refused every agent's communal notes."""
+    cfg = cfg_factory(crewLinks="broken by hand", crewQuarantine=["sora"])
+    assert not cfg.crew().ok
+    assert cfg.quarantined() == frozenset({"sora"})
+    import crew_mcp
+    assert crew_mcp.offers_collab(cfg, "") and not crew_mcp.offers_collab(cfg, "sora")
+
+
 def test_null_in_place_of_a_list_is_unreadable(cfg_factory):
     assert cfg_factory(crewLinks=None).crew_links() is None
     assert cfg_factory(crewQuarantine=None).quarantined() is None

@@ -1159,6 +1159,8 @@ class Runtime:
         #: withheld if it moved -- a quarantine and a release in between are
         #: a change as much as one still in force (Codex review).
         self._q_epoch: dict = {}
+        #: The quarantine list alone, from the sweep's last reading.
+        self._seen_quarantine = None
         #: The last time an unreadable crew list was said in the HUD, so a
         #: burst of refused calls is one line, not twelve.
         self._crew_flash_at = 0.0
@@ -1848,6 +1850,7 @@ class Runtime:
         try:
             cfg = watched() if callable(watched) else self.d.cfg
         except Exception:               # noqa: BLE001 -- unreadable: allow nothing
+            self._seen_key, self._seen_quarantine = None, None
             return crew_links.Crew(None, None, "the settings could not be read")
         stamps = getattr(cfg, "_stamps", ())
         key = (id(cfg), stamps) if stamps else None
@@ -1858,6 +1861,8 @@ class Runtime:
         except Exception:               # noqa: BLE001
             crew = crew_links.Crew(None, None, "the settings could not be read")
         self._seen_key, self._seen_crew = key, crew
+        # The quarantine on its own, from the same reading (_quarantine).
+        self._seen_quarantine = self._quarantine(cfg)
         return crew
 
     def _effective(self, crew, frm: str, to: str, level: str) -> str:
@@ -1945,22 +1950,35 @@ class Runtime:
         print(f"  crew links: unreadable ({crew.why}); every agent call is refused",
               flush=True)
 
+    def _quarantine(self, cfg=None):
+        """The quarantine list alone, read fresh (or from `cfg`), or None when
+        it -- or the settings -- cannot be read. What does not depend on the
+        links asks this, not _crew(): a broken crewLinks refuses every call
+        an agent starts, and nothing else (found live in M8)."""
+        if cfg is None:
+            cfg = self._cfg()
+        try:
+            return cfg.quarantined() if cfg is not None else None
+        except Exception:               # noqa: BLE001 -- a guard closes
+            return None
+
     def _user_pass_refusal(self, target: str, label: str) -> str:
         """Why a pass the person started may not go to `target`: links do not
         govern it, quarantine does. Settings that cannot say whether it is
         quarantined refuse it too."""
-        crew = self._crew()
-        if not crew.ok:
+        q = self._quarantine()
+        if q is None:
             return (f"The crew settings can't be read, so I can't tell whether {label} is "
                     f"quarantined, and nothing was passed. Check the Crew map.")
-        if target in crew.quarantined:
+        if target in q:
             return crew_links.quarantined_line(label)
         return ""
 
     def is_quarantined(self, agent: str) -> bool:
-        """Whether `agent` (external id) is held apart now; unreadable
-        settings say yes."""
-        return self._crew().is_quarantined(agent)
+        """Whether `agent` (external id) is held apart now; a quarantine
+        list that cannot be read says yes."""
+        q = self._quarantine()
+        return q is None or agent in q
 
     def sweep(self) -> None:
         """From the poll: queued work an agent started whose link or
@@ -1968,7 +1986,7 @@ class Runtime:
         agent quarantined since the last poll is carried out (detach). A
         message, once left, is judged again when it is delivered."""
         crew = self._crew_seen()
-        self._apply_quarantine(crew)
+        self._apply_quarantine(self._seen_quarantine)
         work = [t for t in self.board.open() if t.entry == "agent" and t.kind != "message"]
         for t in work:
             why, code = self._task_refusal(crew, t)
@@ -1998,16 +2016,18 @@ class Runtime:
                   flush=True)
         self._stopped(done)
 
-    def _apply_quarantine(self, crew) -> None:
+    def _apply_quarantine(self, quarantined) -> None:
         """Carry out a quarantine the moment it is seen (master plan M8): the
         agent's own conversation and its warm process let go, so nothing it
         held carries on; every chat stops being shared with it and forgets
         its sessions, so nothing is replayed or resumed into it. Releasing
         it grants nothing back. A busy agent is carried out when its turn
         ends. Settings that cannot be read change nothing here: every call
-        is refused anyway, and nothing is detached or released on a guess."""
-        if crew.ok:
-            now = set(crew.quarantined)
+        is refused anyway, and nothing is detached or released on a guess.
+        `quarantined` is the quarantine list alone (None: unreadable), so a
+        broken link list does not hold a quarantine up."""
+        if quarantined is not None:
+            now = set(quarantined)
             for agent in sorted(self._q_applied - now):
                 self._q_applied.discard(agent)
                 print(f"  crew: {self.label(agent)} released from quarantine; nothing "
@@ -2945,13 +2965,13 @@ def cli_pass(args: list[str], stdin, stderr, cfg=None, root: Path | None = None)
         # Phase M8: no pass into quarantine, whoever starts it; the daemon
         # checks again when it takes the request and when the turn starts.
         try:
-            crew = cfg.crew()
+            q = cfg.quarantined()
         except Exception:               # noqa: BLE001
-            crew = crew_links.Crew(None, None)
-        if not crew.ok:
+            q = None
+        if q is None:
             why = (f"the crew settings can't be read, so I can't tell whether "
                    f"{known[fields['to']]} is quarantined; nothing was passed.")
-        elif fields["to"] in crew.quarantined:
+        elif fields["to"] in q:
             why = crew_links.quarantined_line(known[fields["to"]])
     host = hosts.get(fields["to"], "")
     if not why and shown is not None and host_key(shown) != host_key(host):
