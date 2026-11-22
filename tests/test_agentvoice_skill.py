@@ -742,6 +742,15 @@ def test_the_catalog_lists_the_row_with_why_not_for_an_endpoint(cfg_factory):
     assert "one line" in row["how"].lower()
 
 
+def test_the_row_does_not_claim_to_ask_before_running_a_command(cfg_factory):
+    for program, level in (("claude", "ask"), ("claude", "trusted"), ("codex", "ask")):
+        assert agentfs._asks("agentvoiceSkill", program, level) == ""
+    assert agentfs._asks("omarchySkill", "claude", "ask")        # the Omarchy row still does
+    cfg = cfg_factory(agentvoiceSkill=True, mainProgram="claude")
+    row = [t for t in agentfs.catalog("main", cfg)["tools"] if t["key"] == "agentvoiceSkill"][0]
+    assert row["asks"] == ""
+
+
 def test_the_cli_builds_and_shows_it(tmp_path):
     env = {**os.environ, "XDG_DATA_HOME": str(tmp_path / "xdg"),
            "XDG_CONFIG_HOME": str(tmp_path / "cfg"), "PYTHONDONTWRITEBYTECODE": "1"}

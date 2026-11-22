@@ -1923,6 +1923,10 @@ def _asks(key: str, program: str, level: str) -> str:
         return ("Reads and clicks without asking; sending, buying or posting is still asked about."
                 if level == "trusted" else
                 "Asks before acting; sending, buying or posting is asked about at every level.")
+    if key == "agentvoiceSkill":
+        # A reference that explains and starts nothing (phase M14): nothing
+        # to ask about, so no line saying it asks before running a command.
+        return ""
     return _commands_ask(program, level)
 
 
