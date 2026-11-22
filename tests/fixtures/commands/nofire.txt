@@ -1,0 +1,68 @@
+# Sentences no command may fire inside, in any mode (phase M4). Synthetic.
+# Checked in "clause", the most permissive mode, which covers the others.
+# Each is ordinary speech, said to an agent or near the microphone, that
+# holds a command's words: what the never-fires rules are for.
+
+# An object after the verb.
+Stop listening to that song.
+Keep listening to me explain.
+I keep listening to this podcast, it's great.
+Can you stop listening to the radio for me?
+Keep listening for the doorbell.
+Stay listening to the meeting and summarise it.
+Open the mic settings, please.
+Turn the mic off on my laptop, it's too loud.
+# A negation.
+Don't keep listening.
+Don't start a new chat, just carry on.
+Please don't stop listening to me.
+I don't want you to keep listening.
+Never stop listening, that's the trick.
+Do not open the mic.
+# Reported or quoted speech.
+He said, keep listening.
+She told me: stop listening.
+What does "keep listening" do?
+The button says "open mic".
+I heard him say goodbye.
+Tell him I said, goodbye.
+My mom always says, keep listening.
+The word is: goodbye.
+Type 'stop listening' into the box.
+# A question about it, not a request.
+Keep listening? Why would I?
+Should I keep listening?
+Why did you stop listening?
+Did you keep listening the whole time?
+# Two commands, or one said twice.
+New chat, and keep listening.
+Keep listening. Stop.
+Stop listening, keep listening.
+Keep listening. Keep listening.
+Keep listening, goodbye.
+# A command's words that are not a command at all.
+There's an open mic night on Friday.
+I went to an open mic.
+Open mic is broken, can you fix it?
+The open mic was fun last week.
+You keep listening, but you never act.
+I want to keep listening to music while I work.
+Write a goodbye email to the team.
+Say bye.
+I need to go to sleep.
+The baby won't go to sleep.
+New chat app ideas: something for recipes.
+Did you see the new chat feature?
+Have a good night at the party?
+I'll see you later at the office.
+Can you continue the work from yesterday?
+Let's talk about the budget.
+Listen to me carefully, this matters.
+Start listening to audiobooks, they say.
+Bye the way, hm.
+Goodbye, see you tomorrow.
+Stop the music, and keep the lights on.
+Full stop at the end of the line, please.
+Move this to the trash.
+# A command's words inside a chat's topic: still two commands' words.
+Continue the chat about the open mic. What did we decide?

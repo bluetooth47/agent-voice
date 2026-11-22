@@ -15,6 +15,7 @@ the second, for whatever slips through anyway.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 
 _CODE_BLOCK = re.compile(r"```.*?(```|\Z)", re.DOTALL)
 _INLINE_CODE = re.compile(r"`([^`\n]*)`")
@@ -454,3 +455,568 @@ def pass_command(text: str, names) -> tuple[str, str]:
 def is_take_over(text: str) -> bool:
     """True for "take over" and the ways it is said, whole."""
     return _normalize(text) in _TAKE_OVER
+
+
+# --- the command table, and commands inside sentences (phase M4) -------------
+#
+# Every spoken command in one place: what it is called, how it is said, what
+# it does, where in a sentence it may sit, and the one fixed sentence said
+# out loud when it fires from inside a longer one. The phrase sets above are
+# the table's phrases, unchanged -- `alone` mode is exactly the behaviour
+# before M4, and the functions above are still what decides it.
+#
+# What is new is a command found *inside* something longer: "take notes, and
+# keep listening" opens the microphone and sends "take notes". That is a
+# command firing on words nobody meant as one, if it is wrong, so it is
+# narrow on purpose: a short list of phrases per command (the subset of its
+# phrases that do not turn up in ordinary talk), only at the positions the
+# policy table allows, and never
+#
+#   - with anything after the verb ("stop listening to that song"),
+#   - after a negation ("don't keep listening"), which is the same rule:
+#     the phrase must sit at a boundary, and "don't" is not one,
+#   - in reported or quoted speech ("he said, keep listening"),
+#   - when anything else in what was said is a command too.
+#
+# The contexts it must also never fire in -- dictation, partial text, the
+# agent's own voice heard back, a locked screen -- are the daemon's to know,
+# and are checked where it calls this (`Daemon.sentence_command`).
+
+#: Where a command may be found in what was said.
+POSITIONS = ("alone", "start", "end", "clause")
+
+#: `commandsInSentences`. "alone" is the behaviour before M4.
+COMMAND_MODES = ("alone", "edges", "clause")
+
+_MODE_POSITIONS = {
+    "alone": frozenset({"alone"}),
+    "edges": frozenset({"alone", "start", "end"}),
+    "clause": frozenset({"alone", "start", "end", "clause"}),
+}
+
+
+def command_mode(value) -> str:
+    """A `commandsInSentences` value as one of COMMAND_MODES. Anything else
+    -- unset, misspelt, the wrong type -- is "alone": commands only when
+    said on their own, the behaviour nobody has to opt out of."""
+    return value if isinstance(value, str) and value in COMMAND_MODES else "alone"
+
+
+@dataclass(frozen=True)
+class Command:
+    """One spoken command. `phrases` are the whole-transcript forms (for a
+    command matched by a pattern, examples of it, and `pattern` its source);
+    `in_sentence` the forms that count inside something longer."""
+    id: str
+    label: str
+    effect: str
+    where: frozenset
+    phrases: frozenset = frozenset()
+    pattern: str = ""
+    in_sentence: tuple = ()
+    #: False only where the command is heard without a wake word: "full
+    #: stop" with the sherpa-onnx engine (fullStopAnytime). Every command
+    #: works in a follow-up window and on the open microphone.
+    needs_wake: bool = True
+    #: What does the same from a terminal, or "" when nothing does.
+    cli: str = ""
+    #: Said once, and shown, when it fires from inside a sentence. Fixed
+    #: text: never a model's, never built from what was said.
+    said: str = ""
+    #: No follow-up window after the turn it fires in: back to the wake word.
+    ends: bool = False
+
+    def as_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "label": self.label,
+            "effect": self.effect,
+            "where": [p for p in POSITIONS if p in self.where],
+            "phrases": sorted(self.phrases),
+            "pattern": self.pattern,
+            "in_sentence": list(self.in_sentence),
+            "needs_wake": self.needs_wake,
+            "cli": self.cli,
+            "said": self.said,
+            "ends": self.ends,
+        }
+
+
+_ALL = frozenset(POSITIONS)
+
+#: Checked in this order, which is the order the run loop checks them in:
+#: a full stop before a goodbye before a stop, then the open microphone,
+#: the terminal, passing, and last the chats (`Daemon.answer`).
+COMMANDS = (
+    Command(
+        id="full_stop", label="Full stop",
+        effect="Stops every agent at once: every reply, task and follow-up "
+               "window, and the open mic.",
+        where=frozenset({"alone"}), phrases=_FULL_STOPS, needs_wake=False,
+        cli="agentvoice interrupt"),
+    Command(
+        id="goodbye", label="Goodbye",
+        effect="Ends the conversation: the open mic closes and it waits for "
+               "the wake word again.",
+        where=frozenset({"alone", "end"}), phrases=_GOODBYES,
+        in_sentence=("goodbye", "good bye", "bye", "bye bye", "bye for now",
+                     "see you later", "talk to you later", "good night",
+                     "goodnight"),
+        said="Goodbye.", ends=True),
+    Command(
+        id="stop", label="Stop",
+        effect="Stops the reply, or cancels a turn not yet sent: nothing "
+               "goes to the agent.",
+        where=frozenset({"alone"}), phrases=_STOP_PHRASES,
+        cli="agentvoice interrupt"),
+    Command(
+        id="open_mic", label="Open mic",
+        effect="Listens without the wake word until it is closed or nothing "
+               "is said for a while.",
+        where=_ALL, phrases=_OPEN_MIC,
+        in_sentence=("keep listening", "keep on listening", "stay listening",
+                     "open mic", "open the mic", "keep the mic open",
+                     "leave the mic open"),
+        cli="agentvoice open-mic on [AGENT_ID]", said="Open mic on."),
+    Command(
+        id="close_mic", label="Close the open mic",
+        effect="Closes the open mic: back to the wake word.",
+        where=frozenset({"alone", "start", "end"}), phrases=_CLOSE_MIC,
+        in_sentence=("stop listening", "close the mic", "close mic", "mic off",
+                     "turn the mic off", "stop the open mic", "end the open mic"),
+        cli="agentvoice open-mic off", said="Open mic off.", ends=True),
+    Command(
+        id="handoff", label="Move to a terminal",
+        effect="Carries the chat on in a terminal, and stays out of it until "
+               "the terminal closes.",
+        where=frozenset({"alone"}), pattern=_HANDOFF.pattern,
+        phrases=frozenset({"move this to the terminal", "continue in a terminal",
+                           "hand it over to my terminal"})),
+    Command(
+        id="pass", label="Pass to another agent",
+        effect="Passes the conversation to the agent named; anything said "
+               "after the name is its request.",
+        where=frozenset({"alone", "start"}), pattern=_PASS.pattern,
+        phrases=frozenset({"pass this to NAME",
+                           "pass this to NAME and ask about the weather"}),
+        cli="agentvoice pass TO [--from ID] < brief"),
+    Command(
+        id="take_over", label="Take over",
+        effect="Said to an agent: it takes the conversation over from the "
+               "one spoken to last.",
+        where=frozenset({"alone"}), phrases=_TAKE_OVER,
+        cli="agentvoice pass TO --from ID < brief"),
+    Command(
+        id="new_chat", label="New chat",
+        effect="Starts a new chat with that agent.",
+        where=frozenset({"alone", "start"}), phrases=_NEW_CHATS,
+        in_sentence=("new chat", "start a new chat", "new conversation",
+                     "start a new conversation", "fresh chat",
+                     "start a fresh chat", "start a fresh conversation",
+                     "lets start a new chat", "lets start a new conversation"),
+        cli="agentvoice chats new [AGENT_ID]", said="New chat."),
+    Command(
+        id="continue_chat", label="Continue a chat",
+        effect="Picks up one of that agent's saved chats, found by what it "
+               "was about.",
+        where=frozenset({"alone", "start"}), pattern=_CONTINUE.pattern,
+        phrases=frozenset({"continue the chat about the HUD",
+                           "resume our conversation",
+                           "go back to the chat about the trip"}),
+        cli="agentvoice chats continue ID [AGENT_ID]",
+        said="Continuing that chat."),
+)
+
+_BY_ID = {c.id: c for c in COMMANDS}
+
+
+def command(command_id: str) -> Command:
+    """The table's entry for `command_id`."""
+    return _BY_ID[command_id]
+
+
+@dataclass(frozen=True)
+class Found:
+    """A command found in what was said.
+
+    `where` is one of POSITIONS. `rest` is what is left for the agent, ""
+    when nothing is. `arg` is a chat's topic ("continue") or an agent's
+    name ("pass"). `phrase` is the command's words as matched, normalized.
+    `exact` says it was matched by the rules from before M4, which the run
+    loop already acts on: everything else here is new, and is what
+    `Daemon.sentence_command` acts on.
+    """
+    command: Command
+    where: str
+    rest: str = ""
+    arg: str = ""
+    phrase: str = ""
+    exact: bool = False
+    extra: dict = field(default_factory=dict, compare=False)
+
+
+def _exact(text: str, names) -> Found | None:
+    """The command `text` is by the rules from before M4, or None."""
+    norm = _normalize(text)
+    if is_full_stop(text):
+        return Found(command("full_stop"), "alone", phrase=norm, exact=True)
+    if is_goodbye(text):
+        return Found(command("goodbye"), "alone", phrase=norm, exact=True)
+    if is_stop_command(text):
+        return Found(command("stop"), "alone", phrase=norm, exact=True)
+    mic = open_mic_command(text)
+    if mic:
+        return Found(command("open_mic" if mic == "open" else "close_mic"),
+                     "alone", phrase=norm, exact=True)
+    if is_handoff(text):
+        return Found(command("handoff"), "alone", phrase=norm, exact=True)
+    name, request = pass_command(text, names)
+    if name:
+        # The request riding after the name was already "start".
+        return Found(command("pass"), "start" if request else "alone",
+                     rest=request, arg=name, phrase=norm, exact=True)
+    if is_take_over(text):
+        return Found(command("take_over"), "alone", phrase=norm, exact=True)
+    kind, about = chat_command(text)
+    if kind:
+        return Found(command("new_chat" if kind == "new" else "continue_chat"),
+                     "alone", arg=about, phrase=norm, exact=True)
+    return None
+
+
+# A word, with an apostrophe inside it ("don't", "that's") kept as part of
+# it. Anything between two words is a gap, and the gaps are where the
+# punctuation lives.
+_WORD = re.compile(r"[A-Za-z0-9]+(?:['’][A-Za-z0-9]+)*")
+#: A gap holding one of these ends a clause: Whisper's punctuation.
+_BREAK = re.compile(r"[.!?;:,…]|\s[-‐‑‒–—]+\s|[–—]")
+#: The end of a sentence rather than of a clause.
+_SENTENCE_BREAK = re.compile(r"[.!?;…]")
+#: Quotation marks. An apostrophe inside a word belongs to the word, so one
+#: left in a gap is a quote.
+_QUOTES = "\"“”„«»'‘’"
+
+#: May stand between a clause's start and the command: "…, and please keep
+#: listening". Never a negation or a verb of saying, which is what keeps
+#: "don't keep listening" and "he said keep listening" out.
+_JOINERS = frozenset({
+    "and", "then", "so", "now", "please", "okay", "ok", "alright", "also",
+    "just", "actually", "oh", "um", "uh", "well", "hey",
+})
+#: "can you keep listening": a joiner only as the pair. "You" on its own is
+#: the start of a sentence about the agent -- "You keep listening, but you
+#: never act" -- and not a request to it.
+_POLITE = frozenset({"can", "could", "would", "will"})
+#: Without any punctuation in the transcript, these mark where a clause
+#: starts or ends: "take notes and keep listening because I might pause".
+_CUES_BEFORE = frozenset({"and", "then", "so", "but", "also"})
+_CUES_AFTER = frozenset({"and", "then", "so", "but", "because", "cause", "cos",
+                         "since", "while", "till", "until"})
+#: May follow the command at the very end: "…, keep listening please".
+_TRAILING = frozenset({"please", "thanks", "thank", "you", "now", "okay", "ok",
+                       "then"})
+#: Words that say nothing to an agent. A rest made only of these (and of
+#: the agents' names) is no rest: "Alright then, keep listening" sends
+#: nothing. Not "yes" or "no", which answer something.
+_FILLER = _JOINERS | _TRAILING | _POLITE | frozenset({
+    "all", "right", "hi", "hello", "great", "cool", "perfect", "good", "fine",
+    "sure", "thats", "it",
+})
+#: The clause before ends in one of these: what follows is quoted, not said
+#: to us. "He said, keep listening." "The button says: open mic."
+_REPORTING = frozenset({
+    "say", "says", "said", "saying", "tell", "tells", "told", "telling",
+    "ask", "asks", "asked", "asking", "hear", "hears", "heard", "call",
+    "calls", "called", "mean", "means", "meant", "word", "words", "phrase",
+    "command", "like", "write", "wrote", "type", "typed", "read", "reads",
+    "shout", "shouted", "yell", "yelled", "whisper", "whispered", "go",
+    "goes", "went", "reply", "replied", "answer", "answered", "quote",
+    "sing", "sings", "sang", "song", "titled", "named", "lyrics", "sign",
+})
+
+#: "continue the chat about X." inside a sentence: the topic runs to the
+#: end of its sentence, and something has to follow it.
+_CONTINUE_HEAD = re.compile(
+    r"^\W*(?:(?:okay|ok|alright|so|now|and|please)\W+)*"
+    r"(?:(?:please|can you|could you|let['’]?s)\s+)?"
+    r"(?P<verb>continue|resume|go back to|pick up|reopen)"
+    r"(?:\s+(?:the|our|my|that))?\s+(?:chat|conversation)\b",
+    re.IGNORECASE)
+_CONTINUE_TOPIC = re.compile(r"^\s+(?:about|on|from|where|with|we had about)\s+",
+                             re.IGNORECASE)
+_CONTINUE_BARE = re.compile(r"^\s*[.!?;:,](?=\s)(?P<rest>.*)$", re.DOTALL)
+#: A full stop after one of these, or after a single letter, is not the end
+#: of a sentence: "the chat about Dr. Smith" keeps its topic whole.
+_ABBREVIATIONS = frozenset({"dr", "mr", "mrs", "ms", "st", "vs", "etc", "eg",
+                            "ie", "jr", "sr", "prof", "no", "approx"})
+
+
+def _phrase_table():
+    """(words, command) for every in-sentence phrase, longest first."""
+    out = []
+    for c in COMMANDS:
+        for p in c.in_sentence:
+            out.append((tuple(p.split()), c))
+    out.sort(key=lambda wc: len(wc[0]), reverse=True)
+    return tuple(out)
+
+
+_PHRASES = _phrase_table()
+
+
+def _hits(words: list[str]) -> list[tuple[int, int, Command]]:
+    """Every in-sentence phrase in `words` as (start, end, command). Where
+    two overlap the longer wins: "stop the open mic" is not "open mic"."""
+    taken = [False] * len(words)
+    hits = []
+    for phrase, cmd in _PHRASES:
+        n = len(phrase)
+        for i in range(len(words) - n + 1):
+            if tuple(words[i:i + n]) == phrase and not any(taken[i:i + n]):
+                hits.append((i, i + n, cmd))
+                for k in range(i, i + n):
+                    taken[k] = True
+    hits.sort()
+    return hits
+
+
+def _clean_rest(rest: str, names) -> str:
+    """`rest` tidied at the cut, or "" when nothing in it says anything."""
+    rest = rest.strip().strip(",;:-‐‑‒–— ").strip()
+    words = [w.lower().replace("'", "").replace("’", "")
+             for w in _WORD.findall(rest)]
+    named = {w for n in names for w in str(n).lower().split()}
+    if not words or all(w in _FILLER or w in named for w in words):
+        return ""
+    return rest[0].upper() + rest[1:]
+
+
+def _continue_in_sentence(text: str) -> tuple[str, str, str] | None:
+    """(topic, phrase, rest) for "continue the chat about X. <rest>", or None."""
+    head = _CONTINUE_HEAD.match(text)
+    if not head:
+        return None
+    after = text[head.end():]
+    m = _CONTINUE_TOPIC.match(after)
+    if m:
+        body = after[m.end():]
+        for stop in re.finditer(r"[.!?;:](?=\s)", body):
+            word = re.search(r"(\w+)\W*$", body[:stop.start()])
+            word = word.group(1).lower() if word else ""
+            if stop.group() == "." and (len(word) == 1 or word in _ABBREVIATIONS):
+                continue
+            about = _normalize(body[:stop.start()])
+            if not about:
+                return None
+            return (about,
+                    _normalize(text[head.start("verb"):head.end() + m.end() + stop.start()]),
+                    body[stop.end():])
+        return None
+    m = _CONTINUE_BARE.match(after)
+    if m:
+        return "", _normalize(text[head.start("verb"):head.end()]), m.group("rest")
+    return None
+
+
+def _in_sentence(text: str, allowed: frozenset, names) -> Found | None:
+    """A command inside something longer, at a position `allowed` lets it
+    fire from -- or None, which is also the answer whenever it is unclear."""
+    spans = [(m.start(), m.end()) for m in _WORD.finditer(text)]
+    words = [text[a:b].lower().replace("'", "").replace("’", "") for a, b in spans]
+    n = len(words)
+    if not n:
+        return None
+    named = {w for nm in names for w in str(nm).lower().split()}
+
+    def gap(k: int) -> str:
+        """What lies before word k (k == n: after the last word)."""
+        left = spans[k - 1][1] if k > 0 else 0
+        right = spans[k][0] if k < n else len(text)
+        return text[left:right]
+
+    punctuated = any(_BREAK.search(gap(k)) for k in range(1, n))
+
+    found = []          # (where, start_char, end_char, phrase, command, arg)
+    hits = _hits(words)
+    cont = _continue_in_sentence(text) if "start" in allowed else None
+    if cont is not None:
+        about, phrase, rest = cont
+        found.append(("start", None, None, phrase, command("continue_chat"),
+                      about, rest))
+    # Quotation marks open and close across the gaps; a phrase that begins
+    # inside a quote is somebody else's words.
+    quoted = []
+    inside = False
+    for k in range(n):
+        for ch in gap(k):
+            if ch in "\"'‘’":
+                inside = not inside
+            elif ch in "“„«":
+                inside = True
+            elif ch in "”»":
+                inside = False
+        quoted.append(inside)
+
+    def joiner(x: int) -> bool:
+        w = words[x]
+        if w in _JOINERS or w in named:
+            return True
+        if w == "you":
+            return x > 0 and words[x - 1] in _POLITE
+        return w in _POLITE and x + 1 < n and words[x + 1] == "you"
+
+    for i, j, cmd in hits:
+        if quoted[i] or any(ch in _QUOTES for ch in gap(i) + gap(j)):
+            found.append((None, i, j, " ".join(words[i:j]), cmd, "", ""))
+            continue
+        # Before: back over joiners to where the clause starts.
+        k = i
+        while k > 0 and joiner(k - 1) \
+                and not (punctuated and _BREAK.search(gap(k))):
+            k -= 1
+        at_start = all(joiner(x) for x in range(i))
+        joined = words[k:i]
+        if at_start:
+            before = True
+        elif punctuated:
+            before = bool(_BREAK.search(gap(k)))
+        else:
+            before = any(w in _CUES_BEFORE for w in joined)
+        # Said, told, called...: the clause before introduces a quotation.
+        # Across a comma or a colon -- "she told me: stop listening" -- and
+        # not across the end of a sentence: "I heard you. Keep listening."
+        if not at_start and k > 0 and not _SENTENCE_BREAK.search(gap(k)):
+            x = k - 1
+            while x >= max(0, k - 3):
+                if words[x] in _REPORTING:
+                    before = False
+                    break
+                if x > 0 and _BREAK.search(gap(x)):
+                    break
+                x -= 1
+        # After: over "please" and the like to where the clause ends.
+        m = j
+        while m < n and words[m] in _TRAILING \
+                and not (punctuated and _BREAK.search(gap(m))):
+            m += 1
+        at_end = m == n
+        if at_end:
+            after = True
+        elif punctuated:
+            after = bool(_BREAK.search(gap(m)))
+        else:
+            # Right after the phrase, before "then" was walked over.
+            after = j < n and words[j] in _CUES_AFTER
+        # "Keep listening? Why would I?" is a question about it, not a
+        # request -- unless asked as one: "can you keep listening?"
+        asked = "?" in gap(m) and not any(
+            words[x] == "you" and x > 0 and words[x - 1] in _POLITE
+            for x in range(k, i))
+        if asked:
+            where = None
+        elif at_start and at_end:
+            where = "start" if "start" in cmd.where else "end"
+        elif at_start and after:
+            where = "start"
+        elif at_end and before:
+            where = "end"
+        elif before and after:
+            where = "clause"
+        else:
+            where = None
+        found.append((where, i, j, " ".join(words[i:j]), cmd, "",
+                      (k, m)))
+
+    # One command, at one place, or nothing: two of them -- or one said
+    # twice, or the same words where they cannot fire -- is not something
+    # to guess between.
+    if len(found) != 1:
+        return None
+    where, i, j, phrase, cmd, arg, extra = found[0]
+    if where is None or where not in allowed or where not in cmd.where:
+        return None
+    if cmd.id == "continue_chat":
+        rest = extra
+    else:
+        k, m = extra
+        if where == "start":
+            rest = text[spans[m][0]:] if m < n else ""
+        elif where == "end":
+            rest = text[:spans[k - 1][1]] if k > 0 else ""
+        else:
+            rest = (text[:spans[k - 1][1]] + gap(m).rstrip() + " "
+                    + text[spans[m][0]:])
+    rest = _clean_rest(rest, names)
+    # Whatever is left must not be a command of its own either: "keep
+    # listening. Stop." is two things, and neither wins.
+    if rest and (_exact(rest, names) is not None
+                 or _hits([w.lower().replace("'", "").replace("’", "")
+                           for w in _WORD.findall(rest)])):
+        return None
+    if cmd.id == "continue_chat" and not rest:
+        return None         # all of it was the topic: the rule before M4's
+    return Found(cmd, where, rest=rest, arg=arg, phrase=phrase)
+
+
+def find_command(text: str, mode: str = "alone", names=()) -> Found | None:
+    """The command in `text`, or None for an ordinary request.
+
+    Matched on the transcript as Whisper wrote it, before its punctuation is
+    thrown away, because the punctuation is what says where a clause ends.
+    A command said on its own -- the rules before M4, which hold in every
+    mode -- is found first. Then, if `mode` allows it, one at the start or
+    end of what was said ("edges"), or in a clause of its own ("clause"),
+    as the policy in each command's `where` permits. `names` are what the
+    agents answer to: for "pass this to …", and so that "Hey Jarvis, keep
+    listening" leaves nothing to send.
+    """
+    text = str(text or "")
+    names = tuple(n for n in (names or ()) if n)
+    found = _exact(text, names)
+    allowed = _MODE_POSITIONS[command_mode(mode)]
+    if found is not None:
+        # The rule before M4 takes everything after "about" as the topic,
+        # to the end, punctuation and all. Where a sentence plainly ends
+        # first -- "continue the chat about the HUD. What did we pick?" --
+        # a mode that reads sentences gives the question to the agent.
+        if found.command.id == "continue_chat" and "start" in allowed:
+            split = _in_sentence(text, allowed, names)
+            if split is not None and split.command.id == "continue_chat":
+                return split
+        return found
+    if allowed == _MODE_POSITIONS["alone"]:
+        return None
+    return _in_sentence(text, allowed, names)
+
+
+#: Said within this many seconds after an in-sentence open-mic command
+#: finished being answered, these undo it.
+UNDO_S = 3.0
+_UNDO = frozenset({"no", "no no", "nope", "cancel that", "no cancel that",
+                   "undo", "undo that", "not that"})
+
+
+def is_undo(text: str) -> bool:
+    """True for "no" and "cancel that", said on their own."""
+    return _normalize(text) in _UNDO
+
+
+def heard_back(phrase: str, said: str) -> bool:
+    """True when the words of `phrase` occur, in order, in `said` -- which
+    is how the agent's own voice, picked up by the microphone, would bring
+    a command into a transcript."""
+    p, s = _normalize(phrase).split(), _normalize(said).split()
+    return bool(p) and any(s[i:i + len(p)] == p for i in range(len(s) - len(p) + 1))
+
+
+def table(names_by_agent=None, mode: str = "alone") -> dict:
+    """The table as data, for `agentvoice commands --json` and the pages
+    that list it. `names_by_agent` is [{"id", "label", "phrase"}]."""
+    return {
+        "mode": command_mode(mode),
+        "modes": list(COMMAND_MODES),
+        "positions": list(POSITIONS),
+        "undo": {"seconds": UNDO_S, "phrases": sorted(_UNDO)},
+        "commands": [c.as_dict() for c in COMMANDS],
+        "wake_phrases": list(names_by_agent or []),
+    }

@@ -69,6 +69,7 @@
       "openMicIdleMin": 10,
       "openMicAddressedOnly": true,
       "openMicAuto": false,
+      "commandsInSentences": "edges",
       "livePartials": "auto",
       "projectDir": "",
       "mainName": "",
@@ -505,6 +506,18 @@
         "label": "Open the mic after every wake",
         "defaultValue": false,
         "description": "Every wake word starts an open conversation, as if you had said \"keep listening\"."
+      },
+      {
+        "key": "commandsInSentences",
+        "type": "enum",
+        "label": "Commands inside a sentence",
+        "options": [
+          "alone",
+          "edges",
+          "clause"
+        ],
+        "defaultValue": "edges",
+        "description": "Alone: a spoken command works only when it is all you say. Start or end: also at the start or end of a longer sentence (\"take notes, and keep listening\"). Own clause: \"keep listening\" also in a clause of its own mid-sentence. One that fires inside a sentence is said out loud, and \"no\" straight after undoes an open-mic switch."
       },
       {
         "key": "fullStopAnytime",

@@ -273,3 +273,27 @@ def test_the_agent_is_asked_for_a_short_first_sentence():
     short one is heard sooner."""
     from adapters.base import SPOKEN_STYLE
     assert "first sentence short" in SPOKEN_STYLE
+
+
+# --- the command table is built from these sets (phase M4) ---------------------
+
+def test_the_command_table_uses_these_very_sets():
+    """Not copies: one edit to a phrase set reaches the table, the CLI and
+    every page that lists commands. `alone` mode then stays exactly what
+    the functions above decide (test_commands holds the before-and-after)."""
+    import speech_text as st
+    assert st.command("stop").phrases is st._STOP_PHRASES
+    assert st.command("goodbye").phrases is st._GOODBYES
+    assert st.command("full_stop").phrases is st._FULL_STOPS
+    assert st.command("new_chat").phrases is st._NEW_CHATS
+    assert st.command("open_mic").phrases is st._OPEN_MIC
+    assert st.command("close_mic").phrases is st._CLOSE_MIC
+    assert st.command("take_over").phrases is st._TAKE_OVER
+
+
+def test_a_stop_is_never_found_inside_a_sentence():
+    from speech_text import find_command
+    for mode in ("alone", "edges", "clause"):
+        for text in ("Take notes, and stop.", "Stop, I meant Tuesday.",
+                     "Never mind, it's fine.", "Full stop at the end."):
+            assert find_command(text, mode) is None, (mode, text)

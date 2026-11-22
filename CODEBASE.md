@@ -162,7 +162,18 @@ This file is the entry point (`main()`), and its structure is:
     loop are marked "collab" (`turn_ended`, `tick`, `stop_from`,
     `stop_all`, `deliveries`, `take_asides`). Voice commands "pass this to
     Sora …" and "Sora, take over" go through `pass_command()`;
-    `side_adapter()` runs quiet `ask_agent` turns (ephemeral, nothing kept).
+    `side_adapter()` runs quiet `ask_agent` turns (ephemeral, nothing kept);
+  - **commands inside sentences (M4):** `sentence_command()` is the one
+    hook, called after the checks for a command said on its own, from the
+    run loop's one-agent chain and from `_send()` (several agents; never
+    for a typed message). It refuses while locked, lent out, while another
+    program records (`recording_elsewhere()`, pw-dump at that moment) and
+    on the agent's own voice (`_said_lately`, filled by `speak()`). The
+    open-mic and goodbye commands act there and say their fixed sentence;
+    new/continue chat act inside the agent's turn (`answer(command=…)` →
+    `chat_in_sentence()`). The rest of the sentence goes to the agent once.
+    `take_undo()` puts an open-mic switch back on "no" or "cancel that"
+    within `UNDO_S` (3s) of the turn that carried the rest.
 - **`Daemon.run()`** is the frame loop. It reads 100ms PipeWire frames via
   `sounddevice` (imported *inside* `run()` so tests can fake it). Each frame
   goes through gate → wake → capture (endpointing) → transcribe →
@@ -224,7 +235,8 @@ This file is the entry point (`main()`), and its structure is:
 | `collab.py` | Collaboration (Phases 15–16): `Task` (kinds pass/delegate/ask/message; pending → active → completed/cancelled/failed/refused), the board, checks at request and at turn start, the pass order (tell the user first, then share the chat), per-chat target sessions, `crew/origin` files, the call socket server, limits (`DEPTH_MAX` 3, `OPEN_DELEGATIONS_MAX` 2, `RATE_PER_MIN` 6, `QUESTION_TIMEOUT_S` 120, `CANCEL_WINDOW_S` 3), wrapping of returned text as information. CLI: `collab.py pass|tasks`. |
 | `crew_mcp.py` | MCP stdio server `agentvoice-crew`, started for every Claude Code and Codex agent regardless of `desktopTools`. 11 tools: `notes_list/read/write/append`, `list_agents`, `ask_agent`, `delegate`, `pass_conversation`, `message_agent`, `task_status`, `cancel_task`. Collaboration tools hidden when the agent's `collaboration` is off. argv `crew_mcp.py <program> [<id>] [--guard]`; `--guard` = Codex below Trusted, which has no hook. |
 | `audit.py` | `audit.record()` takes only typed fields (ids, names, integers); a bad value is written as "?". A test AST-walks every call. |
-| `speech_text.py` | Markdown → speakable prose, sentence boundaries, code blocks → "Code omitted", `safe_for_terminal`, `as_prompt`; `pass_command` ("pass/send this to NAME …") and `is_take_over`. |
+| `speech_text.py` | Markdown → speakable prose, sentence boundaries, code blocks → "Code omitted", `safe_for_terminal`, `as_prompt`; `pass_command` ("pass/send this to NAME …") and `is_take_over`. Since M4 the **command table** (`COMMANDS`: id, phrases, effect, the positions it may sit at, the in-sentence phrases, CLI equivalent, the fixed sentence said when it fires inside a sentence) and **`find_command(text, mode, names)`**: the rules from before M4 first (`exact`), then a command at the start or end (`edges`) or in its own clause (`clause`), with the never-fires rules (an object after it, a negation, quoted or reported speech, a question, two commands). |
+| `voice_commands.py` | `agentvoice commands [--json]`: the table plus each enabled agent's wake phrase, from the settings. |
 | `permission_hook.py` | Claude Code **PreToolUse hook**. Writes `permissions/<id>.request`, summons the overlay, waits for the response. Levels: `ask` / `edits` / `trusted`. Fails *closed*; hook settings use `onFailure: "block"`. Crew rules: notes reads allowed, notes writes asked at Ask and refused when `notesWrite` is deny; collaboration tools pass (the daemon asks). Loading the agent's own skill is a read. **Orders guard** (`orders_write`, 92c71ff): see section 8. Security-critical. |
 | `readout.py` | M3, bug B: the readout's kept reply (`last_reply`), when both lines clear and stay cleared (`gone`: lock, agent or chat switch, `KEEP_S` 600 s idle), and the 4 s preview. Pure, on an injectable clock; `Daemon._compose` calls it for every unlocked payload. |
 | `sessions.py` | M2, bug I: the pure rule for whether a conversation survives an adapter rebuild (`carry`, `spec_changes`, `why`). |
@@ -455,6 +467,7 @@ an unknown agent id gets deny / off.
 | `talk` / `talk-end` | Push to talk. |
 | `lock` / `unlock` / `locked` | Close the mic for a screen lock, or report whether it is closed. |
 | `open-mic on\|off` | Open mic. |
+| `commands [--json]` | Every spoken command and each agent's wake phrase (voice_commands.py). |
 | `type <agent> <text>` | Typed input to an agent. |
 | `wake-test start\|stop\|auto\|auto-stop` | Wake-word tests. |
 | `permit <id> allow\|allow-session\|deny`, `pending` | Answer or show a permission request. |

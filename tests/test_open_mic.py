@@ -515,3 +515,36 @@ class TestDroppedTurnsKeepTheChat:
         frame_loop.drive(daemon, monkeypatch, items, pipe=pipe)
         assert sent == [] and daemon.open_mic is None
         assert daemon.session_id == "sess-0001" and daemon._main.chat_id == "chat-1"
+
+
+# --- commands inside sentences (phase M4) -------------------------------------
+
+def test_its_own_reminder_heard_back_does_not_close_it(daemon):
+    """"I'm listening. Say stop listening when you're done." is what it says
+    when the open mic starts. Picked up by the microphone mid-sentence, the
+    words "stop listening" are its own voice, not a request."""
+    daemon.start_open_mic(daemon._main, say=True)
+    said_at = time.time()
+    found = daemon.sentence_command(daemon._main, "Okay, stop listening.", {},
+                                    heard_at=said_at)
+    assert found is None, "heard within moments of saying it"
+    assert daemon.open_mic is daemon._main
+
+
+def test_keep_listening_to_me_is_a_request(daemon, monkeypatch):
+    sent = []
+    monkeypatch.setattr(daemon, "dispatch",
+                        lambda p, text, last, clock=None, typed=False, command=None:
+                        sent.append((text, command)))
+    daemon._send(daemon._main, "Keep listening to me explain this.", {"transcript": ""},
+                 {}, heard_at=time.time())
+    assert sent == [("Keep listening to me explain this.", None)]
+    assert daemon.open_mic is None
+
+
+def test_open_mic_said_inside_a_sentence_says_so_once(daemon):
+    daemon.sentence_command(daemon._main, "Read me the list, and keep listening.", {},
+                            heard_at=time.time())
+    assert daemon.open_mic is daemon._main
+    assert daemon.speaker.said == ["Open mic on."], \
+        "the table's sentence, not the long one said on its own"

@@ -346,6 +346,26 @@ never spoken or saved. That costs one agent turn for everything heard, so
 it is safer, not free. **Open the mic after every wake** makes every wake
 start one.
 
+**Commands inside a sentence.** A command does not have to be all you say.
+With Conversation → Spoken commands → **Commands inside a sentence** at
+*Start or end* (the default), "Take notes, and keep listening" opens the mic
+and sends "Take notes"; "Remind me at five, and stop listening" closes it
+after the reminder is set; "New chat. What's the weather in Paris?" starts a
+new chat with that question; "Email Sarah the notes, goodbye" sends the
+request and then waits for the wake word. *Own clause* also takes "keep
+listening" mid-sentence: "Take notes, and keep listening, because I might
+pause." *Alone* is how it was before. A command that fires inside a sentence
+says so once ("Open mic on.", "New chat.") and the rest goes to the agent
+as your request; "no" or "cancel that" straight after undoes an open-mic
+switch. It never fires with something after the command ("stop listening to
+that song", "keep listening to me"), after "don't", in quoted or reported
+speech ("he said, keep listening"), as a question ("keep listening?"), when
+two commands are in one sentence, in a typed message, while something else
+is recording, on the agent's own voice heard back, or while the screen is
+locked. Stop, full stop, take over and moving to a terminal still work only
+said on their own. `agentvoice commands` lists every phrase, where it counts
+and what it says, with each agent's wake phrase (`--json` for scripts).
+
 **Move this to a terminal.** Say "Theo, move this to a terminal" and the
 conversation opens in a terminal, in the agent's project folder, with
 `claude --resume <session>` (Codex: `codex resume`), so typing carries it

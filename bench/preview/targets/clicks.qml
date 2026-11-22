@@ -3,7 +3,7 @@
 // rather than only drawn. Writes go to the preview's stubbed `omarchy bar
 // set` log (<out>.writes), never to shell.json.
 //
-//   preview.sh --wait 9 --out /tmp/c.png clicks; cat /tmp/c.png.writes
+//   preview.sh --wait 12 --out /tmp/c.png clicks; cat /tmp/c.png.writes
 import QtQuick
 import QtTest
 import Quickshell
@@ -64,8 +64,11 @@ ShellRoot {
         } else if (overlay.step === 6) {
           overlay.click(overlay.find(c, function(i) { return i.text === "Snappy" && i.clicked !== undefined }), "Snappy preset")
         } else if (overlay.step === 7) {
-          overlay.goTo("agents", "main")
+          // Phase M4: commands inside a sentence.
+          overlay.click(overlay.find(c, function(i) { return i.text === "Own clause" && i.clicked !== undefined }), "Own clause (commandsInSentences)")
         } else if (overlay.step === 8) {
+          overlay.goTo("agents", "main")
+        } else if (overlay.step === 9) {
           overlay.click(overlay.find(c, function(i) { return i.text === "Ask first" && i.clicked !== undefined }), "Ask first")
         }
       }

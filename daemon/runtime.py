@@ -20,6 +20,7 @@ from pathlib import Path
 
 from paths import (RUNTIME_DIR, SHELL_JSON, VOICE_ID, config_toml, piper_voices,
                    voice_id, voice_stem)
+from speech_text import command_mode
 
 PLUGIN_ID = "duaneoca.agentvoice"
 
@@ -292,6 +293,10 @@ DEFAULTS = {
     "openMicIdleMin": 10,
     "openMicAddressedOnly": True,
     "openMicAuto": False,
+    # Phase M4: commands said inside a longer sentence. "alone" is the
+    # behaviour before it; anything unreadable reads as that
+    # (Config.commands_in_sentences).
+    "commandsInSentences": "edges",
     "voice": "lessac-medium",
     "voiceSpeed": 100,
     # Retired (merged plan, Phase 10): the main agent's instructions live in
@@ -379,6 +384,7 @@ TOML_ALIASES = {
     "openMicIdleMin": ("wake", "open_mic_idle_min"),
     "openMicAddressedOnly": ("wake", "open_mic_addressed_only"),
     "openMicAuto": ("wake", "open_mic_auto"),
+    "commandsInSentences": ("wake", "commands_in_sentences"),
     "agentsPanel": ("ui", "agents_panel"),
     "mainName": ("agent", "main_name"),
     "mainProgram": ("agent", "main_program"),
@@ -879,6 +885,17 @@ class Config:
             return own
         level = self.get_str("narration")
         return level if level in NARRATION_LEVELS else "off"
+
+    def commands_in_sentences(self) -> str:
+        """Where a spoken command counts besides on its own (phase M4): one
+        of speech_text.COMMAND_MODES. "alone" -- commands only when said on
+        their own, as before M4 -- for anything that is not plainly one of
+        them, and whenever the settings themselves cannot be read: a mode
+        the person never chose must not start acting on their sentences.
+        Read on every transcript, so a change applies to the next one."""
+        if not self.settings_readable():
+            return "alone"
+        return command_mode(self["commandsInSentences"])
 
     def narration_silence_s(self) -> float:
         """Seconds of quiet before the first progress sentence, 3 to 30."""

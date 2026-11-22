@@ -61,9 +61,9 @@ from eager import Utterance, sounds_finished  # noqa: E402
 from noise_floor import MARGIN_MAX, MARGIN_MIN, NoiseFloor  # noqa: E402
 import headset  # noqa: E402
 from speech_text import (  # noqa: E402
-    as_prompt, chat_command, is_full_stop, is_goodbye, is_handoff,
-    is_stop_command, is_take_over, open_mic_command, pass_command,
-    safe_for_terminal,
+    UNDO_S, as_prompt, chat_command, command, find_command, heard_back,
+    is_full_stop, is_goodbye, is_handoff, is_stop_command, is_take_over,
+    is_undo, open_mic_command, pass_command, safe_for_terminal,
 )
 from chats import RETENTIONS, ChatStore, replay_context  # noqa: E402
 import chats as chat_schema  # noqa: E402
@@ -1406,6 +1406,12 @@ def _limit_hits_from(state) -> dict:
     return fresh
 
 
+#: Phase M4: commands found inside a sentence that act inside the agent's
+#: own turn, where its chat is (`Daemon.chat_in_sentence`). The others
+#: switch the open microphone, which is the run loop's.
+_IN_TURN_COMMANDS = ("new_chat", "continue_chat")
+
+
 def _empty_turn() -> dict:
     """Nothing heard yet, nothing answered.
 
@@ -1656,6 +1662,13 @@ class Daemon:
         #: until when (plan item 11). None when it is not open.
         self.open_mic: Persona | None = None
         self.open_mic_until = 0.0
+        #: Phase M4. What was said aloud lately, as (began, ended, text): a
+        #: command heard in it may be the agent's own voice coming back, and
+        #: is not taken (`sentence_command`). And the open-mic switch made
+        #: from inside a sentence, which "no" puts back for a moment
+        #: (`take_undo`).
+        self._said_lately: collections.deque = collections.deque(maxlen=24)
+        self._undo: dict | None = None
         #: Until when a frame's loudness may be our own chime rather than the
         #: person. Not `_deaf_until`: deafness throws frames away, and the
         #: frame after a wake word may hold the start of the request.
@@ -3262,6 +3275,7 @@ class Daemon:
         if not self._in_turn():
             with self._mic_lock:
                 self._speaking = True
+        began = time.time()
         try:
             barge = self._barge_watch()
             if self.chimes is not None:
@@ -3271,6 +3285,7 @@ class Daemon:
                                  watch=self._watch(barge, cut, on_start))
         finally:
             self.deafen(tail_ms)
+            self.note_said(began, text)
             with self._mic_lock:
                 self._speaking = False
                 if self._in_turn():
@@ -3768,7 +3783,8 @@ class Daemon:
               f"({' · '.join(spans)}){OFF}")
         last["latency_ms"] = round(total * 1000)
 
-    def answer(self, text: str, last: dict, clock: dict | None = None) -> None:
+    def answer(self, text: str, last: dict, clock: dict | None = None,
+               command=None) -> None:
         """Hand the transcript to the agent and speak the reply as it lands.
 
         Speech starts on the first complete sentence rather than the whole
@@ -3779,6 +3795,10 @@ class Daemon:
         `clock` carries the turn's timestamps from the frame loop -- when you
         stopped talking, when the endpoint fired, when Whisper finished -- and
         this adds the agent's and the voice's, for report_latency().
+
+        `command`: a command found inside what was said (phase M4,
+        `sentence_command`), and `text` what was left of it. Nothing in
+        `text` is then taken as a command: it is the request.
         """
         clock = dict(clock or {})
         tail_ms = self.cfg.get_int("echoTailMs")
@@ -3793,12 +3813,18 @@ class Daemon:
             self._barged = None
             self._woke = False
         if not self.agent:
-            if self.speaker:
+            if self.speaker and text:
                 out.publish("speaking", **last)
                 self.speak(text, tail_ms)       # echo mode
             return
 
-        if self.chat_turn(text, last, out, tail_ms):
+        if command is not None:
+            if command.command.id in _IN_TURN_COMMANDS and \
+                    not self.chat_in_sentence(command, last, out, tail_ms):
+                return
+            if not text:
+                return
+        elif self.chat_turn(text, last, out, tail_ms):
             return
         persona = self._persona()
         open_turn = persona.open_turn and self.cfg.get_bool("openMicAddressedOnly")
@@ -4196,6 +4222,30 @@ class Daemon:
         except (OSError, ValueError):
             pass
 
+    def continue_by_topic(self, p: Persona, about: str) -> tuple[str, bool]:
+        """Find `p`'s saved chat about `about` and make it the current one.
+        (what to say, whether it was continued)."""
+        if not self.cfg.get_bool("saveChats"):
+            return ("Saved chats are off. Turn on Save conversations in the "
+                    "Display settings."), False
+        try:
+            found = self.chats.find(about, p.id)
+        except (OSError, ValueError):
+            found = []
+        if not found:
+            return ((f"I couldn't find a chat about {about}." if about
+                     else "There's no saved chat to continue."), False)
+        if len(found) > 1 and found[1]["score"] >= found[0]["score"] * 0.8:
+            return (f"Two chats match: {found[0]['title']}, and "
+                    f"{found[1]['title']}. Say a few more words about which one."), False
+        chat = self.chats.load(found[0]["id"])
+        if chat is None:
+            return "That chat is gone.", False
+        if self.continue_chat(p, chat) == "refused":
+            return ("That chat isn't shared with me any more, so I can't "
+                    "pick it up."), False
+        return f"Continuing {chat.get('title') or 'that chat'}. Go ahead.", True
+
     def chat_turn(self, text: str, last: dict, out, tail_ms: int) -> bool:
         """ "new chat" and "continue the chat about ..." said to an agent.
 
@@ -4210,28 +4260,8 @@ class Daemon:
         if kind == "new":
             self.new_chat(p)
             msg = "Starting a new chat."
-        elif not self.cfg.get_bool("saveChats"):
-            msg = "Saved chats are off. Turn on Save conversations in the Display settings."
         else:
-            try:
-                found = self.chats.find(about, p.id)
-            except (OSError, ValueError):
-                found = []
-            if not found:
-                msg = (f"I couldn't find a chat about {about}." if about
-                       else "There's no saved chat to continue.")
-            elif (len(found) > 1 and found[1]["score"] >= found[0]["score"] * 0.8):
-                msg = (f"Two chats match: {found[0]['title']}, and "
-                       f"{found[1]['title']}. Say a few more words about which one.")
-            else:
-                chat = self.chats.load(found[0]["id"])
-                if chat is None:
-                    msg = "That chat is gone."
-                elif self.continue_chat(p, chat) == "refused":
-                    msg = ("That chat isn't shared with me any more, so I can't "
-                           "pick it up.")
-                else:
-                    msg = f"Continuing {chat.get('title') or 'that chat'}. Go ahead."
+            msg, _ = self.continue_by_topic(p, about)
         print(f"  {DIM}({kind} chat){OFF}", flush=True)
         out.publish("speaking", **{**last, "reply": msg})
         if self.speaker:
@@ -4479,10 +4509,9 @@ class Daemon:
             return True
         return False
 
-    def pass_command(self, p: Persona, text: str) -> bool:
-        """"pass this to Sora" said to `p`, or "take over" said to the agent
-        that is to take it from whoever was spoken to last. True when it was
-        one and has been dealt with."""
+    def command_names(self) -> dict[str, str]:
+        """Every name an agent may be called by, lower case, and the agent:
+        display names and wake phrases, for "pass this to Sora"."""
         names = {}
         for agent, label in self.collab._known().items():
             names[" ".join(str(label).lower().split())] = agent
@@ -4490,6 +4519,13 @@ class Daemon:
             for n in (q.label, q.name):
                 if n:
                     names[" ".join(n.lower().split())] = collab.external(q.id)
+        return names
+
+    def pass_command(self, p: Persona, text: str) -> bool:
+        """"pass this to Sora" said to `p`, or "take over" said to the agent
+        that is to take it from whoever was spoken to last. True when it was
+        one and has been dealt with."""
+        names = self.command_names()
         name, request = pass_command(text, names)
         if name:
             self.collab.pass_conversation(p, names[name], entry="voice",
@@ -4501,6 +4537,163 @@ class Daemon:
                                           entry="voice")
             return True
         return False
+
+    # --- commands inside sentences (phase M4) ---------------------------------
+
+    #: How long after something was said aloud a command in it may still be
+    #: the agent's own voice coming back to the microphone: the room, and
+    #: the deaf tail after each sentence.
+    OWN_VOICE_S = 2.0
+
+    def note_said(self, began: float, text: str) -> None:
+        """Remember what was just said aloud, and when (`speak()`)."""
+        said = getattr(self, "_said_lately", None)
+        if said is not None:
+            said.append((began, time.time(), str(text or "")))
+
+    def recording_elsewhere(self) -> bool:
+        """Whether another program is recording right now: somebody
+        dictating, whose words are not commands. Asked at the moment a
+        command would fire, not only at the 2s poll that lends the
+        microphone out, because a sentence can finish inside that gap.
+        Asked whatever `yieldToRecorders` says: that setting is about
+        stepping aside, not about obeying what was dictated. "Cannot tell"
+        (no pw-dump) is no, as it is for lending the microphone."""
+        try:
+            return bool(other_recorders(os.getpid()))
+        except Exception:
+            return False
+
+    def _command_refused(self, found, heard_at: float | None) -> str:
+        """Why a command found inside a sentence must not fire, or ""."""
+        if self.locked:
+            return "the screen is locked"
+        if self.yielded:
+            return "the microphone is lent out"
+        if self.recording_elsewhere():
+            return "something else is recording"
+        if heard_at is not None:
+            for began, ended, said in list(getattr(self, "_said_lately", ())):
+                if ended >= heard_at - self.OWN_VOICE_S and heard_back(found.phrase, said):
+                    return "its own voice"
+        return ""
+
+    def sentence_command(self, p: Persona, text: str, last: dict,
+                         heard_at: float | None = None):
+        """The one place a command said inside a longer sentence is acted on.
+
+        Called with a finished transcript -- never a partial, never a typed
+        message -- after the checks for a command said on its own, which
+        handle those exactly as before M4. None when there is nothing for
+        it to do: an ordinary request, a command said on its own, the mode
+        "alone", or a context it must never fire in (locked, lent out,
+        dictation, its own voice heard back).
+
+        Otherwise the `speech_text.Found`. The open microphone has already
+        been switched and the command's fixed sentence said once and shown;
+        a chat command is left to the agent's turn (`answer`), where its
+        chat is. Either way `found.rest`, if anything, is what goes to the
+        agent, once, as an ordinary request. `heard_at` is when the person
+        started speaking, for the own-voice check.
+        """
+        mode = self.cfg.commands_in_sentences()
+        if mode == "alone" or not text:
+            return None
+        try:
+            names = tuple(self.command_names())
+        except Exception:
+            names = ()
+        found = find_command(text, mode, names)
+        if found is None or found.exact:
+            return None
+        cmd = found.command
+        why = self._command_refused(found, heard_at)
+        if why:
+            print(f"  {DIM}command not taken: {cmd.id} ({mode}, "
+                  f"{found.where}; {why}){OFF}", flush=True)
+            return None
+        # The structural line: which command and where, never the words.
+        print(f"  {CYA}command: {cmd.id}{OFF}  {DIM}({mode}, {found.where}"
+              f"{', with a request' if found.rest else ''}){OFF}", flush=True)
+        if cmd.id in _IN_TURN_COMMANDS:
+            return found
+        before = self.open_mic
+        if cmd.id == "open_mic":
+            self.start_open_mic(p, say=False)
+        elif self.open_mic is not None:
+            self.end_open_mic("asked to" if cmd.id == "close_mic" else "goodbye")
+        self.state.publish("speaking", **{**last, "reply": cmd.said})
+        self._say_for(p, cmd.said)
+        if cmd.id in ("open_mic", "close_mic") and self.open_mic is not before:
+            # Open from the moment it was said; the clock starts when the
+            # turn carrying the rest has finished, if one does (undo_clock).
+            self._undo = {"command": cmd.id, "found": found, "before": before,
+                          "after": self.open_mic, "persona": p, "at": time.time(),
+                          "until": None if found.rest else time.time() + UNDO_S}
+        return found
+
+    def undo_clock(self, found) -> None:
+        """The turn that carried `found`'s request is over: the few seconds
+        in which "no" undoes its open-mic switch start now."""
+        undo = getattr(self, "_undo", None)
+        if undo is not None and undo["found"] is found and undo["until"] is None:
+            undo["until"] = time.time() + UNDO_S
+
+    def take_undo(self, text: str, heard_at: float | None) -> bool:
+        """"no" or "cancel that", said straight after an open-mic switch made
+        from inside a sentence, puts it back and says so. Any finished
+        transcript uses the chance up, undo or not.
+
+        True when that was all there was to it. "cancel that" is also a
+        stop, so it is undone and then goes on to stop what was asked."""
+        undo, self._undo = getattr(self, "_undo", None), None
+        if undo is None or not text or self.locked or not is_undo(text):
+            return False
+        until = undo["until"]
+        if until is None and not undo["persona"].busy:
+            # The turn that was to carry the rest never ran, or ended
+            # without saying so: the window is the one after the command.
+            until = undo["at"] + UNDO_S
+        if heard_at is None or (until is not None and heard_at > until):
+            return False
+        if undo["command"] == "open_mic":
+            if self.open_mic is None or self.open_mic is not undo["after"]:
+                return False
+            self.end_open_mic("undone")
+            line = command("close_mic").said
+        else:
+            back = undo["before"]
+            if self.open_mic is not None or back is None or (
+                    back is not self._main and self.crew.get(back.id) is not back):
+                return False
+            self.start_open_mic(back, say=False)
+            line = command("open_mic").said
+        print(f"  {CYA}command undone: {undo['command']}{OFF}", flush=True)
+        self.state.publish("speaking", **{**_empty_turn(), "transcript": text,
+                                          "reply": line})
+        self._say_for(undo["persona"], line)
+        return not is_stop_command(text)
+
+    def chat_in_sentence(self, found, last: dict, out, tail_ms: int) -> bool:
+        """A chat command found inside a sentence, in the agent's turn: start
+        or continue the chat, say so once, and True if the rest of what was
+        said should go on into it. A chat that cannot be continued says why
+        and keeps the rest back: asked of the wrong chat, it would be
+        answered from the wrong conversation."""
+        p = self._persona()
+        cmd = found.command
+        if cmd.id == "new_chat":
+            self.new_chat(p)
+            line, go_on = cmd.said, True
+        else:
+            line, go_on = self.continue_by_topic(p, found.arg)
+            if go_on:
+                line = cmd.said
+        print(f"  {DIM}({cmd.id}){OFF}", flush=True)
+        out.publish("speaking", **{**last, "reply": line})
+        if self.speaker:
+            self.speak(line, tail_ms)
+        return go_on
 
     # --- moving a chat into a terminal (plan item 3) ---------------------------
 
@@ -5021,7 +5214,8 @@ class Daemon:
         return p
 
     def _send(self, p: Persona, text: str, last: dict, clock: dict,
-              open_turn: bool = False, typed: bool = False) -> None:
+              open_turn: bool = False, typed: bool = False,
+              heard_at: float | None = None) -> None:
         """Route what was said and hand it to an agent.
 
         A sentence that opens with an agent's name is for that agent, from
@@ -5053,6 +5247,13 @@ class Daemon:
             self.pass_open_mic(p)
         if self.voice_command(p, text):
             return
+        # Phase M4: a command inside the sentence. Never in a typed one.
+        said = None if typed else self.sentence_command(p, text, last, heard_at)
+        if said is not None:
+            if not said.rest and said.command.id not in _IN_TURN_COMMANDS:
+                return                  # said, and nothing left to send
+            text = said.rest
+            last = {**last, "transcript": text}
         p.open_turn = open_turn and not name and self.open_mic is p
         if p.agent is None and not p.main:
             # Said out loud through the echo path, rather than the transcript
@@ -5060,11 +5261,14 @@ class Daemon:
             text = f"{p.label} cannot answer: {p.problem or 'it is not set up'}."
         if typed:
             self.dispatch(p, text, last, clock, typed=True)
+        elif said is not None:
+            self.dispatch(p, text, last, clock, command=said)
         else:
             self.dispatch(p, text, last, clock)
 
     def dispatch(self, p: Persona, text: str, last: dict,
-                 clock: dict | None = None, typed: bool = False) -> bool:
+                 clock: dict | None = None, typed: bool = False,
+                 command=None) -> bool:
         """Start a turn for `p` on its own thread. False if it could not.
 
         An agent already working is stopped first: one conversation cannot
@@ -5102,22 +5306,27 @@ class Daemon:
         self._last_target = p
         self._recent = None
         p.thread = threading.Thread(target=self._turn,
-                                    args=(p, text, turn, clock, typed),
+                                    args=(p, text, turn, clock, typed, command),
                                     name=f"turn-{p.name or 'main'}",
                                     daemon=True)
         p.thread.start()
         return True
 
     def _turn(self, p: Persona, text: str, last: dict,
-              clock: dict | None, typed: bool = False) -> None:
+              clock: dict | None, typed: bool = False, command=None) -> None:
         self._here.persona = p
         self._here.turn = True
         self._here.typed = typed
         try:
-            self.answer(text, last, clock=clock)
+            if command is None:
+                self.answer(text, last, clock=clock)
+            else:
+                self.answer(text, last, clock=clock, command=command)
             # Not after a typed turn: whoever typed may not be in a position
-            # to talk, and a window would take the room's next sentence.
-            p.follow_up = self.arm_follow_up() and not typed
+            # to talk, and a window would take the room's next sentence. Not
+            # after "…, stop listening" either (phase M4).
+            p.follow_up = (self.arm_follow_up() and not typed
+                           and not (command is not None and command.command.ends))
         except Exception as e:      # a broken turn must not take a thread down silently
             print(f"  {YEL}{p.label or 'agent'}: turn failed: "
                   f"{type(e).__name__}: {e}{OFF}", flush=True)
@@ -5131,6 +5340,8 @@ class Daemon:
                     self._floor_owner, self._floor_until = None, 0.0
                 self._floor.notify_all()
             self._recent = p
+            if command is not None:
+                self.undo_clock(command)        # phase M4
             # collab: a task turn's end is its task's end.
             self.collab.turn_ended(p, stopped=p.interrupt.is_set(),
                                    failed=p.turn_error)
@@ -5814,6 +6025,10 @@ class Daemon:
                         stopped.clear()
                         print(f"  {DIM}(interrupted before sending){OFF}")
                         follow_up = False
+                    elif text and self.take_undo(text, spoke_at):
+                        # "no", straight after an open-mic switch made
+                        # inside a sentence: put back (phase M4).
+                        follow_up = False
                     elif text and is_full_stop(text):
                         # Before routing: "Sarah, full stop" still means all
                         # of them, and route() would otherwise hand it to
@@ -5835,16 +6050,33 @@ class Daemon:
                         # listening, so another agent can be given something
                         # while this one works.
                         self._send(capture_for or self._main, text, last, clock,
-                                   open_turn=capture_kind == "open")
+                                   open_turn=capture_kind == "open",
+                                   heard_at=spoke_at)
                         follow_up = False
                     elif text and self.voice_command(self._main, text):
                         follow_up = False
+                    elif text and (said := self.sentence_command(
+                            self._main, text, last, spoke_at)) is not None \
+                            and not said.rest \
+                            and said.command.id not in _IN_TURN_COMMANDS:
+                        # Phase M4: a command inside the sentence, said and
+                        # done, and nothing else in it to send.
+                        follow_up = False
                     elif text:
+                        if said is not None:
+                            # Phase M4: what was left once the command was
+                            # taken out goes to the agent as the request.
+                            text = said.rest
+                            last = {**last, "transcript": text}
                         self._main.open_turn = capture_kind == "open"
                         # A level lowered during the last turn applies
                         # before this one (Codex review of M2).
                         self.catch_up_flags(self._main)
-                        self.answer(text, last, clock=clock)
+                        if said is None:
+                            self.answer(text, last, clock=clock)
+                        else:
+                            self.answer(text, last, clock=clock, command=said)
+                            self.undo_clock(said)
                         # Uncapped on purpose, and worth stating because it
                         # reads like an oversight: a follow-up window opens
                         # after every answered turn, it uses neither the wake
@@ -5861,7 +6093,8 @@ class Daemon:
                         # conversation mode itself, and the permission level
                         # are all settings, which is where that trade-off
                         # belongs.
-                        follow_up = self.arm_follow_up()
+                        follow_up = self.arm_follow_up() and not (
+                            said is not None and said.command.ends)
                         # Talked over: stopped like any interrupt, so no
                         # follow-up window -- but the person is mid-sentence,
                         # and what they are saying is the next turn.

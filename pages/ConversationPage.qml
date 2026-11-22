@@ -214,6 +214,54 @@ Column {
     }
   }
 
+  // Phase M4: where a spoken command counts besides on its own. Read with
+  // the daemon's fallback: anything that is not one of the three is
+  // "alone", the behaviour before it.
+  SettingsGroup {
+    width: parent.width
+    title: "SPOKEN COMMANDS"
+    foreground: page.s.foreground
+    fontFamily: page.s.fontFamily
+
+    SettingRow {
+      id: commandsRow
+      width: parent.width
+      stacked: true
+      readonly property string mode: {
+        var v = page.s.setting("commandsInSentences", "edges")
+        return (v === "alone" || v === "edges" || v === "clause") ? v : "alone"
+      }
+      label: "Commands inside a sentence"
+      hint: mode === "clause"
+            ? "Also \"keep listening\" in a clause of its own: \"Take notes, and keep listening, because I might pause.\""
+            : mode === "edges"
+            ? "Also at the start or end of what you say: \"Take notes, and keep listening.\""
+            : "Only when the command is all you say: \"keep listening\"."
+      help: "A command that fires inside a sentence is said out loud once (\"Open mic on.\"), " +
+            "and the rest of the sentence goes to the agent as your request. Saying \"no\" " +
+            "or \"cancel that\" straight after undoes an open-mic switch. It never fires with " +
+            "something after it (\"stop listening to that song\"), after \"don't\", when " +
+            "quoting somebody, when two commands are in one sentence, while you dictate, or " +
+            "on the agent's own voice. Stop, full stop and moving to a terminal still only " +
+            "work said on their own."
+      changed: page.s.changed("commandsInSentences")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onReset: page.s.resetKey("commandsInSentences")
+      SegmentedChoice {
+        options: [
+          { value: "alone", label: "Alone" },
+          { value: "edges", label: "Start or end" },
+          { value: "clause", label: "Own clause" }
+        ]
+        value: commandsRow.mode
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onCommitted: function(v) { page.s.put("commandsInSentences", v) }
+      }
+    }
+  }
+
   // Progress talk. Off by default: what it says was written from recorded
   // turns (bench/narration), and is yours to switch on.
   SettingsGroup {

@@ -47,6 +47,18 @@ def _no_sound_server(monkeypatch):
     monkeypatch.setattr(headset, "default_output", lambda: None)
 
 
+@pytest.fixture(autouse=True)
+def _no_recorder_probe(monkeypatch):
+    """Whether another program is recording is a fact about the machine
+    running the suite too. A command found inside a sentence asks before it
+    fires (phase M4, `Daemon.recording_elsewhere`), and without this every
+    such test would run the developer's pw-dump -- passing or failing by
+    whether they were dictating. test_commands keeps the real method."""
+    import wake_listen
+    monkeypatch.setattr(wake_listen.Daemon, "recording_elsewhere",
+                        lambda self: False)
+
+
 @pytest.fixture
 def sandbox() -> Path:
     """The scratch root the XDG variables point into."""

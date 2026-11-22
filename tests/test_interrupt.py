@@ -225,3 +225,31 @@ def test_the_turn_after_a_stop_is_not_thrown_away(daemon, monkeypatch):
     sent = _drive_one_turn(daemon, monkeypatch, "what time is it",
                            on_answer=on_answer)
     assert sent == ["what time is it"] * 2, "the request after a stop was dropped"
+
+
+# --- "cancel that" after a command inside a sentence (phase M4) ---------------
+
+def test_cancel_that_undoes_the_open_mic_and_is_still_a_stop(daemon, monkeypatch):
+    """Straight after "take notes, and keep listening", "cancel that" puts
+    the microphone back and then goes on to the run loop's stop branch, so
+    the turn it was carrying stops too."""
+    import time
+
+    from speech_text import is_stop_command
+    monkeypatch.setattr(daemon, "publish_agent", lambda: None)
+    found = daemon.sentence_command(daemon._main, "Take notes, and keep listening.", {},
+                                    heard_at=time.time())
+    daemon.undo_clock(found)
+    assert daemon.open_mic is daemon._main
+    assert daemon.take_undo("Cancel that.", time.time()) is False
+    assert daemon.open_mic is None
+    assert is_stop_command("Cancel that.")
+    src = open(wake_listen_path()).read()
+    chain = src[src.index("elif text and self.take_undo(text, spoke_at):"):]
+    assert chain.index("is_full_stop(text)") < chain.index("is_stop_command(text)"), \
+        "the undo comes first, the stop after it"
+
+
+def wake_listen_path():
+    import wake_listen
+    return wake_listen.__file__

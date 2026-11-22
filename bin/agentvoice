@@ -27,6 +27,7 @@
 #   agentvoice endpoint ...        clean, models, test, key: the endpoint editor
 #   agentvoice pass TO [--from ID] < brief   pass the conversation to agent TO
 #   agentvoice tasks [cancel ID]   collaboration tasks between agents
+#   agentvoice commands [--json]   every spoken command, and the wake phrases
 set -euo pipefail
 
 UNIT=agentvoice.service
@@ -451,6 +452,17 @@ case "${1:-status}" in
       + (if (.error // "") != "" then "  [failed: " + .error + "]" else "" end)
       + (if .stopped then "  [stopped]" else "" end) + "\n"' "$H"
     ;;
+  commands)
+    # Every spoken command (phase M4): its phrases, what it does, where in a
+    # sentence it counts, what it says when it fires there, and the agents'
+    # wake phrases. Reads the settings only; no daemon needed.
+    #   agentvoice commands [--json]
+    REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+    PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+    [[ -x $PY ]] || PY=python3
+    shift
+    exec "$PY" "$REPO/daemon/voice_commands.py" "$@"
+    ;;
   status)
     if [[ -r $STATE ]] && active; then cat "$STATE"; else echo '{"state":"off"}'; fi
     ;;
@@ -458,7 +470,7 @@ case "${1:-status}" in
     active && echo yes || echo no
     ;;
   *)
-    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|interrupt|hud-preview|monitor|calibrate|voice|permit|pending|history|chats|pass|tasks|agents|endpoint|open-mic|wake-test|status|is-active]" >&2
+    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|interrupt|hud-preview|monitor|calibrate|voice|permit|pending|history|chats|pass|tasks|agents|endpoint|open-mic|commands|wake-test|status|is-active]" >&2
     exit 2
     ;;
 esac

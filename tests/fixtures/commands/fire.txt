@@ -1,0 +1,43 @@
+# Sentences a command fires inside (phase M4). Synthetic, written for the
+# policy table in notes/master-plan.md (M4); none is a real transcript.
+#
+#   least mode | command | where | rest ("-" for nothing) | what was said
+#
+# "least mode" is the least permissive `commandsInSentences` it fires in: it
+# must fire there and in every mode after it (edges, then clause), and not
+# fire at all in the modes before it. Punctuation is Whisper's: it decides
+# where a clause ends, and the lines without any test the clause cues.
+
+edges  | open_mic      | end    | Take notes                         | Take notes, and keep listening.
+edges  | open_mic      | end    | Okay, I'm going to take notes      | Okay, I'm going to take notes, and keep listening.
+edges  | open_mic      | start  | I'm going to read you a list.      | Keep listening, I'm going to read you a list.
+edges  | open_mic      | start  | I'll think out loud for a bit.     | Please keep listening. I'll think out loud for a bit.
+edges  | open_mic      | start  | -                                  | Can you keep listening?
+edges  | open_mic      | start  | -                                  | Alright, keep listening please.
+edges  | open_mic      | start  | -                                  | Hey Jarvis, keep listening.
+edges  | open_mic      | end    | No                                 | No, keep listening.
+edges  | open_mic      | end    | Draft the email                    | Draft the email, then leave the mic open.
+edges  | open_mic      | start  | Let's brainstorm names.            | Open mic, let's brainstorm names.
+edges  | open_mic      | end    | Read me the list                   | Read me the list, and could you keep listening?
+edges  | open_mic      | end    | I'll take notes                    | I'll take notes and keep listening
+edges  | open_mic      | start  | I'll explain.                      | Keep listening then, I'll explain.
+edges  | open_mic      | end    | I heard you                        | I heard you. Keep listening.
+clause | open_mic      | clause | Okay, I'm going to take notes, because I might pause. | Okay, I'm going to take notes, and keep listening, because I might pause.
+clause | open_mic      | clause | Take notes because I might pause   | take notes and keep listening because I might pause
+clause | open_mic      | clause | Read it to me, I'll answer slowly. | Read it to me, keep listening, I'll answer slowly.
+edges  | close_mic     | end    | Remind me at five                  | Remind me at five, and stop listening.
+edges  | close_mic     | start  | I'm done for today.                | Stop listening, I'm done for today.
+edges  | close_mic     | start  | -                                  | Stop the open mic, thanks.
+edges  | close_mic     | end    | That's everything                  | That's everything. Mic off.
+edges  | close_mic     | end    | Save the notes                     | Save the notes and turn the mic off
+edges  | goodbye       | end    | Email Sarah the notes              | Email Sarah the notes, goodbye.
+edges  | goodbye       | end    | -                                  | Alright then, goodbye.
+edges  | goodbye       | end    | Thanks for the help today          | Thanks for the help today. Talk to you later.
+edges  | goodbye       | end    | Set an alarm for seven             | Set an alarm for seven. Good night.
+edges  | new_chat      | start  | What's the weather in Paris?       | New chat. What's the weather in Paris?
+edges  | new_chat      | start  | I want to plan a trip.             | Okay, start a new chat. I want to plan a trip.
+edges  | new_chat      | start  | -                                  | So, new chat.
+edges  | new_chat      | start  | About the budget.                  | New conversation: about the budget.
+edges  | continue_chat | start  | What colour did we pick?           | Continue the chat about the HUD. What colour did we pick?
+edges  | continue_chat | start  | What did you find?                 | Okay, continue our conversation, what did you find?
+edges  | continue_chat | start  | When is it?                        | Let's go back to the chat about Dr. Smith. When is it?

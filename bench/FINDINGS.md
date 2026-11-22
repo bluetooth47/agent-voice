@@ -1707,3 +1707,50 @@ empties) but still grows with the answer and the STOP button, by design.
 The dynamic HUD is wider than before from the start because the kept
 answer is measured into its width. Not measured in the real shell: the
 preview's Quickshell is the shell's, but nothing here was restarted.
+
+## 43. M4: commands inside sentences, over the corpus and the user's own chats
+
+Measured 2026-11-21 on phase-m4 with `speech_text.find_command`, which is
+pure: no microphone, no model. Two inputs.
+
+**The synthetic corpus** (`tests/fixtures/commands/`), written for the policy
+table: 33 sentences a command is meant to fire inside, 56 that hold a
+command's words and must not (an object after the verb, a negation, quoted
+or reported speech, a question, two commands, and ordinary sentences such
+as "there's an open mic night on Friday").
+
+| mode | meant to fire, fired | must not fire, fired |
+|---|---|---|
+| alone | 0 / 33 | 0 / 56 |
+| edges | 30 / 33 | 0 / 56 |
+| clause | 33 / 33 | 0 / 56 |
+
+The three that need `clause` are the ones with the command mid-sentence,
+the user's own example among them. Written by the same hand as the
+matcher, so this says the rules do what they were written to do, not how
+often real speech trips them.
+
+**The user's saved chats**, counts only (`bench/commands_scan.py`; no
+transcript was printed or read by anyone):
+
+```
+transcripts scanned: 213
+commands said on their own (as before M4): 0
+held a command's words inside a sentence: 5  {'close_mic': 1, 'goodbye': 1, 'open_mic': 5}
+ alone: would fire inside a sentence 0
+ edges: would fire inside a sentence 0
+clause: would fire inside a sentence 0
+```
+
+So none of the 213 requests that reached an agent would have fired a
+command in any mode, and the 5 that held a command's words were all
+refused. A saved chat holds only what went to the agent -- a command said on
+its own never does, hence the 0 -- so these are exactly the sentences a
+command could have misfired on. Whether any of the 5 was *meant* as a
+command (a miss, which is bug A) is for the user to label:
+`bench/commands_scan.py --sample FILE`, set `meant`, then `--labels FILE`.
+Not done: unattended, and the transcripts are the user's to read.
+
+Default: **`edges`**, open question 4's default. The measured false-trigger
+counts are 0 for both `edges` and `clause`, so they do not favour `clause`;
+labelling the 5 is what could.
