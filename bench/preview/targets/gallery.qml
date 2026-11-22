@@ -14,6 +14,7 @@
 //                  armed → cancelled, armed → confirmed, armed → Escape,
 //                  armed → left alone past its 6 s
 //   --arg keys     walks the pieces with Tab and presses their keys
+//   --arg armed    arms the DangerButton and leaves it armed, for a shot
 //
 // Neither moves the real pointer or takes the keyboard (TestEvent sends
 // events to this window only, and preview.sh turns Exclusive focus off).
@@ -100,6 +101,7 @@ ShellRoot {
     }
 
     property var chipStates: ({ desktop: "on", browser: "inherit", skill: "off" })
+    property int dangerArmMs: 6000
     property var tabsCurrent: "main"
     property var filters: ["mine"]
 
@@ -281,6 +283,7 @@ ShellRoot {
               spacing: Style.space(12)
               DangerButton {
                 id: danger
+                armMs: win.dangerArmMs
                 text: "Reset"
                 question: win.lbl("Really reset Theo?", "Really reset Theo the extremely thorough reviewer?")
                 confirmText: "Reset"
@@ -488,6 +491,14 @@ ShellRoot {
       console.warn("PREVIEW state " + label + ": armed=" + danger.armed + " last=" + win.lastEvent)
     }
 
+    // --arg armed: the DangerButton armed and left armed, for a screenshot
+    // of the strip (with `long`, of its wrapping).
+    Timer {
+      interval: 300
+      running: win.arg.indexOf("armed") >= 0
+      onTriggered: { win.dangerArmMs = 600000; danger.arm() }
+    }
+
     property int step: 0
     Timer {
       interval: 900
@@ -558,6 +569,11 @@ ShellRoot {
       function() { win.state("armed by keyboard") },
       function() { win.key(Qt.Key_Escape, "Escape (disarms)") },
       function() { win.state("after Escape") },
+      function() { win.key(Qt.Key_Return, "Enter (arms again)") },
+      function() { win.key(Qt.Key_Tab, "Tab (Cancel to Remove)") },
+      function() { win.state("on its own Reset button") },
+      function() { win.key(Qt.Key_Tab, "Tab (leaves the strip)") },
+      function() { win.state("after tabbing away") },
       function() { win.tabTo(bars, "hour bars") },
       function() { win.key(Qt.Key_Left, "Left") },
       function() { win.key(Qt.Key_Left, "Left (readout under the bars)") },

@@ -54,15 +54,27 @@ def blank(src: str, strings: bool = True) -> str:
             continue
         if c in "\"'`":
             j = i + 1
+            # A template literal's `${...}` is code, and is left as code:
+            # `${page.s.clearSession()}` runs (Codex review, M1).
+            keep: list[tuple[int, int]] = []
             while j < n and src[j] != c:
                 if src[j] == "\\":
-                    j += 1
-                elif src[j] == "\n" and c != "`":
+                    j += 2
+                    continue
+                if src[j] == "\n" and c != "`":
                     break
+                if c == "`" and src.startswith("${", j):
+                    depth, k = 1, j + 2
+                    while k < n and depth:
+                        depth += {"{": 1, "}": -1}.get(src[k], 0)
+                        k += 1
+                    keep.append((j + 2, k - 1))
+                    j = k
+                    continue
                 j += 1
             if strings:
                 for k in range(i + 1, min(j, n)):
-                    if src[k] != "\n":
+                    if src[k] != "\n" and not any(a <= k < b for a, b in keep):
                         out[k] = " "
             i = j + 1
             last = c
@@ -121,13 +133,14 @@ class Scanned:
     def lineno(self, pos: int) -> int:
         return self.src.count("\n", 0, pos) + 1
 
-    def calls(self, needle: str) -> list[int]:
-        """Offsets where `needle` occurs as code: not in a comment, not inside
-        a string, and not as the definition (`function removeAgent(`). It
-        may hold a string literal (`run("delete"`) as long as it starts
-        with code."""
+    def calls(self, needle) -> list[int]:
+        """Offsets where `needle` (a string, or a compiled pattern) occurs as
+        code: not in a comment, not inside a string, and not as the
+        definition (`function removeAgent(`). It may hold a string literal
+        (`run("delete"`) as long as it starts with code."""
         out = []
-        for m in re.finditer(re.escape(needle), self.nocomment):
+        pattern = needle if isinstance(needle, re.Pattern) else re.compile(re.escape(needle))
+        for m in pattern.finditer(self.nocomment):
             p = m.start()
             if self.clean[p] != self.src[p]:
                 continue
@@ -146,7 +159,11 @@ class Scanned:
         """The QML signal handler (`onConfirmed`, `onClicked`, ...) or JS
         function `pos` is inside: the innermost block header naming one, or
         a single-line handler on the same line. "" if neither."""
-        own = re.match(r"\s*(on[A-Z]\w*)\s*:", self.line_of(pos))
+        # A handler written on the call's own line, `onClicked: x()`, or
+        # after a brace on it, `Button { onClicked: x() }`.
+        line = self.line_of(pos)
+        segment = line[line.rfind("{") + 1:] if "{" in line else line
+        own = re.match(r"\s*(on[A-Z]\w*)\s*:", segment)
         if own:
             return own.group(1)
         for brace in self.enclosing(pos):

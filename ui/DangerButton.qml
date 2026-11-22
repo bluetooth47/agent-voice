@@ -37,6 +37,11 @@ FocusScope {
   property string tooltipText: ""
   property int armMs: 6000
   property bool busy: false
+  // The widest the armed strip may be. A long name wraps the question (two
+  // lines at most, then elided, the whole of it in a tooltip) and moves
+  // the buttons under it, so Cancel and Confirm never run off the page.
+  // A caller in a column of known width passes that width.
+  property real maxWidth: Style.space(360)
 
   property color foreground: Commons.Color.foreground
   property color urgent: Commons.Color.urgent
@@ -44,6 +49,9 @@ FocusScope {
 
   readonly property bool armed: _armed
   property bool _armed: false
+  // True from arming until Cancel has the focus: the idle button hides
+  // under the focus in between, which is not "focus left".
+  property bool _settling: false
 
   signal confirmed()
   signal cancelled()
@@ -51,10 +59,14 @@ FocusScope {
   function arm() {
     if (!enabled || busy) return
     _armed = true
+    _settling = true
     disarmTimer.restart()
     // After the strip exists: Cancel takes the focus, so the next Enter
     // cancels.
-    Qt.callLater(function() { if (danger._armed) cancelButton.forceActiveFocus() })
+    Qt.callLater(function() {
+      if (danger._armed) cancelButton.forceActiveFocus()
+      danger._settling = false
+    })
   }
   function disarm() {
     if (!_armed) return
@@ -82,6 +94,9 @@ FocusScope {
   onEnabledChanged: if (!enabled) disarm()
   onBusyChanged: if (busy) disarm()
   onVisibleChanged: if (!visible) disarm()
+  // Tabbing (or clicking) away disarms it, so an Escape pressed elsewhere is
+  // never needed to put it back (Codex review, M1).
+  onActiveFocusChanged: if (!activeFocus && _armed && !_settling) disarm()
 
   Timer { id: disarmTimer; interval: danger.armMs; onTriggered: danger.disarm() }
 
@@ -111,19 +126,36 @@ FocusScope {
     onClicked: danger.arm()
   }
 
-  Row {
+  Flow {
     id: strip
     visible: danger._armed
     spacing: Style.space(8)
+    // From natural widths only, so nothing here depends on its own result.
+    width: Math.min(danger.maxWidth, question.implicitWidth + cancelButton.implicitWidth
+                                     + confirmButton.implicitWidth + spacing * 2)
 
     Text {
-      anchors.verticalCenter: parent.verticalCenter
+      id: question
+      width: Math.min(implicitWidth, strip.width)
+      height: Math.max(implicitHeight, cancelButton.implicitHeight)
+      verticalAlignment: Text.AlignVCenter
       text: danger.question
       // The question often holds a name somebody typed.
       textFormat: Text.PlainText
+      wrapMode: Text.Wrap
+      maximumLineCount: 2
+      elide: Text.ElideRight
       color: danger.urgent
       font.family: danger.fontFamily
       font.pixelSize: Style.font.body
+      MouseArea {
+        id: questionArea
+        anchors.fill: parent
+        enabled: question.truncated
+        hoverEnabled: true
+        acceptedButtons: Qt.NoButton
+      }
+      Tip { tipText: question.truncated ? danger.question : ""; shown: questionArea.containsMouse; fontFamily: danger.fontFamily }
     }
     Button {
       id: cancelButton

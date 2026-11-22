@@ -1233,6 +1233,7 @@ Column {
       }
 
       DangerButton {
+        maxWidth: parent.width
         text: "Remove " + (card.label || "this agent")
         question: "Really remove " + (card.label || "this agent") + "?"
         confirmText: "Remove"

@@ -27,20 +27,35 @@ import pytest
 
 from qml_scan import ROOT, overlay_qml, scan
 
+def call(dotted: str, arg: str = "") -> re.Pattern:
+    """A call of `dotted` (`folders.remove`), any spacing, optionally with a
+    first argument that is the string `arg` in any quotes. Exact substrings
+    missed `run('delete', ...)` (Codex review, M1)."""
+    name = r"\s*\.\s*".join(re.escape(p) for p in dotted.split("."))
+    tail = r"\s*\(" + (r"\s*['\"`]" + re.escape(arg) + r"['\"`]" if arg else "")
+    return re.compile(r"(?<![\w.])(?:\w+\s*\.\s*)*" + name + tail if "." not in dotted
+                      else r"\b" + name + tail)
+
+
+def start(process: str) -> re.Pattern:
+    """Anything that starts Process `process`: `running = ...` or
+    startDetached()."""
+    return re.compile(r"\b" + re.escape(process) + r"\s*\.\s*(?:running\s*=(?!=)|startDetached\s*\()")
+
+
 # verb: (where it is built: {file: [the functions, handlers or, for a
 # declaration, the element holding it]}, the calls that reach it)
-DESTRUCTIVE: dict[str, tuple[dict[str, list[str]], list[str]]] = {
+DESTRUCTIVE: dict[str, tuple[dict[str, list[str]], list[re.Pattern]]] = {
     # An agent's folder and settings entry to the trash. AgentFolders also
     # re-trashes after a failed restore (`onFailed`): that is a rollback of
     # the user's own undo, never a first removal.
     "agents trash": ({"AgentFolders.qml": ["remove", "trashOrphan", "onFailed"]},
-                     ["folders.remove(", "folders.trashOrphan(", "removeAgent("]),
-    "chats delete": ({"Chats.qml": ["run"]}, ['run("delete"']),
-    "--uninstall": ({"Settings.qml": ["removeEverything"]}, ["removeEverything("]),
+                     [call("folders.remove"), call("folders.trashOrphan"), call("removeAgent")]),
+    "chats delete": ({"Chats.qml": ["run"]}, [call("run", "delete")]),
+    "--uninstall": ({"Settings.qml": ["removeEverything"]}, [call("removeEverything"), start("remover")]),
     # The session's conversation, from memory: a Process, started by
     # setting `running`, which only clearSession() does.
-    "history clear": ({"Settings.qml": ["Process"]},
-                      ["clearSession(", "clearHistory.running = true"]),
+    "history clear": ({"Settings.qml": ["Process"]}, [call("clearSession"), start("clearHistory")]),
 }
 
 # How each verb looks where it is built.
@@ -52,9 +67,12 @@ SPELLING = {
 }
 
 # Functions a call may sit in without a confirmation of its own, because
-# they are the wrappers named above: their own callers are checked.
-WRAPPERS = {"function " + f for f in
-            ("remove", "trashOrphan", "removeAgent", "removeEverything", "clearSession")}
+# they are the wrappers named above, file by file: their own callers are
+# checked, by the patterns above. A function of the same name anywhere else
+# earns nothing (Codex review, M1).
+WRAPPERS = {("AgentFolders.qml", "function remove"), ("AgentFolders.qml", "function trashOrphan"),
+            ("pages/AgentsPage.qml", "function removeAgent"),
+            ("Settings.qml", "function removeEverything"), ("Settings.qml", "function clearSession")}
 
 
 def _built_in(scanned, spelling):
@@ -84,16 +102,27 @@ def test_each_destructive_command_runs_only_from_a_confirmation(verb):
     wrong = []
     for path in overlay_qml():
         s = scan(path)
+        rel = str(path.relative_to(ROOT))
         for needle in calls:
             for pos in s.calls(needle):
                 seen += 1
                 h = s.handler_of(pos)
-                if h == "onConfirmed" or h in WRAPPERS:
+                if h == "onConfirmed" or (rel, h) in WRAPPERS:
                     continue
-                wrong.append(f"{path.relative_to(ROOT)}:{s.lineno(pos)} {needle} in {h or 'nothing'}")
+                wrong.append(f"{rel}:{s.lineno(pos)} {needle.pattern} in {h or 'nothing'}")
     assert wrong == [], wrong
     # A table whose calls match nothing checks nothing.
     assert seen > 0, verb
+
+
+def test_a_chat_is_deleted_only_through_the_confirmed_run():
+    """run(verb, ...) is generic, so the verb could arrive in a variable the
+    patterns above never see. In Chats.qml the string `delete` appears only
+    as run()'s first argument -- in any quotes."""
+    s = scan(ROOT / "Chats.qml")
+    literals = [m.start() for m in re.finditer(r"['\"`]delete['\"`]", s.nocomment)]
+    as_run = {m.end() - len("delete") - 2 for m in call("run", "delete").finditer(s.nocomment)}
+    assert literals and set(literals) <= as_run, [s.lineno(p) for p in literals if p not in as_run]
 
 
 def test_the_buttons_that_confirm_are_danger_buttons():
@@ -148,8 +177,21 @@ def test_the_scanner_sees_a_confirmation_go_missing():
         return Scanned(ROOT / "x.qml", text, clean, blank(text, strings=False), opens, closes)
 
     good, bad = scanned(src), scanned(mutated)
-    assert [good.handler_of(p) for p in good.calls("removeEverything(")] == ["onConfirmed"]
-    assert [bad.handler_of(p) for p in bad.calls("removeEverything(")] == ["onClicked"]
+    remove = call("removeEverything")
+    assert [good.handler_of(p) for p in good.calls(remove)] == ["onConfirmed"]
+    assert [bad.handler_of(p) for p in bad.calls(remove)] == ["onClicked"]
+
+    # The shapes exact substrings missed: other quotes, other spacing, a
+    # template literal's ${...} (Codex review, M1).
+    chats = (ROOT / "Chats.qml").read_text()
+    extra = ("\n  Button { onClicked: view.run('delete', [view.chat.id]) }"
+             "\n  Button { onClicked: view . run ( `delete`, []) }"
+             "\n  Text { text: `${view.s.clearSession()}` }\n")
+    hacked = scanned(chats[:chats.rindex("}")] + extra + "}\n")
+    runs = [hacked.handler_of(p) for p in hacked.calls(call("run", "delete"))]
+    assert runs.count("onClicked") == 2, runs
+    clears = [hacked.handler_of(p) for p in hacked.calls(call("clearSession"))]
+    assert clears.count("onConfirmed") == 1 and len(clears) == 2, clears
 
 
 def test_no_building_block_writes_a_setting_by_name():

@@ -170,10 +170,11 @@ def _field_writers() -> dict[str, set[str]]:
         assert emitted == set(fields), (name, emitted)
         pieces[name] = fields
     for path in overlay_qml():
-        if path.parent.name == "ui":
-            continue
         s = scan(path)
-        where = path.name
+        # ui/ pieces are scanned too, as their own writers: one that called
+        # updateAgent itself would be a second home the page cannot see
+        # (Codex review, M1). Their edited() signals are VIA_PIECE above.
+        where = ("ui/" if path.parent.name == "ui" else "") + path.name
         for m in re.finditer(r'\bupdateAgent\([^"\n]*?"(\w+)"', s.nocomment):
             if s.clean[m.start()] == s.src[m.start()]:
                 found.setdefault(m.group(1), set()).add(where)

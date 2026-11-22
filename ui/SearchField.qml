@@ -39,7 +39,7 @@ Column {
   signal filterToggled(string id, bool on)
 
   function isActive(id) { return active && active.indexOf(id) >= 0 }
-  function clear() { field.text = ""; debounce.stop(); searched("") }
+  function clear() { search.text = ""; debounce.stop(); searched("") }
   function focusField() { field.forceActiveFocus() }
 
   spacing: Style.space(6)
