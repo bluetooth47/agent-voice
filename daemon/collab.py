@@ -3052,7 +3052,9 @@ def cli_crew(args: list[str], stdin, out, err, cfg=None) -> int:
         return refuse("the lists are too long to be crew links")
     try:
         asked = json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):
+        # RecursionError: a line of nested brackets under the size limit
+        # (Codex review of M9). A refusal, never a traceback.
         return refuse("what came in was not JSON")
     if not isinstance(asked, dict) or set(asked) != {"crewLinks", "crewQuarantine"}:
         return refuse("what came in was not the two crew lists")

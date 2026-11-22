@@ -250,7 +250,11 @@ def check_write(links_raw, quarantine_raw, known_ids, saved_links=None,
     is already saved, so a stale entry the person has not touched does not
     block every other edit. Beyond parse_links and parse_quarantine:
 
-    - every id is a configured agent (`known_ids`), or carried over;
+    - every id is a configured agent (`known_ids`), or carried over: a link
+      to or from an id nobody has may stay as saved or narrow (fewer
+      abilities, ask-first kept), never widen, because the id may come back
+      (Codex review of M9);
+    - no id is quarantined twice;
     - a quarantined agent has no link out (it starts nothing; quarantining
       on the page drops them), and a link into one allows only
       INTO_QUARANTINE -- a list that says more than will happen is not
@@ -265,15 +269,17 @@ def check_write(links_raw, quarantine_raw, known_ids, saved_links=None,
     if held is None:
         return None, why
     known = set(known_ids)
-    old_pairs = set()
-    for e in saved_links if isinstance(saved_links, list) else []:
-        if isinstance(e, dict) and valid_id(e.get("from")) and valid_id(e.get("to")):
-            old_pairs.add((e["from"], e["to"]))
+    # What was saved, read as the daemon reads it; unreadable carries nothing.
+    old_links = parse_links(saved_links)[0] or []
+    old_pairs = {(e["from"], e["to"]): e for e in old_links}
     old_held = {a for a in (saved_quarantine if isinstance(saved_quarantine, list) else [])
                 if valid_id(a)}
     for i, e in enumerate(links, 1):
+        was = old_pairs.get((e["from"], e["to"]))
+        carried = was is not None and set(e["allow"]) <= set(was["allow"]) and (
+            e["askFirst"] or not was["askFirst"])
         for end in (e["from"], e["to"]):
-            if end not in known and (e["from"], e["to"]) not in old_pairs:
+            if end not in known and not carried:
                 return None, (f"link {i} names {end}, which is no agent here now "
                               f"(removed, or renamed)")
         if e["from"] in held:
@@ -284,6 +290,8 @@ def check_write(links_raw, quarantine_raw, known_ids, saved_links=None,
             if extra:
                 return None, (f"link {i} lets {e['from']} {VERBS.get(extra[0], extra[0])} "
                               f"{e['to']}, which is quarantined: only ask and delegate go in")
+    if len(raw_order(quarantine_raw)) != len(quarantine_raw):
+        return None, "the quarantine names an agent twice"
     for a in raw_order(quarantine_raw):
         if a not in known and a not in old_held:
             return None, f"the quarantine names {a}, which is no agent here now"

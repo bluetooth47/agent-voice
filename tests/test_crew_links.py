@@ -339,7 +339,7 @@ def test_the_two_writes_are_reached_only_from_what_the_validator_took():
     checker = s.nocomment[s.nocomment.index("id: checker"):]
     checker = checker[:checker.index("\n  }")]
     assert 'command: ["agentvoice", "crew", "check"]' in checker
-    assert "page.checked(h, text)" in checker
+    assert "page.checked(h, checker.out, checker.code)" in checker
     assert s.nocomment.count('"crew", "check"') == 1
 
 
@@ -376,7 +376,7 @@ KNOWN = ["main", "sora", "hazel"]
 
 
 def test_the_validator_takes_a_good_pair_and_normalises_it():
-    got, why = crew_links.check_write([link("main", "sora", ["pass", "ask"])], ["hazel", "hazel"], KNOWN)
+    got, why = crew_links.check_write([link("main", "sora", ["pass", "ask"])], ["hazel"], KNOWN)
     assert why == ""
     assert got == {"crewLinks": [{"from": "main", "to": "sora", "allow": ["ask", "pass"], "askFirst": False}],
                    "crewQuarantine": ["hazel"]}
@@ -398,9 +398,10 @@ def test_the_validator_takes_a_good_pair_and_normalises_it():
     ([], ["nobody"], "the quarantine names nobody"),
     ([], "hazel", "not a list"),
     ([], ["Hazel"], "not an agent id"),
+    ([], ["hazel", "hazel"], "names an agent twice"),
 ], ids=["duplicate", "self", "unknown-to", "unknown-from", "message-into-q", "pass-into-q",
         "out-of-q", "empty-out-of-q", "oversize", "not-a-list", "unknown-ability",
-        "unknown-quarantine", "quarantine-not-a-list", "quarantine-bad-id"])
+        "unknown-quarantine", "quarantine-not-a-list", "quarantine-bad-id", "quarantine-twice"])
 def test_the_validator_refuses_and_says_why(links, q, needle):
     got, why = crew_links.check_write(links, q, KNOWN)
     assert got is None and needle in why, why
@@ -416,8 +417,14 @@ def test_an_id_left_by_a_rename_is_refused_unless_it_was_already_saved():
     assert crew_links.check_write([stale], [], known)[0] is None
     got, why = crew_links.check_write([stale, link("main", "hazel")], [], known, saved_links=[stale])
     assert why == "" and len(got["crewLinks"]) == 2
-    # Saved under the pair, so its abilities may still be changed or trimmed.
-    assert crew_links.check_write([link("main", "sora", ["delegate"])], [], known, saved_links=[stale])[1] == ""
+    # It may narrow as saved, never widen: the id could come back, and a
+    # link to it would then carry what was added (Codex review of M9).
+    wide = link("main", "sora", ["ask", "pass"], askFirst=True)
+    assert crew_links.check_write([link("main", "sora", ["pass"], askFirst=True)], [], known, saved_links=[wide])[1] == ""
+    assert crew_links.check_write([link("main", "sora", [])], [], known, saved_links=[stale])[1] == ""
+    assert crew_links.check_write([link("main", "sora", ["delegate"])], [], known, saved_links=[stale])[0] is None
+    assert crew_links.check_write([link("main", "sora", ["ask"])], [], known, saved_links=[wide])[0] is None, \
+        "dropping ask-first widens it"
     # A new link to the same old id is not carried over.
     assert crew_links.check_write([link("hazel", "sora")], [], known, saved_links=[stale])[0] is None
     # The quarantine the same way.
@@ -482,7 +489,11 @@ def test_crew_check_says_yes_with_the_normalised_lists():
     (json.dumps({"crewLinks": [link("main", "zed")], "crewQuarantine": []}) + "\n", None, "zed"),
     ('{"crewLinks": [' + ",".join(['{"from": "main", "to": "sora", "allow": []}'] * 4000) + '], "crewQuarantine": []}\n',
      None, "too long"),
-], ids=["empty", "not-json", "a-list", "one-key", "extra-key", "unreadable", "unknown-id", "too-long"])
+    # Nested past the parser's recursion limit, under the size limit: a
+    # refusal either way, never a traceback (Codex review of M9).
+    ("[" * 30000 + "]" * 30000 + "\n", None, "not"),
+], ids=["empty", "not-json", "a-list", "one-key", "extra-key", "unreadable", "unknown-id", "too-long",
+        "nested-deep"])
 def test_crew_check_refuses_on_stdout_and_exits_1(line, cfg, needle):
     code, out, _ = _crew_cli(line, cfg)
     d = json.loads(out)
@@ -538,10 +549,12 @@ def test_the_page_trims_for_quarantine_and_the_validator_takes_every_edit():
             for (var k = 0; k < page.abilities.length; k++) edits.push(withAbility(ids[i], ids[j], page.abilities[k], true));
           }}
           for (var e = 0; e < edits.length; e++) out.push(trimmed(edits[e], q));
-          for (var h = 0; h < ids.length; h++) out.push(trimmed(linksQuarantining(ids[h]), q.concat([ids[h]])));
+          // quarantineAgent never quarantines an agent twice.
+          for (var h = 0; h < ids.length; h++) out.push(trimmed(linksQuarantining(ids[h]), q.indexOf(ids[h]) < 0 ? q.concat([ids[h]]) : q));
           return out;""", links_raw, q_raw)
         for i, edit in enumerate(got):
-            held = q if i < len(got) - 3 else q + [KNOWN[i - (len(got) - 3)]]
+            extra = [] if i < len(got) - 3 else [KNOWN[i - (len(got) - 3)]]
+            held = q + [a for a in extra if a not in q]
             assert crew_links.check_write(edit, held, KNOWN)[1] == "", (links_raw, q, edit)
 
 
@@ -613,3 +626,120 @@ def test_the_send_sheet_will_not_send_into_quarantine():
     q = s.src[s.src.index("function quarantined("):]
     q = q[:q.index("\n  }")]
     assert "!Array.isArray(q) ||" in q, "an unreadable list denies"
+
+
+# --- the page's save queue, run in node (M9, and Codex review pass 1) -------------------
+
+QUEUE_FUNCTIONS = ["trimmed", "savedPair", "rawOf", "commit", "nextCheck", "checked", "refused",
+                   "applyChecked", "writeLinks", "writeQuarantine"]
+
+
+def queue_js(calls: str, cfg: dict) -> object:
+    """The page's commit -> check -> apply path against a fake overlay whose
+    put() records each write and applies it, and a fake checker that only
+    records what it was asked to run. `calls` drives it and returns a value."""
+    from test_agents_page import function_source, run_js
+    fns = "\n".join(function_source(PAGE, n) for n in QUEUE_FUNCTIONS)
+    canon = function_source(ROOT / "Settings.qml", "crewCanon")
+    script = f"""
+{canon}
+var writes = [], runs = [];
+var page = {{ intoQuarantine: ["ask", "delegate"], queue: [], saveNote: "", expectSaved: "",
+              pendingQuarantine: "", lastAction: "",
+              s: {{ cfg: {json.dumps(cfg)}, crewCanon: crewCanon, crewOwnWrite: function() {{}},
+                    put: function(k, v) {{ writes.push([k, v]); page.s.cfg[k] = v }} }} }};
+var checker = {{ running: false, head: null, launched: false, pending: "", out: "", gotOut: false,
+                gotExit: false, code: -1 }};
+Object.defineProperty(checker, "running", {{ get: function() {{ return this._r || false }},
+  set: function(v) {{ this._r = v; if (v) runs.push(JSON.parse(this.pending)) }} }});
+{fns}
+page.trimmed = trimmed; page.nextCheck = nextCheck; page.refused = refused;
+// The checker finishing: what the process printed and its exit status.
+function finish(out, code) {{
+  var h = checker.head; checker.running = false; checker.head = null;
+  checked(h, out, code); nextCheck();
+}}
+function yes() {{ var r = runs[runs.length - 1]; return JSON.stringify({{ ok: true, crewLinks: r.crewLinks, crewQuarantine: r.crewQuarantine }}) }}
+process.stdout.write(JSON.stringify((function() {{ {calls} }})()));
+"""
+    return run_js(script)
+
+
+L1 = [link("main", "sora", ["ask"])]
+
+
+@needs_node
+def test_two_quick_edits_are_checked_and_saved_in_order():
+    got = queue_js("""
+      commit([{from: "main", to: "sora", allow: ["ask"], askFirst: false}], [], "one");
+      commit([{from: "main", to: "sora", allow: ["ask", "pass"], askFirst: false}], [], "two");
+      var before = runs.length;
+      finish(yes(), 0);              // the first answer starts the second check
+      var between = runs.length;
+      finish(yes(), 0);
+      return { before: before, between: between, runs: runs.length, writes: writes, queue: page.queue.length, note: page.saveNote };""",
+                   {})
+    assert got["before"] == 1 and got["between"] == 2 and got["runs"] == 2
+    assert [w[1][0]["allow"] for w in got["writes"]] == [["ask"], ["ask", "pass"]]
+    assert got["queue"] == 0 and got["note"] == ""
+
+
+@needs_node
+def test_a_check_that_prints_yes_and_fails_saves_nothing():
+    got = queue_js("""
+      commit([{from: "main", to: "sora", allow: ["ask"], askFirst: false}], [], "one");
+      commit([], [], "two");
+      finish(yes(), 1);
+      return { writes: writes, queue: page.queue.length, note: page.saveNote, runs: runs.length };""", {})
+    assert got["writes"] == [] and got["queue"] == 0 and got["runs"] == 1
+    assert got["note"].startswith("Not saved: the crew links could not be checked")
+
+
+@needs_node
+def test_a_refusal_says_why_and_drops_what_was_built_on_it():
+    got = queue_js("""
+      commit([{from: "main", to: "nobody", allow: ["ask"], askFirst: false}], [], "one");
+      commit([], [], "two");
+      finish(JSON.stringify({ ok: false, why: "link 1 names nobody" }), 1);
+      return { writes: writes, queue: page.queue.length, note: page.saveNote, runs: runs.length };""", {})
+    assert got == {"writes": [], "queue": 0, "note": "Not saved: link 1 names nobody.", "runs": 1}
+
+
+@needs_node
+def test_a_change_made_outside_while_saving_is_not_overwritten():
+    """Codex review of M9: Hazel released in another window while an edit
+    to another link is being checked; the edit, built on the old pair, must
+    not put the quarantine back."""
+    got = queue_js("""
+      commit([{from: "main", to: "sora", allow: ["ask", "delegate"], askFirst: false}], ["hazel"], "chip");
+      page.s.cfg.crewQuarantine = [];           // released elsewhere meanwhile
+      finish(yes(), 0);
+      return { writes: writes, note: page.saveNote, q: page.s.cfg.crewQuarantine };""",
+                   {"crewLinks": L1, "crewQuarantine": ["hazel"]})
+    assert got["writes"] == [] and got["q"] == []
+    assert "changed outside Settings while this was being saved" in got["note"]
+
+
+@needs_node
+def test_quarantine_is_saved_before_the_links_and_unchanged_lists_not_at_all():
+    got = queue_js("""
+      commit([{from: "sora", to: "main", allow: ["ask", "message"], askFirst: false}], ["main"], "q");
+      finish(yes(), 0);
+      commit([], ["main"], "unchanged quarantine");
+      finish(yes(), 0);
+      return writes;""", {"crewLinks": [link("sora", "main", ["ask", "message"])], "crewQuarantine": []})
+    assert [w[0] for w in got] == ["crewQuarantine", "crewLinks", "crewLinks"]
+    assert got[1][1] == [{"from": "sora", "to": "main", "allow": ["ask"], "askFirst": False}], "trimmed"
+    assert got[2][1] == []
+
+
+def test_the_queue_moves_on_when_the_checker_exits():
+    """The next queued edit starts when the checker process has gone: its
+    output ends while it is still running, so starting the next one there
+    found it busy and the queue stalled (found from the 8-agent preview)."""
+    src = PAGE.read_text()
+    proc = src[src.index("id: checker"):]
+    on = proc[proc.index("onRunningChanged:"):]
+    on = on[:on.index("\n    }\n")]
+    assert "Qt.callLater(page.nextCheck)" in on
+    assert "checker.head !== null" in _body(src, "nextCheck")

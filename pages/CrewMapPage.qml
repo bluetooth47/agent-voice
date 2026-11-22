@@ -287,30 +287,51 @@ Column {
   property var queue: []
   property string saveNote: ""
   readonly property bool saving: queue.length > 0
+  // What the saved pair was when the queued edits were built on it (canonical
+  // JSON). Each edit is applied only while the saved pair is still that:
+  // anything written underneath in between -- another window, an agent,
+  // `omarchy bar set` -- would otherwise be overwritten by a snapshot taken
+  // before it, a release undone by an unrelated edit (Codex review of M9).
+  property string expectSaved: ""
+  function savedPair() {
+    return page.s.crewCanon(rawOf("crewLinks")) + "|" + page.s.crewCanon(rawOf("crewQuarantine"))
+  }
   function commit(links, quarantine, what) {
     page.lastAction = what
     page.saveNote = ""
+    if (!page.queue.length) page.expectSaved = savedPair()
     page.queue = page.queue.concat([{ crewLinks: trimmed(links, quarantine), crewQuarantine: quarantine.slice(), what: what }])
     nextCheck()
   }
   function nextCheck() {
-    if (!page.queue.length || checker.running) return
+    if (!page.queue.length || checker.running || checker.head !== null) return
     var head = page.queue[0]
     checker.head = head
     checker.launched = false
+    checker.out = ""
+    checker.gotOut = false
+    checker.gotExit = false
+    checker.code = -1
     checker.pending = JSON.stringify({ crewLinks: head.crewLinks, crewQuarantine: head.crewQuarantine }) + "\n"
     checker.running = true
   }
-  function checked(head, out) {
+  // Saved only on exit status 0 *and* {"ok": true, both lists}: a checker
+  // that printed yes and then failed has not said yes (Codex review of M9).
+  function checked(head, out, code) {
     if (!page.queue.length || head !== page.queue[0]) return
     var d = null
     try { d = JSON.parse(String(out).trim().split("\n").pop()) } catch (e) { d = null }
-    if (!d || d.ok !== true || !Array.isArray(d.crewLinks) || !Array.isArray(d.crewQuarantine)) {
-      refused(d && typeof d.why === "string" && d.why !== "" ? d.why : "the crew links could not be checked")
+    if (code !== 0 || !d || d.ok !== true || !Array.isArray(d.crewLinks) || !Array.isArray(d.crewQuarantine)) {
+      refused(d && d.ok === false && typeof d.why === "string" && d.why !== "" ? d.why : "the crew links could not be checked")
+      return
+    }
+    if (savedPair() !== page.expectSaved) {
+      refused("the crew links changed outside Settings while this was being saved, so it was not; what is shown now is what is saved")
       return
     }
     page.queue = page.queue.slice(1)
     applyChecked(d.crewLinks, d.crewQuarantine)
+    page.expectSaved = page.s.crewCanon(d.crewLinks) + "|" + page.s.crewCanon(d.crewQuarantine)
     nextCheck()
   }
   function refused(why) {
@@ -341,9 +362,22 @@ Column {
     property var head: null
     property string pending: ""
     property bool launched: false
+    // The answer is judged once both the output and the exit status are in,
+    // whichever arrives last.
+    property string out: ""
+    property bool gotOut: false
+    property bool gotExit: false
+    property int code: -1
+    function settle() {
+      if (!checker.gotOut || !checker.gotExit || checker.head === null) return
+      var h = checker.head
+      checker.head = null
+      page.checked(h, checker.out, checker.code)
+    }
     command: ["agentvoice", "crew", "check"]
     stdinEnabled: true
     onStarted: { checker.launched = true; write(checker.pending); checker.pending = "" }
+    onExited: function(exitCode) { checker.code = exitCode; checker.gotExit = true; checker.settle() }
     // `running` going false, not onExited: a spawn that never started emits
     // no exit, and an edit that saved nothing must say so.
     onRunningChanged: {
@@ -358,11 +392,7 @@ Column {
       Qt.callLater(page.nextCheck)
     }
     stdout: StdioCollector {
-      onStreamFinished: {
-        var h = checker.head
-        checker.head = null
-        page.checked(h, text)
-      }
+      onStreamFinished: { checker.out = text; checker.gotOut = true; checker.settle() }
     }
   }
 
