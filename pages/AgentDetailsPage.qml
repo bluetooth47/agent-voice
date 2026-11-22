@@ -382,7 +382,7 @@ Column {
           text: tryer.running ? "Trying…" : "▶ Try it"
           bordered: true
           focusable: true
-          enabled: !tryer.running && !tryCooldown.running && !page.reserved
+          enabled: !tryer.running && !tryCooldown.running && !page.reserved && page.tryWhyNot === ""
           tooltipText: "Runs one short turn on " + page.name + "'s program, with no tools, and " +
                        "says its first sentence aloud. Uses what is in the boxes now, saved or " +
                        "not. Never saved to a chat. One try every 10 seconds."
@@ -394,8 +394,10 @@ Column {
           width: Math.min(implicitWidth, parent.width)
           height: tryButton.height
           verticalAlignment: Text.AlignVCenter
-          text: tryCooldown.running && !tryer.running ? "One try every 10 seconds."
+          text: page.tryWhyNot !== "" ? page.tryWhyNot
+                : tryCooldown.running && !tryer.running ? "One try every 10 seconds."
                 : "Hear one sentence in " + page.name + "'s voice. Costs a short turn."
+          tone: page.tryWhyNot !== "" ? "warn" : ""
           foreground: page.s.foreground
           fontFamily: page.s.fontFamily
         }
@@ -563,6 +565,7 @@ Column {
     if (page.reserved || !personalityEditor.loaded) return
     if (traitReader.running) { traitDelay.restart(); return }
     traitReader.forTarget = page.target
+    traitReader.baseText = personalityEditor.current
     traitReader.pending = JSON.stringify({ text: personalityEditor.current }) + "\n"
     traitReader.running = true
   }
@@ -574,6 +577,9 @@ Column {
     change[category] = value
     page.traitsNote = ""
     traitWriter.forTarget = page.target
+    // What the choice was made on: a result for older text is dropped.
+    traitWriter.baseText = personalityEditor.current
+    traitWriter.baseStamp = personalityEditor.stamp
     traitWriter.pending = JSON.stringify({ text: personalityEditor.current, traits: change }) + "\n"
     traitWriter.running = true
   }
@@ -586,6 +592,7 @@ Column {
   Process {
     id: traitReader
     property string forTarget: ""
+    property string baseText: ""
     property string pending: ""
     command: ["agentvoice", "agents", "traits", "apply"]
     stdinEnabled: true
@@ -593,6 +600,8 @@ Column {
     stdout: StdioCollector {
       onStreamFinished: {
         if (traitReader.forTarget !== page.target) return
+        // Typed on since: the next read (already scheduled) says it.
+        if (personalityEditor.current !== traitReader.baseText) return
         try {
           var d = JSON.parse(String(text))
           if (d && d.traits) { page.traitsNow = d; page.traitsFor = traitReader.forTarget }
@@ -603,6 +612,8 @@ Column {
   Process {
     id: traitWriter
     property string forTarget: ""
+    property string baseText: ""
+    property string baseStamp: ""
     property string pending: ""
     property string err: ""
     command: ["agentvoice", "agents", "traits", "apply"]
@@ -614,6 +625,15 @@ Column {
         var d
         try { d = JSON.parse(String(text)) } catch (e) { return }
         if (!d || typeof d.text !== "string") return
+        // The box was typed in, or reloaded from a newer file, while this
+        // ran: saving it would put the older text back over the newer, on
+        // a stamp that may be the new one (Codex review of M6).
+        if (personalityEditor.current !== traitWriter.baseText ||
+            personalityEditor.stamp !== traitWriter.baseStamp) {
+          page.traitsNote = "Not changed: the personality changed while that was chosen. Choose again."
+          page.readTraits()
+          return
+        }
         page.traitsNow = d
         page.traitsFor = traitWriter.forTarget
         personalityEditor.fill(d.text)
@@ -631,6 +651,17 @@ Column {
   // Try it. The draft goes on stdin as one JSON line; the sentence comes
   // back on stdout, or why not on stderr (the service off, the screen
   // locked, an agent busy, the 10 s limit -- the daemon decides).
+  // Where Try it cannot run, said before the press (try_it.backend_refusal
+  // decides; the daemon asks it again).
+  readonly property string tryWhyNot: {
+    if (page.program === "claude") return ""
+    if (page.program === "endpoint")
+      return (page.isMain ? page.s.setting("endpointIsAgent", false) === true
+                          : page.entry.endpointIsAgent === true)
+             ? "Try it is off for an agent endpoint: its own tools cannot be switched off from here." : ""
+    return "Try it runs only where a turn can start with no tools at all: Claude Code and plain " +
+           "endpoints so far, not " + (page.s.programLabel(page.program) || page.program) + "."
+  }
   property string tryNote: ""
   property string tryFor: ""
   property bool trySaid: false

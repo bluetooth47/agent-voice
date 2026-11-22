@@ -72,11 +72,18 @@ def folder() -> Path:
 
 # --- what the daemon decides ---------------------------------------------------
 
-def refusal(*, locked: bool, yielded: bool, known: bool, label: str, has_program: bool,
+def refusal(*, locked: bool | None, yielded: bool, known: bool, label: str, has_program: bool,
             problem: str = "", target_busy: bool, other_busy: bool,
             since_last: float, stale: bool = False) -> str:
     """Why a try is refused, in words for the page; "" when it may run.
-    In order of what the person can do least about."""
+    In order of what the person can do least about.
+
+    `locked` None is "cannot tell". A reply goes on in that case (the
+    daemon says so in the journal), but Try it is an extra and need not:
+    it is refused rather than risk speaking over a lock screen (Codex
+    review of M6)."""
+    if locked is None:
+        return "cannot tell whether the screen is locked, so it will not speak"
     if locked:
         return "the screen is locked"
     if yielded:
@@ -133,14 +140,42 @@ def draft_parts(parts: dict | None, personality: str | None) -> dict:
     return out
 
 
+def backend_refusal(program: str, endpoint: bool, endpoint_is_agent: bool) -> str:
+    """Why Try it cannot run on this backend; "" when it can. Only where
+    "no tools" is enforced, not just asked for (Codex review of M6):
+
+    - Claude Code: `--tools ""` and `--strict-mcp-config`, recorded on a real
+      turn (tests/fixtures/try/claude-no-tools.json);
+    - an endpoint that is a plain model: it has no tools to use.
+
+    Codex in `exec` can still run read-only commands, Gemini's plan mode and
+    agy's read-only mode still read files, an agent endpoint runs whatever
+    its own host gives it, and none of them has been shown to start with
+    nothing. They are refused, saying so, until one has."""
+    if endpoint:
+        return ("its endpoint is an agent with tools of its own, which cannot be switched off "
+                "from here" if endpoint_is_agent else "")
+    if program == "claude":
+        return ""
+    return (f"Try it runs only where a turn can be started with no tools at all, which so far "
+            f"is Claude Code and plain endpoints, not {program or 'this program'}")
+
+
 def first_sentence(chunks) -> str:
-    """The first speakable sentence of a reply stream (adapters' Chunks), cut
-    at SENTENCE_MAX. Stops reading at it."""
+    """The first sentence of a reply stream (adapters' Chunks), cut at
+    SENTENCE_MAX. The shared splitter merges a short sentence into the next
+    so speech does not sound choppy; here one is wanted, so the first piece
+    is cut again at its own first boundary ("Hi! How are you?" says "Hi!")."""
     from adapters.base import sentences
+    from speech_text import _next_boundary
     for s in sentences(chunks):
         s = " ".join(str(s).split())
-        if s:
-            return s[:SENTENCE_MAX]
+        if not s:
+            continue
+        m = _next_boundary(s)
+        if m is not None and s[:m.end()].strip():
+            s = s[:m.end()].strip()
+        return s[:SENTENCE_MAX]
     return ""
 
 

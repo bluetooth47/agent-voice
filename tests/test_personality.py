@@ -100,11 +100,19 @@ def test_unknown_hand_typed_values_are_kept_and_a_category_holds_one_value():
     typed = "traits: Warm, Dry, sarcastic , very British.\nRest."
     got = traits.parse(typed)
     assert got["traits"] == {"tone": "warm", "length": None, "formality": None}
-    assert got["unknown"] == ["sarcastic", "very british"]
+    assert got["unknown"] == ["sarcastic", "very British"]
     new = traits.apply(typed, {"tone": "playful"})
-    assert new == "Traits: playful, sarcastic, very british.\nRest."
+    assert new == "Traits: playful, sarcastic, very British.\nRest."
     # Clearing every chip keeps a line while it still holds a typed value.
-    assert traits.apply(new, {"tone": None}) == "Traits: sarcastic, very british.\nRest."
+    assert traits.apply(new, {"tone": None}) == "Traits: sarcastic, very British.\nRest."
+
+
+def test_unknown_values_are_kept_exactly_as_typed():
+    """Codex review of M6: a letters-only filter dropped "très calme"."""
+    typed = "Traits: warm, très calme, Ruhig & klar, 🙂.\nRest."
+    new = traits.apply(typed, {"length": "brief"})
+    assert new == "Traits: warm, brief, très calme, Ruhig & klar, 🙂.\nRest."
+    assert traits.apply(new, {"length": None}) == "Traits: warm, très calme, Ruhig & klar, 🙂.\nRest."
 
 
 def test_a_paragraph_that_merely_starts_with_traits_is_not_the_line():
@@ -186,6 +194,18 @@ def test_traits_set_with_no_base_still_never_overwrites_a_write_in_between(monke
     code, _, err = run("traits", "set", "sora", stdin='{"traits": {"tone": "warm"}}')
     assert code == 3, err
     assert path.read_text() == "A hand save that landed meanwhile.\n"
+
+
+def test_traits_set_refuses_a_file_too_large_to_read_whole(monkeypatch):
+    """Codex review of M6: a file past READ_CAP is read in part, and writing
+    that part back would drop the rest."""
+    agentfs.create("sora")
+    path, _ = agentfs._resolve("sora", "personality.md")
+    path.write_text("Traits: warm.\n\n" + "x" * 300)
+    monkeypatch.setattr(agentfs, "READ_CAP", 100)
+    code, _, err = run("traits", "set", "sora", stdin='{"traits": {"tone": null}}')
+    assert code == 1 and "too large" in err
+    assert path.read_text() == "Traits: warm.\n\n" + "x" * 300
 
 
 def test_traits_apply_is_pure_and_reports_the_count_told():
@@ -311,6 +331,14 @@ def test_the_chips_save_through_the_editor_never_beside_it():
     writer = writer[:writer.index("\n  }\n")]
     assert "personalityEditor.fill(d.text)" in writer
     assert '"agents", "write"' not in PAGE
+    # ... and only onto the text and stamp the choice was made on (Codex
+    # review of M6): a result for older text is dropped, not saved.
+    stale = writer.index("personalityEditor.current !== traitWriter.baseText")
+    assert "personalityEditor.stamp !== traitWriter.baseStamp" in writer
+    assert stale < writer.index("personalityEditor.fill(d.text)")
+    fn = PAGE[PAGE.index("function setTrait("):]
+    assert "traitWriter.baseText = personalityEditor.current" in fn[:900]
+    assert "traitWriter.baseStamp = personalityEditor.stamp" in fn[:900]
 
 
 def test_try_it_sends_the_draft_on_stdin_and_is_rate_limited_on_the_page():

@@ -2806,8 +2806,11 @@ class Daemon:
             self.refresh()
         p = self._persona_by_id("" if req["agent"] == "main" else req["agent"])
         label = (p.label or p.name or req["agent"]) if p is not None else req["agent"]
+        # Asked afresh, not the last poll's answer: the poll is 2 s old at
+        # worst, and "cannot tell" is a refusal here (Codex review of M6).
+        locked = True if self.locked else session_locked()
         why = try_it.refusal(
-            locked=self.locked, yielded=self.yielded, known=p is not None, label=label,
+            locked=locked, yielded=self.yielded, known=p is not None, label=label,
             has_program=p is not None and p.agent is not None,
             problem=(getattr(p, "problem", "") or "") if p is not None else "",
             target_busy=p is not None and p.busy,
@@ -2823,6 +2826,10 @@ class Daemon:
                       flush=True)
             if side is None:
                 why = f"{label}'s program could not be started"
+            else:
+                why = try_it.backend_refusal(
+                    getattr(side, "name", "") or "", hasattr(side, "base_url"),
+                    bool(getattr(side, "is_agent", False)))
         if why:
             print(f"  {DIM}(try for {req['agent']} refused){OFF}", flush=True)
             try_it.answer(rid, "refused", why)
@@ -2834,14 +2841,25 @@ class Daemon:
         timer.daemon = True
         timer.start()
         sentence, crash = "", ""
+        # The stream is held here, not handed straight in: dropped as soon as
+        # the first sentence is out, the adapter's generator would run its
+        # own cleanup first and could let go of a process cancel() then
+        # cannot reach (Codex review of M6). Cancel, then close.
+        stream = None
         try:
-            sentence = try_it.first_sentence(side.send(try_it.PROMPT, None))
+            stream = side.send(try_it.PROMPT, None)
+            sentence = try_it.first_sentence(stream)
         except Exception as e:              # noqa: BLE001
             crash = type(e).__name__
         finally:
             timer.cancel()
             try:
                 side.cancel()               # thrown away: no process left behind
+            except Exception:
+                pass
+            try:
+                if stream is not None:
+                    stream.close()
             except Exception:
                 pass
         took = time.monotonic() - t0
@@ -2857,6 +2875,13 @@ class Daemon:
         # Said the way a typed reply is: through speak(), which checks the
         # lock and a lent microphone itself before and during the sentence;
         # `typed` lets it speak while muted, as a typed turn does.
+        # And the lock asked once more just before: the turn took seconds.
+        now = True if self.locked else session_locked()
+        if now is not False:
+            try_it.answer(rid, "failed", "the screen locked" if now else
+                          "cannot tell whether the screen is locked, so it was not said")
+            self.deafen(0)
+            return
         was = getattr(self._here, "typed", False)
         self._here.typed = True
         try:

@@ -14,8 +14,9 @@ type it by hand. So this module only ever reads and rewrites that one line.
 - **The line sits after any leading comment.** `agentfs.clean` strips a
   comment only while it leads the file; a line put above the template's
   comment would push that comment into what the agent is told.
-- **Unknown values are kept.** "Traits: warm, sarcastic." keeps "sarcastic"
-  when tone changes; it is only dropped by editing the line by hand.
+- **Unknown values are kept, as typed.** "Traits: warm, très calme." keeps
+  "très calme" when tone changes; it is only dropped by editing the line by
+  hand. Only the trait words are matched without regard to case.
 - **A category holds one value.** Choosing one replaces whatever that
   category had, including a second value somebody typed in it.
 - **No choices and no unknown values: no line.** Clearing the last chip
@@ -41,12 +42,9 @@ CATEGORY_OF = {v: k for k, vals in TRAITS.items() for v in vals}
 #: The longest line read as the managed one. Past this it is somebody's
 #: paragraph that happens to start with "Traits:", and it is left alone.
 LINE_MAX = 200
-#: An unknown value kept from a hand edit: one or two words, nothing more.
-VALUE_MAX = 32
 
 _LEADING = re.compile(r"\A\ufeff?(?:\s*<!--.*?-->)*(?:[ \t]*\r?\n)*", re.S)
 _LINE = re.compile(r"[ \t]*traits[ \t]*:[ \t]*(?P<body>[^\n]*?)[ \t]*(?:\r?\n|\Z)", re.I)
-_VALUE = re.compile(r"[a-z][a-z' -]{0,%d}" % (VALUE_MAX - 1))
 
 
 def _split(text: str) -> tuple[str, re.Match | None]:
@@ -64,23 +62,26 @@ def parse(text: str) -> dict:
     """What the managed line says.
 
     {"traits": {"tone": "warm" | None, ...}, "unknown": [...], "line": bool}.
-    A category typed twice reads as its first value; the rest of a value that
-    is not a trait word is kept in "unknown", lower-cased and trimmed."""
+    A category typed twice reads as its first value. Any other value is kept
+    in "unknown" exactly as typed, trimmed (Codex review of M6: a filter on
+    the letters dropped "très calme" when a chip was clicked)."""
     text = text if isinstance(text, str) else ""
     _, m = _split(text)
     out = {"traits": {k: None for k in TRAITS}, "unknown": [], "line": m is not None}
     if m is None:
         return out
+    seen = set()
     for raw in m.group("body").rstrip(".").split(","):
-        v = " ".join(raw.strip().strip(".").lower().split())
-        if not v:
+        tok = raw.strip()
+        if not tok:
             continue
-        cat = CATEGORY_OF.get(v)
+        cat = CATEGORY_OF.get(tok.lower())
         if cat is not None:
             if out["traits"][cat] is None:
-                out["traits"][cat] = v
-        elif _VALUE.fullmatch(v) and v not in out["unknown"]:
-            out["unknown"].append(v)
+                out["traits"][cat] = tok.lower()
+        elif tok.lower() not in seen:
+            seen.add(tok.lower())
+            out["unknown"].append(tok)
     return out
 
 

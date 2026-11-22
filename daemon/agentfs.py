@@ -780,6 +780,10 @@ def _traits_cli(a) -> int:
         raise AgentFsError("the communal folder has no personality")
     path, _ = _resolve(a.id, "personality.md")
     got = _bytes_or_none(path)
+    if got is not None and got[1] and a.action == "set":
+        # Read only up to READ_CAP: writing that back would drop the rest
+        # of a file nobody has seen (Codex review of M6).
+        raise AgentFsError("personality.md is too large to rewrite safely; shorten it by hand")
     raw = "" if got is None else _decode(*got)
     stamp = "missing" if got is None else _stamp_from(got[0], path)
     if a.action == "get":

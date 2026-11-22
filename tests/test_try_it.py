@@ -34,6 +34,15 @@ DRAFT = "Personality canary: QUOKKA-7731 speaks like a lighthouse keeper."
 INSTR = "Instructions canary: WOMBAT-2209 always counts in base twelve."
 
 
+@pytest.fixture(autouse=True)
+def unlocked(monkeypatch):
+    """The lock asked afresh by handle_try: unlocked unless a test says."""
+    import wake_listen
+    state = {"now": False}
+    monkeypatch.setattr(wake_listen, "session_locked", lambda: state["now"])
+    return state
+
+
 @pytest.fixture
 def rundir(tmp_path, monkeypatch):
     import paths
@@ -65,6 +74,10 @@ def test_a_free_agent_may_try():
 ])
 def test_each_refusal_says_why(kw, words):
     assert words in ok(**kw)
+
+
+def test_cannot_tell_whether_locked_is_a_refusal():
+    assert "cannot tell whether the screen is locked" in ok(locked=None)
 
 
 def test_a_lock_outranks_everything_else():
@@ -131,6 +144,10 @@ def test_answers_are_private_and_old_ones_are_cleared(rundir):
 def test_first_sentence_stops_at_the_first_and_caps_it():
     chunks = iter([Chunk(text="Hello there, I am Sora. "), Chunk(text="And this is more.")])
     assert try_it.first_sentence(chunks) == "Hello there, I am Sora."
+    # The shared splitter merges short sentences; one is wanted here.
+    assert try_it.first_sentence(iter([Chunk(text="Hi! How are you? Fine.")])) == "Hi!"
+    assert try_it.first_sentence(iter([Chunk(text="Meet J. Smith, the keeper.")])) == \
+        "Meet J. Smith, the keeper."
     assert len(try_it.first_sentence(iter([Chunk(text="x" * 900)]))) == try_it.SENTENCE_MAX
     assert try_it.first_sentence(iter([Chunk(error="boom")])) == ""
 
@@ -209,8 +226,19 @@ def test_the_cli_refuses_when_the_service_is_off_or_locked(tmp_path):
 
 # --- the daemon's half -----------------------------------------------------------------
 
+@pytest.mark.parametrize("program,endpoint,agent,ok_", [
+    ("claude", False, False, True), ("", True, False, True), ("", True, True, False),
+    ("codex", False, False, False), ("gemini", False, False, False),
+    ("antigravity", False, False, False), ("copilot", False, False, False),
+])
+def test_only_backends_that_can_start_with_no_tools_may_try(program, endpoint, agent, ok_):
+    assert (try_it.backend_refusal(program, endpoint, agent) == "") is ok_
+
+
 class Side:
     """A side turn that records what it was given and answers."""
+
+    name = "claude"
 
     def __init__(self, reply="Ahoy there, I keep the lighthouse and I will keep you right. "
                              "More words after."):
@@ -311,6 +339,56 @@ def test_a_lock_landing_before_the_sentence_stops_it(daemon, rundir, monkeypatch
         daemon.locked = False
     assert daemon.speaker.said == []
     assert _answers(rundir, RID) == {"state": "failed", "why": "the screen locked", "text": ""}
+
+
+def test_a_lock_that_cannot_be_told_refuses_before_and_stays_silent_after(daemon, rundir, monkeypatch,
+                                                                         unlocked):
+    built = []
+    monkeypatch.setattr(daemon, "try_adapter", lambda p, req: built.append(1) or Side())
+    unlocked["now"] = None
+    daemon.handle_try(RID, _req())
+    assert built == [] and "cannot tell" in _answers(rundir, RID)["why"]
+
+    class Unsure(Side):
+        def send(self, text, session_id=None):
+            unlocked["now"] = None              # the probe stops answering mid-turn
+            yield Chunk(text="This must not be heard either, not even once. ")
+    unlocked["now"] = False
+    monkeypatch.setattr(daemon, "try_adapter", lambda p, req: Unsure())
+    daemon.handle_try(RID, _req())
+    assert daemon.speaker.said == [] and _answers(rundir, RID)["state"] == "failed"
+
+
+def test_a_backend_that_cannot_start_with_no_tools_is_refused(daemon, rundir, monkeypatch):
+    class Codex(Side):
+        name = "codex"
+    side = Codex()
+    monkeypatch.setattr(daemon, "try_adapter", lambda p, req: side)
+    daemon.handle_try(RID, _req())
+    got = _answers(rundir, RID)
+    assert got["state"] == "refused" and "Claude Code" in got["why"]
+    assert side.sent == [] and daemon.speaker.said == []
+
+
+def test_the_process_is_cancelled_before_the_stream_is_closed(daemon, rundir, monkeypatch):
+    """Codex review of M6: a stream dropped as soon as the first sentence
+    was out ran its own cleanup first, before cancel() could reach the
+    process it held."""
+    order = []
+
+    class Held(Side):
+        def send(self, text, session_id=None):
+            try:
+                yield Chunk(text="A first sentence that is long enough. ")
+                yield Chunk(text="And a second one, never read.")
+            finally:
+                order.append("closed")
+
+        def cancel(self):
+            order.append("cancelled")
+    monkeypatch.setattr(daemon, "try_adapter", lambda p, req: Held())
+    daemon.handle_try(RID, _req())
+    assert order[:2] == ["cancelled", "closed"]
 
 
 def test_no_answer_is_a_failure_not_a_silence(daemon, rundir, monkeypatch):
