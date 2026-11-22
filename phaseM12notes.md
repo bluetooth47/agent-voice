@@ -311,9 +311,9 @@ applies as for M11 (`skillsOff` unread before M11).
 1. **Codex review owed for M12, both passes**, and for every later phase
    until credits are added (balance 0; the limit resets 2026-11-25 14:53
    per Codex's message). M17, M20, M22 and M27 are Tier A, where the plan
-   makes both reviews mandatory before the next phase. The runner needs a
-   decision (wait for the reset, more credits, another reviewer, or accept
-   "review owed").
+   makes both reviews mandatory before the next phase. **Decided
+   2026-11-22 by the user: bypass the Codex review for now and keep
+   working.** M12 stays "review owed"; later phases go ahead without one.
 2. **Auto-scroll while dragging near the edge of a lane list**: not built;
    Move to… covers it. Build it?
 3. **A skill with a problem cannot be moved** (only fixed in place). Allow
