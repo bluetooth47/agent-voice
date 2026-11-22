@@ -272,7 +272,7 @@ def read_file(target: str, file: str) -> dict:
     # shows, so that saving it never drops the end of a file it did not
     # display (Phase 12 review). `text` is what the agent is told.
     out = {"name": file, "limit": 0, "text": "", "full": "", "chars": 0, "exists": False,
-           "problem": "", "changed_outside": False, "stamp": "missing"}
+           "problem": "", "changed_outside": False, "stamp": "missing", "partial": False}
     out["limit"] = _limit(target, file)
     key = _key(target, file)
     try:
@@ -282,6 +282,9 @@ def read_file(target: str, file: str) -> dict:
             # From the very bytes the text comes from, so a save between
             # reading and stamping cannot pair this text with that stamp.
             out["stamp"] = _stamp_from(got[0], path)
+            # Only READ_CAP of it was read: an editor must not save that
+            # part back over the whole (Codex review of M6, pass 2).
+            out["partial"] = bool(got[1])
         raw = None if got is None else _decode(*got)
     except AgentFsError as e:
         good = _LAST_GOOD.get(key)
@@ -785,7 +788,11 @@ def _traits_cli(a) -> int:
         # of a file nobody has seen (Codex review of M6).
         raise AgentFsError("personality.md is too large to rewrite safely; shorten it by hand")
     raw = "" if got is None else _decode(*got)
-    stamp = "missing" if got is None else _stamp_from(got[0], path)
+    # A whole read's own size, not the file's a moment later: an append in
+    # between must not produce a stamp that matches the longer file (Codex
+    # review of M6, pass 2).
+    stamp = ("missing" if got is None else
+             _stamp_from(got[0], path) if got[1] else _stamp_from(got[0], size=len(got[0])))
     if a.action == "get":
         v = {**traits.parse(raw), "stamp": stamp}
         _print(v, a.json, line_of(v))

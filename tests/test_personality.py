@@ -115,6 +115,12 @@ def test_unknown_values_are_kept_exactly_as_typed():
     assert traits.apply(new, {"length": None}) == "Traits: warm, très calme, Ruhig & klar, 🙂.\nRest."
 
 
+def test_every_unknown_value_is_kept_duplicates_and_case_included():
+    """Codex review of M6, pass 2: "US, us" lost "us" to a case-blind dedupe."""
+    new = traits.apply("Traits: warm, US, us.\nRest.", {"tone": "dry"})
+    assert new == "Traits: dry, US, us.\nRest."
+
+
 def test_a_paragraph_that_merely_starts_with_traits_is_not_the_line():
     long = "Traits: " + "warm and kind, " * 20 + "and more."
     assert not traits.parse(long)["line"]
@@ -206,6 +212,43 @@ def test_traits_set_refuses_a_file_too_large_to_read_whole(monkeypatch):
     code, _, err = run("traits", "set", "sora", stdin='{"traits": {"tone": null}}')
     assert code == 1 and "too large" in err
     assert path.read_text() == "Traits: warm.\n\n" + "x" * 300
+
+
+def test_traits_stamps_a_whole_read_by_its_own_size(monkeypatch):
+    """Codex review of M6, pass 2: an append landing between the read and
+    the stamp must not give a stamp that matches the longer file."""
+    agentfs.create("sora")
+    path, _ = agentfs._resolve("sora", "personality.md")
+    path.write_text("0123456789")                   # exactly READ_CAP below
+    monkeypatch.setattr(agentfs, "READ_CAP", 10)
+    real = agentfs._bytes_or_none
+
+    def then_append(p):
+        got = real(p)
+        if not path.read_text().endswith("APPENDED"):     # once, after the first read
+            with open(p, "a") as f:
+                f.write("APPENDED")
+            return (got[0], False)
+        return got
+    monkeypatch.setattr(agentfs, "_bytes_or_none", then_append)
+    code, _, err = run("traits", "set", "sora", stdin='{"traits": {"tone": "warm"}}')
+    monkeypatch.setattr(agentfs, "_bytes_or_none", real)
+    assert code == 3, err
+    assert path.read_text() == "0123456789APPENDED"
+
+
+def test_an_editor_never_saves_a_file_it_could_read_only_in_part(monkeypatch):
+    """Codex review of M6, pass 2: the chips (and typing) saved the part of
+    an oversize file that was read back over the whole of it."""
+    agentfs.write("main", "personality.md", " " * 50 + "short")
+    monkeypatch.setattr(agentfs, "READ_CAP", 20)
+    assert agentfs.read_file("main", "personality.md")["partial"] is True
+    monkeypatch.setattr(agentfs, "READ_CAP", 256 * 1024)
+    assert agentfs.read_file("main", "personality.md")["partial"] is False
+    box = EDITOR.read_text()
+    save = box[box.index("function save("):box.index("function keepMine(")]
+    assert save.index("if (fe.partial) {") < save.index("writer.running = true")
+    assert "fe.partial = f.partial === true" in box
 
 
 def test_traits_apply_is_pure_and_reports_the_count_told():

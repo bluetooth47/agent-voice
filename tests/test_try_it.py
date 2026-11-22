@@ -226,6 +226,21 @@ def test_the_cli_refuses_when_the_service_is_off_or_locked(tmp_path):
 
 # --- the daemon's half -----------------------------------------------------------------
 
+def test_first_sentence_is_returned_as_soon_as_it_ends():
+    """Codex review of M6, pass 2: "Hi! " then a stall was held for a second
+    sentence until the turn timed out."""
+    pulled = []
+
+    def stream():
+        yield Chunk(text="Hi! ")
+        pulled.append("more")               # must never be reached
+        yield Chunk(text="How are you?")
+    assert try_it.first_sentence(stream()) == "Hi!"
+    assert pulled == []
+    assert try_it.first_sentence(iter([Chunk(text="Let me look"), Chunk(tool="Read"),
+                                       Chunk(text=" at that.")])) == "Let me look"
+
+
 @pytest.mark.parametrize("program,endpoint,agent,ok_", [
     ("claude", False, False, True), ("", True, False, True), ("", True, True, False),
     ("codex", False, False, False), ("gemini", False, False, False),

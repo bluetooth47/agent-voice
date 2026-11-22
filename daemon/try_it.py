@@ -163,20 +163,27 @@ def backend_refusal(program: str, endpoint: bool, endpoint_is_agent: bool) -> st
 
 def first_sentence(chunks) -> str:
     """The first sentence of a reply stream (adapters' Chunks), cut at
-    SENTENCE_MAX. The shared splitter merges a short sentence into the next
-    so speech does not sound choppy; here one is wanted, so the first piece
-    is cut again at its own first boundary ("Hi! How are you?" says "Hi!")."""
-    from adapters.base import sentences
+    SENTENCE_MAX, returned the moment its boundary arrives.
+
+    Not through the shared splitter: that merges a short sentence into the
+    next so speech does not sound choppy, so "Hi! " followed by a stall was
+    held for a second sentence until the turn timed out (Codex review of
+    M6). The boundary rule is the same one (speech_text._next_boundary:
+    "J. Smith" and code fences are not ends). An error ends the reading; a
+    tool starting ends it too, with what was said before it."""
     from speech_text import _next_boundary
-    for s in sentences(chunks):
-        s = " ".join(str(s).split())
-        if not s:
-            continue
-        m = _next_boundary(s)
-        if m is not None and s[:m.end()].strip():
-            s = s[:m.end()].strip()
-        return s[:SENTENCE_MAX]
-    return ""
+    text = ""
+    for chunk in chunks:
+        if getattr(chunk, "error", None):
+            break
+        text += getattr(chunk, "text", "") or ""
+        m = _next_boundary(text)
+        if m is not None and text[:m.end()].strip():
+            text = text[:m.end()]
+            break
+        if getattr(chunk, "tool", None) or len(text) > SENTENCE_MAX * 4:
+            break
+    return " ".join(text.split())[:SENTENCE_MAX]
 
 
 def take(now: float | None = None) -> tuple[str, dict | None] | None:

@@ -70,7 +70,6 @@ def parse(text: str) -> dict:
     out = {"traits": {k: None for k in TRAITS}, "unknown": [], "line": m is not None}
     if m is None:
         return out
-    seen = set()
     for raw in m.group("body").rstrip(".").split(","):
         tok = raw.strip()
         if not tok:
@@ -79,8 +78,9 @@ def parse(text: str) -> dict:
         if cat is not None:
             if out["traits"][cat] is None:
                 out["traits"][cat] = tok.lower()
-        elif tok.lower() not in seen:
-            seen.add(tok.lower())
+        else:
+            # Every one, in order, duplicates too: "US, us" is two values to
+            # whoever typed them (Codex review of M6, pass 2).
             out["unknown"].append(tok)
     return out
 
@@ -88,7 +88,7 @@ def parse(text: str) -> dict:
 def line(traits: dict, unknown: list) -> str:
     """The managed line for these choices, or "" when there is nothing."""
     values = [traits.get(k) for k in TRAITS if traits.get(k)]
-    values += [u for u in unknown if u not in values]
+    values += list(unknown)
     return f"Traits: {', '.join(values)}." if values else ""
 
 

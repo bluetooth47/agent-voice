@@ -57,6 +57,10 @@ Column {
   // read); the box then shows what the agent is told instead.
   property string readProblem: ""
   property bool changedOutside: false
+  // Only the first part of the file could be read (agentfs READ_CAP): a
+  // save from here would write that part back over the whole, so none is
+  // made (Codex review of M6, pass 2). Typing and the trait chips alike.
+  property bool partial: false
   // Why the last save, Keep or Revert failed, in words; "" when it did not.
   property string note: ""
   // A save refused because the file changed since it was read: the stamp it
@@ -173,6 +177,11 @@ Column {
     fe.holding = true
     fe.justSaved = false
     fe.conflictStamp = ""
+    if (fe.partial) {
+      fe.note = "Not saved: " + fe.file + " is too large to have been read whole, so saving " +
+                "would drop the rest of it. Shorten it by hand."
+      return
+    }
     // Never cut to fit: the text stays in the box and the count says why.
     // Counted as it would be told, which is what the budget is about.
     if (fe.sentChars(t) > fe.limit) {
@@ -254,7 +263,7 @@ Column {
     saveGen++; session++
     holding = false; loaded = false; exists = false; reloadWanted = false
     saved = ""; stamp = ""; unsaved = ""; note = ""; conflictStamp = ""
-    readProblem = ""; changedOutside = false; justSaved = false
+    readProblem = ""; changedOutside = false; justSaved = false; partial = false
     hasQueued = false; queued = ""; retryAfterRead = false
     box.reset("")
     reload()
@@ -287,6 +296,7 @@ Column {
         fe.loaded = true
         fe.readProblem = f.problem ? String(f.problem) : ""
         fe.changedOutside = f.changed_outside === true
+        fe.partial = f.partial === true
         // A save that waited for this read: now it has a base.
         if (fe.retryAfterRead) {
           fe.retryAfterRead = false
