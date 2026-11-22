@@ -597,22 +597,21 @@ def test_a_yes_allows_and_a_corrupt_answer_denies(hook_as, monkeypatch):
     agentfs.create("theo-x")
     other = str(paths.AGENTS_DIR / "theo-x" / "instructions.md")
 
-    def answer(body):
-        def run():
-            deadline = time.time() + 2
-            while time.time() < deadline:
-                for req in hook.PENDING.glob("*.request"):
-                    (hook.PENDING / f"{req.stem}.response").write_text(body)
-                    return
-                time.sleep(0.02)
-        threading.Thread(target=run, daemon=True).start()
-
-    hook.PENDING.mkdir(parents=True, exist_ok=True)
-    for f in hook.PENDING.iterdir():
-        f.unlink()
-    answer("{ not json")
+    import cardhelp
+    import cards
+    # Asked, and only a yes from the overlay lets it through (phase M7: a
+    # yes the daemon could not check is a no).
+    cardhelp.answer_after(cards.LOCAL_DESK, 0.0, "deny")
     assert hook.decide("Read", {"file_path": other})[0] == "deny"
-    answer('{"allow": true}')
+    card = {}
+    t = cardhelp.answer_after(cards.LOCAL_DESK, 0.0, None, seen=card)
+
+    def forged():
+        t.join(3)
+        cards.LOCAL_DESK.answer(card["id"], "allow", verified=False)
+    threading.Thread(target=forged, daemon=True).start()
+    assert hook.decide("Read", {"file_path": other})[0] == "deny"
+    cardhelp.answer_after(cards.LOCAL_DESK, 0.0, "allow")
     assert hook.decide("Read", {"file_path": other})[0] == "allow"
 
 
@@ -867,16 +866,11 @@ def test_a_grep_glob_that_names_an_ignored_credential_asks(hook_as, tmp_path):
                                 "glob": "*"})[0] == "deny"
 
 
-def test_a_notebook_question_shows_the_notebook_it_writes(monkeypatch):
+def test_a_notebook_question_shows_the_notebook_it_writes(monkeypatch, card_desk):
+    import cardhelp
     seen = {}
     monkeypatch.setattr(hook, "TIMEOUT", 0.2)
-    real_write = Path.write_text
-
-    def spy(self, data, *a, **k):
-        if self.suffix == ".staging":
-            seen.update(json.loads(data))
-        return real_write(self, data, *a, **k)
-    monkeypatch.setattr(Path, "write_text", spy)
+    cardhelp.peek(card_desk, seen)
     hook._ask("NotebookEdit", {"file_path": "/tmp/ok.py",
                                "notebook_path": "/tmp/real.ipynb"})
     assert "/tmp/real.ipynb" in seen["summary"] and "/tmp/ok.py" in seen["summary"]

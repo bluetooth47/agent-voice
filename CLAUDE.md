@@ -236,7 +236,7 @@ reloads a model on every poll. Miss the third and the fix waits for something
 unrelated to be touched, which is how "switching engines and back" became
 folklore for "make it notice".
 
-## Six ways this fails open, and the rules that close them
+## Seven ways this fails open, and the rules that close them
 
 Each of these was a real path from "somebody said something near the
 microphone" to "something ran". They are listed because every one of them is
@@ -294,6 +294,22 @@ far enough to say where its prompt goes and a prompt sent down a channel a
 CLI is not reading hangs the turn. That is the standing rule for this table:
 a backend earns its place with one real turn, or it is not offered. The
 endpoint adapter never had this: an HTTPS body is not argv.
+
+**An answer is only as good as whoever sent it.** Until M7 a card's
+answer was a file under `$RUNDIR/permissions/`, and anything running as the
+user could write it, so an agent at Trusted could answer its own card with
+`agentvoice permit ID allow`. Now the daemon holds every card (`cards.py`)
+and takes an allow only from a caller it checked by the kernel's word: the
+live Omarchy shell's direct child, reading that shell's own pipe, carrying
+the card's one-use nonce and digest, while unlocked. Anything else
+*denies* the card. It is not ignored, because a forged yes that merely
+fails leaves the question up for the next try. Two things follow. A new
+way to answer a card goes through `Desk.answer` and nowhere else. And an
+asker trusts only a listener that is its own ancestor, since any process
+can bind a socket at that path. What this cannot stop (a plugin dropped
+into the shell, injected input, a race on the overlay's pipes) is written
+in phaseM7notes.md, and it is why "ask me first" is advisory for Trusted
+agents.
 
 **A transcript and a model reply are untrusted input to the UI.** Any `Text`
 showing one needs `textFormat: Text.PlainText`: `AutoText` renders anything

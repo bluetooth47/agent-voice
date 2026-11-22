@@ -122,6 +122,8 @@ fi
 
 real_omarchy=$(command -v omarchy || true)
 : > "$out.writes"
+# A card left by an earlier run is not this run's question (M7).
+rm -f "$out.card" "$out.permit"
 config_env=()
 apply=""
 if [ "$live" -eq 1 ]; then
@@ -227,7 +229,25 @@ case "\${1:-}" in
     sleep "\${PREVIEW_TRY_DELAY:-0}"
     if [ "\${PREVIEW_TRY:-}" = refuse ]; then echo "another agent is answering; try again when it has finished" >&2; exit 1; fi
     echo "Hello from the preview: nothing was run."; exit 0 ;;
-  start|stop|restart|toggle|enable|disable|mic|open-mic|interrupt|lock|unlock|type|talk|talk-end|permit|wake-test|calibrate|pass|tasks|hud-preview)
+  pending)
+    # The permission card (M7): what the daemon would hand the overlay, from
+    # <out>.card when a target wrote one; else the real command as before.
+    if [ -f '$out.card' ]; then cat '$out.card'; exit 0; fi ;;
+  permit)
+    # Answering a real agent's question is never what a preview means. The
+    # verdict (argv) goes to <out>.writes and what came on stdin -- the
+    # nonce and digest, never argv (M7) -- to <out>.permit; the answer is
+    # the daemon's "allowed", or its refusal under PREVIEW_PERMIT=refuse.
+    IFS= read -r line || true
+    printf 'agentvoice %s\n' "\$*" >> '$out.writes'
+    printf '%s\n' "\$line" >> '$out.permit'
+    sleep "\${PREVIEW_PERMIT_DELAY:-0}"
+    if [ "\${PREVIEW_PERMIT:-}" = refuse ]; then
+      echo '{"ok": false, "text": "refused, and the question was denied: it was not started by the Omarchy shell"}'
+      echo "agentvoice: refused" >&2; exit 1
+    fi
+    echo '{"ok": true, "text": "allowed"}'; exit 0 ;;
+  start|stop|restart|toggle|enable|disable|mic|open-mic|interrupt|lock|unlock|type|talk|talk-end|wake-test|calibrate|pass|tasks|hud-preview)
     printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0 ;;
 esac
 exec '$tmp/bin/agentvoice.rest' "\$@"

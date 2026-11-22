@@ -1916,36 +1916,38 @@ class TestLevels:
         assert not got["ok"] and "setting changed" in got["text"]
         assert refused_code(d) == "changed"
 
-    def test_the_real_card_reads_only_a_literal_single_yes(self, tmp_path, monkeypatch):
-        """ask_card's own protocol: silence is None; corruption, a list and a
-        key given twice are {} -- and every caller treats both as no."""
-        monkeypatch.setattr(permission_hook, "PENDING", tmp_path)
-        monkeypatch.setattr("subprocess.run", lambda *a, **k: None)
-        for raw, want in ((None, None), (b"garbage", {}), (b"[true]", {}),
-                          (b'{"allow": false, "allow": true}', {}),
-                          (b'{"allow": true}', {"allow": True})):
-            def answer():
-                if raw is None:
-                    return
-                for _ in range(100):
-                    reqs = list(tmp_path.glob("*.request"))
-                    if reqs:
-                        reqs[0].with_suffix(".response").write_bytes(raw)
-                        return
-                    time.sleep(0.01)
-            t = threading.Thread(target=answer)
-            t.start()
-            got = permission_hook.ask_card({"tool": "x"}, timeout=0.6)
-            t.join()
-            assert got == want, raw
-        assert not list(tmp_path.iterdir()), "the card left files behind"
+    def test_the_real_card_takes_only_a_checked_yes(self, card_desk):
+        """ask_card in the daemon (phase M7: the desk, not files): silence is
+        None; a deny, and an allow the daemon could not check, are denials
+        -- and every caller treats both as no. Only a checked allow is
+        {"allow": True}. (Over the socket, corruption: test_permission_hook.)"""
+        import cardhelp
+        for verdict, checked, want in ((None, True, None), ("deny", True, False),
+                                       ("allow", False, False), ("allow", True, True)):
+            seen = {}
+            t = cardhelp.answer_after(card_desk, 0.0, None, seen=seen)
 
-    def test_the_card_comes_down_when_the_turn_stops(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(permission_hook, "PENDING", tmp_path)
-        monkeypatch.setattr("subprocess.run", lambda *a, **k: None)
+            def answer():
+                t.join(3)
+                if verdict is None or not seen:
+                    return
+                shown = card_desk.show(seen["id"], verified=checked)
+                card_desk.answer(seen["id"], verdict, shown.get("nonce", ""),
+                                 shown["digest"], verified=checked)
+            a = threading.Thread(target=answer)
+            a.start()
+            got = permission_hook.ask_card({"tool": "x"}, timeout=0.6)
+            a.join()
+            if want is None:
+                assert got is None
+            else:
+                assert got.get("allow") is want, (verdict, checked, got)
+        assert card_desk.pending() == [], "the card stayed up"
+
+    def test_the_card_comes_down_when_the_turn_stops(self, card_desk):
         t0 = time.time()
         assert permission_hook.ask_card({"tool": "x"}, timeout=10, stop=lambda: True) is None
-        assert time.time() - t0 < 2 and not list(tmp_path.iterdir())
+        assert time.time() - t0 < 2 and card_desk.pending() == []
 
     def test_announce_is_the_default_and_shares_only_after_the_window(self, agents):
         d = agents

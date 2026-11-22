@@ -1105,19 +1105,9 @@ def test_the_card_shows_the_words_about_to_be_written(monkeypatch):
     monkeypatch.setattr(hook, "granted", lambda s: False)
     monkeypatch.setattr(hook, "_settings", lambda: ("ask", None))
     monkeypatch.setattr(sys, "argv", ["permission_hook.py", "claude"])
-    real = hook.PENDING
-
-    def grab():
-        import time as _t
-        end = _t.time() + 3
-        while _t.time() < end:
-            for r in real.glob("*.request"):
-                seen.update(json.loads(r.read_text()))
-                return
-            _t.sleep(0.01)
-    import threading
-    t = threading.Thread(target=grab, daemon=True)
-    t.start()
+    import cardhelp
+    import cards
+    t = cardhelp.peek(cards.LOCAL_DESK, seen, verdict=None)
     hook.decide(P + "notes_append", {"scope": "communal", "name": "n", "text": "Buy milk."})
     t.join(3)
     assert seen.get("summary") == "Buy milk."

@@ -69,7 +69,8 @@ Runtime files (`$RUNDIR` = `$XDG_RUNTIME_DIR/agentvoice/`):
 | `state` | JSON for the bar: top-level `state` first (the CLI's `vstate` anchors on it), plus `who`, `collab` (one-line collaboration status) and `tasks` (public task board, never a brief). |
 | `pid`, `command`, `typed/` | Daemon pid; atomic command file; typed input. |
 | `history.jsonl` | The conversation view (tmpfs). |
-| `permissions/<id>.request` / `.response` | Permission hook round trip. |
+| `cards/cards.sock` | Unix socket (0600 in 0700): approval cards (M7). Askers post and wait on it; the overlay's `pending`/`permit` show and answer. The daemon holds every card. |
+| `permissions/` | Before M7, the hook's `<id>.request` / `.response` files. Nothing reads them now; writes there are still asked about (orders guard). |
 | `grants/` | "Allow all in this chat" grants, keyed by session hash; cleared at start. |
 | `prompts/` | 0600 instruction files handed to adapters. |
 | `crew/calls.sock` | Unix socket: crew MCP server → daemon calls, caller identified by `SO_PEERCRED`. |
@@ -243,7 +244,8 @@ This file is the entry point (`main()`), and its structure is:
 | `audit.py` | `audit.record()` takes only typed fields (ids, names, integers); a bad value is written as "?". A test AST-walks every call. |
 | `speech_text.py` | Markdown → speakable prose, sentence boundaries, code blocks → "Code omitted", `safe_for_terminal`, `as_prompt`; `pass_command` ("pass/send this to NAME …") and `is_take_over`. Since M4 the **command table** (`COMMANDS`: id, phrases, effect, the positions it may sit at, the in-sentence phrases, CLI equivalent, the fixed sentence said when it fires inside a sentence) and **`find_command(text, mode, names)`**: the rules from before M4 first (`exact`), then a command at the start or end (`edges`) or in its own clause (`clause`), with the never-fires rules (an object after it, a negation, quoted or reported speech, a question, two commands). |
 | `voice_commands.py` | `agentvoice commands [--json]`: the table plus each enabled agent's wake phrase, from the settings. |
-| `permission_hook.py` | Claude Code **PreToolUse hook**. Writes `permissions/<id>.request`, summons the overlay, waits for the response. Levels: `ask` / `edits` / `trusted`. Fails *closed*; hook settings use `onFailure: "block"`. Crew rules: notes reads allowed, notes writes asked at Ask and refused when `notesWrite` is deny; collaboration tools pass (the daemon asks). Loading the agent's own skill is a read. **Orders guard** (`orders_write`, 92c71ff): see section 8. Security-critical. |
+| `cards.py` | **Approval cards** (M7). `Desk`: the daemon's cards, posted, shown, answered once (`_finish` under one lock); silence, expiry, a stop, a hung-up asker or a lock is no. `Listener` on `cards/cards.sock`; `Verifier`: an asker must descend from the daemon; an **allow** counts only from a process whose parent is the live Omarchy shell (exe `quickshell`, `-p $OMARCHY_PATH/shell`, not descended from the daemon), whose stdout (`pending`) or stdin (`permit`) is a pipe that shell holds, carrying the card's one-use nonce and digest, while unlocked. A failed allow **denies** the card. `ask()`: the hook's client, which checks the listener is its own ancestor. CLI `cards.py show [ID]` / `answer ID VERDICT` (nonce on stdin). `LOCAL_DESK` in the daemon. Security-critical. |
+| `permission_hook.py` | Claude Code **PreToolUse hook**. Posts the card to the daemon over `cards/cards.sock` (M7; `ask_card` → `cards.ask`, or `LOCAL_DESK` in-process) and waits on the same connection. Levels: `ask` / `edits` / `trusted`. Fails *closed*; hook settings use `onFailure: "block"`. Crew rules: notes reads allowed, notes writes asked at Ask and refused when `notesWrite` is deny; collaboration tools pass (the daemon asks). Loading the agent's own skill is a read. **Orders guard** (`orders_write`, 92c71ff): see section 8. Security-critical. |
 | `readout.py` | M3, bug B: the readout's kept reply (`last_reply`), when both lines clear and stay cleared (`gone`: lock, agent or chat switch, `KEEP_S` 600 s idle), and the 4 s preview. Pure, on an injectable clock; `Daemon._compose` calls it for every unlocked payload. |
 | `sessions.py` | M2, bug I: the pure rule for whether a conversation survives an adapter rebuild (`carry`, `spec_changes`, `why`). |
 | `crew.py` | Multiple agents: `Persona` (own adapter/session/voice, plus `task`, `saved_conversation`, `turn_id`, `answering` for collaboration), `route()` picks who was addressed by wake name. With extra agents, each turn runs on its own thread. |
@@ -339,7 +341,11 @@ Notes and collaboration exist only for Claude Code and Codex
   M6 `details` also walks the agent tabs, a rename, a starter, the trait
   chips, the meter and Try it (`agentvoice try` is a stub that logs the
   draft to `<out>.try`; `PREVIEW_TRY=refuse` makes it refuse), and
-  `detailshots` with `--config` gives sora two chips chosen. Options
+  `detailshots` with `--config` gives sora two chips chosen. Since M7
+  `card` draws the permission card from a synthetic card the stubbed
+  `agentvoice pending` serves (`--arg verified|unverified|allow`;
+  `PREVIEW_PERMIT=refuse` makes the stubbed `permit` refuse), and checks
+  the nonce arrived on stdin, never argv. Options
   include `--state FILE`, `--theme`, `--live-config`, `--config FILE` (a
   synthetic shell.json from `bench/preview/configs/`, so nothing real is
   shown or written) and `--arg '{"page":…}'`. It never moves the real
@@ -487,7 +493,7 @@ an unknown agent id gets deny / off.
 | `commands [--json]` | Every spoken command and each agent's wake phrase (voice_commands.py). |
 | `type <agent> <text>` | Typed input to an agent. |
 | `wake-test start\|stop\|auto\|auto-stop` | Wake-word tests. |
-| `permit <id> allow\|allow-session\|deny`, `pending` | Answer or show a permission request. |
+| `permit <id> allow\|allow-session\|deny`, `pending [<id>]` | Answer or show a permission request, through the daemon (M7). Nonce and digest on stdin. An allow counts only from the overlay; from anywhere else it is refused and the card denied. `pending` gives the nonce only to the overlay's own call. |
 | `calibrate` | Check whether the room supports barge-in. |
 | `monitor` | Live wake-word scores. |
 | `voice fetch\|sample\|remove` | The Voice page's library. |
@@ -525,6 +531,16 @@ Summarized from CLAUDE.md and merged-plan.md section 3; read the full text.
   Bash matching is on command text: it catches the plain case, not a
   determined one. Trusted Codex has no hook, so for it outside-edit
   detection (Keep/Revert) is the only control.
+- **Card answers** (M7, `cards.py`): an allow counts only from the overlay,
+  checked by the kernel's word (SO_PEERCRED, a pidfd where the kernel has
+  one, /proc): parent is the live Omarchy shell, the pipe is the shell's,
+  the nonce and digest match, the screen is unlocked. Anything else denies
+  the card. The orders guard's second layer asks at every level about
+  `agentvoice permit`, the card socket and the old `permissions/` folder,
+  and about writes to what the shell runs (`~/.config/omarchy`, this
+  plugin's checkout) and the daemon's installed code (`app/`, `venv/`).
+  Not sound against a same-user process set on defeating it (see
+  phaseM7notes.md); below Trusted an agent cannot become one unasked.
 - Notes: `notesWrite` deny and a per-note lock beat every level through the
   crew tools; a corrupt `.meta.json` locks all notes.
 - Collaboration: caller identity from `SO_PEERCRED`, never from the call;
@@ -634,3 +650,8 @@ Summarized from CLAUDE.md and merged-plan.md section 3; read the full text.
 - `collab.py` and `crew_mcp.py` docstrings still describe call files in
   `$RUNDIR/crew/calls/`; the code uses `crew/calls.sock`.
 - The orders guard matches Bash on command text only.
+- Card answers (M7) are checked against what a same-user process can
+  forge, not against one that sets out to: a plugin dropped into the
+  shell's folder, injected input through the virtual keyboard or pointer,
+  or a race on the overlay's pipes through `/proc/PID/fd` all still get a
+  yes. Hence "advisory for Trusted agents" (phaseM7notes.md).

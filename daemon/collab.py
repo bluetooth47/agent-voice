@@ -1862,8 +1862,9 @@ class Runtime:
         return True, "", "", level
 
     def _card(self, p, task: Task, text: str, extra: str, line: str, stop=None):
-        """The permission card, through the hook's own file protocol, with the
-        question said out loud as it goes up. It shows everything that would
+        """The permission card, through the daemon's own desk (cards.py, phase
+        M7: answered only from the overlay, checked), with the question said
+        out loud as it goes up. It shows everything that would
         be sent -- the request and its context or summary, whole -- and who
         to. The answer dict, or None."""
         import permission_hook

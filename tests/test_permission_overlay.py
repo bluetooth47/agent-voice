@@ -14,71 +14,76 @@ import re
 import subprocess
 from pathlib import Path
 
+import cardhelp
+
 ROOT = Path(__file__).resolve().parent.parent
 SETTINGS = (ROOT / "Settings.qml").read_text()
 
 
 def _run(rundir: Path, *args: str) -> str:
-    env = dict(os.environ)
-    env["XDG_RUNTIME_DIR"] = str(rundir)
-    done = subprocess.run([str(ROOT / "bin" / "agentvoice"), *args],
-                          env=env, capture_output=True, text=True, timeout=30)
-    return done.stdout.strip()
+    return cardhelp.cli(rundir, *args).stdout.strip()
 
 
-def _request(rundir: Path, request_id: str, command: str) -> None:
-    d = rundir / "agentvoice" / "permissions"
-    d.mkdir(parents=True, exist_ok=True)
-    (d / f"{request_id}.request").write_text(json.dumps(
-        {"id": request_id, "tool": "Bash", "summary": command, "timeout": 45}))
+def _cards(rundir: Path, desk, *commands: str) -> list[str]:
+    """Put one card up per command (the daemon picks the ids since phase
+    M7); their ids, oldest first."""
+    ids = []
+    for c in commands:
+        _t, out = cardhelp.post_async(desk, {"tool": "Bash", "summary": c}, 20)
+        ids.append(out["id"])
+    return ids
 
 
 class TestPendingById:
     def test_it_returns_the_request_that_was_asked_for(self, tmp_path):
-        _request(tmp_path, "a" * 12, "rm -rf /")
-        _request(tmp_path, "b" * 12, "ls")
-        got = json.loads(_run(tmp_path, "pending", "b" * 12))
-        assert got["summary"] == "ls"
+        with cardhelp.live_desk(tmp_path) as desk:
+            a, b = _cards(tmp_path, desk, "rm -rf /", "ls")
+            got = json.loads(_run(tmp_path, "pending", b))
+            assert got["summary"] == "ls" and got["id"] == b
 
     def test_an_unknown_id_is_not_some_other_request(self, tmp_path):
         """Falling back to "the newest" here would show one command and
         answer a different one."""
-        _request(tmp_path, "a" * 12, "rm -rf /")
-        assert json.loads(_run(tmp_path, "pending", "c" * 12)) == {}
+        with cardhelp.live_desk(tmp_path) as desk:
+            _cards(tmp_path, desk, "rm -rf /")
+            assert json.loads(_run(tmp_path, "pending", "c" * 12)) == {}
 
-    def test_a_malformed_id_is_refused_rather_than_used_as_a_path(self, tmp_path):
-        _request(tmp_path, "a" * 12, "rm -rf /")
-        assert json.loads(_run(tmp_path, "pending", "../../x")) == {}
+    def test_a_malformed_id_is_refused_rather_than_used(self, tmp_path):
+        with cardhelp.live_desk(tmp_path) as desk:
+            _cards(tmp_path, desk, "rm -rf /")
+            assert json.loads(_run(tmp_path, "pending", "../../x")) == {}
 
     def test_with_no_id_it_still_answers_for_a_person_at_a_terminal(self, tmp_path):
-        _request(tmp_path, "a" * 12, "rm -rf /")
-        assert json.loads(_run(tmp_path, "pending"))["summary"] == "rm -rf /"
+        with cardhelp.live_desk(tmp_path) as desk:
+            _cards(tmp_path, desk, "ls", "rm -rf /")
+            got = json.loads(_run(tmp_path, "pending"))
+            assert got["summary"] == "rm -rf /"
+            # A terminal sees the question, never the nonce an allow needs.
+            assert got["verified"] is False and "nonce" not in got
 
     def test_nothing_pending_says_so_rather_than_saying_nothing(self, tmp_path):
-        """`set -euo pipefail` plus `ls` on a directory that is not there:
-        ls exits 2, pipefail carries it out of the pipeline, and a failing
-        command substitution in an assignment ends the script. So this
-        printed nothing and exited 2, and the overlay only survived it by
-        failing to parse the empty output. Same shape as the jq-exits-2 bug
-        in install.sh."""
-        env = dict(os.environ)
-        env["XDG_RUNTIME_DIR"] = str(tmp_path)
-        done = subprocess.run([str(ROOT / "bin" / "agentvoice"), "pending"],
-                              env=env, capture_output=True, text=True, timeout=30)
+        """`set -euo pipefail` plus `ls` on a directory that is not there
+        once printed nothing and exited 2. With no daemon at all, and with
+        one that has nothing waiting, the answer is {} and exit 0."""
+        done = cardhelp.cli(tmp_path, "pending")
         assert done.returncode == 0, done.stderr
         assert json.loads(done.stdout) == {}
+        with cardhelp.live_desk(tmp_path):
+            done = cardhelp.cli(tmp_path, "pending")
+            assert done.returncode == 0 and json.loads(done.stdout) == {}
 
-    def test_an_empty_permissions_directory_is_also_nothing(self, tmp_path):
-        (tmp_path / "agentvoice" / "permissions").mkdir(parents=True)
-        assert json.loads(_run(tmp_path, "pending")) == {}
+    def test_a_file_in_the_old_folder_is_not_a_question(self, tmp_path):
+        """Phase M7: the request files are gone; one left there (or put
+        there) is shown to nobody."""
+        d = tmp_path / "agentvoice" / "permissions"
+        d.mkdir(parents=True)
+        (d / ("a" * 12 + ".request")).write_text(json.dumps({"summary": "rm -rf /"}))
+        with cardhelp.live_desk(tmp_path):
+            assert json.loads(_run(tmp_path, "pending")) == {}
+            assert json.loads(_run(tmp_path, "pending", "a" * 12)) == {}
 
     def test_permit_refuses_an_id_that_is_not_one(self, tmp_path):
-        """It is a filename: `../../x` would write a verdict anywhere."""
-        env = dict(os.environ)
-        env["XDG_RUNTIME_DIR"] = str(tmp_path)
-        done = subprocess.run([str(ROOT / "bin" / "agentvoice"), "permit",
-                               "../../x", "allow"], env=env,
-                              capture_output=True, text=True, timeout=30)
+        done = cardhelp.cli(tmp_path, "permit", "../../x", "allow")
         assert done.returncode == 2
         assert not list(tmp_path.rglob("*.response"))
 
@@ -114,3 +119,63 @@ class TestTheCardAnswers:
         card = SETTINGS[SETTINGS.index('text: root.request.summary'):]
         card = card[:card.index("}")]
         assert "textFormat: Text.PlainText" in card
+
+
+class TestTheAnswerIsAuthenticated:
+    """Phase M7: the overlay's side of the checked answer (cards.py has the
+    daemon's)."""
+
+    @staticmethod
+    def _fn(name: str) -> str:
+        body = SETTINGS[SETTINGS.index(f"function {name}("):]
+        return body[:body.index("\n  }")]
+
+    def test_the_nonce_goes_on_stdin_never_argv(self):
+        body = self._fn("answer")
+        cmd = re.search(r"command: (\[[^\]]*\])", body).group(1)
+        assert cmd == '["agentvoice", "permit", cid, verdict]'
+        assert "nonce" not in cmd and "digest" not in cmd
+        pending = body[body.index("pending:"):]
+        assert "request.nonce" in pending and "request.digest" in pending
+
+    def test_the_answers_stdin_stays_open_until_it_is_done(self):
+        """The daemon checks the answer's stdin is a pipe the shell still
+        holds; closing it after the write would fail that check."""
+        proc = SETTINGS[SETTINGS.index("id: permitProc"):]
+        proc = proc[:proc.index("\n  // The daemon holds the card")]
+        assert "stdinEnabled: true" in proc and "write(proc.pending)" in proc
+        assert "stdinEnabled = false" not in proc
+
+    def test_each_answer_has_its_own_process(self):
+        """Setting `running` on a Process still sending an earlier answer
+        does nothing, so a second card's answer would be lost."""
+        assert "permitProc.createObject(" in self._fn("answer")
+        assert not re.search(r"Process \{ id: permit \}", SETTINGS)
+
+    def test_allow_needs_the_nonce_the_daemon_handed_over(self):
+        decl = SETTINGS[SETTINGS.index("readonly property bool mayAllow"):]
+        decl = decl[:decl.index("\n\n")]
+        assert "request.verified === true" in decl and "[0-9a-f]{32}" in decl
+        assert "!answered" in decl
+        for label in ('text: "Allow once"', 'text: "Allow all in this chat"'):
+            button = SETTINGS[SETTINGS.index(label):]
+            button = button[:button.index("onClicked")]
+            assert "enabled: root.mayAllow" in button, label
+
+    def test_a_greyed_out_allow_says_why(self):
+        """A control that does nothing says why -- in plain text, since the
+        reason is the daemon's words about a process."""
+        note = SETTINGS[SETTINGS.index("Allow cannot be accepted from here"):][:800]
+        assert "root.request.why" in note
+        assert "textFormat: Text.PlainText" in note
+
+    def test_a_refused_allow_is_shown_not_swallowed(self):
+        body = self._fn("permitReplied")
+        assert "answerFailed = true" in body and "told no" in body
+        assert "cid !== answerFor" in body       # an older card's reply
+        assert "root.permitNeverRan" in SETTINGS[SETTINGS.index("id: permitProc"):]
+
+    def test_the_countdown_stops_once_answered(self):
+        timer = SETTINGS[SETTINGS.index("// Silence is a denial, so the countdown"):]
+        timer = timer[:timer.index("repeat:")]
+        assert "!root.answered" in timer

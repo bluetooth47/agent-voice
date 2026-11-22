@@ -7,10 +7,12 @@ mechanism, and it is the one that works -- `--permission-prompt-tool` is
 accepted by the CLI, loads the MCP server, and is then never consulted, at
 least in 2.1.278.
 
-The hook is spawned by Claude, not by the daemon, so the two talk through
-files in the runtime directory: this writes <id>.request and waits for
-<id>.response. Nothing polls that directory -- this process summons the
-overlay itself and names the id, and the overlay reads the request file.
+The hook is spawned by Claude, not by the daemon, so the two talk over the
+daemon's card socket (cards.py, phase M7): this posts the question and waits
+on the same connection for the answer, having checked by the kernel's word
+that the listener is its own ancestor. Until M7 the answer was a file any
+process running as the user could write -- an agent at Trusted could answer
+its own card -- and a file is no longer read at all.
 
 Silence means no. A request nobody answers is denied when the timeout expires,
 because the alternative -- a spoken sentence quietly editing files while
@@ -25,12 +27,15 @@ import signal
 import subprocess
 import sys
 import time
-import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paths import AGENTS_DIR, COMMUNAL_DIR, CONFIG_DIR, DATA_DIR, RUNTIME_DIR, scope_root  # noqa: E402
 
+#: Where questions and answers were files before phase M7. Nothing reads
+#: an answer here any more; the name stays because reading under it is
+#: still a secret read, and writing under it is still asked about (an older
+#: build, put back, would read it again).
 PENDING = RUNTIME_DIR / "permissions"
 
 #: "Allow everything in this chat": one file per conversation that the user
@@ -283,18 +288,42 @@ def _orders_dirs() -> list[Path]:
             Path.home() / ".config" / "omarchy" / "shell.json"]
 
 
-def _orders_spellings() -> list[str]:
+def _card_dirs() -> list[Path]:
+    """What decides who answers an approval card (phase M7, the second
+    layer). The daemon accepts an allow only from the live Omarchy shell, so
+    whatever that shell runs is part of the check: its config, plugins and
+    hooks under ~/.config/omarchy (a custom bar widget runs a command from
+    shell.json; a dropped-in plugin is loaded at once), this plugin's own
+    checkout behind its link, and the daemon's installed code. And the
+    folder the answers were files in before M7, which an older build put
+    back would read again."""
+    home = Path.home()
+    return [home / ".config" / "omarchy",
+            home / ".config" / "omarchy" / "plugins" / "duaneoca.agentvoice",
+            DATA_DIR / "app", DATA_DIR / "venv",
+            RUNTIME_DIR / "permissions", RUNTIME_DIR / "cards"]
+
+
+#: Command text that answers, or reaches what answers, a card. A match on
+#: text, like the rest of the Bash check: the plain case, not a determined one.
+CARD_WORDS = ("agentvoice permit", "agentvoice/permissions", "agentvoice/cards")
+
+
+def _spellings(dirs: list[Path]) -> list[str]:
     """The ways a shell command can name those places: absolute, resolved,
     and from the home folder on (which ~, $HOME and ${HOME} all end in)."""
     home = str(Path.home())
     out: set[str] = set()
-    for d in _orders_dirs():
+    for d in dirs:
         for form in {str(d), str(d.resolve())}:
             out.add(form)
             if form.startswith(home + "/"):
                 out.add(form[len(home):])  # "/.local/share/agentvoice/communal"
-    out.add("bar set duaneoca.agentvoice")
     return sorted(out)
+
+
+def _orders_spellings() -> list[str]:
+    return sorted(set(_spellings(_orders_dirs())) | {"bar set duaneoca.agentvoice"})
 
 
 def orders_write(tool_name: str, tool_input) -> str:
@@ -302,7 +331,8 @@ def orders_write(tool_name: str, tool_input) -> str:
 
     Asked about at every level, Trusted and "allow all in this chat"
     included (the Rule of Two, Phase 13): a web page that steers a trusted
-    agent should not be able to rewrite what the other agents are told.
+    agent should not be able to rewrite what the other agents are told --
+    nor, since phase M7, answer an approval card or change what does.
     For Bash this is a match on the command text, so a command built to
     hide a path still gets past it; it catches the plain case, not a
     determined one.
@@ -317,6 +347,8 @@ def orders_write(tool_name: str, tool_input) -> str:
             r = _resolved(target)
             if any(_under(r, d) for d in _orders_dirs()):
                 return f"this changes what the agents are told ({target})"
+            if any(_under(r, d) for d in _card_dirs()):
+                return f"this changes what answers approval cards ({target})"
         except (OSError, ValueError, RuntimeError):
             return "this may change what the agents are told"
         return ""
@@ -328,6 +360,10 @@ def orders_write(tool_name: str, tool_input) -> str:
             if frag in cmd:
                 return ("this command touches what the agents are told "
                         f"({frag})")
+        for frag in sorted(set(_spellings(_card_dirs())) | set(CARD_WORDS)):
+            if frag in cmd:
+                return ("this command could answer an approval card, or change "
+                        f"what does ({frag})")
     return ""
 
 
@@ -989,11 +1025,8 @@ def _ask(tool_name: str, tool_input: dict, note: str = "",
     shown, cut = summary[:400], max(0, len(summary) - 400)
     if cut:
         shown += f"… (+{cut} more characters, {summary.count(chr(10)) + 1} lines)"
-    # Written to a temporary name and chmod'd before it is given the one the
-    # overlay watches, so it is never briefly readable under its real name --
-    # the same order the state file uses. `input` is the whole tool call, which
-    # for a write is the entire file content, so the directory mode is not the
-    # only thing standing in front of it.
+    # Handed to the daemon over its socket, not left on disk: `input` is the
+    # whole tool call, which for a write is the entire file content.
     answer = ask_card({
         "tool": tool_name,
         # Which agent is asking, when there is more than one: two can be at
@@ -1019,8 +1052,8 @@ def _ask(tool_name: str, tool_input: dict, note: str = "",
     })
     if answer is None:
         return "deny", f"Nobody answered within {TIMEOUT:.0f} seconds."
-    # `is True`, not truthiness: only the literal yes the overlay writes
-    # counts. A response file holding anything else is a response this
+    # `is True`, not truthiness: only the literal yes the daemon sends for a
+    # checked allow counts. An answer holding anything else is one this
     # cannot read, and that is a denial.
     if answer.get("allow") is True:
         # This one is allowed whatever happens next; the grant only saves
@@ -1031,99 +1064,41 @@ def _ask(tool_name: str, tool_input: dict, note: str = "",
     return "deny", str(answer.get("reason") or "Denied at the desktop.")
 
 
-def _strict(pairs):
-    """json's object hook for an answer: a key given twice is an answer
-    that says two things, so it is no answer at all."""
-    out = {}
-    for k, v in pairs:
-        if k in out:
-            raise ValueError("a key given twice")
-        out[k] = v
-    return out
-
-
 def ask_card(fields: dict, timeout: float | None = None, on_posted=None,
              stop=None) -> dict | None:
-    """Put one question on screen and wait for its answer: the file protocol
-    the overlay reads, shared by the hook, the desktop server's screenshot
-    and the daemon's collaboration questions (Phase 16).
+    """Put one question on screen and wait for its answer, shared by the
+    hook, the desktop server's screenshot and the daemon's collaboration
+    questions (Phase 16).
 
-    Returns the answer as a dict -- `{}` for a response that cannot be read,
-    which every caller treats as a no -- or None when nobody answered within
-    `timeout`. Only `answer.get("allow") is True` is a yes. `on_posted` runs
-    once the card is up (the daemon says the question out loud then); it
-    cannot change the answer. `stop()` true ends the wait early as None (the
-    caller's turn was stopped), and takes the card down."""
+    Since phase M7 through the daemon (cards.py), never a file: inside the
+    daemon the desk is called directly; anywhere else the question goes over
+    the card socket, whose listener must be this process's ancestor. The
+    daemon accepts an allow only from the overlay, checked by the kernel's
+    word, for this card's nonce and digest.
+
+    Returns the answer as a dict -- a denial with its reason when anything
+    went wrong on the way, which every caller treats as a no -- or None when
+    nobody answered within `timeout`. Only `answer.get("allow") is True` is
+    a yes. `on_posted` runs once the card is up (the daemon says the question
+    out loud then); it cannot change the answer. `stop()` true ends the wait
+    early as None (the caller's turn was stopped), and takes the card down."""
+    import cards
     timeout = TIMEOUT if timeout is None else timeout
-    # 0o700: the request holds whatever the agent is about to run, and the
-    # response is the word "yes". Neither is anyone else's business, and a
-    # response another local user could write would be a free allow.
-    PENDING.mkdir(parents=True, exist_ok=True, mode=0o700)
-    try:
-        PENDING.chmod(0o700)      # mkdir's mode is ignored if it exists
-    except OSError:
-        pass
-    request_id = uuid.uuid4().hex[:12]
-    request = PENDING / f"{request_id}.request"
-    response = PENDING / f"{request_id}.response"
-    staged = PENDING / f"{request_id}.staging"
-    try:
-        # Written to a temporary name and chmod'd before it is given the one
-        # the overlay watches, so it is never briefly readable under its real
-        # name -- the same order the state file uses. `input` is the whole
-        # tool call, which for a write is the entire file content.
-        staged.write_text(json.dumps({**fields, "id": request_id, "asked_at": time.time(),
-                                      "timeout": timeout}))
-        staged.chmod(0o600)
-        staged.replace(request)
-
-        # Put it on screen. The overlay reads the request file itself, so the
-        # payload only has to say which one. Failure here is not fatal: the
-        # request still times out into a denial, which is the safe direction.
-        try:
-            import subprocess
-            subprocess.run(["omarchy-shell", "shell", "summon", "duaneoca.agentvoice",
-                            json.dumps({"mode": "permission", "id": request_id})],
-                           timeout=5, capture_output=True)
-        except Exception:
-            pass
-        if on_posted is not None:
-            try:
-                on_posted()
-            except Exception:
-                pass
-
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if response.exists():
-                try:
-                    answer = json.loads(response.read_text(), object_pairs_hook=_strict)
-                except Exception:
-                    answer = {}
-                return answer if isinstance(answer, dict) else {}
-            if stop is not None:
-                try:
-                    if stop():
-                        return None
-                except Exception:
-                    return None
-            time.sleep(0.1)
-        return None
-    finally:
-        # staged is normally gone -- replace() consumed it -- but a chmod that
-        # raised would otherwise leave the whole tool call on disk unowned.
-        staged.unlink(missing_ok=True)
-        request.unlink(missing_ok=True)
-        response.unlink(missing_ok=True)
+    desk = cards.LOCAL_DESK
+    if desk is not None:
+        return desk.post(fields, timeout, on_posted=on_posted, stop=stop)
+    return cards.ask(fields, timeout, stop=stop, on_sent=on_posted)
 
 
 def _die_cleanly() -> None:
-    """Turn a kill into a normal unwind, so the request file goes away.
+    """Turn a kill into a normal unwind, so the card goes away.
 
     Claude kills the whole process group when a turn is interrupted. The
-    default SIGTERM disposition skips `finally`, which left the .request file
-    behind -- and `agentvoice pending` then showed a question nobody was
-    waiting for an answer to, forever.
+    default SIGTERM disposition skips `finally`; before phase M7 that left
+    the .request file behind, and `agentvoice pending` then showed a question
+    nobody was waiting for an answer to, forever. Now the card's connection
+    closes either way and the daemon takes it down, but an orderly exit is
+    still the one that says nothing odd.
     """
     def raise_it(signum, _frame):
         raise SystemExit(f"interrupted by signal {signum}")
@@ -1153,7 +1128,7 @@ def main() -> int:
     Everything here is inside one catch, because of how Claude Code reads a
     hook: exit 0 with a decision is the decision, exit 2 is a block, and
     *anything else* -- an unhandled traceback, an ImportError, a full disk
-    while writing the request file -- is a non-blocking error, which means
+    while posting the card -- is a non-blocking error, which means
     the tool runs. So the failure mode of this file is not "the hook broke",
     it is "the guard was not there". Every path out of here is a denial that
     names itself.

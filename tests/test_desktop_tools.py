@@ -670,21 +670,11 @@ def test_a_purchase_is_asked_at_trusted_and_through_a_chat_grant(monkeypatch):
     assert len(seen) == 1
 
 
-def test_the_question_is_marked_to_be_said(monkeypatch):
+def test_the_question_is_marked_to_be_said(monkeypatch, card_desk):
+    import cardhelp
     monkeypatch.setattr(hook, "TIMEOUT", 0.2)
-    import threading, time as _t
     seen = {}
-
-    def peek():
-        end = _t.time() + 3
-        while _t.time() < end:
-            for r in hook.PENDING.glob("*.request"):
-                seen.update(json.loads(r.read_text()))
-                return
-            _t.sleep(0.01)
-
-    t = threading.Thread(target=peek)
-    t.start()
+    t = cardhelp.peek(card_desk, seen)
     hook._ask(B + "computer", click("Sends the email"), note="n", announce=True)
     t.join()
     assert seen["announce"] is True
@@ -717,25 +707,48 @@ def test_below_trusted_the_whole_hook_still_guards_the_browser():
     assert settings["hooks"]["PreToolUse"][0]["matcher"] == GUARDED_TOOLS
 
 
-def test_the_daemon_says_its_own_agents_browser_question_once(cfg_factory, tmp_path, monkeypatch):
+def test_the_daemon_says_its_own_agents_browser_question_once(cfg_factory, card_desk):
+    """From the daemon's own cards since phase M7, not request files."""
+    import threading
+    import time as _t
     from crew import Persona
     from wake_listen import Daemon
-    monkeypatch.setattr(hook, "PENDING", tmp_path)
     d = Daemon.__new__(Daemon)
+    d.cards = card_desk
     said = []
     d.speak = lambda text, tail_ms, cut=None: said.append(text)
     nova = Persona("nova", {"id": "nova-k3f", "label": "Nova"})
-    (tmp_path / "a1.request").write_text(json.dumps({
-        "announce": True, "who": "nova-k3f",
-        "input": {"action_summary": "Places the order.", "text": "card 4242"}}))
-    (tmp_path / "b2.request").write_text(json.dumps({
-        "announce": False, "who": "nova-k3f", "input": {}}))
-    (tmp_path / "c3.request").write_text(json.dumps({
-        "announce": True, "who": "someone-else", "input": {}}))
-    assert d.announce_permission(nova, 0) is True
-    assert said == ["Nova is asking first: Places the order. Answer on screen."]
-    assert "4242" not in said[0]
-    assert d.announce_permission(nova, 0) is False     # once
+    cards_up = [
+        {"tool": B + "computer", "announce": True, "who": "nova-k3f",
+         "input": {"action_summary": "Places the order.", "text": "card 4242"}},
+        {"tool": B + "computer", "announce": False, "who": "nova-k3f", "input": {}},
+        {"tool": B + "computer", "announce": True, "who": "someone-else", "input": {}},
+    ]
+    posters = [threading.Thread(target=card_desk.post, args=(f, 10), daemon=True)
+               for f in cards_up]
+    for t in posters:
+        t.start()
+    end = _t.time() + 3
+    while len(card_desk.pending()) < 3 and _t.time() < end:
+        _t.sleep(0.01)
+    try:
+        assert d.announce_permission(nova, 0) is True
+        assert said == ["Nova is asking first: Places the order. Answer on screen."]
+        assert "4242" not in said[0]
+        assert d.announce_permission(nova, 0) is False     # once
+    finally:
+        for c in card_desk.pending():
+            card_desk.answer(c["id"], "deny")
+        for t in posters:
+            t.join(5)
+
+
+def test_no_desk_means_nothing_is_said():
+    from crew import Persona
+    from wake_listen import Daemon
+    d = Daemon.__new__(Daemon)
+    d.speak = lambda *a, **k: pytest.fail("said something")
+    assert d.announce_permission(Persona("nova", {"id": "nova-k3f"}), 0) is False
 
 
 

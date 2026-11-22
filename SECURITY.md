@@ -112,9 +112,9 @@ even if nothing malicious is ever hosted.
   never reaches a disk, each publish replaces the last one, and returning to
   `listening` clears the text. `logSpeech` is a statement about the journal,
   which keeps entries for weeks; it is not a claim that the words exist
-  nowhere. The same is true of the permission request the overlay reads: it
-  holds the entire tool call, which for a write is the whole file content,
-  and it is unlinked when the question is answered.
+  nowhere. The permission request is no longer a file at all (M7): it is
+  held by the daemon and handed to the overlay over a 0600 socket, and it
+  holds the entire tool call, which for a write is the whole file content.
 - **The journal still carries the shape of every turn.** Timings, wake
   events, tool markers, lock transitions and errors are logged whatever
   `logSpeech` says, because nearly every bug here was found from those rather
@@ -128,6 +128,19 @@ even if nothing malicious is ever hosted.
   rather than by what it returns -- and it is the larger instance of it.
   Inferring credential paths from shell is declined on purpose: `cd /; rm -rf .`
   names no file either, so prefix matching buys confidence rather than safety.
+- **A card answered "yes" is checked, not proven (M7).** The daemon accepts
+  an allow only from a process the live Omarchy shell started itself,
+  reading the shell's own pipe, with the card's one-use nonce, while the
+  screen is unlocked; anything else denies the card. That defeats a
+  written file, `agentvoice permit ID allow` from an agent or a terminal,
+  a client started from an agent's tree, a second shell with its own
+  config, and a replay. It does not defeat a process running as you that
+  sets out to: drop a plugin into `~/.config/omarchy/plugins`, edit this
+  plugin's QML, inject input through the compositor's virtual keyboard or
+  pointer, or race the overlay's pipes through `/proc/PID/fd`. The orders
+  guard asks about the plain forms of those at every level, and below
+  Trusted every command is a question; a Trusted agent can get past it.
+  A way to get a yes past the checks *without* one of those is a report.
 - **The protected-file list is names and locations.** A content search and a
   direct read now get the same answer for the same bytes, which is what the
   list is for. It will not recognise a `prod-dump.sql` full of passwords, and

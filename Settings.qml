@@ -64,9 +64,16 @@ Item {
   property string communalTab: "rules"
   property var request: ({})
   property int secondsLeft: 0
-  // True once a verdict has been written for the request on screen, so
-  // closing the card does not write a second one.
+  // True once a verdict has been sent for the request on screen, so
+  // closing the card does not send a second one.
   property bool answered: false
+  // Phase M7: an allow goes to the daemon, which checks where it came from
+  // and may refuse it. The card stays up until it says, so a refusal is
+  // seen rather than an Allow that silently became a no.
+  property string answerFor: ""
+  property string answerVerdict: ""
+  property string answerNote: ""
+  property bool answerFailed: false
 
   // Shares the [menu] surface tokens, so themes that style the menu style
   // this too.
@@ -587,6 +594,11 @@ Item {
     { label: "Copilot", value: "copilot" },
     { label: "Endpoint", value: "endpoint" }
   ]
+  // Allow is offered only for a card the daemon handed this panel with its
+  // one-use nonce (cards.py, phase M7), and only once.
+  readonly property bool mayAllow: !answered && request.verified === true &&
+                                   /^[0-9a-f]{32}$/.test(String(request.nonce || ""))
+
   // Who is asking, by name. The hook sends the main agent's name as `label`
   // with no `who`; an extra agent has both.
   function askerName() {
@@ -843,6 +855,10 @@ Item {
       request = ({})
       secondsLeft = 0
       answered = false
+      answerFor = ""
+      answerVerdict = ""
+      answerNote = ""
+      answerFailed = false
       // Asked for by id. The hook names the request it is summoning us
       // about, and taking "the newest" instead meant that a second question
       // arriving first put the wrong command on screen above the wrong
@@ -1002,20 +1018,91 @@ Item {
   // the HUD's own notes say those draw over the lock screen -- which with
   // this page open would put the whole session's conversation above a
   // locked machine. The Overview shows the last exchange, so it goes too.
-  onVStateChanged: if (vState === "locked" && opened && mode !== "permission") close()
-
-  function answer(verdict) {
-    if (!request || !request.id) { close(); return }
-    permit.command = ["agentvoice", "permit", String(request.id), verdict]
-    permit.running = true
-    answered = true
-    dismiss()
+  // A permission card goes as well, as a no (phase M7): it would show the
+  // command over the lock screen, and the daemon refuses an allow while
+  // locked anyway, so a click there could only be somebody else's.
+  onVStateChanged: if (vState === "locked" && opened) {
+    if (mode === "permission") dismiss()
+    else close()
   }
 
-  Process { id: permit }
+  // The verdict goes on argv, which nothing but the shell can set; the
+  // card's one-use nonce and digest go on stdin, never argv (/proc/PID/
+  // cmdline is readable by every local account). The daemon accepts an
+  // allow only from a process this shell started itself, with stdin a pipe
+  // this shell holds (cards.py). One Process per answer: setting `running`
+  // on one that is still sending an earlier answer does nothing, and that
+  // answer would be lost.
+  function answer(verdict) {
+    if (!request || !request.id) { close(); return }
+    if (answered) return
+    answered = true
+    var cid = String(request.id)
+    answerFor = cid
+    answerVerdict = verdict
+    answerFailed = false
+    answerNote = verdict === "deny" ? "" : "Sending your answer…"
+    var proc = permitProc.createObject(root, {
+      cardId: cid,
+      command: ["agentvoice", "permit", cid, verdict],
+      pending: JSON.stringify({ nonce: String(request.nonce || ""),
+                                digest: String(request.digest || "") }) + "\n"
+    })
+    if (!proc) {
+      answerFailed = true
+      answerNote = "Not sent: the answer could not be started. The question times out as a no."
+      return
+    }
+    proc.running = true
+    // A no is safe whether or not it arrives -- silence is a no -- so the
+    // card goes at once, as it always did.
+    if (verdict === "deny") hideCard()
+  }
 
-  // The hook writes the request file and only tells us its id; read the rest
-  // here so the two do not have to agree on a payload schema.
+  function permitReplied(cid, text) {
+    if (cid !== answerFor || answerVerdict === "deny") return
+    var d = {}
+    try { d = JSON.parse(String(text).trim() || "{}") || {} } catch (e) { d = {} }
+    if (d.ok === true) {
+      answerNote = ""
+      if (opened && mode === "permission") hideCard()
+      return
+    }
+    answerFailed = true
+    answerNote = "Not allowed: " + String(d.text || "no answer came back from Agent Voice") +
+                 ". The agent was told no."
+  }
+
+  function permitNeverRan(cid) {
+    if (cid !== answerFor || answerVerdict === "deny") return
+    answerFailed = true
+    answerNote = "Not sent: the agentvoice command could not be run. The question times out as a no."
+  }
+
+  Component {
+    id: permitProc
+    Process {
+      id: proc
+      property string cardId: ""
+      property string pending: ""
+      property bool launched: false
+      stdinEnabled: true
+      onStarted: { proc.launched = true; write(proc.pending); proc.pending = "" }
+      // `running` going false, not onExited: a spawn that never started
+      // emits no exit, and an Allow that did nothing must say so.
+      onRunningChanged: if (!running) {
+        if (!proc.launched) root.permitNeverRan(proc.cardId)
+        proc.destroy(2000)
+      }
+      stdout: StdioCollector {
+        onStreamFinished: root.permitReplied(proc.cardId, String(text))
+      }
+    }
+  }
+
+  // The daemon holds the card and the summon names only its id; ask it for
+  // the rest. This call -- started by the shell itself, its stdout a pipe
+  // back to it -- is the one the daemon gives the card's nonce to (M7).
   Process {
     id: pendingProbe
     stdout: StdioCollector {
@@ -1031,7 +1118,7 @@ Item {
   // Silence is a denial, so the countdown is the honest thing to show.
   Timer {
     interval: 1000
-    running: root.opened && root.mode === "permission"
+    running: root.opened && root.mode === "permission" && !root.answered
     repeat: true
     onTriggered: {
       root.secondsLeft = Math.max(0, root.secondsLeft - 1)
@@ -1048,6 +1135,9 @@ Item {
       answer("deny")
       return
     }
+    hideCard()
+  }
+  function hideCard() {
     if (shell && typeof shell.hide === "function")
       shell.hide((manifest && manifest.id) || "duaneoca.agentvoice")
     else close()
@@ -1456,9 +1546,12 @@ Item {
             Text {
               id: hint
               anchors.verticalCenter: parent.verticalCenter
-              text: root.mode === "permission"
-                    ? "denied in " + root.secondsLeft + "s"
-                    : "esc to close"
+              // Once answered the countdown is over: say what became of it
+              // rather than leave a frozen number (M7).
+              text: root.mode !== "permission" ? "esc to close"
+                    : !root.answered ? "denied in " + root.secondsLeft + "s"
+                    : root.answerFailed ? "denied · esc to close"
+                    : "sending…"
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -1570,12 +1663,16 @@ Item {
               text: "Deny"
               fontFamily: root.fontFamily
               bordered: true
+              enabled: !root.answered
+              opacity: enabled ? 1 : 0.45
               onClicked: root.answer("deny")
             }
             Button {
               text: "Allow once"
               fontFamily: root.fontFamily
               bordered: true
+              enabled: root.mayAllow
+              opacity: enabled ? 1 : 0.45
               onClicked: root.answer("allow")
             }
             // Everything this agent asks for in this conversation, from now
@@ -1589,8 +1686,29 @@ Item {
                            " asks for until the conversation ends"
               fontFamily: root.fontFamily
               bordered: true
+              enabled: root.mayAllow
+              opacity: enabled ? 1 : 0.45
               onClicked: root.answer("allow-session")
             }
+          }
+
+          // Why Allow is greyed out, when the daemon did not hand this card
+          // the nonce an allow needs (M7): a control that does nothing says
+          // why. And what happened to an answer once it was sent.
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            visible: text !== ""
+            text: root.answerNote !== "" ? root.answerNote
+                : (root.request.id && root.request.verified !== true && !root.answered)
+                  ? "Allow cannot be accepted from here: " +
+                    String(root.request.why || "this card was not handed to the Agent Voice panel") +
+                    ". Deny still works, and doing nothing is a no."
+                  : ""
+            textFormat: Text.PlainText
+            color: (root.answerFailed || root.answerNote === "") ? root.urgent : root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
           }
 
           Text {

@@ -313,12 +313,17 @@ def test_the_conversation_page_reads_the_file_the_daemon_writes():
 
 def test_the_conversation_page_closes_when_the_screen_locks():
     """The conversation, and the Overview's last exchange, are on a surface
-    that draws over the lock screen. Everything but a permission prompt goes:
-    the prompt is a question with a countdown, and silence denies it."""
+    that draws over the lock screen, so they go. Since phase M7 a permission
+    prompt goes too, as a no: it would show the command over the lock
+    screen, and the daemon refuses an allow while locked anyway."""
     handler = SETTINGS[SETTINGS.index("onVStateChanged:"):]
-    handler = handler[:handler.index("\n")]
+    handler = handler[:handler.index("\n  }\n")]
     assert '"locked"' in handler and "close()" in handler
-    assert 'mode !== "permission"' in handler
+    assert 'mode === "permission"' in handler and "dismiss()" in handler
+    # dismiss() on an unanswered card is a deny, never a hide alone.
+    body = SETTINGS[SETTINGS.index("function dismiss()"):]
+    body = body[:body.index("\n  }")]
+    assert 'answer("deny")' in body
 
 
 def _blocks(src: str, opener: str) -> list[str]:

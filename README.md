@@ -805,10 +805,24 @@ conversation.
 
 A spoken sentence should not be able to edit files unchallenged. For
 Claude Code, a PreToolUse hook passed through `--settings` receives each
-tool call, writes it to the runtime directory, summons the overlay and
-waits. The overlay shows the tool and the command verbatim with Deny,
+tool call, hands it to the daemon, which summons the overlay, and waits.
+The overlay shows the tool and the command verbatim with Deny,
 Allow once, and a countdown; silence denies. Read-only tools are never
 asked about, because a prompt on every Read would train you to say yes.
+
+The answer goes back to the daemon over its socket, and since M7 only
+the overlay can say yes. The daemon checks with the kernel which process
+sent it: one the running Omarchy shell started itself, reading the
+shell's own pipe, carrying the one-use code the daemon handed that card.
+A yes from anywhere else, such as `agentvoice permit ID allow` typed in a
+terminal or run by an agent, is refused and the question is denied. A no
+is taken from anyone. A card cannot be answered while the screen is
+locked, and locking the screen denies it. This stops an agent answering
+its own question the easy ways. It does not stop a program running as
+you that sets out to beat it: one that drops a plugin into the shell, fakes
+input, or rewrites this plugin. Below Trusted an agent cannot do any of
+those without asking you first. At Trusted it can, so a question put to
+you about a Trusted agent's work is advisory, not a guarantee.
 
 Not `--permission-prompt-tool`: that flag is accepted by the CLI and
 does load the MCP server, but is never consulted -- tested against

@@ -63,6 +63,21 @@ def _no_recorder_probe(monkeypatch):
                         lambda self: self.locked)
 
 
+@pytest.fixture(autouse=True)
+def card_desk(monkeypatch):
+    """A fresh in-process desk for approval cards (phase M7), as the daemon
+    installs one: `permission_hook.ask_card` posts to it instead of a socket.
+    Nothing is summoned -- the ids it would have summoned are kept in
+    `summoned` -- and the screen is unlocked. tests/cardhelp.py answers its
+    cards the way the overlay does."""
+    import cards
+    desk = cards.Desk(summon=None, is_locked=lambda: False)
+    desk.summoned = []
+    desk.summon = desk.summoned.append
+    monkeypatch.setattr(cards, "LOCAL_DESK", desk)
+    return desk
+
+
 @pytest.fixture
 def sandbox() -> Path:
     """The scratch root the XDG variables point into."""

@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+import cardhelp
 import permission_hook as hook
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -35,15 +36,12 @@ def isolated(tmp_path, monkeypatch):
 
 
 def answer(body: dict):
-    """Answer the next request the way `agentvoice permit` would."""
-    def run():
-        deadline = time.time() + 5
-        while time.time() < deadline:
-            for req in hook.PENDING.glob("*.request"):
-                (hook.PENDING / f"{req.stem}.response").write_text(json.dumps(body))
-                return
-            time.sleep(0.02)
-    threading.Thread(target=run, daemon=True).start()
+    """Answer the next card the way the overlay would (phase M7: through the
+    desk, with the card's nonce)."""
+    import cards
+    verdict = ("allow-session" if body.get("session") is True else "allow") \
+        if body.get("allow") is True else "deny"
+    cardhelp.answer_after(cards.LOCAL_DESK, 0.0, verdict)
 
 
 def asks(tool="Bash", cmd="rm -rf build", session=SID) -> bool:
@@ -61,7 +59,8 @@ def test_allow_all_covers_the_rest_of_the_conversation():
     assert hook.decide("Bash", {"command": "rm -rf build"}, SID) == ("allow", "")
     assert hook.decide("Write", {"file_path": "/tmp/x"}, SID) == ("allow", "")
     assert hook.decide("Read", {"file_path": str(Path.home() / ".ssh/id_rsa")}, SID) == ("allow", "")
-    assert not list(hook.PENDING.glob("*.request"))
+    import cards
+    assert len(cards.LOCAL_DESK.summoned) == 1      # only the first was asked
 
 
 def test_allow_once_grants_nothing_more():
@@ -70,24 +69,27 @@ def test_allow_once_grants_nothing_more():
     assert asks()
 
 
-def test_the_prompt_offers_it_only_with_a_conversation_to_scope_it_to():
+def test_the_prompt_offers_it_only_with_a_conversation_to_scope_it_to(card_desk):
     seen = {}
-
-    def peek():
-        deadline = time.time() + 3
-        while time.time() < deadline:
-            for req in hook.PENDING.glob("*.request"):
-                seen.update(json.loads(req.read_text()))
-                return
-            time.sleep(0.02)
-
     for session, want in ((SID, True), ("", False), ("not-a-uuid", False)):
         seen.clear()
-        t = threading.Thread(target=peek, daemon=True)
-        t.start()
+        t = cardhelp.peek(card_desk, seen)
         hook.decide("Bash", {"command": "ls"}, session)
         t.join()
         assert seen.get("sessionWide") is want, session
+
+
+def test_allow_all_is_refused_for_a_card_that_did_not_offer_it(card_desk):
+    """Phase M7: the daemon refuses "allow all in this chat" for a card that
+    had no conversation to scope it to -- the answer does not match the
+    question -- and the question is denied, not allowed once."""
+    seen = {}
+    t = cardhelp.answer_after(card_desk, 0.0, "allow-session", seen=seen)
+    decision, reason = hook.decide("Bash", {"command": "ls"}, "")
+    t.join()
+    assert seen.get("sessionWide") is False
+    assert decision == "deny" and "whole chat" in reason
+    assert not hook.granted("")
 
 
 # --- and applies nowhere else ------------------------------------------------------
@@ -201,9 +203,24 @@ def test_the_daemon_forgets_every_grant_when_it_starts(tmp_path, monkeypatch):
     assert wake_listen.forget_chat_grants() == 0
 
 
-def test_the_cli_writes_the_session_answer():
+def test_the_cli_sends_the_session_answer():
+    """The verdict the overlay passes is handed to the daemon as it is, and
+    the daemon turns a checked one into the grant (cards.py, phase M7)."""
     body = (ROOT / "bin" / "agentvoice").read_text()
-    assert "allow-session" in body and '{"allow":true,"session":true}' in body
+    assert "allow|allow-session|deny" in body
+    import cards
+    desk = cards.Desk(summon=lambda cid: None)
+    out = {}
+    t = __import__("threading").Thread(
+        target=lambda: out.update(a=desk.post({"tool": "Bash", "sessionWide": True}, 5)))
+    t.start()
+    import cardhelp
+    card = cardhelp.wait_card(desk)
+    shown = desk.show(card["id"], verified=True)
+    assert desk.answer(card["id"], "allow-session", shown["nonce"], shown["digest"],
+                       verified=True) == (True, "allowed")
+    t.join(5)
+    assert out["a"] == {"allow": True, "session": True}
 
 
 def test_the_prompt_button_sends_it():

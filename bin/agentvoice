@@ -22,7 +22,7 @@
 #   agentvoice calibrate           can this room support barge-in?
 #   agentvoice monitor             live wake-word scores, for tuning
 #   agentvoice voice fetch|sample|remove <voice>   the Voice page's library
-#   agentvoice permit <id> allow|allow-session|deny   answer a pending permission request
+#   agentvoice permit <id> allow|allow-session|deny   answer a pending permission request (an allow only from the overlay)
 #   agentvoice pending             the request waiting for an answer, as JSON
 #   agentvoice endpoint ...        clean, models, test, key: the endpoint editor
 #   agentvoice pass TO [--from ID] < brief   pass the conversation to agent TO
@@ -271,55 +271,45 @@ case "${1:-status}" in
     active && send_command talk-end
     ;;
   permit)
-    # Answer a pending permission request. The overlay calls this; so can you.
+    # Answer a pending permission request. The overlay calls this; a person
+    # at a terminal can still say no with it, and nobody can say yes with it
+    # from anywhere but the overlay (phase M7).
     #   agentvoice permit <id> allow|allow-session|deny
+    # Since M7 the answer goes to the daemon over its card socket, not into a
+    # file any process could write. The daemon checks who sent it: an allow
+    # counts only from a process the live Omarchy shell started itself, with
+    # its stdin a pipe from that shell carrying the card's one-use nonce and
+    # digest -- so the nonce is read from stdin, never argv. An allow from
+    # anywhere else is refused and the question is denied. `exec`, so the
+    # process the daemon checks is the one the overlay started.
     id="${2:-}"; verdict="${3:-deny}"
-    # The id is a filename, so it is checked rather than trusted: the hook
-    # makes it from twelve hex characters, and `../../x` would otherwise write
-    # a .response anywhere it liked.
-    if [[ ! $id =~ ^[0-9a-f]{12}$ ]]; then
-      echo "usage: agentvoice permit <id> allow|deny   (id is 12 hex characters)" >&2
+    # The id is checked rather than trusted, as it always was.
+    if [[ ! $id =~ ^[0-9a-f]{12}$ ]] || [[ ! $verdict =~ ^(allow|allow-session|deny)$ ]]; then
+      echo "usage: agentvoice permit <id> allow|allow-session|deny   (id is 12 hex characters)" >&2
       exit 2
     fi
-    D="$RUNDIR/permissions"
-    # Only a question that is waiting gets an answer. Answering an id that
-    # is not pending left a .response behind for nobody (found in testing:
-    # one from a timed-out card was still there hours later).
-    if [[ ! -f $D/$id.request ]]; then
-      echo "agentvoice: no question $id is waiting" >&2
-      exit 1
-    fi
-    if [[ $verdict == allow ]]; then
-      printf '{"allow":true}' > "$D/$id.response"
-    elif [[ $verdict == allow-session ]]; then
-      # This request, and everything else this agent asks in this
-      # conversation. The hook keeps the grant; a new conversation ends it.
-      printf '{"allow":true,"session":true}' > "$D/$id.response"
-    else
-      printf '{"allow":false,"reason":"denied at the desktop"}' > "$D/$id.response"
-    fi
+    REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+    PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+    [[ -x $PY ]] || { echo "no agentvoice Python at $PY; run install.sh" >&2; exit 1; }
+    exec "$PY" -I "$REPO/daemon/cards.py" answer "$id" "$verdict"
     ;;
   pending)
-    # A permission request waiting for an answer, as JSON.
+    # A permission request waiting for an answer, as JSON; {} when none is.
     #   agentvoice pending <id>   that exact one, so the overlay answers the
     #                             question it was summoned about
     #   agentvoice pending        the newest, for a person at a terminal
-    D="$RUNDIR/permissions"
+    # From the daemon since phase M7. Only the overlay's own call -- a
+    # process the live shell started, its stdout a pipe back to that shell
+    # -- is given the nonce an allow needs; anyone else sees the question.
     want="${2:-}"
+    if [[ -n $want && ! $want =~ ^[0-9a-f]{12}$ ]]; then echo '{}'; exit 0; fi
+    REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+    PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+    [[ -x $PY ]] || { echo '{}'; exit 0; }
     if [[ -n $want ]]; then
-      if [[ ! $want =~ ^[0-9a-f]{12}$ ]]; then echo '{}'; exit 0; fi
-      [[ -r "$D/$want.request" ]] && cat "$D/$want.request" || echo '{}'
-    else
-      # `|| true`, because of `set -euo pipefail`: with no permissions
-      # directory `ls` exits 2, pipefail carries that out of the pipeline, and
-      # a failing command substitution in an assignment ends the script -- so
-      # "nothing is pending" printed nothing at all and exited 2. The overlay
-      # survived it by failing to parse the empty output, which is not the
-      # same as being told there is nothing. Same shape as the jq-exits-2 bug
-      # in install.sh.
-      f=$(ls -t "$D"/*.request 2>/dev/null | head -1) || true
-      if [[ -n ${f:-} && -r ${f:-} ]]; then cat "$f"; else echo '{}'; fi
+      exec "$PY" -I "$REPO/daemon/cards.py" show "$want"
     fi
+    exec "$PY" -I "$REPO/daemon/cards.py" show
     ;;
   calibrate)
     # Whether the user can be heard over the speaker is a property of the

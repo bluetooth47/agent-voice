@@ -3116,25 +3116,21 @@ class Daemon:
         and it is this agent's. True if something was said.
 
         Only ever a fixed sentence and the action's own summary -- never the
-        tool's input, which for a typed action is the text being typed."""
-        from permission_hook import PENDING
+        tool's input, which for a typed action is the text being typed.
+        The cards are the daemon's own since phase M7 (cards.py)."""
         said = self.__dict__.setdefault("_announced", set())
-        try:
-            requests = sorted(PENDING.glob("*.request"))
-        except OSError:
+        desk = getattr(self, "cards", None)
+        if desk is None:
             return False
-        for path in requests:
-            if path.stem in said:
+        for req in desk.pending():
+            cid = str(req.get("id") or "")
+            if not cid or cid in said:
                 continue
-            try:
-                req = json.loads(path.read_text())
-            except (OSError, ValueError):
-                continue
-            if not isinstance(req, dict) or req.get("announce") is not True:
+            if req.get("announce") is not True:
                 continue
             if str(req.get("who") or "") != (p.id or ""):
                 continue
-            said.add(path.stem)
+            said.add(cid)
             summary = ""
             inp = req.get("input")
             if isinstance(inp, dict):
@@ -6657,6 +6653,11 @@ def main() -> int:
         # Not under --simulate: a simulated run is not an agent anybody can
         # talk to, and must not appear in the panel as one.
         panel = daemon.panel = AgentsPanel(enabled=lambda: cfg.get_bool("agentsPanel"))
+        # Phase M7: the approval cards and the socket their answers come back
+        # on. Before any agent can ask; a lock is read from the daemon's own
+        # flag, so a card cannot be answered over the lock screen.
+        import cards
+        daemon.cards = cards.start_desk(is_locked=lambda: daemon.locked)
         # Only for the live loop: a simulated turn has no room to chime into.
         # Built whether or not the setting is on, because it can be switched
         # on while running; rendering the three sounds costs a few ms.
