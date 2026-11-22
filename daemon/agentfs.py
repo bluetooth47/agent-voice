@@ -1052,8 +1052,9 @@ SKILL_BYTES_MAX = 2 * 1024 * 1024
 #: The index a backend with no skills of its own is told (section 3.6).
 SKILL_INDEX_MAX = 1500
 SKILL_INDEX_LINE = 160
-#: Names a folder skill may not take: the built-in Omarchy skill's.
-RESERVED_SKILLS = ("omarchy",)
+#: Names a folder skill may not take: the two Agent Voice builds itself, the
+#: Omarchy commands and (phase M14) how Agent Voice works.
+RESERVED_SKILLS = ("omarchy", "agentvoice")
 _SKILL_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
 _FRONT_KEY = re.compile(r"([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)")
 
@@ -1106,7 +1107,7 @@ def parse_skill(folder: str, text) -> tuple[str, str]:
         return "", ("its folder name must be lower-case letters, digits and "
                     "hyphens, at most 48")
     if folder in RESERVED_SKILLS:
-        return "", f"the name {folder} is the built-in Omarchy skill's"
+        return "", f"the name {folder} is one of Agent Voice's own built-in skills"
     if not isinstance(text, str) or not text.strip():
         return "", "SKILL.md is empty"
     if len(text) > SKILL_MAX:
@@ -1563,12 +1564,15 @@ def plugins_dir() -> Path:
     return paths.DATA_DIR / "agent-plugins"
 
 
-def plugin_dir(agent_id: str, omarchy_root: str | None, off=frozenset()) -> str | None:
+def plugin_dir(agent_id: str, omarchy_root: str | None, off=frozenset(),
+               agentvoice_root: str | None = None) -> str | None:
     """The folder a Claude agent is given with --plugin-dir: the Omarchy
-    skill (from `omarchy_root`, when it is wanted) and every skill this
-    agent is to have, its own and the communal ones, less those switched
-    off for it (`off`, skill_set's: phase M11). When it has no skill of
-    its own or communal one, `omarchy_root` exactly, as before Phase 13.
+    skill (from `omarchy_root`, when it is wanted), the Agent Voice skill
+    (from `agentvoice_root`, phase M14, when it is wanted) and every skill
+    this agent is to have, its own and the communal ones, less those
+    switched off for it (`off`, skill_set's: phase M11). When it has no skill
+    of its own or communal one and only one built-in skill is wanted, that
+    skill's folder exactly, as before Phase 13.
 
     Each file is copied whole, read without following links, with its
     executable bit kept; a skill that changes between the check and the
@@ -1576,14 +1580,15 @@ def plugin_dir(agent_id: str, omarchy_root: str | None, off=frozenset()) -> str 
     me = folder_id(agent_id)
     chosen = [s for s in skill_set(skills(me) if _valid_agent(me) else [],
                                    skills(COMMUNAL), off) if s["delivered"]]
-    if not chosen:
-        return omarchy_root
+    if not chosen and not (omarchy_root and agentvoice_root):
+        return omarchy_root or agentvoice_root
     files: list[tuple[str, bytes, int]] = []
     files.append((".claude-plugin/plugin.json", (json.dumps({
         "name": "agentvoice",
         "version": "1.0.0",
-        "description": "Skills for one Agent Voice agent: the Omarchy commands "
-                       "and the skills in its folder and the communal one.",
+        "description": "Skills for one Agent Voice agent: the Omarchy commands, "
+                       "how Agent Voice works, and the skills in its folder and "
+                       "the communal one.",
     }, indent=2) + "\n").encode(), 0o600))
     if omarchy_root:
         src = Path(omarchy_root) / "skills" / "omarchy" / "SKILL.md"
@@ -1591,6 +1596,12 @@ def plugin_dir(agent_id: str, omarchy_root: str | None, off=frozenset()) -> str 
             files.append(("skills/omarchy/SKILL.md", src.read_bytes(), 0o600))
         except OSError:
             pass                        # built at install; none is no skill
+    if agentvoice_root:
+        src = Path(agentvoice_root) / "skills" / "agentvoice" / "SKILL.md"
+        try:
+            files.append(("skills/agentvoice/SKILL.md", src.read_bytes(), 0o600))
+        except OSError:
+            pass                        # built by the daemon; none is no skill
     for s in chosen:
         tree, why = _skill_tree(s["source"], s["name"])
         if why:
@@ -1797,7 +1808,8 @@ def roster(cfg, live_ids=None) -> list[dict]:
 
 #: The three switched tools, in the order the pages list them.
 TOOL_ROWS = {"desktop": "Desktop tools", "browser": "Browser (Claude in Chrome)",
-             "omarchySkill": "Omarchy commands"}
+             "omarchySkill": "Omarchy commands",
+             "agentvoiceSkill": "How Agent Voice works"}
 #: Which programs can take which tool. Held to the adapters by a test:
 #: desktop tools need Agent Voice's MCP server (Claude Code, Codex), the
 #: browser is Claude Code's own, and only Claude Code loads a plugin folder.
@@ -1952,9 +1964,10 @@ def catalog(agent_id: str, cfg) -> dict:
     for key, label in TOOL_ROWS.items():
         why = _why_not(key, program)
         how = ""
-        if key == "omarchySkill" and not why:
+        if key in ("omarchySkill", "agentvoiceSkill") and not why:
             how = ("Loaded as a skill when a request needs it." if program in PLUGIN_PROGRAMS
-                   else "A list of the commands, in what it is told.")
+                   else "A list of the commands, in what it is told." if key == "omarchySkill"
+                   else "One line saying where to read it, in what it is told.")
         tools.append({"key": key, "label": label, "choice": choices[key],
                       "global": cfg.get_bool(TOOL_GLOBALS[key]), "on": switched[key],
                       "can": not why, "why_not": why, "how": how,
@@ -2097,6 +2110,9 @@ def preview(agent_id: str, cfg, live_ids=None) -> list[dict]:
     if cfg.tools_for(agent_id if me != MAIN else "")["omarchySkill"] and not endpoint:
         out.append({"label": "Omarchy commands and keybindings", "source": "built in",
                     "text": ""})
+    # Phase M14: how Agent Voice itself works, when switched on for it.
+    if cfg.tools_for(agent_id if me != MAIN else "")["agentvoiceSkill"] and not endpoint:
+        out.append({"label": "How Agent Voice works", "source": "built in", "text": ""})
     if p["roster"]:
         out.append({"label": "Other agents here", "source": "each agent's role.md",
                     "text": "\n".join(p["roster"])})

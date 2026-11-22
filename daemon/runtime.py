@@ -66,7 +66,7 @@ SPEED_MIN, SPEED_MAX = 50, 200
 #: The per-agent tool switches (merged plan, Phase 13, section 3.4), each
 #: named by its own key and following the global setting it overrides.
 TOOL_GLOBALS = {"desktop": "desktopTools", "browser": "browserTools",
-                "omarchySkill": "omarchySkill"}
+                "omarchySkill": "omarchySkill", "agentvoiceSkill": "agentvoiceSkill"}
 #: What each switch may say. Anything else, a missing key or a map that is
 #: not a map reads as "inherit": the global setting decides, as it did
 #: before the switches existed.
@@ -334,6 +334,10 @@ DEFAULTS = {
     # person's own signed-in browser.
     "browserTools": False,
     "omarchySkill": True,
+    # Phase M14: the skill that tells agents how Agent Voice itself works
+    # (agentvoice_skill.py). On: it explains, it starts nothing. An agent's
+    # own switch beats it. An unreadable value reads as off (get_bool).
+    "agentvoiceSkill": True,
     # The main agent's own tool switches (merged plan, Phase 13): a map of
     # desktop / browser / omarchySkill to inherit, on or off. Extra agents
     # keep theirs in their entry, as `tools`.
@@ -455,6 +459,7 @@ TOML_ALIASES = {
     "desktopTools": ("agent", "desktop_tools"),
     "browserTools": ("agent", "browser_tools"),
     "omarchySkill": ("agent", "omarchy_skill"),
+    "agentvoiceSkill": ("agent", "agentvoice_skill"),
     "mainTools": ("agent", "main_tools"),
     "mainSkillsOff": ("agent", "main_skills_off"),
     "mainNotesWrite": ("agent", "main_notes_write"),
@@ -890,6 +895,13 @@ class Config:
             off = None
         if off is not None and "omarchy" in off:
             out["omarchySkill"] = False
+        # Likewise the Agent Voice skill (phase M14): its name is "agentvoice".
+        if off is not None and "agentvoice" in off:
+            out["agentvoiceSkill"] = False
+        # Settings that cannot be read: nobody's decision is behind it, so
+        # the new skill is not given (Appendix A: unreadable reads as off).
+        if not self.settings_readable():
+            out["agentvoiceSkill"] = False
         return out
 
     def tool_switches(self, agent_id: str | None) -> tuple[dict, dict]:

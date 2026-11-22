@@ -580,6 +580,23 @@ and Copilot get a shorter list in their instructions. With it, Claude
 named three version-specific commands exactly; without it, one
 (FINDINGS §31).
 
+**Agent Voice skill** (on) tells agents how Agent Voice itself works, so
+"how do I keep the mic open?" is answered from a reference and not from
+guessing or reading the source. It is built by the daemon from the same
+tables it matches against: the spoken-command table (each phrase, what it
+does, where in a sentence it counts, and the mode in force), the wake
+phrases of the agents that are on, every setting with the page it is on, the
+files, and what an agent cannot do for itself (a terminal handoff ends the
+turn it is said in, so the agent gives you the phrase). It is built again
+when a command, a wake phrase, a setting or the mode changes. It **explains
+and starts nothing**: it never teaches `agentvoice permit`, a settings
+write, or anything the orders guard asks about, and the daemon refuses to
+write it if it would. Claude Code loads it as a skill beside the Omarchy
+one, whatever the Omarchy switch says; Codex, Gemini, Antigravity and Copilot
+are told one line saying where to read it; an endpoint gets nothing. Its
+switch is on Communal → Tools, and each agent's own is on its Tools & skills
+tab. `agentvoice` is now a reserved skill name, like `omarchy`.
+
 ### Tools found on this machine
 
 Agent Voice looks for the MCP servers your coding agents are set up with --

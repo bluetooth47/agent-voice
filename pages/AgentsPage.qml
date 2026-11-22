@@ -223,7 +223,8 @@ Column {
   readonly property var toolGlobals: ({
     desktop: s.setting("desktopTools", false) === true,
     browser: s.setting("browserTools", false) === true,
-    omarchySkill: s.setting("omarchySkill", true) === true
+    omarchySkill: s.setting("omarchySkill", true) === true,
+    agentvoiceSkill: s.setting("agentvoiceSkill", true) === true
   })
   readonly property var sharedTools: s.setting("sharedTools", {})
   // Leave out the keys for the notes and collaboration defaults.

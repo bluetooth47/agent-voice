@@ -408,6 +408,7 @@ def test_the_cli_preview_names_each_piece_and_its_source(cfg_factory, monkeypatc
     assert [x["label"] for x in got] == ["Spoken style", "Rules for every agent",
                                           "Standing instructions",
                                           "Omarchy commands and keybindings",
+                                          "How Agent Voice works",
                                           "Other agents here"]
     assert got[-1]["text"] == R("Theo", "theo")
     assert got[2]["source"] == "agents/sora/instructions.md"

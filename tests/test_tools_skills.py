@@ -70,7 +70,7 @@ def tree(root) -> dict[str, str]:
 def test_inherit_follows_the_global_setting_for_every_agent(cfg_factory):
     cfg = cfg_factory(desktopTools=True, browserTools=False, omarchySkill=True,
                       voiceAgents=[{"name": "sora", "id": "sora"}])
-    want = {"desktop": True, "browser": False, "omarchySkill": True}
+    want = {"desktop": True, "browser": False, "omarchySkill": True, "agentvoiceSkill": True}
     assert cfg.tools_for("") == want
     assert cfg.tools_for("main") == want
     assert cfg.tools_for("sora") == want
@@ -81,8 +81,10 @@ def test_an_agents_own_switch_beats_the_global_one(cfg_factory):
                       mainTools={"browser": "off"},
                       voiceAgents=[{"name": "sora", "id": "sora",
                                     "tools": {"desktop": "off", "omarchySkill": "on"}}])
-    assert cfg.tools_for("") == {"desktop": True, "browser": False, "omarchySkill": False}
-    assert cfg.tools_for("sora") == {"desktop": False, "browser": True, "omarchySkill": True}
+    assert cfg.tools_for("") == {"desktop": True, "browser": False, "omarchySkill": False,
+                                 "agentvoiceSkill": True}
+    assert cfg.tools_for("sora") == {"desktop": False, "browser": True, "omarchySkill": True,
+                                     "agentvoiceSkill": True}
 
 
 def test_a_switched_off_agent_keeps_its_switches(cfg_factory):
@@ -237,7 +239,8 @@ def test_a_folded_or_quoted_description_is_read():
     ("w", "---\nname: w\ndescription: " + "d" * 301 + "\n---\n", "longer than 300"),
     ("w", "---\nname: w\ndescription: x\n---\n" + "y" * 20_001, "longer than 20000"),
     ("w", "", "empty"),
-    ("omarchy", "---\nname: omarchy\ndescription: x\n---\n", "built-in Omarchy"),
+    ("omarchy", "---\nname: omarchy\ndescription: x\n---\n", "own built-in skills"),
+    ("agentvoice", "---\nname: agentvoice\ndescription: x\n---\n", "own built-in skills"),
     ("Bad_Name", "---\nname: Bad_Name\ndescription: x\n---\n", "folder name"),
 ])
 def test_a_malformed_skill_names_its_problem(folder, text, why):
@@ -506,8 +509,8 @@ def test_the_roster_says_what_each_agent_can_use_and_follows_a_switch(cfg_factor
     cfg = cfg_factory(browserTools=True, desktopTools=True, mainProgram="claude",
                       voiceAgents=agents)
     by = {a["id"]: a for a in agentfs.roster(cfg, live_ids={"main", "sora", "hazel"})}
-    assert by["sora"]["tools"] == ["desktop", "browser", "omarchySkill"]
-    assert by["hazel"]["tools"] == ["desktop", "omarchySkill"]     # no Chrome for Codex
+    assert by["sora"]["tools"] == ["desktop", "browser", "omarchySkill", "agentvoiceSkill"]
+    assert by["hazel"]["tools"] == ["desktop", "omarchySkill", "agentvoiceSkill"]     # no Chrome for Codex
     assert by["sora"]["skills"] == ["pirate", "shared"]
     assert by["main"]["skills"] == ["shared"]                      # not Sora's
     agents[0]["tools"] = {"browser": "off"}
@@ -571,7 +574,7 @@ def test_the_cli_catalog_is_json(tmp_path):
     out = cli("catalog", "main", "--json", env=env)
     assert out.returncode == 0, out.stderr
     got = json.loads(out.stdout)
-    assert [t["key"] for t in got["tools"]] == ["desktop", "browser", "omarchySkill"]
+    assert [t["key"] for t in got["tools"]] == ["desktop", "browser", "omarchySkill", "agentvoiceSkill"]
 
 
 def test_the_cards_copy_of_the_program_table_matches_agentfs():

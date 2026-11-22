@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO / "daemon"))
 
 import adapters  # noqa: E402
 import agentfs  # noqa: E402
+import agentvoice_skill  # noqa: E402
 import omarchy_skill  # noqa: E402
 import runtime  # noqa: E402
 from adapters.base import Adapter, INSTRUCTIONS_HEAD, SPOKEN_STYLE  # noqa: E402
@@ -69,8 +70,9 @@ def offline(program: str, endpoint: dict | None) -> Adapter | None:
 def claude_plugin() -> dict:
     """What Claude gets instead of skill text: the plugin's SKILL.md, whose
     front matter is always in context and whose body is read on demand."""
-    root = omarchy_skill.plugin_dir()
-    files = sorted(Path(root).glob("skills/*/SKILL.md")) if root else []
+    files = []
+    for root in (omarchy_skill.plugin_dir(), agentvoice_skill.plugin_dir()):   # M14: both
+        files += sorted(Path(root).glob("skills/*/SKILL.md")) if root else []
     out = {}
     for f in files:
         try:
@@ -99,7 +101,11 @@ def main(argv=None) -> int:
 
     cfg = runtime.Config()
     skill_on = cfg.get_bool("omarchySkill")
-    skill_text = omarchy_skill.instructions() if skill_on else ""
+    av_on = cfg.get_bool("agentvoiceSkill")
+    # What a backend with no skill loader is told: the Omarchy commands, then
+    # (M14) the one line that says where Agent Voice's own reference is.
+    skill_text = "\n\n".join(t for t in (omarchy_skill.instructions() if skill_on else "",
+                                         agentvoice_skill.instructions() if av_on else "") if t)
     # Where the daemon reads them from (Phase 10): the folder's file, the old
     # setting only while that is missing.
     main_instr = agentfs.instructions_for("", cfg["agentInstructions"])
@@ -107,7 +113,9 @@ def main(argv=None) -> int:
     parts = {"spoken_style": len(SPOKEN_STYLE),
              "instructions_head": len(INSTRUCTIONS_HEAD),
              "omarchy_skill_text": len(skill_text),
-             "omarchy_skill_on": skill_on}
+             "omarchy_skill_on": skill_on,
+             "agentvoice_skill_text": len(agentvoice_skill.instructions()) if av_on else 0,
+             "agentvoice_skill_on": av_on}
 
     per_backend = {name: size(ad, main_instr, skill_text)
                    for name, ad in backends()}

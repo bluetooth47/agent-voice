@@ -88,6 +88,7 @@
       "desktopTools": false,
       "browserTools": false,
       "omarchySkill": true,
+      "agentvoiceSkill": true,
       "mainTools": {},
       "sharedTools": {},
       "mainSkillsOff": [],
@@ -625,6 +626,13 @@
         "label": "Omarchy skill",
         "defaultValue": true,
         "description": "Tell agents the exact omarchy commands this machine has (scratchpads, menus, screenshots, recording, themes, keybindings), built from what is installed."
+      },
+      {
+        "key": "agentvoiceSkill",
+        "type": "bool",
+        "label": "Agent Voice skill",
+        "defaultValue": true,
+        "description": "Let agents look up how Agent Voice works (its spoken commands, wake phrases and settings), built from its own tables. It explains; it starts nothing."
       },
       {
         "key": "mainNotesWrite",

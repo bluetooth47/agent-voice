@@ -1377,8 +1377,8 @@ Item {
     root.chooseVoice(v)
   }
   // One agent's tool switch (master plan, M10): the one way any page sets
-  // an agent's own tools -- the three built in (desktop, browser,
-  // omarchySkill: "inherit" / "on" / "off") and each tool found on this
+  // an agent's own tools -- the four built in (desktop, browser,
+  // omarchySkill, agentvoiceSkill: "inherit" / "on" / "off") and each tool found on this
   // machine ("mcp:<server>" or "cli:<name>": "inherit" / "off" /
   // "on:<fingerprint>", the definition it approves). "inherit" leaves the key
   // out, so an entry nobody changed stays as it was. Every other field of
@@ -1386,7 +1386,7 @@ Item {
   // build does not know included. Called from Agent details' Tools & skills
   // only (test_tool_controls.py counts the callers).
   function setAgentTool(agentId, key, value) {
-    var builtin = ["desktop", "browser", "omarchySkill"].indexOf(key) >= 0
+    var builtin = ["desktop", "browser", "omarchySkill", "agentvoiceSkill"].indexOf(key) >= 0
     var detected = /^(mcp:[A-Za-z0-9][A-Za-z0-9._:@+-]{0,95}|cli:[a-z0-9][a-z0-9._+-]{0,31})$/.test(key)
     if (!builtin && !detected) return false
     var ok = value === "inherit" || value === "off" ||

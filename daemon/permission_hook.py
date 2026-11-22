@@ -280,7 +280,8 @@ def _sensitive(p: Path) -> bool:
         # skills an agent loads as its own.
         return (_under(p, AGENTS_DIR) or _under(p, COMMUNAL_DIR)
                 or _under(p, DATA_DIR / "agent-plugins")
-                or _under(p, DATA_DIR / "omarchy-skill"))
+                or _under(p, DATA_DIR / "omarchy-skill")
+                or _under(p, DATA_DIR / "agentvoice-skill"))
     except (OSError, ValueError, RuntimeError):
         return True
 
@@ -289,7 +290,7 @@ def _orders_dirs() -> list[Path]:
     """Where the agents' orders live: what every agent is told on every
     turn, the skills they load, and the settings that set their levels."""
     return [AGENTS_DIR, COMMUNAL_DIR, DATA_DIR / "agent-plugins",
-            DATA_DIR / "omarchy-skill", CONFIG_DIR,
+            DATA_DIR / "omarchy-skill", DATA_DIR / "agentvoice-skill", CONFIG_DIR,
             Path.home() / ".config" / "omarchy" / "shell.json"]
 
 

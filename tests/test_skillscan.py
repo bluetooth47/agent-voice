@@ -559,7 +559,7 @@ def test_a_name_clash_and_a_reserved_name_are_refused(tmp_path):
         skillscan.import_skill("claude-user:weekly", "sora")
     assert "Sora's own" in (paths.AGENTS_DIR / "sora/skills/weekly/SKILL.md").read_text()
     write_skill(claude_home() / "skills" / "omarchy", "omarchy")
-    with pytest.raises(agentfs.AgentFsError, match="built-in Omarchy"):
+    with pytest.raises(agentfs.AgentFsError, match="own built-in skills"):
         skillscan.import_skill("claude-user:omarchy", "sora")
 
 

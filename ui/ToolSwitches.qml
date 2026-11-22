@@ -136,7 +136,9 @@ Column {
       tooltip: "Claude in Chrome: your own browser, signed in as you. Sending, buying, posting and the " +
                "like are asked about at every level." },
     { key: "omarchySkill", label: "Omarchy commands", short: "Omarchy commands",
-      tooltip: "This machine's omarchy commands and keybindings, so “open a scratchpad” is one command." }
+      tooltip: "This machine's omarchy commands and keybindings, so “open a scratchpad” is one command." },
+    { key: "agentvoiceSkill", label: "How Agent Voice works", short: "Agent Voice help",
+      tooltip: "A reference on Agent Voice's spoken commands, wake phrases and settings. It explains; it starts nothing." }
   ]
 
   // How many tools found on this machine are switched on for it, by the

@@ -92,13 +92,15 @@ def test_agent_details_writes_no_setting():
 
 def test_communal_writes_only_the_tools_for_every_agent():
     """Communal wrote no setting until M5 moved the three switches for every
-    agent there (bug E), and M10 added the found tools for every agent
-    (`sharedTools`, through one function). Those, and nothing else: the
-    rules, skills and notes are files, written through the CLI."""
+    agent there (bug E), M10 added the found tools for every agent
+    (`sharedTools`, through one function) and M14 the Agent Voice skill's
+    switch. Those, and nothing else: the rules, skills and notes are files,
+    written through the CLI."""
     page = text("pages/CommunalPage.qml")
     keys = re.findall(r'\b(?:put|putMap)\("(\w+)"', page)
-    assert sorted(keys) == ["browserTools", "desktopTools", "omarchySkill", "sharedTools"]
-    assert len(re.findall(r"\b(?:put|putMap)\(", page)) == 4
+    assert sorted(keys) == ["agentvoiceSkill", "browserTools", "desktopTools", "omarchySkill",
+                            "sharedTools"]
+    assert len(re.findall(r"\b(?:put|putMap)\(", page)) == 5
 
 
 def test_the_folder_operations_write_only_the_agent_list():

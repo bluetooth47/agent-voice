@@ -262,6 +262,25 @@ Column {
       onReset: page.s.resetKey("omarchySkill")
     }
 
+    ToggleRow {
+      width: parent.width
+      label: "Agent Voice skill"
+      hint: "Agents can look up how Agent Voice works (its spoken commands, wake phrases and " +
+            "settings) instead of guessing. It explains; it starts nothing."
+      help: "Built from the daemon's own tables, so it matches what is installed, and built " +
+            "again when a command, a wake phrase or a setting changes. Claude Code loads it " +
+            "as a skill for the voice session only; Codex, Gemini, Antigravity and Copilot " +
+            "are told one line saying where to read it. Endpoints get nothing. It never " +
+            "teaches an agent to answer a permission question or change a setting: those " +
+            "stay yours."
+      checked: page.s.setting("agentvoiceSkill", true) === true
+      changed: page.s.changed("agentvoiceSkill")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onToggled: page.s.put("agentvoiceSkill", !checked)
+      onReset: page.s.resetKey("agentvoiceSkill")
+    }
+
     // --- found on this machine (M10) --------------------------------------------
     // Each MCP server in Claude Code's and Codex's own settings, and each
     // command-line tool Agent Voice looks for, with "on for every agent":

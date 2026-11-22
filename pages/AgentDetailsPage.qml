@@ -731,6 +731,7 @@ Column {
                                                          s.setting("desktopTools", false),
                                                          s.setting("browserTools", false),
                                                          s.setting("omarchySkill", true),
+                                                         s.setting("agentvoiceSkill", true),
                                                          s.setting("permissions", {}),
                                                          s.setting("mainProgram", ""),
                                                          s.mainAgent, s.usingEndpoint])
@@ -782,6 +783,10 @@ Column {
                   ? (page.program === "claude"
                      ? "Loaded by Claude Code as a skill, when a request needs one."
                      : "A list of this machine's omarchy commands, given in full.")
+                  : label === "How Agent Voice works"
+                  ? (page.program === "claude"
+                     ? "Loaded by Claude Code as a skill, when a request needs one."
+                     : "One line saying where to read it; it reads the file when asked.")
                   : ""
           }
         })

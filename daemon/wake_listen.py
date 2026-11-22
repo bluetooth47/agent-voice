@@ -70,6 +70,7 @@ import chats as chat_schema  # noqa: E402
 import collab  # noqa: E402
 import narration  # noqa: E402
 import omarchy_skill  # noqa: E402
+import agentvoice_skill  # noqa: E402
 import readout  # noqa: E402
 import try_it  # noqa: E402
 import sessions  # noqa: E402
@@ -3189,11 +3190,38 @@ class Daemon:
             # asking omarchy for its command list takes about a second.
             self._skill_checked = True
             threading.Thread(target=self._rebuild_skill, daemon=True).start()
+        # Phase M14: how Agent Voice works, rebuilt when a command, a wake
+        # phrase or a setting moved (a stat check, no read, when nothing did).
+        if any(self.tools_for(p)["agentvoiceSkill"] for p in agents):
+            self._refresh_agentvoice_skill()
         for p in agents:
             agent = self.agent if p.main else p.agent
             if agent is not None and not p.busy:
                 self.apply_extras(agent, p)
         self.publish_live_tools(agents)
+
+    def _refresh_agentvoice_skill(self) -> None:
+        """Build the Agent Voice skill when it is missing or its inputs
+        changed (agentvoice_skill.stale). A build that is refused or fails
+        keeps the earlier skill, says so once, and is not tried again until
+        the inputs change: it would only fail the same way every poll."""
+        try:
+            if not agentvoice_skill.stale(self.cfg):
+                return
+            now = agentvoice_skill.stamp(self.cfg)
+            if getattr(self, "_av_skill_failed", None) == now:
+                return
+            try:
+                result = agentvoice_skill.build(cfg=self.cfg)
+                self._av_skill_failed = None
+                print(f"  {CYA}agentvoice skill rebuilt: {result['chars']} characters{OFF}",
+                      flush=True)
+            except Exception as e:          # a skill is never worth a turn
+                self._av_skill_failed = now
+                why = str(e) if isinstance(e, agentvoice_skill.SkillRefused) else type(e).__name__
+                print(f"  {YEL}agentvoice skill not rebuilt: {why}{OFF}", flush=True)
+        except Exception:
+            pass
 
     def publish_live_tools(self, agents) -> None:
         """Which MCP servers each Claude agent's last process said it
@@ -3246,7 +3274,8 @@ class Daemon:
         except Exception:
             return None
 
-    def plugin_dir_for(self, p, omarchy_root: str | None) -> str | None:
+    def plugin_dir_for(self, p, omarchy_root: str | None,
+                       agentvoice_root: str | None = None) -> str | None:
         """Persona `p`'s Claude plugin folder (Phase 13): the Omarchy skill
         when `omarchy_root` is given, and its own and the communal skills.
         Built again only when the folders changed (their stamp) or the
@@ -3263,11 +3292,21 @@ class Daemon:
                 revision = (st.st_mtime_ns, st.st_size)
             except OSError:
                 pass
+        # And the Agent Voice skill's (phase M14), rebuilt in place whenever
+        # its inputs change: a new revision is a new plugin folder.
+        av_revision = None
+        if agentvoice_root:
+            try:
+                st = os.stat(Path(agentvoice_root) / "skills" / "agentvoice" / "SKILL.md")
+                av_revision = (st.st_mtime_ns, st.st_size)
+            except OSError:
+                pass
         # The skills switched off for it are in the key too (phase M11): a
         # switch moved is a different folder, and nothing else would notice.
         off = self.skills_off_for(p)
         key = (omarchy_root, revision, getattr(self, "_agentfs_stamp", None),
-               None if off is None else tuple(sorted(off)))
+               None if off is None else tuple(sorted(off)),
+               agentvoice_root, av_revision)
         cache = self.__dict__.setdefault("_plugin_dirs", {})
         have = cache.get(fid)
         now = time.monotonic()
@@ -3275,13 +3314,13 @@ class Daemon:
                 and (have[2] is None or now < have[2])):
             return have[1]
         try:
-            got, retry = agentfs.plugin_dir(fid, omarchy_root, off), None
+            got, retry = agentfs.plugin_dir(fid, omarchy_root, off, agentvoice_root), None
         except Exception as e:
             self.say_once(f"plugins-{fid}", f"  {YEL}skills for “{fid}”: not given "
                                             f"({type(e).__name__}){OFF}")
             # Tried again in a while even with nothing changed: a full disk
             # or a busy file clears on its own (Phase 13 review).
-            got, retry = omarchy_root, now + 30.0
+            got, retry = omarchy_root or agentvoice_root, now + 30.0
         cache[fid] = (key, got, retry)
         return got
 
@@ -3345,6 +3384,7 @@ class Daemon:
         changed = False
         tools = self.tools_for(p)
         skill_on = tools["omarchySkill"]
+        av_on = tools["agentvoiceSkill"]
         if hasattr(agent, "desktop_tools"):
             want = tools["desktop"]
             if agent.desktop_tools != want:
@@ -3354,7 +3394,8 @@ class Daemon:
             if agent.browser_tools != want:
                 agent.browser_tools, changed = want, True
         if hasattr(agent, "skill_dir"):
-            want = self.plugin_dir_for(p, omarchy_skill.plugin_dir() if skill_on else None)
+            want = self.plugin_dir_for(p, omarchy_skill.plugin_dir() if skill_on else None,
+                                       agentvoice_skill.plugin_dir() if av_on else None)
             if agent.skill_dir != want:
                 agent.skill_dir, changed = want, True
         # Phase M11: the skills its CLI finds by itself, switched off where
@@ -3368,7 +3409,10 @@ class Daemon:
             if getattr(agent, "skills_unknown", "") != unknown:
                 agent.skills_unknown, changed = unknown, True
         if getattr(agent, "takes_skill_text", False) and getattr(agent, "has_tools", False):
-            want = omarchy_skill.instructions() if skill_on else ""
+            # The Omarchy commands, then (phase M14) one line saying where to
+            # read how Agent Voice works.
+            want = "\n\n".join(t for t in (omarchy_skill.instructions() if skill_on else "",
+                                           agentvoice_skill.instructions() if av_on else "") if t)
             if getattr(agent, "skill_text", "") != want:
                 agent.skill_text, changed = want, True
         if getattr(agent, "crew_tools", False):
@@ -3413,6 +3457,8 @@ class Daemon:
                     if getattr(agent, a, False)]
             if skill_on and (getattr(agent, "skill_dir", None) or getattr(agent, "skill_text", "")):
                 have.append("omarchy")
+            if av_on and (getattr(agent, "skill_dir", None) or getattr(agent, "skill_text", "")):
+                have.append("agentvoice")
             # Counts only: a server's or a CLI's name can say what the
             # person uses, and names are on the page, not in the journal.
             found = len(getattr(agent, "detected_servers", None) or {}) + \
