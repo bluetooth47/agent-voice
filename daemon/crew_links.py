@@ -236,3 +236,60 @@ def refusal(crew: Crew, frm: str, to: str, ability: str, to_label: str) -> tuple
 def quarantined_line(label: str) -> str:
     """What is said when the person passes a conversation into quarantine."""
     return f"{label} is quarantined. Release it on the Crew map first."
+
+
+# --- what the Crew map may write (M9) -------------------------------------------
+
+def check_write(links_raw, quarantine_raw, known_ids, saved_links=None,
+                saved_quarantine=None) -> tuple[dict | None, str]:
+    """Whether the Crew map may save these two lists, as ({"crewLinks":
+    normalised, "crewQuarantine": ids}, "") or (None, why). Stricter than
+    reading: what the daemon *reads* tolerates an id nobody has (an agent
+    removed or renamed since, which matches nothing), but nothing the page
+    writes may name one -- unless that very link, or that quarantined id,
+    is already saved, so a stale entry the person has not touched does not
+    block every other edit. Beyond parse_links and parse_quarantine:
+
+    - every id is a configured agent (`known_ids`), or carried over;
+    - a quarantined agent has no link out (it starts nothing; quarantining
+      on the page drops them), and a link into one allows only
+      INTO_QUARANTINE -- a list that says more than will happen is not
+      written.
+
+    `agentvoice crew check` runs this with the settings on disk, and the
+    page saves nothing it refuses."""
+    links, why = parse_links(links_raw)
+    if links is None:
+        return None, why
+    held, why = parse_quarantine(quarantine_raw)
+    if held is None:
+        return None, why
+    known = set(known_ids)
+    old_pairs = set()
+    for e in saved_links if isinstance(saved_links, list) else []:
+        if isinstance(e, dict) and valid_id(e.get("from")) and valid_id(e.get("to")):
+            old_pairs.add((e["from"], e["to"]))
+    old_held = {a for a in (saved_quarantine if isinstance(saved_quarantine, list) else [])
+                if valid_id(a)}
+    for i, e in enumerate(links, 1):
+        for end in (e["from"], e["to"]):
+            if end not in known and (e["from"], e["to"]) not in old_pairs:
+                return None, (f"link {i} names {end}, which is no agent here now "
+                              f"(removed, or renamed)")
+        if e["from"] in held:
+            return None, (f"link {i} starts at {e['from']}, which is quarantined and so "
+                          f"starts nothing")
+        if e["to"] in held:
+            extra = [a for a in e["allow"] if a not in INTO_QUARANTINE]
+            if extra:
+                return None, (f"link {i} lets {e['from']} {VERBS.get(extra[0], extra[0])} "
+                              f"{e['to']}, which is quarantined: only ask and delegate go in")
+    for a in raw_order(quarantine_raw):
+        if a not in known and a not in old_held:
+            return None, f"the quarantine names {a}, which is no agent here now"
+    return {"crewLinks": links, "crewQuarantine": raw_order(quarantine_raw)}, ""
+
+
+def raw_order(quarantine_raw) -> list[str]:
+    """A quarantine list as written, each id once, in its first place."""
+    return list(dict.fromkeys(quarantine_raw)) if isinstance(quarantine_raw, list) else []

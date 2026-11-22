@@ -493,6 +493,17 @@ Quarantining it ends its sessions and the chats shared with it; releasing it
 gives none of that back. A pass you start yourself needs no link, but never
 goes into quarantine.
 
+The page opens on a **map**: each agent a box, each link a line with an
+arrow at the agent it reaches and a label saying what it carries (A ask, D
+give a task, M message, P pass, ? asks you first). Drag from an agent's dot
+onto another to link them (the new line allows asking); click a line's label
+to change what it allows, add the reverse or delete it; click an agent to
+see whom it reaches. Drag an agent into the red zone to quarantine it (after
+a confirm that says what it loses) and out again to release it. Boxes stay
+where you put them; that is kept on this computer only and means nothing to
+the daemon. **Table** shows the same list as rows. Either way, nothing is
+saved until the daemon's own rules have checked it.
+
 The daemon enforces all of this, reading the list fresh for every call and
 again before queued work starts and before an answer is handed back. A list
 that cannot be read refuses every call an agent starts, and says so on

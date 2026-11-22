@@ -17,6 +17,14 @@ What has to hold:
 
 The daemon's use of all this -- the four checks, the sweep, quarantine
 carried out -- is driven end to end in test_collab.py, section M8.
+
+And for the drawn map (M9): nothing the page saves skips the daemon's own
+validator (`agentvoice crew check`, crew_links.check_write), which refuses
+duplicates, self-links, ids nobody has (removed or renamed) unless that link
+was already saved, abilities that cannot go into quarantine, links out of
+it, and an oversize list; the page trims what quarantine lets a link carry
+before asking, so the map and the table never trip it by themselves; and
+the layout file the map keeps is never read by the daemon.
 """
 from __future__ import annotations
 
@@ -206,7 +214,7 @@ needs_node = pytest.mark.skipif(NODE is None, reason="node is not installed, so 
 PAGE_FUNCTIONS = ["validId", "parseLinks", "parseQuarantine", "isQuarantined", "linkOf",
                   "effectiveOf", "reachOf", "reachedBy", "everyoneLinks", "copyLinks", "withLink",
                   "withAbility", "withAskFirst", "withoutLink", "quarantineLoses",
-                  "linksQuarantining"]
+                  "linksQuarantining", "trimmed", "withReverse", "parseLayout"]
 
 
 def page_js(calls: str, links_raw, quarantine_raw) -> object:
@@ -296,11 +304,300 @@ def test_the_page_writes_each_key_in_one_function_only():
         assert found == [fn], (key, found)
 
 
+def _body(src: str, name: str) -> str:
+    body = src[src.index(f"function {name}("):]
+    return body[:body.index("\n  }")]
+
+
 def test_quarantine_is_written_before_the_links_it_trims():
-    src = PAGE.read_text()
-    body = src[src.index("function quarantineAgent("):]
-    body = body[:body.index("\n  }")]
+    """applyChecked is where both are written; the quarantine goes first, so
+    the daemon holds the agent apart before its links change."""
+    body = _body(PAGE.read_text(), "applyChecked")
     assert body.index("writeQuarantine(") < body.index("writeLinks(")
+    assert "quarantine.concat([id])" in _body(PAGE.read_text(), "quarantineAgent")
+
+
+# --- M9: nothing is saved that the daemon's validator did not take ----------------------
+
+def test_the_two_writes_are_reached_only_from_what_the_validator_took():
+    """writeLinks and writeQuarantine are called from applyChecked alone;
+    applyChecked from checked() alone, which reads `agentvoice crew check`'s
+    answer; and the only process the page starts with that command is the
+    checker. So the map, the table and anything added later save only a
+    list the daemon's own validator accepted."""
+    from qml_scan import scan
+    s = scan(PAGE)
+    for fn, caller in (("writeLinks", "function applyChecked"), ("writeQuarantine", "function applyChecked"),
+                       ("applyChecked", "function checked"), ("checked", None)):
+        calls = [m.start() for m in re.finditer(r"\b(?:page\.)?" + fn + r"\(", s.nocomment)
+                 if not s.nocomment[max(0, m.start() - 9):m.start()].endswith("function ")]
+        where = [s.handler_of(i) for i in calls]
+        if caller:
+            assert where == [caller] * len(where) and where, (fn, where)
+        else:
+            assert len(calls) == 1, (fn, where)
+    checker = s.nocomment[s.nocomment.index("id: checker"):]
+    checker = checker[:checker.index("\n  }")]
+    assert 'command: ["agentvoice", "crew", "check"]' in checker
+    assert "page.checked(h, text)" in checker
+    assert s.nocomment.count('"crew", "check"') == 1
+
+
+def test_every_edit_goes_through_commit():
+    """Each edit the map or the table makes builds both lists and hands
+    them to commit(); none writes, or queues, by itself."""
+    src = PAGE.read_text()
+    for name in ("quarantineAgent", "releaseAgent", "linkEveryone", "removeLink", "addLink",
+                 "setAbility", "setAskFirst", "addReverse", "clearUnreadable"):
+        body = _body(src, name)
+        assert "commit(" in body, name
+        assert "put(" not in body and "page.queue" not in body, name
+    # And the controls reach the edits, never the writes.
+    from qml_scan import scan
+    ui = scan(PAGE).nocomment
+    ui = ui[ui.index("PageHeader {"):]
+    assert "writeLinks(" not in ui and "writeQuarantine(" not in ui and "put(" not in ui
+
+
+def test_a_refused_check_drops_every_edit_built_on_it():
+    body = _body(PAGE.read_text(), "refused")
+    assert "page.queue = []" in body and "Not saved" in body
+    checked = _body(PAGE.read_text(), "checked")
+    # Anything but {"ok": true, both lists} is a refusal: an empty answer, a
+    # crash, a non-JSON line.
+    assert "d.ok !== true" in checked and "refused(" in checked
+    # A checker that never started says so, and saves nothing.
+    src = PAGE.read_text()
+    proc = src[src.index("id: checker"):]
+    assert "!launched" in proc[:proc.index("stdout:")] and "page.refused(" in proc[:proc.index("stdout:")]
+
+
+KNOWN = ["main", "sora", "hazel"]
+
+
+def test_the_validator_takes_a_good_pair_and_normalises_it():
+    got, why = crew_links.check_write([link("main", "sora", ["pass", "ask"])], ["hazel", "hazel"], KNOWN)
+    assert why == ""
+    assert got == {"crewLinks": [{"from": "main", "to": "sora", "allow": ["ask", "pass"], "askFirst": False}],
+                   "crewQuarantine": ["hazel"]}
+    assert crew_links.check_write([], [], KNOWN) == ({"crewLinks": [], "crewQuarantine": []}, "")
+
+
+@pytest.mark.parametrize("links,q,needle", [
+    ([link("main", "sora"), link("main", "sora", ["delegate"])], [], "repeats a link"),
+    ([link("sora", "sora")], [], "itself"),
+    ([link("main", "nobody")], [], "nobody, which is no agent here now"),
+    ([link("ghost", "main")], [], "ghost, which is no agent here now"),
+    ([link("main", "hazel", ["ask", "message"])], ["hazel"], "only ask and delegate go in"),
+    ([link("main", "hazel", ["pass"])], ["hazel"], "only ask and delegate go in"),
+    ([link("hazel", "main", ["ask"])], ["hazel"], "quarantined and so starts nothing"),
+    ([link("hazel", "main", [])], ["hazel"], "quarantined and so starts nothing"),
+    ([link("main", "sora")] * 0 + [link(f"a{i}", f"b{i}") for i in range(129)], [], "more than 128"),
+    ("all", [], "not a list"),
+    ([link("main", "sora", ["fly"])], [], "no link can"),
+    ([], ["nobody"], "the quarantine names nobody"),
+    ([], "hazel", "not a list"),
+    ([], ["Hazel"], "not an agent id"),
+], ids=["duplicate", "self", "unknown-to", "unknown-from", "message-into-q", "pass-into-q",
+        "out-of-q", "empty-out-of-q", "oversize", "not-a-list", "unknown-ability",
+        "unknown-quarantine", "quarantine-not-a-list", "quarantine-bad-id"])
+def test_the_validator_refuses_and_says_why(links, q, needle):
+    got, why = crew_links.check_write(links, q, KNOWN)
+    assert got is None and needle in why, why
+
+
+def test_an_id_left_by_a_rename_is_refused_unless_it_was_already_saved():
+    """An agent saved without an id takes its id from its wake phrase, so a
+    rename changes it: a link written to the old id is refused, while one
+    already saved naming it (which matches nothing) does not block every
+    other edit until it is deleted."""
+    stale = link("main", "sora")
+    known = ["main", "sky", "hazel"]          # Sora renamed Sky
+    assert crew_links.check_write([stale], [], known)[0] is None
+    got, why = crew_links.check_write([stale, link("main", "hazel")], [], known, saved_links=[stale])
+    assert why == "" and len(got["crewLinks"]) == 2
+    # Saved under the pair, so its abilities may still be changed or trimmed.
+    assert crew_links.check_write([link("main", "sora", ["delegate"])], [], known, saved_links=[stale])[1] == ""
+    # A new link to the same old id is not carried over.
+    assert crew_links.check_write([link("hazel", "sora")], [], known, saved_links=[stale])[0] is None
+    # The quarantine the same way.
+    assert crew_links.check_write([], ["sora"], known)[0] is None
+    assert crew_links.check_write([], ["sora"], known, saved_quarantine=["sora"])[1] == ""
+    # Saved lists that cannot be read carry nothing over.
+    assert crew_links.check_write([stale], [], known, saved_links="junk")[0] is None
+
+
+def test_what_the_validator_takes_the_daemon_reads_the_same():
+    raw = [link("main", "sora", ["delegate", "ask"], askFirst=True), link("sora", "hazel", ["ask"])]
+    got, _ = crew_links.check_write(raw, ["hazel"], KNOWN)
+    crew = Crew.from_raw(got["crewLinks"], got["crewQuarantine"])
+    want = Crew.from_raw(raw, ["hazel"])
+    for a in KNOWN:
+        for b in KNOWN:
+            assert crew.abilities(a, b) == want.abilities(a, b)
+            assert crew.asks_first(a, b) == want.asks_first(a, b)
+
+
+class _Cfg:
+    def __init__(self, agents=("sora", "hazel"), links=None, quarantine=None, readable=True):
+        self._agents = [{"id": a} for a in agents]
+        self._vals = {"crewLinks": links if links is not None else [],
+                      "crewQuarantine": quarantine if quarantine is not None else []}
+        self._readable = readable
+
+    def settings_readable(self):
+        return self._readable
+
+    def all_agents(self):
+        return self._agents
+
+    def __getitem__(self, key):
+        return self._vals[key]
+
+
+def _crew_cli(line, cfg=None, args=("check",)):
+    import io
+
+    import collab
+    out, err = io.StringIO(), io.StringIO()
+    code = collab.cli_crew(list(args), io.StringIO(line), out, err, cfg=cfg or _Cfg())
+    return code, out.getvalue(), err.getvalue()
+
+
+def test_crew_check_says_yes_with_the_normalised_lists():
+    code, out, _ = _crew_cli(json.dumps({"crewLinks": [link("sora", "main", ["pass", "ask"])],
+                                         "crewQuarantine": []}) + "\n")
+    assert code == 0
+    assert json.loads(out) == {"ok": True, "crewLinks": [{"from": "sora", "to": "main", "allow": ["ask", "pass"],
+                                                          "askFirst": False}], "crewQuarantine": []}
+
+
+@pytest.mark.parametrize("line,cfg,needle", [
+    ("", None, "not JSON"),
+    ("not json\n", None, "not JSON"),
+    ('["crewLinks"]\n', None, "not the two crew lists"),
+    ('{"crewLinks": []}\n', None, "not the two crew lists"),
+    ('{"crewLinks": [], "crewQuarantine": [], "more": 1}\n', None, "not the two crew lists"),
+    ('{"crewLinks": [], "crewQuarantine": []}\n', _Cfg(readable=False), "can't be read"),
+    (json.dumps({"crewLinks": [link("main", "zed")], "crewQuarantine": []}) + "\n", None, "zed"),
+    ('{"crewLinks": [' + ",".join(['{"from": "main", "to": "sora", "allow": []}'] * 4000) + '], "crewQuarantine": []}\n',
+     None, "too long"),
+], ids=["empty", "not-json", "a-list", "one-key", "extra-key", "unreadable", "unknown-id", "too-long"])
+def test_crew_check_refuses_on_stdout_and_exits_1(line, cfg, needle):
+    code, out, _ = _crew_cli(line, cfg)
+    d = json.loads(out)
+    assert code == 1 and d["ok"] is False and needle in d["why"], d
+
+
+def test_crew_check_checks_against_what_is_saved():
+    stale = link("main", "gone")
+    line = json.dumps({"crewLinks": [stale], "crewQuarantine": []}) + "\n"
+    assert _crew_cli(line)[0] == 1
+    assert _crew_cli(line, _Cfg(links=[stale]))[0] == 0
+
+
+def test_crew_check_takes_only_check():
+    for args in ((), ("set",), ("check", "extra")):
+        code, out, err = _crew_cli("{}\n", args=args)
+        assert code == 2 and out == "" and "usage" in err
+
+
+def test_agentvoice_crew_check_runs_the_daemons_validator(tmp_path):
+    """Through bin/agentvoice, as the page runs it: stdin in, JSON out, no
+    daemon needed and nothing written."""
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "XDG_CONFIG_HOME": str(tmp_path / "cfg"),
+           "XDG_RUNTIME_DIR": str(tmp_path / "run"), "PYTHONDONTWRITEBYTECODE": "1",
+           "AGENTVOICE_PYTHON": __import__("sys").executable}
+    ok = subprocess.run([str(ROOT / "bin" / "agentvoice"), "crew", "check"], env=env, text=True,
+                        input='{"crewLinks": [], "crewQuarantine": []}\n', capture_output=True, timeout=30)
+    assert ok.returncode == 0 and json.loads(ok.stdout)["ok"] is True, ok.stderr
+    no = subprocess.run([str(ROOT / "bin" / "agentvoice"), "crew", "check"], env=env, text=True,
+                        input=json.dumps({"crewLinks": [link("main", "sora")], "crewQuarantine": []}) + "\n",
+                        capture_output=True, timeout=30)
+    assert no.returncode == 1 and "sora" in json.loads(no.stdout)["why"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == [], "it wrote nothing"
+
+
+@needs_node
+def test_the_page_trims_for_quarantine_and_the_validator_takes_every_edit():
+    """Every edit the page can make, from every starting list, trimmed as
+    commit() trims it, is a pair the validator accepts -- so neither the
+    map nor the table is refused for something the person did not do."""
+    for links_raw, q_raw in CASES[:4]:
+        q = parse_quarantine(q_raw)[0]
+        q = sorted(q) if q is not None else None
+        if q is None or parse_links(links_raw)[0] is None:
+            continue
+        got = page_js(f"""
+          var q = {json.dumps(q)}, ids = ["main", "sora", "hazel"], out = [];
+          page.quarantine = q;
+          var edits = [copyLinks(), everyoneLinks(ids)];
+          for (var i = 0; i < ids.length; i++) for (var j = 0; j < ids.length; j++) {{
+            edits.push(withLink(ids[i], ids[j])); edits.push(withoutLink(ids[i], ids[j]));
+            edits.push(withReverse(ids[i], ids[j])); edits.push(withAskFirst(ids[i], ids[j], true));
+            for (var k = 0; k < page.abilities.length; k++) edits.push(withAbility(ids[i], ids[j], page.abilities[k], true));
+          }}
+          for (var e = 0; e < edits.length; e++) out.push(trimmed(edits[e], q));
+          for (var h = 0; h < ids.length; h++) out.push(trimmed(linksQuarantining(ids[h]), q.concat([ids[h]])));
+          return out;""", links_raw, q_raw)
+        for i, edit in enumerate(got):
+            held = q if i < len(got) - 3 else q + [KNOWN[i - (len(got) - 3)]]
+            assert crew_links.check_write(edit, held, KNOWN)[1] == "", (links_raw, q, edit)
+
+
+@needs_node
+def test_the_reverse_copies_the_link_the_other_way_and_only_once():
+    start = [link("main", "sora", ["ask", "pass"], askFirst=True), link("sora", "hazel", ["ask"]),
+             link("hazel", "sora", ["message"])]
+    got = page_js("""return { rev: withReverse("main", "sora"), again: withReverse("sora", "hazel"),
+                             none: withReverse("main", "hazel"),
+                             trim: trimmed([{from: "main", to: "sora", allow: ["ask", "message"], askFirst: false},
+                                            {from: "sora", to: "main", allow: ["ask"], askFirst: true}], ["sora"]) };""",
+                  start, [])
+    norm = parse_links(start)[0]
+    assert got["rev"] == norm + [{"from": "sora", "to": "main", "allow": ["ask", "pass"], "askFirst": True}]
+    assert got["again"] == norm and got["none"] == norm
+    assert got["trim"] == [{"from": "main", "to": "sora", "allow": ["ask"], "askFirst": False}]
+
+
+@needs_node
+@pytest.mark.parametrize("text,want", [
+    ('{"version": 1, "spots": {"main": {"x": 0.5, "y": 0.25}}}', {"main": {"x": 0.5, "y": 0.25}}),
+    ('{"spots": {"main": {"x": 1.5, "y": 0.2}, "Bad": {"x": 0.1, "y": 0.1}, "ok": {"x": 0, "y": 1}}}',
+     {"ok": {"x": 0, "y": 1}}),
+    ('{"spots": {"main": {"x": "0.5", "y": 0.2}, "sora": [0.1, 0.2]}}', {}),
+    ('{"spots": [1, 2]}', {}),
+    ("not json", {}),
+    ("", {}),
+    ('{"spots": {"main": {"x": 0.1, "y": 0.1}}}' + " " * 70000, {}),
+])
+def test_the_layout_file_is_read_as_positions_or_not_at_all(text, want):
+    assert page_js(f"return parseLayout({json.dumps(text)});", [], []) == want
+
+
+def test_the_daemon_never_reads_the_map_layout():
+    """Where the boxes sit is the page's alone: no daemon module, script or
+    installer names the file, so dragging a box can never change a
+    decision."""
+    hits = []
+    for path in list((ROOT / "daemon").rglob("*.py")) + list((ROOT / "bin").iterdir()) + [ROOT / "install.sh"]:
+        if path.is_file() and "crew-layout" in path.read_text(errors="replace"):
+            hits.append(str(path.relative_to(ROOT)))
+    assert hits == []
+    src = PAGE.read_text()
+    assert '"/agentvoice/crew-layout.json"' in src and "XDG_STATE_HOME" in src
+    assert "crew-layout" not in (ROOT / "manifest.json").read_text()
+
+
+def test_the_map_draws_with_the_crew_edge_and_hands_drops_to_the_page():
+    from qml_scan import scan
+    s = scan(PAGE).nocomment
+    assert "CrewEdge {" in s and "drag.target: node" in s and "preventStealing: true" in s
+    # A drop into the zone only asks: quarantine itself comes from the
+    # confirm (test_confirms holds quarantineAgent to onConfirmed).
+    dropped = _body(PAGE.read_text(), "dropped")
+    assert "quarantineAgent(" not in dropped and "pendingQuarantine = id" in dropped
+    assert "releaseAgent(id)" in dropped
 
 
 def test_the_send_sheet_will_not_send_into_quarantine():

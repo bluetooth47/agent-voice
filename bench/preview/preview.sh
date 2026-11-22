@@ -247,6 +247,11 @@ case "\${1:-}" in
       echo "agentvoice: refused" >&2; exit 1
     fi
     echo '{"ok": true, "text": "allowed"}'; exit 0 ;;
+  crew)
+    # The Crew map's validator (M9): this checkout's, against the scratch
+    # shell.json under --config, so a preview checks what it saves with the
+    # rules the daemon it ships with uses. It writes nothing.
+    exec '$repo/bin/agentvoice' "\$@" ;;
   start|stop|restart|toggle|enable|disable|mic|open-mic|interrupt|lock|unlock|type|talk|talk-end|wake-test|calibrate|pass|tasks|hud-preview)
     printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0 ;;
 esac
@@ -266,7 +271,13 @@ if [ "$scratch" -eq 1 ]; then
   fi
 fi
 
-env "${runtime_env[@]}" "${config_env[@]}" "${data_env[@]+"${data_env[@]}"}" \
+# The Crew map's layout file (M9) lives under XDG_STATE_HOME: a preview
+# drags boxes into a scratch one, never the real one. Commons' theme path
+# is built from $HOME (patched above), so this moves nothing else.
+mkdir -p "$tmp/xdgstate/agentvoice"
+state_env=(XDG_STATE_HOME="$tmp/xdgstate")
+
+env "${runtime_env[@]}" "${config_env[@]}" "${data_env[@]+"${data_env[@]}"}" "${state_env[@]}" \
 PATH="$tmp/bin:$PATH" PREVIEW_ARG="$arg" PREVIEW_WRITES="$out.writes" \
   PREVIEW_DATA="$tmp/data/agentvoice" PREVIEW_AGENTS_DELAY="${PREVIEW_AGENTS_DELAY:-0}" \
   PREVIEW_WAIT="$wait" PREVIEW_GAP="$gap" \
@@ -304,6 +315,8 @@ else
 fi
 
 [ "$live" -eq 1 ] && cp "$tmp/config/omarchy/shell.json" "$out.shell.json.after"
+# The Crew map's layout, if a preview saved one.
+if [ -f "$tmp/xdgstate/agentvoice/crew-layout.json" ]; then cp "$tmp/xdgstate/agentvoice/crew-layout.json" "$out.layout.json"; else rm -f "$out.layout.json"; fi
 
 if [ "$keep" -eq 1 ]; then
   echo "running; Ctrl+C to stop (log: $out.log, writes: $out.writes)" >&2

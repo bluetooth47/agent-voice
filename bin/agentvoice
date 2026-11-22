@@ -27,6 +27,8 @@
 #   agentvoice endpoint ...        clean, models, test, key: the endpoint editor
 #   agentvoice pass TO [--from ID] < brief   pass the conversation to agent TO
 #   agentvoice tasks [cancel ID]   collaboration tasks between agents
+#   agentvoice crew check < lists  may the Crew map save these crew links and
+#                                  this quarantine (one JSON line on stdin)
 #   agentvoice commands [--json]   every spoken command, and the wake phrases
 #   agentvoice try AGENT < draft   one sentence in AGENT's voice, on a draft
 #                                  personality (Agent details' Try it)
@@ -371,6 +373,18 @@ case "${1:-status}" in
     shift
     exec "$PY" "$REPO/daemon/collab.py" tasks "$@"
     ;;
+  crew)
+    # The Crew map's validator (phase M9): one JSON line on stdin,
+    # {"crewLinks": [...], "crewQuarantine": [...]}, judged with the
+    # daemon's own rules against the agents and the lists saved now. Reads
+    # the settings only; no daemon needed, nothing written.
+    #   agentvoice crew check < lists
+    REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+    PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+    [[ -x $PY ]] || PY=python3
+    shift
+    exec "$PY" "$REPO/daemon/collab.py" crew "$@"
+    ;;
   chats)
     # Saved conversations (saveChats). The daemon holds which chat each
     # agent is in, so continuing or starting one is a command to it; the
@@ -484,7 +498,7 @@ case "${1:-status}" in
     active && echo yes || echo no
     ;;
   *)
-    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|try|interrupt|hud-preview|monitor|calibrate|voice|permit|pending|history|chats|pass|tasks|agents|endpoint|open-mic|commands|wake-test|status|is-active]" >&2
+    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|try|interrupt|hud-preview|monitor|calibrate|voice|permit|pending|history|chats|pass|tasks|crew|agents|endpoint|open-mic|commands|wake-test|status|is-active]" >&2
     exit 2
     ;;
 esac

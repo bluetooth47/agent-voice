@@ -5,6 +5,7 @@ Card 1.0 Card.qml
 CardGrid 1.0 CardGrid.qml
 ChatBubble 1.0 ChatBubble.qml
 CompactSelector 1.0 CompactSelector.qml
+CrewEdge 1.0 CrewEdge.qml
 DangerButton 1.0 DangerButton.qml
 DraggableCard 1.0 DraggableCard.qml
 DropLane 1.0 DropLane.qml

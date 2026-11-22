@@ -3023,12 +3023,62 @@ def cli_tasks(args: list[str], out) -> int:
     return 0
 
 
+#: The most `agentvoice crew check` reads: 128 links of four abilities each,
+#: written out, are about 12 KB.
+CREW_CHECK_MAX = 64 * 1024
+
+
+def cli_crew(args: list[str], stdin, out, err, cfg=None) -> int:
+    """`agentvoice crew check`: whether the Crew map may save a pair of
+    lists (phase M9). One JSON line on stdin, `{"crewLinks": [...],
+    "crewQuarantine": [...]}`; on stdout `{"ok": true, "crewLinks": ...,
+    "crewQuarantine": ...}` (normalised, exit 0) or `{"ok": false, "why":
+    ...}` (exit 1). Judged by crew_links.check_write against the agents and
+    the lists saved now, read from the settings on disk; settings that
+    cannot be read refuse. Writes nothing: the page saves what this
+    returned, and the daemon judges every call on what is saved, whoever
+    wrote it."""
+    if args[:1] != ["check"] or len(args) != 1:
+        print("usage: agentvoice crew check < {\"crewLinks\": [...], \"crewQuarantine\": [...]}",
+              file=err)
+        return 2
+
+    def refuse(why: str) -> int:
+        print(json.dumps({"ok": False, "why": why}), file=out)
+        return 1
+
+    raw = stdin.readline(CREW_CHECK_MAX + 1) if stdin is not None else ""
+    if len(raw) > CREW_CHECK_MAX:
+        return refuse("the lists are too long to be crew links")
+    try:
+        asked = json.loads(raw)
+    except ValueError:
+        return refuse("what came in was not JSON")
+    if not isinstance(asked, dict) or set(asked) != {"crewLinks", "crewQuarantine"}:
+        return refuse("what came in was not the two crew lists")
+    if cfg is None:
+        from runtime import Config
+        cfg = Config()
+    if not cfg.settings_readable():
+        return refuse("the settings can't be read, so nothing can be checked against them")
+    known = ["main"] + [spec["id"] for spec in cfg.all_agents()]
+    got, why = crew_links.check_write(asked["crewLinks"], asked["crewQuarantine"], known,
+                                      saved_links=cfg["crewLinks"],
+                                      saved_quarantine=cfg["crewQuarantine"])
+    if got is None:
+        return refuse(why)
+    print(json.dumps({"ok": True, **got}), file=out)
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if argv and argv[0] == "pass":
         return cli_pass(argv[1:], sys.stdin, sys.stderr)
     if argv and argv[0] == "tasks":
         return cli_tasks(argv[1:], sys.stdout)
-    print("usage: collab.py pass TO [--from ID] [--chat ID] < brief | tasks [--json]",
+    if argv and argv[0] == "crew":
+        return cli_crew(argv[1:], sys.stdin, sys.stdout, sys.stderr)
+    print("usage: collab.py pass TO [--from ID] [--chat ID] < brief | tasks [--json] | crew check",
           file=sys.stderr)
     return 2
 
