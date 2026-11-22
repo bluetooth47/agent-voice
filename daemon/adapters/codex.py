@@ -140,6 +140,11 @@ def codex_models() -> list[dict]:
     return out
 
 
+#: runtime.SKILL_REF's pattern, held here so a name the daemon hands over is
+#: checked again before it is written into a `-c` value (phase M11).
+SKILL_REF = r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?::[A-Za-z0-9][A-Za-z0-9._-]{0,63})?"
+
+
 class ConfigUnaccounted(Exception):
     """Codex's config.toml exists but cannot be read whole (phase M10)."""
 
@@ -218,6 +223,15 @@ class Codex(Adapter):
         #: there, and one whose definition no longer matches, is started
         #: with enabled=false: see _argv.
         self.mcp_on: dict = {}
+        #: The skills switched off for this agent where Codex looks (phase
+        #: M11, skillscan.native_off): one `-c skills.config=[...]` with
+        #: enabled=false for each, which Codex merges with any in its
+        #: config.toml (tests/fixtures/skills/spike-m11.json). Its own
+        #: Agent Voice skills reach it as the index, so naming them here
+        #: only keeps a same-named one of Codex's from showing beside them.
+        self.skills_off: tuple = ()
+        #: Why those could not be named, or "": then no turn starts.
+        self.skills_unknown: str = ""
         self.effort = effort
         self.spoken = spoken
         self.cwd = cwd
@@ -297,6 +311,14 @@ class Codex(Adapter):
             # at all ("invalid transport"). Recorded in
             # tests/fixtures/tools/codex-mcp-enabled.json.
             argv += ["-c", f"mcp_servers.{name}.enabled=false"]
+        if self.skills_unknown:
+            raise ConfigUnaccounted(f"{self.skills_unknown} Codex was not started.")
+        off = [n for n in (self.skills_off or ()) if re.fullmatch(SKILL_REF, n)]
+        if off:
+            # A name is quoted as a TOML string; SKILL_REF admits no quote or
+            # backslash, so nothing in it can end the string early.
+            argv += ["-c", "skills.config=[" + ",".join(
+                f'{{name="{n}",enabled=false}}' for n in sorted(off)) + "]"]
         if self.crew_tools:
             # Below Trusted the notes server asks for itself (--guard), on
             # Codex's own level, not on the desktop server's condition: with

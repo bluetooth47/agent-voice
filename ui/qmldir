@@ -30,6 +30,7 @@ SendSheet 1.0 SendSheet.qml
 SettingRow 1.0 SettingRow.qml
 SettingsStore 1.0 SettingsStore.qml
 SidebarNav 1.0 SidebarNav.qml
+SkillCard 1.0 SkillCard.qml
 StageBlock 1.0 StageBlock.qml
 StarterChips 1.0 StarterChips.qml
 StatTile 1.0 StatTile.qml

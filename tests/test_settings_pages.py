@@ -102,6 +102,8 @@ FIELD_HOMES: dict[str, tuple[str | None, str | None]] = {
     # Since M10 through the overlay's setAgentTool, called from Agent
     # details' Tools & skills only (OVERLAY_HOMES below).
     "tools": ("AgentDetailsPage.qml", "mainTools"),
+    # Phase M11: through the overlay's setAgentSkill, the same way.
+    "skillsOff": ("AgentDetailsPage.qml", "mainSkillsOff"),
     "notesWrite": ("AgentsPage.qml", "mainNotesWrite"),
     "collaboration": ("AgentsPage.qml", "mainCollaboration"),
     "acceptsWork": ("AgentsPage.qml", "mainAcceptsWork"),
@@ -129,6 +131,8 @@ OUTSIDE_WRITERS: dict[tuple[str, str], set[str]] = {
     # Phase M10: an agent's own tool switches, the one overlay function the
     # Tools & skills tab writes them through.
     ("Settings.qml", "function setAgentTool"): {"mainTools", "voiceAgents", "field:tools"},
+    # Phase M11: the skills switched off for an agent.
+    ("Settings.qml", "function setAgentSkill"): {"mainSkillsOff", "voiceAgents", "field:skillsOff"},
     ("Settings.qml", "function trainVerifier"): {"engine"},
     ("AgentFolders.qml", "function saveAgents"): {"voiceAgents"},
     ("Panel.qml", "*"): {"voice"},
@@ -140,7 +144,10 @@ DEFAULTS_ONLY = {"agentEfforts", "agentModels", "mainTools", "permissions",
                  "crewLinks", "crewQuarantine",
                  # Phase M10: the found tools for every agent, a map written
                  # on Communal → Tools.
-                 "sharedTools"}
+                 "sharedTools",
+                 # Phase M11: the main agent's skills switched off, a list
+                 # written on Agent details → Tools & skills.
+                 "mainSkillsOff"}
 
 # A key or an agent field whose one writer is an overlay function, and the
 # one page that calls it (phase M10). The page is its home: a call from any
@@ -148,6 +155,8 @@ DEFAULTS_ONLY = {"agentEfforts", "agentModels", "mainTools", "permissions",
 OVERLAY_HOMES: dict[str, tuple[str, str]] = {
     "mainTools": ("setAgentTool", "AgentDetailsPage.qml"),
     "field:tools": ("setAgentTool", "AgentDetailsPage.qml"),
+    "mainSkillsOff": ("setAgentSkill", "AgentDetailsPage.qml"),
+    "field:skillsOff": ("setAgentSkill", "AgentDetailsPage.qml"),
 }
 
 

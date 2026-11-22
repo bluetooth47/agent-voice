@@ -1,0 +1,46 @@
+{
+  "recorded": "2026-11-22, phase M11, on the development machine",
+  "claude_code_version": "2.1.330",
+  "codex_cli_version": "0.171.0",
+  "how": "Claude: `claude -p` (Haiku) with Agent Voice's argv shape (--strict-mcp-config, --no-chrome, a --plugin-dir holding an `agentvoice` plugin with one skill), reading the init event's `skills` list; the user's own settings.json already holds skillOverrides {omarchy: off, diagnose-crash: off}. Codex: `codex debug prompt-input` (renders the model-visible prompt, no model call), reading the 'Available skills' list.",
+  "claude": {
+    "baseline_init_skills": ["minecraft", "omarchy-app", "workmap-pages", "agentvoice:spike-own", "design", "design-sync", "dataviz", "update-config", "verify", "debug", "code-review", "simplify", "batch", "fewer-permission-prompts", "doctor", "loop", "schedule", "claude-api", "run", "run-skill-generator", "plugin-authoring", "anthropic-skills:built-in-browser", "anthropic-skills:chrome-browser", "anthropic-skills:computer-use", "anthropic-skills:deep-research", "anthropic-skills:docs", "anthropic-skills:docx", "anthropic-skills:google-workspace", "anthropic-skills:import-memory", "anthropic-skills:morning", "anthropic-skills:pdf", "anthropic-skills:pptx", "anthropic-skills:setup-writing-style", "anthropic-skills:skill-creator", "anthropic-skills:xlsx"],
+    "sources": {
+      "minecraft, omarchy-app, workmap-pages": "~/.claude/skills (top-level entries, links followed)",
+      "anthropic-skills:*": "~/.claude/skills/synced/<bucket>/<name> (claude.ai account skills)",
+      "agentvoice:*": "the --plugin-dir Agent Voice builds",
+      "the rest": "bundled with Claude Code (not on disk as skills)"
+    },
+    "overrides": [
+      {"settings": {"skillOverrides": {"minecraft": "off", "anthropic-skills:docx": "off", "agentvoice:spike-own": "off", "code-review": "off"}},
+       "gone": ["minecraft", "anthropic-skills:docx", "code-review"], "kept": ["agentvoice:spike-own"]},
+      {"settings": {"skillOverrides": {"docx": "off", "spike-own": "off"}},
+       "gone": ["anthropic-skills:docx"], "kept": ["agentvoice:spike-own"]},
+      {"settings": {"skillOverrides": {"minecraft": "off"}}, "plugin_dir_also_holds": "agentvoice:minecraft",
+       "gone": ["minecraft"], "kept": ["agentvoice:minecraft"]},
+      {"settings": {"skillOverrides": {"no-such-skill-xyz": "off", "minecraft": "off"}},
+       "gone": ["minecraft"], "error": false}
+    ],
+    "skill_tool": [
+      {"settings": {"skillOverrides": {"minecraft": "off"}}, "asked": "Skill(minecraft)",
+       "tool_result": "<tool_use_error>Skill minecraft is disabled for model invocation in skillOverrides settings</tool_use_error>"},
+      {"settings": {}, "asked": "Skill(minecraft)", "tool_result": "Launching skill: minecraft"}
+    ]
+  },
+  "codex": {
+    "baseline_skills": {"~/.codex/skills": ["diagnose-crash", "omarchy", "omarchy-app", "workmap-pages"],
+                        "~/.codex/skills/.system": ["imagegen", "openai-docs", "skill-creator", "skill-installer"],
+                        "plugins": ["documents:documents", "pdf:pdf", "spreadsheets:excel-live-control", "template-creator:template-creator", "visualize:visualize"],
+                        "~/.agents/skills": "read too: with CODEX_HOME set to an empty folder, the links there (diagnose-crash, omarchy, omarchy-app) were still listed, from ~/.agents/skills"},
+    "overrides": [
+      {"c": "skills.config=[{name=\"omarchy-app\",enabled=false}]", "gone": ["omarchy-app"]},
+      {"c": "skills.config=[{path=\"~/.codex/skills/workmap-pages/SKILL.md\",enabled=false}]", "gone": ["workmap-pages"]},
+      {"c": "skills.config=[{name=\"pdf:pdf\",enabled=false},{name=\"imagegen\",enabled=false}]", "gone": ["pdf:pdf", "imagegen"]},
+      {"c": "skills.config=[{name=\"pdf\",enabled=false},{path=\".../workmap-pages/SKILL.md\",enabled=true},{name=\"workmap-pages\",enabled=false}]",
+       "gone": ["workmap-pages"], "kept": ["pdf:pdf"], "note": "a plugin skill needs its full plugin:name; a name that says off beats a path that says on"},
+      {"c": "skills.config=[{name=\"no-such-skill-xyz\",enabled=false},{name=\"omarchy\",enabled=false}]", "gone": ["omarchy"], "error": false},
+      {"config_toml": "[[skills.config]] name=\"aaa-one\" enabled=false", "c": "skills.config=[{name=\"bbb-two\",enabled=false}]",
+       "gone": ["aaa-one", "bbb-two"], "note": "the -c entries are merged with config.toml's, not put in their place"}
+    ]
+  }
+}

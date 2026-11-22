@@ -921,6 +921,64 @@ Column {
     skillsFolder.running = true
   }
 
+  // Phase M11: a skill's switch for this agent, through the one overlay
+  // function that writes skillsOff (FIELD_HOMES). Read again once saved.
+  function switchSkill(name, on) {
+    skillNote = ""
+    if (!page.s.setAgentSkill(page.target, name, on))
+      skillNote = "Not changed: " + page.name + "'s skill switches cannot be read or written."
+  }
+  // One line under a card: why it is not given, or nothing.
+  function skillStatus(x) {
+    if (x.problem !== "") return "Not given to any agent: " + x.problem
+    if (x.delivered) return ""
+    return "Not given: " + (x.why || "not given to " + page.name)
+  }
+  function sizeText(x) {
+    if (!x.size) return x.files ? x.files + " files" : "unknown"
+    var kb = Math.max(1, Math.round(x.size / 1024))
+    return kb + " KB in " + x.files + (x.files === 1 ? " file" : " files")
+  }
+  // The details drop-down: description, where it is, size, problems, what
+  // shadows what, and who gets it.
+  function skillDetails(x, communal) {
+    var out = []
+    if (x.description) out.push({ label: "What it is for", value: x.description })
+    out.push({ label: "Source", value: (x.native === true || x.source_label ? x.source_label + " · " : "") + x.path })
+    if (x.linked === true) out.push({ label: "Note", value: "its folder is a link, which the CLI follows" })
+    if (x.size || x.files) out.push({ label: "Size", value: page.sizeText(x) })
+    if (x.problem) out.push({ label: "Problem", value: x.problem, urgent: true })
+    if (x.copy_problem) out.push({ label: "Cannot be copied in", value: x.copy_problem })
+    if (x.shadowed === true)
+      out.push({ label: "Shadowed", value: communal ? page.name + "'s own skill of this name is given instead"
+                                                    : "an Agent Voice skill of this name is given instead" })
+    if (Array.isArray(x.gets))
+      out.push({ label: "Who gets it", value: x.gets.length > 0 ? x.gets.join(", ") : "no agent" })
+    return out
+  }
+  // Giving a skill found outside Agent Voice to this agent or Communal: a
+  // checked copy (`agentvoice skills import`), run only from the confirm's
+  // onConfirmed (tests/test_confirms.py).
+  property string importing: ""
+  property string importTo: ""
+  function importSkill(id, to) {
+    if (skillImporter.running) return
+    skillNote = ""
+    importing = ""
+    skillImporter.command = ["agentvoice", "skills", "import", id, to]
+    skillImporter.running = true
+  }
+  Process {
+    id: skillImporter
+    stderr: StdioCollector {
+      onStreamFinished: {
+        var t = String(text).trim()
+        page.skillNote = t === "" ? "" : "Not copied: " + t.replace(/^agentvoice skills: /, "").split("\n").pop()
+      }
+    }
+    onRunningChanged: if (!running) { page.s.folders.refresh(); page.loadCatalog() }
+  }
+
   Column {
     id: toolsTab
     width: parent.width
@@ -928,8 +986,21 @@ Column {
     visible: page.tab === "tools"
 
     readonly property var c: page.catalog && page.catalog.agent === page.target ? page.catalog : null
-    readonly property var ownSkills: c ? c.skills.filter(function(x) { return x.source !== "communal" }) : []
+    // Phase M11: its own and those its program finds by itself, in its lane;
+    // the communal ones in theirs; every other agent's lane and Unused from
+    // the same reading (agentfs.catalog's skill_lanes).
+    readonly property var mySkills: c ? c.skills.filter(function(x) { return x.source !== "communal" }) : []
     readonly property var sharedSkills: c ? c.skills.filter(function(x) { return x.source === "communal" }) : []
+    readonly property int nativeCount: mySkills.filter(function(x) { return x.native === true }).length
+    readonly property var otherLanes: c && c.skill_lanes
+                                      ? c.skill_lanes.lanes.filter(function(l) { return l.id !== page.target }) : []
+    readonly property var unused: c && c.skill_lanes ? c.skill_lanes.unused : []
+    // A switch where it would change something: a skill its program can be
+    // given (an endpoint takes none), and a list that can be read.
+    function canSwitch(x) {
+      if (!c || c.skills_readable === false) return false
+      return x.native === true || c.delivery !== "none"
+    }
 
     Text {
       width: parent.width
@@ -1273,77 +1344,243 @@ Column {
       font.family: page.s.fontFamily
       font.pixelSize: Style.font.caption
     }
+    // Phase M11: what a switch does, and what Agent Voice does not switch.
+    // Wrapped, not a one-line Hint: the second half is the honest part.
+    Text {
+      width: parent.width
+      visible: toolsTab.c !== null && (toolsTab.nativeCount > 0 || toolsTab.c.skills_note !== "")
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: (toolsTab.nativeCount > 0
+             ? "Off takes a skill out of what " + (toolsTab.c ? toolsTab.c.program_label : "") +
+               " offers " + page.name + ", wherever it comes from. The file stays where it is, " +
+               "and an agent that reads files can still open it. "
+             : "") + (toolsTab.c ? toolsTab.c.skills_note : "")
+      color: page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+    Text {
+      width: parent.width
+      visible: toolsTab.c !== null && toolsTab.c.skills_readable === false
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: page.name + "'s skill switches cannot be read, so every communal skill and every " +
+            "one its program finds by itself is off for it until they are fixed (its own folder's " +
+            "skills are still given). Fix or remove its skillsOff in shell.json."
+      color: page.s.urgent
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+    Text {
+      width: parent.width
+      visible: toolsTab.c !== null && (toolsTab.c.skills_error !== "" ||
+                                       (toolsTab.c.skills_problems || []).length > 0)
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: toolsTab.c ? [toolsTab.c.skills_error].concat(toolsTab.c.skills_problems || [])
+                           .filter(function(x) { return x !== "" }).join(" · ") : ""
+      color: page.s.urgent
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
 
-    Repeater {
-      model: [
-        { title: page.name + "'s own", items: toolsTab.ownSkills,
-          empty: "None in " + page.name + "'s folder." },
-        { title: "From Communal", items: toolsTab.sharedSkills,
-          empty: "None in the communal folder." }
-      ]
-      Column {
-        required property var modelData
-        width: toolsTab.width
-        spacing: Style.space(4)
-        visible: toolsTab.c !== null
-        Text {
-          text: modelData.title
-          textFormat: Text.PlainText
-          color: page.s.foreground
-          font.family: page.s.fontFamily
-          font.pixelSize: Style.font.caption
-          font.bold: true
-        }
-        Text {
-          visible: modelData.items.length === 0
-          text: modelData.empty
-          textFormat: Text.PlainText
-          color: page.s.dim
-          font.family: page.s.fontFamily
-          font.pixelSize: Style.font.caption
-        }
+    // Every skill on the machine in its owner's lane (master plan, M11):
+    // this agent first, with a switch on each card it would otherwise get;
+    // Communal, with a switch for this agent; the other agents, read only;
+    // and Unused, the skills found outside Agent Voice that no agent gets,
+    // each of which can be given to this agent or Communal as a copy.
+    Flow {
+      id: skillLanes
+      width: parent.width
+      visible: toolsTab.c !== null
+      spacing: Style.space(10)
+      readonly property real laneWidth: width >= Style.space(760) ? (width - spacing) / 2 : width
+
+      DropLane {
+        width: skillLanes.laneWidth
+        laneId: page.target
+        title: page.name
+        subtitle: toolsTab.c && toolsTab.nativeCount > 0
+                  ? "Its own, and those " + toolsTab.c.program_label + " finds by itself."
+                  : "Its own skills folder."
+        count: toolsTab.mySkills.length
+        emptyText: "None in " + page.name + "'s folder" +
+                   (toolsTab.c && toolsTab.c.skills_note !== "" && toolsTab.nativeCount === 0
+                    ? ", and none found for its program." : ".")
+        refuse: function() { return "Moving skills between lanes is not built yet: use Give a copy on an Unused one." }
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
         Repeater {
-          model: modelData.items
+          model: toolsTab.mySkills
+          SkillCard {
+            required property var modelData
+            width: parent.width
+            title: modelData.name
+            subtitle: modelData.description
+            badge: modelData.native === true ? modelData.source_label : ""
+            status: page.skillStatus(modelData)
+            statusUrgent: modelData.problem !== ""
+            dimmed: !modelData.delivered
+            details: page.skillDetails(modelData, false)
+            switchable: toolsTab.canSwitch(modelData)
+            checked: modelData.on === true
+            foreground: page.s.foreground
+            fontFamily: page.s.fontFamily
+            onToggled: function(on) { page.switchSkill(modelData.name, on) }
+            Button {
+              visible: modelData.changed_outside === true
+              text: "Keep"
+              focusable: true
+              enabled: !skillKeeper.running
+              foreground: page.s.foreground
+              fontFamily: page.s.fontFamily
+              fontSize: Style.font.caption
+              tooltipText: "Added or changed outside Settings. It applies already; Keep saves this " +
+                           "version, so the notice goes."
+              onClicked: page.keepSkill(modelData.source, modelData.name, modelData.stamp)
+            }
+          }
+        }
+      }
+
+      DropLane {
+        width: skillLanes.laneWidth
+        laneId: "communal"
+        title: "Communal"
+        subtitle: "Every agent's. The switch is " + page.name + "'s alone."
+        count: toolsTab.sharedSkills.length
+        emptyText: "None in the communal folder."
+        refuse: function() { return "Moving skills between lanes is not built yet: use Give a copy on an Unused one." }
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        Repeater {
+          model: toolsTab.sharedSkills
+          SkillCard {
+            required property var modelData
+            width: parent.width
+            title: modelData.name
+            subtitle: modelData.description
+            status: page.skillStatus(modelData)
+            statusUrgent: modelData.problem !== ""
+            dimmed: !modelData.delivered
+            details: page.skillDetails(modelData, true)
+            switchable: toolsTab.canSwitch(modelData)
+            checked: modelData.on === true
+            foreground: page.s.foreground
+            fontFamily: page.s.fontFamily
+            onToggled: function(on) { page.switchSkill(modelData.name, on) }
+          }
+        }
+      }
+
+      Repeater {
+        model: toolsTab.otherLanes
+        DropLane {
+          required property var modelData
+          width: skillLanes.laneWidth
+          laneId: modelData.id
+          title: modelData.label
+          subtitle: modelData.program_label + (modelData.enabled ? "" : " · switched off") +
+                    (modelData.delivery === "none" ? " · takes no skills" : "") +
+                    ". Its switches are on its own Tools & skills tab."
+          count: modelData.skills.length
+          emptyText: "No skills."
+          refuse: function() { return "Moving skills between lanes is not built yet." }
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          Repeater {
+            model: modelData.skills
+            SkillCard {
+              required property var modelData
+              width: parent.width
+              title: modelData.name
+              subtitle: modelData.description
+              badge: modelData.native === true ? modelData.source_label : ""
+              status: modelData.problem !== "" ? "Not given: " + modelData.problem
+                      : !modelData.delivered ? "Not given: " + (modelData.why || "") : ""
+              statusUrgent: modelData.problem !== ""
+              dimmed: !modelData.delivered
+              details: page.skillDetails(modelData, false)
+              foreground: page.s.foreground
+              fontFamily: page.s.fontFamily
+            }
+          }
+        }
+      }
+
+      DropLane {
+        width: skillLanes.laneWidth
+        laneId: "unused"
+        title: "Unused"
+        subtitle: "No agent gets these. Giving one makes a checked copy; the original stays."
+        count: toolsTab.unused.length
+        emptyText: "Every skill found on this machine is used by an agent."
+        refuse: function() { return "Moving skills between lanes is not built yet." }
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        Repeater {
+          model: toolsTab.unused
           Column {
             required property var modelData
-            width: toolsTab.width
-            spacing: Style.space(2)
-            Text {
+            width: parent.width
+            spacing: Style.space(4)
+            SkillCard {
               width: parent.width
-              wrapMode: Text.WordWrap
-              textFormat: Text.PlainText
-              text: modelData.name + " — " +
-                    (modelData.problem !== "" ? "not given: " + modelData.problem
-                     : modelData.shadowed ? "not given: " + page.name + " has its own of the same name"
-                     : !modelData.delivered ? "not given to " + page.name
-                     : modelData.description)
-              color: modelData.problem !== "" ? page.s.urgent
-                     : modelData.delivered ? page.s.foreground : page.s.dim
-              font.family: page.s.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-            // Made or edited by hand (a skill always is), so it reads as
-            // changed outside Settings until it is kept, as the other files.
-            Flow {
-              width: parent.width
-              visible: modelData.changed_outside === true
-              spacing: Style.space(8)
-              Text {
-                text: "Added or changed outside Settings."
-                color: page.s.dim
-                font.family: page.s.fontFamily
-                font.pixelSize: Style.font.caption
-              }
+              title: modelData.name
+              subtitle: modelData.description
+              badge: modelData.source_label
+              status: modelData.problem !== "" ? modelData.problem
+                      : modelData.copy_problem !== "" ? "Cannot be copied in: " + modelData.copy_problem : ""
+              statusUrgent: modelData.problem !== ""
+              details: page.skillDetails(modelData, false)
+              foreground: page.s.foreground
+              fontFamily: page.s.fontFamily
               Button {
-                text: "Keep"
+                text: "Give a copy to " + page.name + "…"
+                bordered: true
                 focusable: true
-                enabled: !skillKeeper.running
+                enabled: modelData.copy_problem === "" && !skillImporter.running && page.target !== "communal"
                 foreground: page.s.foreground
                 fontFamily: page.s.fontFamily
                 fontSize: Style.font.caption
-                tooltipText: "It applies already. Keep saves this version, so the notice goes."
-                onClicked: page.keepSkill(modelData.source, modelData.name, modelData.stamp)
+                tooltipText: modelData.copy_problem !== "" ? modelData.copy_problem
+                             : "Copies it into " + page.name + "'s skills folder, after asking."
+                onClicked: { page.importing = modelData.id; page.importTo = page.target }
               }
+              Button {
+                text: "Give a copy to Communal…"
+                focusable: true
+                enabled: modelData.copy_problem === "" && !skillImporter.running
+                foreground: page.s.foreground
+                fontFamily: page.s.fontFamily
+                fontSize: Style.font.caption
+                tooltipText: modelData.copy_problem !== "" ? modelData.copy_problem
+                             : "Copies it into the communal skills folder, after asking."
+                onClicked: { page.importing = modelData.id; page.importTo = "communal" }
+              }
+            }
+            // Giving a skill widens what an agent is told, so it asks
+            // first, naming who gets it (master plan, section 7.3). The
+            // copy is made only from onConfirmed.
+            ToolConfirm {
+              visible: page.importing === modelData.id
+              title: page.importTo === "communal"
+                     ? "Give every agent a copy of " + modelData.name + "?"
+                     : "Give " + page.name + " a copy of " + modelData.name + "?"
+              lines: [{ label: "Copied from", value: modelData.path },
+                      { label: "Size", value: page.sizeText(modelData) },
+                      { label: "Who gets it", value: page.importTo === "communal"
+                        ? "Every agent whose program takes skills, unless it switches it off"
+                        : page.name + " only" }]
+              warning: "A skill tells an agent what to do, and its scripts run at the agent's own " +
+                       "permission level. The copy is checked (no links, no hooks, within the size " +
+                       "limits) and kept as it is now; later changes to the original are not copied."
+              confirmText: "Give a copy"
+              foreground: page.s.foreground
+              fontFamily: page.s.fontFamily
+              onConfirmed: page.importSkill(modelData.id, page.importTo)
+              onCancelled: page.importing = ""
             }
           }
         }
@@ -1366,7 +1603,7 @@ Column {
             "“name:” (the folder's name) and “description:” (one line on when to use it, at most " +
             "300 characters), then ---, then the instructions. Scripts beside it are run by the " +
             "agent, never by Agent Voice. One in " + page.name + "'s folder beats a communal one " +
-            "of the same name."
+            "of the same name, and an Agent Voice skill beats one its program finds by itself."
       textFormat: Text.PlainText
       color: page.s.dim
       font.family: page.s.fontFamily
@@ -1382,6 +1619,15 @@ Column {
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
         onClicked: page.openSkills()
+      }
+      Button {
+        text: "Rescan"
+        focusable: true
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        fontSize: Style.font.caption
+        tooltipText: "Look again for skills outside Agent Voice"
+        onClicked: page.loadCatalog()
       }
       Button {
         text: "Communal skills →"

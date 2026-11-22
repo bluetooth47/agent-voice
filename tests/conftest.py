@@ -80,6 +80,11 @@ def _no_real_cli_settings(monkeypatch, tmp_path_factory):
     import tooldetect
     monkeypatch.setattr(tooldetect, "default_path", lambda: "")
     tooldetect._MEMO.clear()
+    # Phase M11: the skills the CLIs find by themselves come from the same
+    # two homes, and from ~/.agents/skills, which is pointed here as well.
+    (base / "agents-skills").mkdir()
+    import skillscan
+    monkeypatch.setattr(skillscan, "agents_dir", lambda r: base / "agents-skills")
 
 
 @pytest.fixture(autouse=True)

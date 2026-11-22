@@ -329,6 +329,11 @@ def _crew_dirs() -> list[Path]:
 #: grants an agent another's chat. The same text match as CARD_WORDS.
 CREW_WORDS = ("agentvoice pass", "collab.py pass", "agentvoice chats share", "agentvoice/crew")
 
+#: Command text that copies a skill into an agent's folder or the communal
+#: one (phase M11): only the person assigns a skill (master plan, 7.3), so
+#: an agent running it is asked at every level. The same text match.
+SKILL_WORDS = ("agentvoice skills import", "skillscan.py import")
+
 
 def _spellings(dirs: list[Path]) -> list[str]:
     """The ways a shell command can name those places: absolute, resolved,
@@ -395,6 +400,9 @@ def orders_write(tool_name: str, tool_input) -> str:
             if frag in cmd or frag in flat:
                 return ("this command could pass work between agents as if you had, "
                         f"stepping round the Crew map ({frag})")
+        for frag in SKILL_WORDS:
+            if frag in cmd or frag in flat:
+                return f"this command gives an agent a skill, which only you do ({frag})"
     return ""
 
 

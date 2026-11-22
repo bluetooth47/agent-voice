@@ -1429,6 +1429,59 @@ Item {
     return true
   }
 
+  // Phase M11: switch one skill on or off for one agent, by name -- its own
+  // copy, the communal one and the one its CLI finds by itself, together.
+  // The one writer of mainSkillsOff and every voiceAgents[i].skillsOff
+  // (FIELD_HOMES), called from Agent details' Tools & skills only. Keeps
+  // every other field and agent as it is. A list that cannot be read (not
+  // a list, or holding something that is no skill name) is left alone:
+  // rewriting it would turn back on whatever it was trying to switch off.
+  function setAgentSkill(agentId, name, on) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(:[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$/.test(String(name)))
+      return false
+    if (on !== true && on !== false) return false
+    function edited(current) {
+      if (current === undefined || current === null) current = []
+      if (!Array.isArray(current) || current.length > 256) return null
+      var out = []
+      for (var k = 0; k < current.length; k++) {
+        var n = current[k]
+        if (typeof n !== "string" ||
+            !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(:[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$/.test(n))
+          return null
+        if (n !== name && out.indexOf(n) < 0) out.push(n)
+      }
+      if (!on) out.push(name)
+      return out.length > 256 ? null : out
+    }
+    if (agentId === "" || agentId === "main") {
+      var mine = edited(root.setting("mainSkillsOff", []))
+      if (mine === null) return false
+      root.put("mainSkillsOff", mine)
+      return true
+    }
+    var list = [], found = false
+    for (var i = 0; i < root.voiceAgents.length; i++) {
+      var a = root.voiceAgents[i] || {}
+      var copy = {}
+      var names = Object.keys(a)
+      for (var j = 0; j < names.length; j++)
+        Object.defineProperty(copy, names[j], { value: a[names[j]], enumerable: true,
+                                                writable: true, configurable: true })
+      copy.id = root.agentId(a)
+      if (copy.id === agentId) {
+        var theirs = edited(a.skillsOff)
+        if (theirs === null) return false
+        copy.skillsOff = theirs
+        found = true
+      }
+      list.push(copy)
+    }
+    if (!found) return false
+    root.put("voiceAgents", list)
+    return true
+  }
+
   // Who speaks in `v` now: "main" and the display names of extra agents.
   function voiceUsers(v) {
     var out = []

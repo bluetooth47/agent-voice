@@ -331,8 +331,10 @@ def _substitute(value, root: str):
     return value
 
 
-def _plugin_servers(roots: Roots, reader: _Reader) -> list[dict]:
-    """The MCP servers of each enabled Claude Code plugin."""
+def enabled_plugins(roots: Roots, reader: _Reader) -> list[tuple[str, Path]]:
+    """Each enabled Claude Code plugin as (its name, its install folder),
+    from settings.json's enabledPlugins and installed_plugins.json. Read
+    only; at most MAX_PLUGINS. The skill scan uses it too (phase M11)."""
     settings = reader.json(roots.claude_dir / "settings.json", follow=True)
     enabled = (settings or {}).get("enabledPlugins") if isinstance(settings, dict) else None
     if not isinstance(enabled, dict):
@@ -342,8 +344,8 @@ def _plugin_servers(roots: Roots, reader: _Reader) -> list[dict]:
     if not isinstance(plugins, dict):
         return []
     out = []
-    for key in sorted(plugins)[:MAX_PLUGINS]:
-        if enabled.get(key) is not True or not isinstance(key, str):
+    for key in sorted(k for k in plugins if isinstance(k, str))[:MAX_PLUGINS]:
+        if enabled.get(key) is not True:
             continue
         entries = plugins[key]
         entries = entries if isinstance(entries, list) else [entries]
@@ -351,8 +353,14 @@ def _plugin_servers(roots: Roots, reader: _Reader) -> list[dict]:
                       and isinstance(e.get("installPath"), str)), None)
         if entry is None:
             continue
-        root = Path(entry["installPath"])
-        plugin = key.split("@", 1)[0]
+        out.append((key.split("@", 1)[0], Path(entry["installPath"])))
+    return out
+
+
+def _plugin_servers(roots: Roots, reader: _Reader) -> list[dict]:
+    """The MCP servers of each enabled Claude Code plugin."""
+    out = []
+    for plugin, root in enabled_plugins(roots, reader):
         table = {}
         mcp = reader.json(root / ".mcp.json", beneath=root)
         if isinstance(mcp, dict):

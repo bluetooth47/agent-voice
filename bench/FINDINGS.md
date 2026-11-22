@@ -1862,3 +1862,65 @@ under the loose median cold. The warm cost was not expected (a warm process
 has started them before the turn); likely the larger tool list each turn
 carries, possibly noise at n=20 -- not investigated further. No gate rests
 on this; it is what a switch costs.
+
+## 45. M11: which skills Claude Code and Codex find by themselves, and how to switch one off
+
+Measured 2026-11-22 on the i7-1185G7 (8 threads) with `claude` 2.1.330
+(Haiku) and `codex-cli` 0.171.0, in a scratch folder. Recordings:
+`tests/fixtures/skills/spike-m11.json` (replayed by `test_skillscan.py`).
+Claude: seven `claude -p` turns with Agent Voice's argv shape
+(`--strict-mcp-config`, `--no-chrome`, a `--plugin-dir` holding an
+`agentvoice` plugin), reading the init event's `skills` list, and two
+with `--tools Skill` asking the model to load one. Codex: `codex debug
+prompt-input`, which renders the model-visible prompt without a model call
+(no credits), reading its "Available skills" list. **Not checked with a
+real Codex turn.**
+
+### What each CLI offers an agent today
+
+| | found by itself |
+|---|---|
+| Claude Code | every skill in `~/.claude/skills` (top-level links followed), the claude.ai account's synced skills (`~/.claude/skills/synced/<bucket>/<name>`, listed as `anthropic-skills:<name>`), enabled plugins' skills (`plugin:name`), and its bundled ones (/loop, /schedule, /code-review…) -- less what the person's own `skillOverrides` turn off |
+| Codex | `~/.codex/skills`, its own `~/.codex/skills/.system`, its plugins' skills, and **`~/.agents/skills`** (with `CODEX_HOME` pointed at an empty folder, Omarchy's links there were still listed) |
+
+So before M11 a Claude agent was offered 35 skills on this machine, Agent
+Voice's among them, and a Codex agent 13, whatever its Tools & skills tab
+said.
+
+### Switching one off
+
+| | result |
+|---|---|
+| Claude, `--settings '{"skillOverrides":{"minecraft":"off"}}'` | gone from the init event; the Skill tool answers "Skill minecraft is disabled for model invocation in skillOverrides settings". Without it: "Launching skill: minecraft" |
+| the same, with `agentvoice:minecraft` also in the plugin dir | the user's gone, the agent's own copy kept |
+| `{"docx":"off"}` (a bare name) | the synced `anthropic-skills:docx` gone too |
+| `{"agentvoice:spike-own":"off"}` or `{"spike-own":"off"}` | a `--plugin-dir` skill is **not** switched off this way (so Agent Voice leaves its own skills out of the plugin folder instead) |
+| a name that names nothing | ignored, no error |
+| Codex, `-c 'skills.config=[{name="omarchy-app",enabled=false}]'` | gone |
+| a path selector, `{path=".../SKILL.md",enabled=false}` | gone |
+| `{name="pdf"}` against the plugin skill `pdf:pdf` | kept: a plugin skill needs its full `plugin:name` |
+| a name off and a path on, for the same skill | off wins |
+| config.toml has `[[skills.config]] aaa-one off`, `-c` names `bbb-two` | both gone: Codex merges the two, it does not replace config.toml's |
+| a name that names nothing | ignored |
+
+Either way the file stays readable to an agent with file tools: "off"
+takes a skill out of what the CLI offers. The page says so.
+
+### The scan, and the plugin folder
+
+`skillscan.scan()` on this machine (5 in `~/.claude/skills`, 14 synced, 4
+in `~/.codex/skills`, 3 in `~/.agents/skills`, no plugin): **26 skills,
+median 17.4 ms, max 33 ms (n=25)**, load average about 3.9 (a test run
+going). Listing names only, which the daemon does when a switch list is
+unreadable: 0.68 ms median.
+
+`agentfs.plugin_dir` with 20 skills (10 an agent's own, 10 communal, each a
+1.2 KB SKILL.md and a script): **18.0 ms median** (max 22) to build a new
+folder; 13.9 ms when it already exists, because every file is read to name
+the folder by its content. The daemon builds one only when the folders or
+a switch change (the switch list is in its cache key), never on an idle
+poll.
+
+S on `sora` was not rerun: the index a Codex agent is told only ever
+shrinks under M11 (a skill switched off leaves it), and Claude's
+`--settings` grows by one small JSON key.

@@ -243,6 +243,16 @@ class ClaudeCode(Adapter):
         #: which `sh -c` gets past -- the reason the row says "told, not
         #: enforced" (tests/fixtures/tools/claude-deny-rules.json).
         self.clis_denied: tuple = ()
+        #: The skills switched off for this agent where Claude Code looks
+        #: (phase M11, skillscan.native_off): each named `off` in
+        #: skillOverrides, so its Skill tool refuses it ("disabled for model
+        #: invocation"). Never touches the agent's own `agentvoice:` copies:
+        #: tests/fixtures/skills/spike-m11.json. Read when the process starts.
+        self.skills_off: tuple = ()
+        #: Why those could not be named, or "": then it is given no skill at
+        #: all (--disable-slash-commands drops every one, recorded in
+        #: FINDINGS §44), rather than ones nobody could switch off.
+        self.skills_unknown: str = ""
         #: What the last process said it started, from its init event:
         #: [{"name", "status"}] (tooldetect.live_servers). For the Tools &
         #: skills tab and M16.
@@ -277,7 +287,7 @@ class ClaudeCode(Adapter):
         _LIVE.add(self)
 
     @classmethod
-    def _hook_settings(cls, named: str = "", matcher: str = "", deny=()) -> str:
+    def _hook_settings(cls, named: str = "", matcher: str = "", deny=(), skills_off=()) -> str:
         """A PreToolUse hook, passed inline as JSON.
 
         `--settings` takes a JSON string and loads it *in addition to* the
@@ -308,6 +318,11 @@ class ClaudeCode(Adapter):
             # which could catch a longer name ("gh" and "ghc").
             extra["permissions"] = {"deny": [rule for name in deny
                                              for rule in (f"Bash({name})", f"Bash({name} *)")]}
+        if skills_off:
+            # The skills switched off for this agent (phase M11), merged by
+            # Claude Code with the person's own skillOverrides; an unknown
+            # name is ignored (recorded).
+            extra["skillOverrides"] = {name: "off" for name in sorted(skills_off)}
         return json.dumps({**extra, "hooks": {"PreToolUse": [{
             "matcher": matcher or GUARDED_TOOLS,
             # ".*" -- every tool, with permission_hook.py deciding which ones
@@ -377,8 +392,9 @@ class ClaudeCode(Adapter):
             argv += ["--append-system-prompt-file", prompt_file(head)]
         detected = {} if self.no_tools else dict(self.detected_servers or {})
         deny = () if self.no_tools else tuple(self.clis_denied or ())
+        skills_off = () if self.no_tools else tuple(self.skills_off or ())
         if self.ask_permission:
-            argv += ["--settings", self._hook_settings(self.named, deny=deny)]
+            argv += ["--settings", self._hook_settings(self.named, deny=deny, skills_off=skills_off)]
         else:
             # Trusted, but a click in a signed-in browser can still buy or
             # post, and a write to the agents' orders (the communal rules,
@@ -394,7 +410,8 @@ class ClaudeCode(Adapter):
                 # the idle process is let go.
                 import re as _re
                 matcher += "|" + "|".join(f"mcp__{_re.escape(k)}__.*" for k in sorted(detected))
-            argv += ["--settings", self._hook_settings(self.named, matcher, deny=deny)]
+            argv += ["--settings", self._hook_settings(self.named, matcher, deny=deny,
+                                                       skills_off=skills_off)]
         servers: dict = {}
         if self.desktop_tools and not self.no_tools:
             # Agent Voice's desktop tools (plan 12a), as this agent: the
@@ -415,6 +432,8 @@ class ClaudeCode(Adapter):
             # In a 0600 file, never inline: a detected server's definition
             # can carry an API key, and argv is world readable.
             argv += ["--mcp-config", private_config_file({"mcpServers": servers})]
+        if self.skills_unknown and not self.no_tools:
+            argv.append("--disable-slash-commands")
         if self.skill_dir and not self.no_tools:
             # The Omarchy skill (plan 12b), loaded as a plugin for this
             # process only: nothing is written into ~/.claude.

@@ -90,6 +90,7 @@
       "omarchySkill": true,
       "mainTools": {},
       "sharedTools": {},
+      "mainSkillsOff": [],
       "mainNotesWrite": "allow",
       "mainCollaboration": "announce",
       "mainAcceptsWork": true,

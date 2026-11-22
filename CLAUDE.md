@@ -337,7 +337,11 @@ only where a recorded turn shows it (`tests/fixtures/tools/`): a CLI is
 "told, not enforced", because Claude's deny rules stop `gh` and not `sh -c
 'gh'`. A new way to hand an agent a tool goes through `tooldetect.delivery`
 and the hook's `detected_refusal`, and is off until a switch approves its
-fingerprint.
+fingerprint. Skills the same way since M11: `claude -p` and `codex exec` load
+every skill in the user's own folders whatever Agent Voice gives them, so
+a skill switched off is switched off where the CLI looks too
+(`skillOverrides`, `skills.config`: `skillscan.native_off`), and a list
+that cannot be read switches off every one the CLI finds.
 
 **A transcript and a model reply are untrusted input to the UI.** Any `Text`
 showing one needs `textFormat: Text.PlainText`: `AutoText` renders anything

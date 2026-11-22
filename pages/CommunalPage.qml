@@ -484,10 +484,12 @@ Column {
   }
 
   // --- Skills (Phase 13) ------------------------------------------------------------
-  // The shared skills, from `agents skills communal`, and which agents get
-  // each: every agent whose program can take skills, unless it has its own
-  // of the same name.
+  // The shared skills, and which agents get each: since M11 from `skills
+  // lanes`, the daemon's own resolution -- every agent whose program can
+  // take skills, unless it has its own of the same name or switched it off
+  // on its Tools & skills tab -- and how each agent takes them at all.
   property var skillList: null
+  property var skillLanes: []
   property string skillError: ""
   readonly property string skillWatch: page.watch + JSON.stringify(s.vAgentFiles) +
                                        JSON.stringify(s.folders.folders)
@@ -501,22 +503,45 @@ Column {
   }
   Process {
     id: skillReader
-    command: ["agentvoice", "agents", "skills", "communal", "--json"]
+    command: ["agentvoice", "skills", "lanes", "--json"]
     stdout: StdioCollector {
       onStreamFinished: {
         var d
         try { d = JSON.parse(String(text)) } catch (e) { return }
-        if (!Array.isArray(d)) return
+        if (!d || !Array.isArray(d.communal) || !Array.isArray(d.lanes)) return
         page.skillError = ""
-        page.skillList = d
+        page.skillList = d.communal
+        page.skillLanes = d.lanes
       }
     }
     stderr: StdioCollector {
       onStreamFinished: {
         var t = String(text).trim()
-        if (t !== "") page.skillError = t.replace(/^agentvoice agents: /, "").split("\n").pop()
+        if (t !== "") page.skillError = t.replace(/^agentvoice (agents|skills): /, "").split("\n").pop()
       }
     }
+  }
+  // Phase M11: each agent, and how it takes the communal skills -- or why
+  // it takes none (master plan, M11: "marks each agent whose backend
+  // cannot take skills and why").
+  function takesLine(l) {
+    if (l.delivery === "none")
+      return l.program === "endpoint" ? "takes no skills: an endpoint runs nothing on this machine"
+             : l.program === "" ? "takes no skills: no program is chosen" : "takes no skills: Agent Voice cannot run " + l.program
+    if (l.delivery === "plugin") return "loads each one itself when a request needs it"
+    return "is told a list and reads a skill's file when it needs it (" + l.program_label + " cannot load Agent Voice's skills itself)"
+  }
+  // Who does not get one communal skill, and why.
+  function notGiven(skill) {
+    var out = []
+    for (var i = 0; i < skillLanes.length; i++) {
+      var l = skillLanes[i]
+      if (!l.enabled || (skill.gets || []).indexOf(l.label) >= 0) continue
+      var own = (l.skills || []).some(function(x) { return x.source === l.id && x.name === skill.name })
+      out.push(l.label + (l.delivery === "none" ? " (takes no skills)"
+                          : own ? " (has its own)" : " (switched off)"))
+    }
+    return out
   }
   property string skillNote: ""
   Process {
@@ -546,21 +571,6 @@ Column {
       }
     }
   }
-  // Which agents have their own skill of this name (from the folder sizes
-  // every page already reads), so the list can say who does not get it.
-  function hiddenBy(name) {
-    var out = []
-    // Only agents that exist: a removed agent's folder may still be read
-    // (the trash, an orphan) and must not be named here (Phase 13 review).
-    var ids = { "main": true }
-    for (var i = 0; i < s.voiceAgents.length; i++) ids[s.agentId(s.voiceAgents[i] || {})] = true
-    for (var id in ids) {
-      // The overlay's own read (every 3s on this page), else the daemon's.
-      var f = s.folders.folders[id] || s.vAgentFiles[id]
-      if (((f || {}).files || {})["skills/" + name + "/SKILL.md"]) out.push(labelOf(id))
-    }
-    return out
-  }
   function labelOf(id) {
     if (id === "main") return s.mainLabel
     for (var i = 0; i < s.voiceAgents.length; i++)
@@ -579,10 +589,24 @@ Column {
       text: "Given to every agent whose program can take skills: Claude Code loads each one " +
             "itself when a request needs it; Codex, Gemini, Antigravity and Copilot are told a list " +
             "and read a skill's file when they need it; an endpoint gets none. An agent with its " +
-            "own skill of the same name gets its own instead."
+            "own skill of the same name gets its own instead, and any agent can switch one off " +
+            "on its Tools & skills tab."
       color: page.s.dim
       font.family: page.s.fontFamily
       font.pixelSize: Style.font.caption
+    }
+    Repeater {
+      model: page.skillLanes
+      Text {
+        required property var modelData
+        width: parent.width
+        wrapMode: Text.WordWrap
+        textFormat: Text.PlainText
+        text: modelData.label + (modelData.enabled ? "" : " (switched off)") + " " + page.takesLine(modelData) + "."
+        color: modelData.delivery === "none" ? page.s.urgent : page.s.foreground
+        font.family: page.s.fontFamily
+        font.pixelSize: Style.font.caption
+      }
     }
     Text {
       width: parent.width
@@ -606,14 +630,13 @@ Column {
       model: page.skillList || []
       SettingRow {
         required property var modelData
-        readonly property var hidden: page.hiddenBy(modelData.name)
+        readonly property var missing: page.notGiven(modelData)
         width: parent.width
         label: modelData.name
         hint: (modelData.problem !== "" ? "Not given to any agent: " + modelData.problem
                : modelData.description +
-                 (hidden.length > 0 ? " Not given to " + hidden.join(", ") + ", which " +
-                                      (hidden.length === 1 ? "has its" : "have their") +
-                                      " own of the same name." : "")) +
+                 " Given to " + ((modelData.gets || []).length > 0 ? modelData.gets.join(", ") : "no agent") + "." +
+                 (missing.length > 0 ? " Not to " + missing.join(", ") + "." : "")) +
               (modelData.changed_outside === true ? " Added or changed outside Settings." : "")
         foreground: modelData.problem !== "" ? page.s.urgent : page.s.foreground
         fontFamily: page.s.fontFamily

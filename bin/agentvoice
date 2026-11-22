@@ -30,6 +30,8 @@
 #   agentvoice crew check < lists  may the Crew map save these crew links and
 #                                  this quarantine (one JSON line on stdin)
 #   agentvoice tools scan [--json] the MCP servers and CLIs found on this machine
+#   agentvoice skills lanes [--json] every skill on this machine, and who gets it
+#   agentvoice skills import ID TO  give an agent or communal a checked copy of one
 #   agentvoice commands [--json]   every spoken command, and the wake phrases
 #   agentvoice try AGENT < draft   one sentence in AGENT's voice, on a draft
 #                                  personality (Agent details' Try it)
@@ -398,6 +400,20 @@ case "${1:-status}" in
     shift
     exec "$PY" "$REPO/daemon/tooldetect.py" "$@"
     ;;
+  skills)
+    # Every skill on this machine and who gets it (phase M11): the agents'
+    # own, the communal ones, and the ones Claude Code and Codex find by
+    # themselves. Reads files only. `import` gives an agent (or communal) a
+    # checked copy of one found outside Agent Voice; the original is never
+    # changed. Asked about when an agent runs it (the orders guard).
+    #   agentvoice skills lanes [--json]
+    #   agentvoice skills import SOURCE_ID AGENT_ID|communal
+    REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+    PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+    [[ -x $PY ]] || PY=python3
+    shift
+    exec "$PY" "$REPO/daemon/skillscan.py" "$@"
+    ;;
   chats)
     # Saved conversations (saveChats). The daemon holds which chat each
     # agent is in, so continuing or starting one is a command to it; the
@@ -511,7 +527,7 @@ case "${1:-status}" in
     active && echo yes || echo no
     ;;
   *)
-    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|try|interrupt|hud-preview|monitor|calibrate|voice|permit|pending|history|chats|pass|tasks|crew|tools|agents|endpoint|open-mic|commands|wake-test|status|is-active]" >&2
+    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|try|interrupt|hud-preview|monitor|calibrate|voice|permit|pending|history|chats|pass|tasks|crew|tools|skills|agents|endpoint|open-mic|commands|wake-test|status|is-active]" >&2
     exit 2
     ;;
 esac

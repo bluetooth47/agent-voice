@@ -151,6 +151,37 @@ def detected_choices(raw) -> dict[str, str] | None:
     return out
 
 
+#: A skill an agent is switched off from (phase M11): its name as the CLI
+#: knows it -- a folder name, or a plugin's `plugin:name`. One name is one
+#: switch: everything of that name the agent would get, its own copy, the
+#: communal one and the one its CLI finds by itself, is off together.
+SKILL_REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?::[A-Za-z0-9][A-Za-z0-9._-]{0,63})?")
+#: More than anyone switches off by hand; a longer list is unreadable.
+MAX_SKILLS_OFF = 256
+
+
+def skills_off_choice(raw) -> list[str] | None:
+    """`skillsOff` / `mainSkillsOff` as written, cleaned: the names of the
+    skills switched off for one agent. A missing key or null is none (every
+    skill it would get, it gets: today's behaviour). Anything else that is
+    not a list of skill names -- a string, a map, one entry that is not a
+    name, more than MAX_SKILLS_OFF -- is None: unreadable. Somebody meant to
+    switch something off and nobody can tell what, so the caller gives that
+    agent no communal skill and none its CLI finds by itself (master plan,
+    M11: "every communal skill off for that agent")."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or len(raw) > MAX_SKILLS_OFF:
+        return None
+    out: list[str] = []
+    for name in raw:
+        if not isinstance(name, str) or not SKILL_REF.fullmatch(name):
+            return None
+        if name not in out:
+            out.append(name)
+    return out
+
+
 def speed_pct(value, fallback: int = 100) -> int:
     """A speaking speed as a whole percent inside the bounds, or `fallback`.
 
@@ -314,6 +345,13 @@ DEFAULTS = {
     # a switch approves one definition (tooldetect.fingerprint). An agent's
     # own entry in its tools map beats this. Written on Communal → Tools.
     "sharedTools": {},
+    # Phase M11: the skills switched off for the main agent, by name (the
+    # folder's, or a plugin's `plugin:name`): its own, the communal ones and
+    # the ones its CLI finds by itself (~/.claude/skills, ~/.codex/skills).
+    # Empty is every skill it would get, as before M11. Extra agents keep
+    # theirs in their entry, as `skillsOff`. Written on Agent details →
+    # Tools & skills, through setAgentSkill.
+    "mainSkillsOff": [],
     # Whether the main agent may write notes (merged plan, Phase 14): allow
     # or deny. Extra agents keep theirs in their entry, as `notesWrite`.
     "mainNotesWrite": "allow",
@@ -418,6 +456,7 @@ TOML_ALIASES = {
     "browserTools": ("agent", "browser_tools"),
     "omarchySkill": ("agent", "omarchy_skill"),
     "mainTools": ("agent", "main_tools"),
+    "mainSkillsOff": ("agent", "main_skills_off"),
     "mainNotesWrite": ("agent", "main_notes_write"),
     "mainCollaboration": ("agent", "main_collaboration"),
     "mainAcceptsWork": ("agent", "main_accepts_work"),
@@ -800,6 +839,9 @@ class Config:
                 "tools": tool_choices(entry.get("tools")),
                 # Its switches for the tools found on this machine (M10).
                 "detected": detected_choices(entry.get("tools")),
+                # The skills switched off for it, by name; None when the
+                # list cannot be read (phase M11).
+                "skillsOff": skills_off_choice(entry.get("skillsOff")),
                 # Whether it may write notes: allow or deny (Phase 14).
                 "notesWrite": notes_choice(entry, "notesWrite"),
                 # What it may start with other agents, and whether it takes
@@ -865,6 +907,23 @@ class Config:
         if own is None:
             return {}, {}
         return dict(own), shared
+
+    def skills_off_for(self, agent_id: str | None) -> frozenset[str] | None:
+        """The skills switched off for this agent, by name (phase M11), or
+        None when that cannot be known: the settings cannot be read, the
+        list is not one, or the settings do not have this agent. None gives
+        it no communal skill and none its CLI finds by itself; its own
+        folder's skills are still its own. Read fresh by whoever asks."""
+        if not self.settings_readable():
+            return None
+        if not agent_id or agent_id == "main":
+            got = skills_off_choice(self._values.get("mainSkillsOff"))
+        else:
+            spec = next((a for a in self.all_agents() if a["id"] == agent_id), None)
+            if spec is None:
+                return None
+            got = spec.get("skillsOff")
+        return None if got is None else frozenset(got)
 
     def settings_readable(self) -> bool:
         """False when shell.json exists and this widget's entry could not be

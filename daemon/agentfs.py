@@ -1131,18 +1131,20 @@ def parse_skill(folder: str, text) -> tuple[str, str]:
     return desc, ""
 
 
-def _skill_tree(target: str, name: str) -> tuple[list[tuple[str, Path]], str]:
-    """Every file of one skill as (path inside the skill, path), and the
-    problem, if any, that keeps it from being given to an agent: a link
-    anywhere in it, something that is not a file or a folder, or more than
-    SKILL_FILES_MAX files or SKILL_BYTES_MAX bytes."""
-    root = _base(target) / "skills" / name
+def valid_skill_name(name) -> bool:
+    """A name a skill folder of Agent Voice's may have."""
+    return isinstance(name, str) and bool(_SKILL_NAME.fullmatch(name))
+
+
+def walk_skill(root: Path) -> tuple[list[tuple[str, Path, int]], str]:
+    """Every file of the skill folder `root` as (path inside it, path,
+    size), and the problem, if any, that keeps it from being given to an
+    agent or copied into a folder: a link anywhere in it, something that is
+    not a file or a folder, a file over READ_CAP, or more than
+    SKILL_FILES_MAX files or SKILL_BYTES_MAX bytes. `root` itself is not
+    checked for being a link; the caller decides that."""
     out, total = [], 0
     try:
-        for d in (paths.AGENTS_DIR if target != COMMUNAL else None, _base(target),
-                  _base(target) / "skills", root):
-            if d is not None:
-                _no_link(d)
         stack = [Path()]
         while stack:
             rel = stack.pop()
@@ -1161,16 +1163,32 @@ def _skill_tree(target: str, name: str) -> tuple[list[tuple[str, Path]], str]:
                     # dropped from the plugin folder without a word).
                     return [], f"{sub} is larger than {READ_CAP // 1024} KB"
                 total += size
-                out.append((sub.as_posix(), root / sub))
+                out.append((sub.as_posix(), root / sub, size))
                 if len(out) > SKILL_FILES_MAX:
                     return [], f"it holds more than {SKILL_FILES_MAX} files"
                 if total > SKILL_BYTES_MAX:
                     return [], f"it holds more than {SKILL_BYTES_MAX // 1024 // 1024} MB"
+    except OSError as e:
+        return [], f"it cannot be read ({e.strerror})"
+    return sorted(out), ""
+
+
+def _skill_tree(target: str, name: str) -> tuple[list[tuple[str, Path]], str]:
+    """Every file of one skill as (path inside the skill, path), and the
+    problem, if any, that keeps it from being given to an agent (walk_skill),
+    or a link on the way to it."""
+    root = _base(target) / "skills" / name
+    try:
+        for d in (paths.AGENTS_DIR if target != COMMUNAL else None, _base(target),
+                  _base(target) / "skills", root):
+            if d is not None:
+                _no_link(d)
     except AgentFsError as e:
         return [], str(e)
     except OSError as e:
         return [], f"it cannot be read ({e.strerror})"
-    return sorted(out), ""
+    tree, why = walk_skill(root)
+    return [(rel, path) for rel, path, _ in tree], why
 
 
 def _skill_dirs(target: str) -> list[str]:
@@ -1235,17 +1253,27 @@ def skills_from(texts: dict, target: str) -> list[dict]:
     return out
 
 
-def skill_set(own: list[dict], communal: list[dict]) -> list[dict]:
+def skill_set(own: list[dict], communal: list[dict], off=frozenset()) -> list[dict]:
     """An agent's own skills and the communal ones, each marked `shadowed`
     (an own skill of the same name wins, even one with a problem: the
-    person meant this agent to have its own) and `delivered`."""
+    person meant this agent to have its own), `on` (not in `off`, the
+    names switched off for it: phase M11), `delivered`, and `why` it is not.
+
+    `off` None is a switch list that cannot be read: every communal skill
+    is then off for this agent, and its own are still its own."""
     mine = {s["name"] for s in own}
     out = []
     for s in own:
-        out.append({**s, "shadowed": False, "delivered": not s["problem"]})
+        on = off is None or s["name"] not in off
+        why = s["problem"] or ("" if on else "switched off for this agent")
+        out.append({**s, "shadowed": False, "on": on, "delivered": not why, "why": why})
     for s in communal:
         hidden = s["name"] in mine
-        out.append({**s, "shadowed": hidden, "delivered": not s["problem"] and not hidden})
+        on = off is not None and s["name"] not in off
+        why = (s["problem"] or ("its switch list cannot be read, so it is off" if off is None
+                                else "switched off for this agent" if not on
+                                else "its own of the same name is given instead" if hidden else ""))
+        out.append({**s, "shadowed": hidden, "on": on, "delivered": not why, "why": why})
     return out
 
 
@@ -1305,6 +1333,143 @@ def _skill_texts(target: str, files: dict[str, dict]) -> dict[str, str]:
     return out
 
 
+# --- importing a skill found elsewhere (phase M11) --------------------------------
+#
+# Assigning a skill from outside Agent Voice (~/.claude/skills, a plugin's,
+# ~/.codex/skills) to an agent or Communal is a verified copy: Agent Voice
+# never edits, moves or deletes a skill it did not make. The copy keeps
+# every rule an Agent Voice skill keeps (parse_skill, walk_skill); the
+# original is read beneath its own folder with no link followed at any
+# level, hashed, copied into a staging folder, hashed again, and published
+# by one rename -- or not at all.
+
+def _read_beneath(root: Path, rel: str) -> tuple[bytes, int]:
+    """A file of the skill at `root`, opened one folder at a time with no
+    link followed at any level (a folder swapped for a link mid-copy is
+    refused, not followed), and its mode. At most READ_CAP bytes."""
+    import tooldetect
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK
+    fd = tooldetect._open_beneath(root, root / rel, flags)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise AgentFsError(f"{rel} is not a plain file")
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            data = f.read(READ_CAP + 1)
+    finally:
+        os.close(fd)
+    if len(data) > READ_CAP:
+        raise AgentFsError(f"{rel} is larger than {READ_CAP // 1024} KB")
+    return data, st.st_mode
+
+
+def _read_skill(root: Path) -> tuple[list[tuple[str, bytes, int]], str]:
+    """Every file of the skill at `root` with its bytes and mode, and a
+    digest over all of them. AgentFsError for anything an Agent Voice skill
+    may not hold."""
+    tree, why = walk_skill(root)
+    if why:
+        raise AgentFsError(f"it cannot be copied: {why}")
+    if not tree:
+        raise AgentFsError("it cannot be copied: the folder is empty")
+    files, digest = [], hashlib.sha256()
+    for rel, _, _ in tree:
+        try:
+            data, mode = _read_beneath(root, rel)
+        except OSError as e:
+            raise AgentFsError(f"it cannot be copied: {rel} cannot be read ({e.strerror})") from None
+        exe = 0o700 if mode & stat.S_IXUSR else 0o600
+        files.append((rel, data, exe))
+        digest.update(f"{rel}\0{exe}\0{len(data)}\0".encode())
+        digest.update(data)
+    return files, digest.hexdigest()
+
+
+def import_skill(target: str, name: str, source: Path) -> dict:
+    """Copy the skill folder `source` (found outside Agent Voice) into
+    `target`'s skills as `name`: an agent's folder id, or communal. Refused,
+    leaving nothing behind, when the name is not one a skill may have or is
+    taken there, when the skill breaks a rule every skill keeps, or when the
+    original changed while it was copied. Its SKILL.md is saved as kept, so
+    it does not read as changed outside Settings. One audit line: the name
+    and the size, never the text. Returns {"target", "name", "files", "bytes"}."""
+    if target != COMMUNAL and not _valid_agent(target):
+        raise AgentFsError(f"not an agent id: {target!r}")
+    if not valid_skill_name(name):
+        raise AgentFsError(parse_skill(name if isinstance(name, str) else "", "")[1])
+    # A reserved name (omarchy) is refused by parse_skill below.
+    # The skill's own folder may be a link (Omarchy installs its skills as
+    # links into /usr/share, and the CLIs follow them); nothing inside it is.
+    try:
+        root = Path(source).resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise AgentFsError("it cannot be copied: its folder is not there") from None
+    if not root.is_dir():
+        raise AgentFsError("it cannot be copied: it is not a folder")
+    files, before = _read_skill(root)
+    skill_md = next((d for rel, d, _ in files if rel == "SKILL.md"), None)
+    if skill_md is None:
+        raise AgentFsError("it cannot be copied: it has no SKILL.md")
+    try:
+        text = skill_md.decode("utf-8")
+    except UnicodeDecodeError:
+        raise AgentFsError("it cannot be copied: its SKILL.md is not UTF-8 text") from None
+    _, why = parse_skill(name, text)
+    if why:
+        raise AgentFsError(f"it cannot be copied: {why}")
+    base = _base(target)
+    with _locked():
+        for d in ([] if target == COMMUNAL else [paths.AGENTS_DIR]) + [base, base / "skills"]:
+            _no_link(d)
+        if not base.is_dir():
+            raise AgentFsError(f"{target} has no folder")
+        if target != COMMUNAL and (paths.AGENTS_DIR / target).resolve().parent \
+                != paths.AGENTS_DIR.resolve():
+            raise AgentFsError(f"{target} has no folder")
+        skills_root = base / "skills"
+        paths.private_dir(skills_root)
+        _no_link(skills_root)
+        dest = skills_root / name
+        if os.path.lexists(dest):
+            raise AgentFsError(f"{target} already has a skill named {name}; "
+                               "rename or remove that one first")
+        import tempfile
+        stage = Path(tempfile.mkdtemp(prefix=".import-", dir=skills_root))
+        try:
+            for rel, data, mode in files:
+                for parent in reversed(Path(rel).parents[:-1]):
+                    d = stage / parent
+                    if not d.is_dir():
+                        os.mkdir(d, 0o700)
+                fd = os.open(stage / rel, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                             | os.O_CLOEXEC, mode)
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data)
+                    f.flush()
+                    os.fsync(f.fileno())
+            # The original again: copied as it was when it was checked, or
+            # not at all.
+            _, after = _read_skill(root)
+            if after != before:
+                raise AgentFsError("it changed while it was copied; nothing was copied, try again")
+            if os.path.lexists(dest):
+                raise AgentFsError(f"{target} already has a skill named {name}")
+            os.rename(stage, dest)
+        except BaseException:
+            shutil.rmtree(stage, ignore_errors=True)
+            raise
+        file = f"skills/{name}/SKILL.md"
+        _save_version(target, file, text, "import")
+        _prune(target, file)
+    copied_bytes = sum(len(d) for _, d, _ in files)
+    try:
+        import audit
+        audit.record("skill_import", frm="you", to=target, note=name, after=copied_bytes)
+    except Exception:           # noqa: BLE001 -- the copy is made; a log never undoes it
+        pass
+    return {"target": target, "name": name, "files": len(files), "bytes": copied_bytes}
+
+
 #: The plugin folders made for Claude agents (section 3.3), named by their
 #: content, so a change makes a new one and never rewrites a file a running
 #: process has open.
@@ -1312,10 +1477,11 @@ def plugins_dir() -> Path:
     return paths.DATA_DIR / "agent-plugins"
 
 
-def plugin_dir(agent_id: str, omarchy_root: str | None) -> str | None:
+def plugin_dir(agent_id: str, omarchy_root: str | None, off=frozenset()) -> str | None:
     """The folder a Claude agent is given with --plugin-dir: the Omarchy
     skill (from `omarchy_root`, when it is wanted) and every skill this
-    agent is to have, its own and the communal ones. When it has no skill of
+    agent is to have, its own and the communal ones, less those switched
+    off for it (`off`, skill_set's: phase M11). When it has no skill of
     its own or communal one, `omarchy_root` exactly, as before Phase 13.
 
     Each file is copied whole, read without following links, with its
@@ -1323,7 +1489,7 @@ def plugin_dir(agent_id: str, omarchy_root: str | None) -> str | None:
     copy is copied as it is then, and checked again on the next change."""
     me = folder_id(agent_id)
     chosen = [s for s in skill_set(skills(me) if _valid_agent(me) else [],
-                                   skills(COMMUNAL)) if s["delivered"]]
+                                   skills(COMMUNAL), off) if s["delivered"]]
     if not chosen:
         return omarchy_root
     files: list[tuple[str, bytes, int]] = []
@@ -1447,7 +1613,7 @@ def roster_line(label, phrase, role) -> str:
         role = role[:len(role) - (len(line) - ROSTER_LINE)].rstrip()
 
 
-def parts_from(texts: dict, me: str, name: str, live: list[dict]) -> dict:
+def parts_from(texts: dict, me: str, name: str, live: list[dict], off=frozenset()) -> dict:
     """The folder pieces of one agent's prompt (merged plan, section 3.6),
     each already within its budget, from folder texts as snapshot() gives
     them. Pure: the daemon calls it with what it last read, the bench and
@@ -1456,7 +1622,8 @@ def parts_from(texts: dict, me: str, name: str, live: list[dict]) -> dict:
     `me` is the agent's folder id and `name` its display name. `live` is
     every reachable agent as {"id": folder id, "label", "phrase"}: the
     roster lists each of them but `me`, with its role line. `skills` is the
-    index of its skills (Phase 13), which the adapter tells only a backend
+    index of its skills (Phase 13), less those switched off for it (`off`,
+    skill_set's: phase M11), which the adapter tells only a backend
     that cannot load skills itself. Instructions and the Omarchy commands
     are not here; they reach the adapter as before.
     Keys with nothing in them are empty, so the preamble leaves no header."""
@@ -1472,7 +1639,7 @@ def parts_from(texts: dict, me: str, name: str, live: list[dict]) -> dict:
             break
     try:
         index = skills_index(skill_set(skills_from(texts, me),
-                                       skills_from(texts, COMMUNAL)))
+                                       skills_from(texts, COMMUNAL), off))
     except AgentFsError:
         index = ""
     return {"rules": comm.get("rules.md", ""),
@@ -1532,7 +1699,9 @@ def roster(cfg, live_ids=None) -> list[dict]:
         switched = cfg.tools_for(a["id"])
         tools = [k for k in TOOL_ROWS if switched[k] and not _why_not(k, program)]
         given = [] if program == "endpoint" or not _runnable(program) else [
-            s["name"] for s in skill_set(skills_from(texts, a["id"]), comm) if s["delivered"]]
+            s["name"] for s in skill_set(skills_from(texts, a["id"]), comm,
+                                         cfg.skills_off_for("" if a["id"] == MAIN else a["id"]))
+            if s["delivered"]]
         out.append({**a, "role": " ".join(texts.get(a["id"], {}).get("role.md", "").split()),
                     "program": program, "tools": tools, "skills": given})
     return out
@@ -1659,6 +1828,22 @@ def _asks(key: str, program: str, level: str) -> str:
     return _commands_ask(program, level)
 
 
+def delivery_of(program: str) -> tuple[str, str]:
+    """How a program is given Agent Voice's skills, and that in words:
+    "plugin" (Claude Code loads them from the folder made for it), "index"
+    (told a list, reads a file when it needs one) or "none"."""
+    if program == "endpoint":
+        return "none", "An endpoint runs nothing on this machine, so it is given no skills."
+    if not program:
+        return "none", "No program is chosen for it."
+    if not _runnable(program):
+        return "none", f"Agent Voice cannot run {program}, so it answers nothing."
+    if program in PLUGIN_PROGRAMS:
+        return "plugin", "Claude Code loads each skill itself when a request needs it."
+    return "index", (f"{_label(program)} is told a list of Agent Voice's skills and reads a "
+                     "skill's file when it needs it.")
+
+
 def catalog(agent_id: str, cfg) -> dict:
     """Everything an agent can be given, as the Tools & skills tab shows
     it (merged plan, Phase 13): each tool with whether it is switched on
@@ -1688,17 +1873,7 @@ def catalog(agent_id: str, cfg) -> dict:
                       "global": cfg.get_bool(TOOL_GLOBALS[key]), "on": switched[key],
                       "can": not why, "why_not": why, "how": how,
                       "asks": _asks(key, program, level) if not why else ""})
-    if program == "endpoint":
-        delivery, how = "none", "An endpoint runs nothing on this machine, so it is given no skills."
-    elif not program:
-        delivery, how = "none", "No program is chosen for it."
-    elif not _runnable(program):
-        delivery, how = "none", f"Agent Voice cannot run {program}, so it answers nothing."
-    elif program in PLUGIN_PROGRAMS:
-        delivery, how = "plugin", "Claude Code loads each skill itself when a request needs it."
-    else:
-        delivery, how = "index", (f"{_label(program)} loads no skills itself, so it is told a "
-                                  "list of them and reads a skill's file when it needs it.")
+    delivery, how = delivery_of(program)
     if program == "endpoint" or not program or not _runnable(program):
         notes_why = _why_not("notes", program)
     elif program not in NOTES_PROGRAMS:
@@ -1727,10 +1902,20 @@ def catalog(agent_id: str, cfg) -> dict:
                                "Other agents may ask it questions, but not give it tasks or "
                                "pass it a conversation.")
                   if program and _runnable(program) or program == "endpoint" else ""}
+    # Phase M11: its own skills, the communal ones and the ones its CLI
+    # finds by itself, each with its switch (skillsOff) and whether it is
+    # really given; and every skill on the machine in its owner's lane.
+    import skillscan
     own = skills(me) if me != COMMUNAL else []
-    entries = skill_set(own, skills(COMMUNAL))
-    if delivery == "none":
-        entries = [{**s, "delivered": False} for s in entries]
+    off = cfg.skills_off_for("" if me == MAIN else me)
+    try:
+        found = skillscan.scan()
+        lanes = skillscan.lanes(cfg)
+        skills_error = ""
+    except Exception as e:      # noqa: BLE001 -- shown on the tab
+        found, lanes = {"skills": [], "problems": []}, None
+        skills_error = f"the skill scan failed ({type(e).__name__})"
+    entries = skillscan.agent_view(program, off, own, skills(COMMUNAL), found["skills"], delivery)
     # Phase M10: the tools found on this machine, as this agent has them.
     # A scan that fails lists nothing (and says why): nothing is on then.
     import tooldetect
@@ -1749,6 +1934,10 @@ def catalog(agent_id: str, cfg) -> dict:
     return {"agent": me, "program": program, "program_label": _label(program),
             "level": level, "tools": tools, "notes": notes_row, "collab": collab_row,
             "skills": entries,
+            "skills_readable": off is not None,
+            "skill_lanes": lanes, "skills_error": skills_error,
+            "skills_problems": found.get("problems") or [],
+            "skills_note": skillscan.UNMANAGED.get(program, ""),
             "delivery": delivery, "delivery_how": how,
             "skills_asks": _commands_ask(program, level) if delivery != "none" else "",
             "detected": detected, "scan": scan,
@@ -1765,7 +1954,8 @@ def parts(agent_id: str, cfg, live_ids=None) -> dict:
     if me != MAIN and not any(a["id"] == me for a in live):
         spec = cfg.agent_by_id(me)
         name = spec["label"] if spec else me
-    return parts_from(snapshot()[1], me, name, live)
+    return parts_from(snapshot()[1], me, name, live,
+                      cfg.skills_off_for("" if me == MAIN else me))
 
 
 def preview(agent_id: str, cfg, live_ids=None) -> list[dict]:
@@ -1805,7 +1995,9 @@ def preview(agent_id: str, cfg, live_ids=None) -> list[dict]:
     if not endpoint and program and not _runnable(program):
         pass                            # it answers nothing, so is told nothing
     elif not endpoint and program in PLUGIN_PROGRAMS:
-        names = [s["name"] for s in skill_set(skills(me), skills(COMMUNAL)) if s["delivered"]]
+        names = [s["name"] for s in skill_set(skills(me), skills(COMMUNAL),
+                                              cfg.skills_off_for("" if me == MAIN else me))
+                 if s["delivered"]]
         if names:
             out.append({"label": "Skills", "source": "skills folders", "text": "",
                         "note": "Loaded by Claude Code when a request needs one: "

@@ -2456,7 +2456,8 @@ class Daemon:
             fid = "main" if p is main else p.id
             reach = crew.reach(fid) if crew is not None else {}
             mine = [a for a in live if a["id"] == fid or a["id"] in reach]
-            want = agentfs.parts_from(texts, fid, p.label or p.name, mine)
+            want = agentfs.parts_from(texts, fid, p.label or p.name, mine,
+                                      self.skills_off_for(p))
             if getattr(agent, "parts", None) == want:
                 continue
             try:
@@ -3214,6 +3215,16 @@ class Daemon:
                     "browser": self.cfg.get_bool("browserTools"),
                     "omarchySkill": self.cfg.get_bool("omarchySkill")}
 
+    def skills_off_for(self, p):
+        """The skills switched off for persona `p` (phase M11), by name, or
+        None when that cannot be known (agentfs.skill_set: no communal skill
+        then). Read fresh; an odd setting is None."""
+        try:
+            return self.cfg.skills_off_for("" if getattr(p, "main", False) or p is None
+                                           else getattr(p, "id", "") or "")
+        except Exception:
+            return None
+
     def plugin_dir_for(self, p, omarchy_root: str | None) -> str | None:
         """Persona `p`'s Claude plugin folder (Phase 13): the Omarchy skill
         when `omarchy_root` is given, and its own and the communal skills.
@@ -3231,7 +3242,11 @@ class Daemon:
                 revision = (st.st_mtime_ns, st.st_size)
             except OSError:
                 pass
-        key = (omarchy_root, revision, getattr(self, "_agentfs_stamp", None))
+        # The skills switched off for it are in the key too (phase M11): a
+        # switch moved is a different folder, and nothing else would notice.
+        off = self.skills_off_for(p)
+        key = (omarchy_root, revision, getattr(self, "_agentfs_stamp", None),
+               None if off is None else tuple(sorted(off)))
         cache = self.__dict__.setdefault("_plugin_dirs", {})
         have = cache.get(fid)
         now = time.monotonic()
@@ -3239,7 +3254,7 @@ class Daemon:
                 and (have[2] is None or now < have[2])):
             return have[1]
         try:
-            got, retry = agentfs.plugin_dir(fid, omarchy_root), None
+            got, retry = agentfs.plugin_dir(fid, omarchy_root, off), None
         except Exception as e:
             self.say_once(f"plugins-{fid}", f"  {YEL}skills for “{fid}”: not given "
                                             f"({type(e).__name__}){OFF}")
@@ -3276,6 +3291,30 @@ class Daemon:
                                               f"“{who}” ({type(e).__name__}){OFF}")
             return empty
 
+    def native_skills_off(self, agent, p) -> tuple[tuple, str]:
+        """(the names to switch off where `agent`'s CLI looks, why they
+        cannot be named or ""): skillscan.native_off over the folder texts
+        last read, so an idle poll reads no file. When the switch list
+        cannot be read and a skills folder cannot be listed either, no name
+        can be given: the reason goes to the adapter, which then starts no
+        turn (Codex) or gives no skill at all (Claude), and is said once."""
+        program = getattr(agent, "name", "") or ""
+        try:
+            import agentfs
+            import skillscan
+            fid = "main" if getattr(p, "main", False) or p is None else (getattr(p, "id", "") or "main")
+            texts = getattr(self, "_folder_texts", None) or {}
+            names = {s["name"] for t in (fid, agentfs.COMMUNAL)
+                     for s in agentfs.skills_from(texts, t)}
+            agent_id = "" if fid == "main" else fid
+            return tuple(skillscan.native_off(self.cfg, agent_id, program, names)), ""
+        except Exception as e:      # never a skill offered on a guess
+            who = getattr(p, "label", "") or "main"
+            why = (str(e) if type(e).__name__ == "SkillsUnknown"
+                   else f"the skills it finds by itself could not be worked out ({type(e).__name__})")
+            self.say_once(f"skills-{who}", f"  {YEL}skills for “{who}”: {why}{OFF}")
+            return (), f"Agent Voice could not tell which skills to switch off ({why})."
+
     def apply_extras(self, agent, p=None) -> bool:
         """Give `agent` (persona `p`'s) the desktop tools, the browser, the
         Omarchy skill and its skills, as its switches ask (Phase 13; before
@@ -3297,6 +3336,16 @@ class Daemon:
             want = self.plugin_dir_for(p, omarchy_skill.plugin_dir() if skill_on else None)
             if agent.skill_dir != want:
                 agent.skill_dir, changed = want, True
+        # Phase M11: the skills its CLI finds by itself, switched off where
+        # the CLI looks -- each one in its skillsOff, and each Agent Voice
+        # skill's name so the CLI's own of that name is not offered beside
+        # it. Read when a process starts, so a change lets the idle one go.
+        if hasattr(agent, "skills_off"):
+            want_off, unknown = self.native_skills_off(agent, p)
+            if tuple(getattr(agent, "skills_off", ()) or ()) != want_off:
+                agent.skills_off, changed = want_off, True
+            if getattr(agent, "skills_unknown", "") != unknown:
+                agent.skills_unknown, changed = unknown, True
         if getattr(agent, "takes_skill_text", False) and getattr(agent, "has_tools", False):
             want = omarchy_skill.instructions() if skill_on else ""
             if getattr(agent, "skill_text", "") != want:

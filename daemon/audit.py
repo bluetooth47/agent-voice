@@ -49,6 +49,9 @@ KINDS = frozenset({
     "note_refused",
     # One per collaboration task, when it ends (Phase 15).
     "task_pass", "task_delegate", "task_ask", "task_message",
+    # A skill found outside Agent Voice copied into an agent's folder or the
+    # communal one, by the person (phase M11): the skill's name and size.
+    "skill_import",
 })
 #: How a task ended: collab.DONE, kept here so this file imports nothing.
 STATES = frozenset({"completed", "cancelled", "failed", "refused"})

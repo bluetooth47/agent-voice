@@ -214,7 +214,26 @@ for c in gh stripe; do printf '#!/bin/sh\nexit 0\n' > "$tmp/toolpath/$c"; chmod 
 for c in bash dirname readlink python3; do
   w=$(command -v "$c" || true); [ -n "$w" ] && ln -sf "$w" "$tmp/toolpath/$c"
 done
-tools_env="CLAUDE_CONFIG_DIR='$tmp/claude' CODEX_HOME='$tmp/codex' XDG_RUNTIME_DIR='$tmp/run' XDG_STATE_HOME='$tmp/xdgstate' PATH='$tmp/toolpath'"
+# And the skills those CLIs find by themselves (M11): two of Claude Code's
+# (one over the size a skill may be copied at), a claude.ai synced one, one
+# of Codex's and one in ~/.agents/skills -- whose home is a scratch one, so
+# the person's own ~/.agents/skills is never read either.
+mkskill() {  # folder name description [extra-bytes]
+  mkdir -p "$1"
+  printf -- '---\nname: %s\ndescription: %s\n---\n\nSteps for the preview.\n' "$2" "$3" > "$1/SKILL.md"
+  [ -n "${4:-}" ] && head -c "$4" /dev/zero | tr '\0' 'x' >> "$1/SKILL.md"
+  return 0
+}
+mkskill "$tmp/claude/skills/weekly-report" weekly-report "Write the weekly report from the week's notes. Use when asked for the weekly report."
+printf '#!/bin/sh\necho report\n' > "$tmp/claude/skills/weekly-report/make.sh"; chmod +x "$tmp/claude/skills/weekly-report/make.sh"
+mkskill "$tmp/claude/skills/big-guide" big-guide "A long style guide." 21000
+mkskill "$tmp/claude/skills/synced/bucket/docx" docx "Make and edit Word documents."
+mkskill "$tmp/codex/skills/deploy-site" deploy-site "Deploy the website. Use when asked to ship it."
+mkskill "$tmp/home/.agents/skills/crash-notes" crash-notes "Read a core dump and say why a program crashed."
+real_python="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+[ -x "$real_python" ] || real_python=python3
+real_config="${XDG_CONFIG_HOME:-$HOME/.config}"
+tools_env="CLAUDE_CONFIG_DIR='$tmp/claude' CODEX_HOME='$tmp/codex' XDG_RUNTIME_DIR='$tmp/run' XDG_STATE_HOME='$tmp/xdgstate' PATH='$tmp/toolpath' HOME='$tmp/home' AGENTVOICE_PYTHON='$real_python'"
 
 # Starting, stopping or toggling the real service, typing to a real agent or
 # answering its permission question is never what a preview means, and since
@@ -230,10 +249,14 @@ case "\${1:-}" in
     if [ "\${2:-}" = export ] && [ \$# -eq 3 ]; then
       mkdir -p '$tmp/exports'; set -- "\$@" '$tmp/exports'
     fi
-    env XDG_DATA_HOME='$tmp/data' $tools_env '$repo/bin/agentvoice' "\$@"; exit \$? ;;
+    env XDG_CONFIG_HOME="\${XDG_CONFIG_HOME:-$real_config}" XDG_DATA_HOME='$tmp/data' $tools_env '$repo/bin/agentvoice' "\$@"; exit \$? ;;
+  skills)
+    # Skills on this machine (M11): the synthetic one above, and a copy
+    # given from Unused lands in the scratch data folder.
+    env XDG_CONFIG_HOME="\${XDG_CONFIG_HOME:-$real_config}" XDG_DATA_HOME='$tmp/data' $tools_env '$repo/bin/agentvoice' "\$@"; exit \$? ;;
   tools)
     # The tools found on this machine (M10): the synthetic one above.
-    env XDG_DATA_HOME='$tmp/data' $tools_env '$repo/bin/agentvoice' "\$@"; exit \$? ;;
+    env XDG_CONFIG_HOME="\${XDG_CONFIG_HOME:-$real_config}" XDG_DATA_HOME='$tmp/data' $tools_env '$repo/bin/agentvoice' "\$@"; exit \$? ;;
   chats)
     # Saved chats: from the scratch data folder under --scratch-data, so
     # sharing a chat in a preview touches no real one; else as before.

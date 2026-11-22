@@ -813,7 +813,9 @@ AUDIT_SAFE = {"author", "target", "name", "kind", "reason", "locked", "valid_nam
               # collab._audit (Phase 15): ids, a state and a byte count.
               "frm", "to", "tid", "state", "brief_bytes",
               # Phase 16: why a call was refused, a code from collab's fixed list.
-              "code"}
+              "code",
+              # Phase M11: a skill copied in, by its size in bytes.
+              "copied_bytes"}
 
 
 def _names_outside_len(node):

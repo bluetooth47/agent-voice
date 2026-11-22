@@ -617,6 +617,31 @@ has its notes and answers marked as possibly holding outside text, like
 the browser. Gemini, Antigravity and Copilot still start the MCP servers in
 their own settings; their tab says so.
 
+### Skills on this machine
+
+Agent Details → **Tools & skills** shows every skill on the machine as a
+card in its owner's lane: one lane per agent (its own skills, and the ones
+its program finds by itself), **Communal**, and **Unused**. Unfold a card
+for its description, where it lives, its size, any problem, and who gets it.
+
+Claude Code and Codex find skills by themselves -- Claude Code in
+`~/.claude/skills`, your claude.ai account's synced skills and enabled
+plugins; Codex in `~/.codex/skills` and `~/.agents/skills` -- and every
+agent on those programs has always seen them. Nothing changes about that
+by default. What is new is a **switch on every card an agent would get**,
+its own, the communal ones and those: off takes the skill out of what
+that agent's program offers it (Claude Code's own skill switch, which its
+Skill tool then refuses; Codex's `skills.config`), and out of what Agent
+Voice gives it. The file itself is not touched, and an agent that can read
+files can still open it, so the page never calls that hiding. An Agent
+Voice skill beats one the program finds of the same name, so an agent never
+has two.
+
+**Unused** holds skills found outside Agent Voice that no agent gets. Give
+one to an agent, or to Communal, and it gets a **checked copy** -- no links
+inside, no hooks, within the size limits -- after a question that says who
+gets it. Agent Voice never edits, moves or deletes a skill it did not make.
+
 ### In Omarchy's Agents panel
 
 Each voice agent also gets a section in Omarchy's own Agents panel, the one

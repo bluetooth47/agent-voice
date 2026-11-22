@@ -52,6 +52,7 @@ class TestConfigAgents:
             "effort": "high", "voice": "amy-medium", "speed": 0, "narration": "", "instructions": "", "level": "edits",
             "tools": {"desktop": "inherit", "browser": "inherit", "omarchySkill": "inherit"},
             "detected": {},
+            "skillsOff": [],
             "notesWrite": "allow", "collaboration": "announce", "acceptsWork": True,
             "projectDir": "~/code", "endpoint": None}]
 

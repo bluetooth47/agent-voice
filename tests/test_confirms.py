@@ -150,7 +150,9 @@ def test_the_buttons_that_confirm_are_danger_buttons():
     anything else would satisfy the test above without a confirmation.
     The one other: ToolConfirm (phase M10), the question before a tool
     found on this machine is switched on, whose handlers may only write a
-    tool switch -- never one of the destructive commands above."""
+    tool switch -- or, since M11, give an agent a copy of a skill found on
+    this machine (importSkill) -- never one of the destructive commands
+    above."""
     wrong = []
     for path in overlay_qml():
         s = scan(path)
@@ -158,7 +160,7 @@ def test_the_buttons_that_confirm_are_danger_buttons():
             el = s.element_of(m.start())
             if el == "ToolConfirm":
                 body = s.src[m.end():m.end() + 400].split("onCancelled")[0]
-                if not re.search(r"\b(setAgentTool|putShared)\(", body) or \
+                if not re.search(r"\b(setAgentTool|putShared|importSkill)\(", body) or \
                         re.search(r"agents\W+trash|chats\W+delete|--uninstall|remove|reset", body):
                     wrong.append(f"{path.relative_to(ROOT)}:{s.lineno(m.start())} ToolConfirm "
                                  f"doing something other than a tool switch")
