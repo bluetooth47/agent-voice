@@ -217,6 +217,7 @@ class Task:
     # Phase M8: the target was quarantined when it was admitted. A task
     # whose target's quarantine changed since does not go ahead.
     into_quarantine: bool = False
+    q_epoch: int = 0                # Runtime._q_epoch of the target then
 
     def public(self, position: int = 0) -> dict:
         """What the state file shows: never the brief or the request."""
@@ -1153,6 +1154,11 @@ class Runtime:
         #: takes the change, so a full disk is retried, not forgotten.
         self._q_owed: dict = {}
         self._q_failed: set = set()
+        #: How many times each agent has been seen quarantined this run. A
+        #: result carries the count from when its task was admitted, and is
+        #: withheld if it moved -- a quarantine and a release in between are
+        #: a change as much as one still in force (Codex review).
+        self._q_epoch: dict = {}
         #: The last time an unreadable crew list was said in the HUD, so a
         #: burst of refused calls is one line, not twelve.
         self._crew_flash_at = 0.0
@@ -1510,8 +1516,11 @@ class Runtime:
         if self._shared_now:
             try:
                 self.d.chats.unshare(task.chat_id, task.to)
-            except (OSError, ValueError):
-                pass
+            except (OSError, ValueError) as e:
+                # Said, not swallowed: the chat stays shared with the target
+                # (a quarantine revokes it again when it is carried out).
+                print(f"  {task.kind} {task.id}: the chat could not be unshared from "
+                      f"{task.to_label} ({type(e).__name__})", flush=True)
         try:
             self.d.chats.set_current(target.id, prior[1])
         except (OSError, ValueError):
@@ -1546,6 +1555,14 @@ class Runtime:
                 [self.label(a) for a in task.chain], quarantined=True)
             return "brief only, quarantined"
         if saving and task.chat_id:
+            # Before the share as well as after it: nothing is shared at all
+            # for what the settings already refuse.
+            why, code = self._gate(task)
+            if why:
+                task.code = code
+                if self.board.move(task.id, "cancelled", why):
+                    self._audit(task)
+                return how
             try:
                 import chats as chat_store
                 before = d.chats.load(task.chat_id)
@@ -1887,7 +1904,12 @@ class Runtime:
         """_task_refusal with the settings read now, for an agent's task; for
         a pass the person started, only quarantine."""
         if task.entry == "agent":
-            return self._task_refusal(self._crew(), task)
+            why, code = self._task_refusal(self._crew(), task)
+            if not why and task.kind in ("delegate", "pass") and not self._accepts(task.to):
+                # Switched to questions only while it waited (Codex review).
+                why, code = (f"{task.to_label} no longer takes work from other agents."), \
+                    "no-work"
+            return why, code
         why = self._user_pass_refusal(task.to, task.to_label or task.to)
         return why, ("quarantined" if why else "")
 
@@ -1995,6 +2017,7 @@ class Runtime:
                     continue            # nobody by that id here: nothing to do
                 self._q_applied.add(agent)
                 self._q_owed[agent] = {"persona", "chats"}
+                self._q_epoch[agent] = self._q_epoch.get(agent, 0) + 1
         # What is owed is carried out whatever the settings say now: it only
         # ever takes something away.
         for agent in sorted(self._q_owed):
@@ -2342,6 +2365,7 @@ class Runtime:
         # for the guard and the level, and again after any wait.
         crew = self._crew()
         task.into_quarantine = bool(target) and target in crew.quarantined and crew.ok
+        task.q_epoch = self._q_epoch.get(target, 0)
         if task.into_quarantine:
             # The brief alone, and at most this much of it: what the card
             # shows is what goes.
@@ -2549,6 +2573,25 @@ class Runtime:
                            f"{T} couldn't start to answer.")
         with self._lock:
             self.side[task.to] = (task, side)
+        # Once more now the adapter is where a stop can find it: a sweep
+        # that cancelled the question between going active and here found
+        # nothing to cancel (Codex review of M8). From here on a cancel
+        # reaches the adapter itself.
+        late_why, late_code = ((task.reason or "The question was stopped.", task.code)
+                               if task.state != "active"
+                               else self._task_refusal(self._crew(), task))
+        if late_why:
+            try:
+                side.cancel()
+            except Exception:           # noqa: BLE001
+                pass
+            release()
+            if task.state == "active":
+                task.code = late_code
+                if self.board.move(task.id, "cancelled", late_why):
+                    self._audit(task)
+            self.publish()
+            return False, late_why
         write_origin(task.to, task, {a: self.label(a) for a in task.chain}, self.root)
         self.publish()
         parts, error = [], ""
@@ -2644,7 +2687,8 @@ class Runtime:
                "quarantined": task.into_quarantine,
                # Compared at delivery: a quarantine that changed since it
                # was given withholds the result (Codex review of M8).
-               "admitted_quarantined": task.into_quarantine}
+               "admitted_quarantined": task.into_quarantine,
+               "q_epoch": task.q_epoch}
         with self._lock:
             waiting = self.reports.setdefault(task.frm, [])
             waiting.append(rep)
@@ -2691,7 +2735,8 @@ class Runtime:
         kept = []
         for r in reports:
             who = r.get("from") if isinstance(r.get("from"), str) else ""
-            moved = (who in crew.quarantined) != bool(r.get("admitted_quarantined"))
+            moved = ((who in crew.quarantined) != bool(r.get("admitted_quarantined"))
+                     or self._q_epoch.get(who, 0) != r.get("q_epoch", 0))
             if r.get("state") == "completed" and (moved or crew_links.refusal(
                     crew, me, who, "delegate", who)[0]):
                 print(f"  {p.label or me}: the result of task {r.get('task', '?')} was "

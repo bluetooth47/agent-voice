@@ -3399,3 +3399,80 @@ class TestCodexPass1:
             assert call(d, "main", "ask_agent", {"to": "sora", "question": "time?"})["ok"]
             asides = d.collab.take_asides(p)
         assert asides and "from a quarantined agent" in asides[0]["answer"]
+
+
+class TestCodexPass2:
+    """Codex's second review of M8."""
+
+    def test_extra_whitespace_does_not_hide_a_pass_from_the_guard(self, monkeypatch):
+        """1: the same command to the shell is the same command here."""
+        monkeypatch.setattr(permission_hook, "_settings", lambda: ("trusted", None))
+        asked = []
+        monkeypatch.setattr(permission_hook, "_ask",
+                            lambda *a, **k: asked.append(k) or ("deny", "asked"))
+        for cmd in ("agentvoice   pass sora", "agentvoice\tpass sora", "agentvoice  permit x allow"):
+            assert permission_hook.decide("Bash", {"command": cmd}, "x")[0] == "deny", cmd
+        assert len(asked) == 3
+
+    def test_nothing_is_shared_for_what_the_settings_already_refuse(self, m8):
+        """2: the gate before the share; the share itself never happens."""
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        assert act(d, "main", "sora", "delegate")["ok"]
+        t = last_task(d)
+        shared = []
+        real = d.chats.share
+        d.chats.share = lambda cid, agent: shared.append(agent) or real(cid, agent)
+
+        board_move = d.collab.board.move
+
+        def move(task_id, state, reason=""):
+            ok = board_move(task_id, state, reason)
+            if state == "active":
+                links(d, [])                    # after start()'s last gate
+            return ok
+        d.collab.board.move = move
+        _release(d)
+        _idle(d)
+        assert t.state == "cancelled" and t.code == "no-link" and shared == []
+        assert not dispatched(d, "sora")
+
+    def test_a_question_cancelled_before_its_adapter_is_registered_is_not_sent(self, m8):
+        """3: the sweep's cancel found no adapter to stop; the check after
+        registering it does."""
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        real = d.side_adapter
+
+        def side(p):
+            a = real(p)
+            quarantine(d, ["sora"])             # in the gap
+            return a
+        d.side_adapter = side
+        got = act(d, "main", "sora", "ask_agent")
+        assert not got["ok"] and "quarantined" in got["text"]
+        assert all(not a.sent for _, a in d.sides), "the question never went"
+
+    def test_a_quarantine_and_release_before_delivery_still_withholds(self, m8):
+        """4: the epoch moved, though both readings say not quarantined."""
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        assert act(d, "main", "sora", "delegate", report_back=True)["ok"]
+        _release(d)
+        _idle(d)
+        quarantine(d, ["sora"])
+        d.collab.tick()
+        quarantine(d, [])
+        d.collab.tick()
+        text = d.collab.deliveries(d._main)
+        assert "was withheld" in text and "Sora here." not in text
+
+    def test_a_target_that_stops_taking_work_in_the_last_moment_gets_none(self, m8):
+        """5: the last gate holds acceptsWork too."""
+        d = m8
+        links(d, crew_links.everyone(["main", "sora"]))
+        assert act(d, "main", "sora", "delegate")["ok"]
+        d.catch_up_one = lambda p: set_agent(d, "sora", acceptsWork=False)
+        _release(d)
+        _idle(d)
+        assert last_task(d).state == "refused" and not dispatched(d, "sora")

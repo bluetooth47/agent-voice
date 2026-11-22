@@ -382,12 +382,16 @@ def orders_write(tool_name: str, tool_input) -> str:
             if frag in cmd:
                 return ("this command touches what the agents are told "
                         f"({frag})")
+        # The words with every run of whitespace as one space, so
+        # `agentvoice  pass` is the same command it is to the shell (Codex
+        # review of M8). Still a text match: quoting gets past it.
+        flat = " ".join(cmd.split())
         for frag in sorted(set(_spellings(_card_dirs())) | set(CARD_WORDS)):
-            if frag in cmd:
+            if frag in cmd or frag in flat:
                 return ("this command could answer an approval card, or change "
                         f"what does ({frag})")
         for frag in sorted(set(_spellings(_crew_dirs())) | set(CREW_WORDS)):
-            if frag in cmd:
+            if frag in cmd or frag in flat:
                 return ("this command could pass work between agents as if you had, "
                         f"stepping round the Crew map ({frag})")
     return ""
