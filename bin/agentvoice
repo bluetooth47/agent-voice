@@ -124,9 +124,14 @@ case "${1:-status}" in
   talk)
     # The push-to-talk key going down. Mid-reply that means "stop talking";
     # otherwise it means "listen to me now", skipping the wake word.
+    # The readout's preview publishes `speaking` with "preview": true; that
+    # is sample text, not a reply to stop (phase M3, Codex review).
     case "$(vstate)" in
       off)                 echo "daemon not running" >&2; exit 1 ;;
-      thinking|speaking)   exec "$0" interrupt ;;
+      speaking)            if grep -q '"preview": true' "$STATE" 2>/dev/null; then
+                             send_command talk
+                           else exec "$0" interrupt; fi ;;
+      thinking)            exec "$0" interrupt ;;
       *)                   send_command talk ;;
     esac
     ;;

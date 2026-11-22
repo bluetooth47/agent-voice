@@ -21,7 +21,17 @@ daemon so they can be tested on their own:
   clear, not only what was on it at that instant: a lock during a capture
   finds the screen blank, and the exchange before it would otherwise come
   straight back, because crew mode re-merges `Persona.last` into every idle
-  payload. The first new words end it.
+  payload, and the run loop republishes its own copy of the last turn with
+  every level update. Until new words arrive both fields are sent as "";
+  after, a field that still holds cleared words is left out, so the screen
+  keeps the newer exchange it has (Codex review of M3). The set outlives
+  the first new words for that reason; a new turn worded exactly like a
+  cleared one shows its answer but not its question.
+- **A capture never carries an answer.** The follow-up window opens on the
+  turn just finished, and its partials replace only the transcript, so the
+  old answer rode along as `reply` -- drawn whatever `hudKeepReply` said.
+  While somebody is speaking (`capture`, `transcribing`) a reply is moved to
+  `last_reply`.
 
 The preview (the Display page's button) is here too: four seconds of sample
 text published as a real `speaking` payload, so the HUD draws it exactly as
@@ -45,6 +55,8 @@ KEEP_S = 600.0
 #: How many recent texts a clear covers. A turn carries a growing reply and
 #: a growing partial, so this spans the last few turns.
 SEEN_MAX = 64
+#: And how many cleared texts are remembered, newest kept.
+GONE_MAX = 256
 
 #: How long the preview shows, as the plan specifies.
 PREVIEW_S = 4.0
@@ -53,6 +65,9 @@ PREVIEW_S = 4.0
 #: expire without cutting off words somebody is reading. `followup` counts:
 #: the window is open and waiting, and the text in it is the last exchange.
 IDLE = ("listening", "off", "yielded", "followup")
+
+#: Somebody is speaking: whatever reply a payload carries is the last one.
+CAPTURING = ("capture", "transcribing")
 
 #: The preview sits only on these: a real turn, a capture, a lent
 #: microphone and a lock all win over it.
@@ -68,11 +83,18 @@ SAMPLE_REPLY = ("Two things: the design review at three, and a call with Sam at 
 class Readout:
     def __init__(self, clock=time.monotonic) -> None:
         self._clock = clock
-        self._lock = threading.Lock()
+        # Re-entrant: the daemon's SIGUSR1 handler publishes from the main
+        # thread, which may already be inside compose() when the signal
+        # lands, and a plain Lock would deadlock it there (Codex review).
+        self._lock = threading.RLock()
         #: {"who", "text"}: the last reply the readout carried.
         self._kept: dict | None = None
-        #: Texts cleared and not to be shown again; None when nothing is.
-        self._gone: frozenset[str] | None = None
+        #: Texts cleared and not to be shown again, oldest first.
+        self._gone: list[str] = []
+        #: True from a clear until new words arrive: both fields go out as "".
+        self._blank = False
+        #: The preview was on the screen and its end has not been drawn yet.
+        self._previewed = False
         #: Every text the readout has carried since the last clear: what a
         #: clear has to cover. Bounded, oldest first.
         self._seen: list[str] = []
@@ -95,21 +117,39 @@ class Readout:
             who = str(extra.get("who", "") or "")
             t, r = extra.get("transcript"), extra.get("reply")
 
-            if self._gone is not None:
-                gone = self._gone
-                fresh = any(isinstance(v, str) and v != "" and v not in gone
-                            for v in (t, r))
-                if fresh:
-                    self._gone = None
-                else:
+            if self._gone:
+                gone = set(self._gone)
+                if self._blank and any(isinstance(v, str) and v != "" and v not in gone
+                                       for v in (t, r)):
+                    self._blank = False
+                if self._blank:
                     # Said outright, not left out: the screen updates only a
                     # field it is sent, so an absent key keeps the old words.
                     extra["transcript"] = extra["reply"] = ""
                     t = r = ""
+                else:
+                    # Newer words are on screen; a stale copy of cleared ones
+                    # must not replace them, nor bring the old ones back.
+                    for key, v in (("transcript", t), ("reply", r)):
+                        if isinstance(v, str) and v != "" and v in gone:
+                            extra.pop(key)
+                    t, r = extra.get("transcript"), extra.get("reply")
 
-            if self._kept is not None and self._kept["who"] != who:
-                # Another agent's turn: its answer is not this one's.
+            if who != self._who:
+                # Another agent's turn, or none: its answer is not this
+                # one's, and words the payload does not replace were the
+                # other agent's (a lent microphone after Theo answered
+                # said nothing about Theo's words, and they stayed).
                 self._kept = None
+                if t is None:
+                    extra["transcript"] = t = ""
+                if r is None:
+                    extra["reply"] = r = ""
+
+            if state in CAPTURING and r:
+                # The answer before this capture, not an answer to it.
+                self._kept = {"who": who, "text": str(r)}
+                extra["reply"] = r = ""
 
             shown_t = self._shown[0] if t is None else str(t)
             shown_r = self._shown[1] if r is None else str(r)
@@ -133,7 +173,15 @@ class Readout:
                 extra.update(transcript=SAMPLE_TRANSCRIPT, reply=SAMPLE_REPLY,
                              preview=True)
                 extra.pop("last_reply", None)
+                self._previewed = True
                 state = "speaking"
+            elif self._previewed:
+                # The first payload after it: the real words, said outright,
+                # or a merging screen keeps the sample (a muted `off`
+                # payload carries no text at all).
+                self._previewed = False
+                extra.setdefault("transcript", self._shown[0])
+                extra.setdefault("reply", self._shown[1])
             return state, extra
 
     # --- clearing ---------------------------------------------------------
@@ -143,7 +191,8 @@ class Readout:
         if self._kept is not None:
             texts.add(self._kept["text"])
         if texts:
-            self._gone = frozenset(texts) | (self._gone or frozenset())
+            self._gone = ([g for g in self._gone if g not in texts] + sorted(texts))[-GONE_MAX:]
+            self._blank = True
         self._seen = []
         self._kept = None
 

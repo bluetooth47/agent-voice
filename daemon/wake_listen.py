@@ -1992,6 +1992,12 @@ class Daemon:
             r = self.readout = readout.Readout()
         return r
 
+    def expire_readout(self) -> None:
+        """Ten minutes with nothing new on the readout: both lines clear
+        (readout.KEEP_S). From the run loop's unconditional 2 s poll."""
+        if self.readout_for().expire():
+            self._recompose()
+
     def apply_readout_command(self, cmd: str | None) -> bool:
         """`agentvoice hud-preview`, the Display page's Preview button: four
         seconds of sample text through the state file. True if it was one.
@@ -2283,8 +2289,10 @@ class Daemon:
         self._notices = {**self._notices, p.id or "": (
             f"{label}: new chat — {because}.", getattr(p, "turn_id", 0),
             time.time())}
-        # phase M3: the reply kept for the readout was the old chat's.
-        self.readout_for().forget(p.id or "")
+        # phase M3: the reply kept for the readout was the old chat's, and
+        # so are the words on screen: cleared, or the recompose below would
+        # read the old answer back and keep it again (Codex review).
+        self.readout_for().forget(p.id or "", clear=True)
         self._recompose()
         return False
 
@@ -2799,9 +2807,6 @@ class Daemon:
         # phase M2: a notice outlives the turn it explained only until the
         # agent answers again, and today's limit count rolls over at midnight.
         if self.expire_notices():
-            self._recompose()
-        # phase M3: ten minutes with nothing new, and the readout clears.
-        if self.readout_for().expire():
             self._recompose()
         if self.limit_hits_rolled():
             self.publish_agent()
@@ -4860,10 +4865,16 @@ class Daemon:
         return view
 
     def _recompose(self) -> None:
-        """Redraw the shared readout after an agent's own state moved."""
+        """Redraw the shared readout after an agent's own state moved.
+
+        The snapshot is read under the state file's own lock: read outside
+        it, a timer (the readout preview's end) could take `listening`, lose
+        the race to the microphone publishing `capture`, and write the stale
+        snapshot back over it (Codex review of M3)."""
         if self.state is not None:
-            state, extra = self._mic_shown
-            self.state.publish(state, **extra)
+            with getattr(self.state, "_lock", None) or contextlib.nullcontext():
+                state, extra = self._mic_shown
+                self.state.publish(state, **extra)
 
     def _compose(self, state: str, extra: dict) -> tuple[str, dict]:
         """_compose_line, with the collaboration tasks beside it (Phase 15):
@@ -5358,6 +5369,11 @@ class Daemon:
                     # never run again and the microphone would stay lent
                     # forever. That exact bug shipped once already.
                     self.reconcile_yield()
+                    # phase M3: ten idle minutes and the readout clears --
+                    # here, above the gate, so a muted or lent microphone
+                    # does not keep the last exchange on screen for hours
+                    # (Codex review of M3; it was in refresh(), below).
+                    self.expire_readout()
 
                 if crew:
                     # Every way out of a capture lands in "wake"; releasing

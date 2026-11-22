@@ -445,7 +445,9 @@ Item {
   }
   Process { id: micToggle; command: ["agentvoice", "mic"] }
 
-  readonly property bool turnRunning: serviceActive
+  // The readout's preview is not a turn (phase M3).
+  property bool vPreview: false
+  readonly property bool turnRunning: serviceActive && !vPreview
                                       && (vState === "speaking" || vState === "thinking"
                                           || vState === "transcribing")
   function stopTurn() {
@@ -1304,6 +1306,12 @@ Item {
         if (d.floor_db !== undefined) root.floorDb = d.floor_db
         if (d.transcript !== undefined) root.lastTranscript = String(d.transcript)
         if (d.reply !== undefined) root.lastReply = String(d.reply)
+        // A locked payload carries no text, and a field that is not sent
+        // keeps its value: the Overview's LAST EXCHANGE would have kept the
+        // exchange through the lock, for an overlay summoned over it
+        // (Codex review of M3; pre-existing).
+        if (root.vState === "locked") { root.lastTranscript = ""; root.lastReply = "" }
+        root.vPreview = d.preview === true
         if (d.latency_ms !== undefined) root.lastLatencyMs = Math.round(d.latency_ms)
         root.lastWho = d.who !== undefined ? String(d.who) : ""
         if (d.agent !== undefined) root.vAgent = String(d.agent)

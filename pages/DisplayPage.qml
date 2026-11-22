@@ -62,11 +62,11 @@ Column {
       onReset: page.s.resetKey("hudLingerMs")
     }
 
-    // phase M3 (feedback items 3 and 20). All dimmed with the switch, like
-    // the duration: none of them means anything with the readout off.
+    // phase M3 (feedback items 3 and 20). Position and text size are dimmed
+    // with the switch, like the duration: they shape the floating readout
+    // alone. Size and keeping the answer shape the popup too, so stay live.
     SettingRow {
       width: parent.width
-      disabledReason: page.s.setting("hud", true) === true ? "" : "Only while the readout is shown."
       label: "Size"
       hint: page.s.setting("hudSize", "locked") === "dynamic"
             ? "Grows and shrinks to fit what it shows."
@@ -93,8 +93,8 @@ Column {
 
     ToggleRow {
       width: parent.width
-      enabled: page.s.setting("hud", true) === true
-      opacity: enabled ? 1 : 0.45
+      // Not dimmed with the switch: like Size, it shapes the popup's
+      // last-heard lines too.
       label: "Keep the last answer on screen while I talk"
       hint: "The answer stays above what you are saying, so replying to it does not make it vanish."
       help: "It clears, with what you said, when the screen locks, when you talk to " +
@@ -144,8 +144,10 @@ Column {
           { value: "medium", label: "Medium" },
           { value: "large", label: "Large" }
         ]
-        value: ["small", "large"].indexOf(String(page.s.setting("hudTextSize", "medium"))) >= 0
-               ? String(page.s.setting("hudTextSize", "medium")) : "medium"
+        // Strict, as the HUD reads it: a malformed value shows as medium,
+        // which is what is drawn.
+        value: page.s.setting("hudTextSize", "medium") === "small" ? "small"
+               : page.s.setting("hudTextSize", "medium") === "large" ? "large" : "medium"
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
         onCommitted: function(v) { page.s.put("hudTextSize", v) }

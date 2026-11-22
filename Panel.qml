@@ -87,6 +87,11 @@ Panel {
   // own yet (the wake word clears `reply`). The daemon keeps it and says
   // when it is gone (readout.py); whether it is drawn is hudKeepReply.
   property string lastKept: ""
+  // The payload is the readout's preview, not a turn (readout.py).
+  property bool vPreview: false
+  // LAST HEARD unfolded by its "more". Here, not on the section: the close
+  // handler below cannot reach an id inside the panel's loaded content.
+  property bool lastExpanded: false
   // Locked: two fixed lines, the same height every turn. Anything but
   // "dynamic" is locked, so an unreadable value gets the steady one.
   readonly property bool readoutLocked: voice.pref("hudSize", "locked") !== "dynamic"
@@ -213,7 +218,10 @@ Panel {
   //: stop means something. `_on_interrupt` in the daemon checks the same list
   //: and does nothing outside it, so a control shown at any other moment
   //: would be a button that silently does nothing.
-  readonly property bool vTurnRunning: serviceActive
+  //: Not during the readout's preview (phase M3): its `speaking` is four
+  //: seconds of sample text, and STOP would interrupt nothing -- or, with
+  //: collaboration work queued, cancel it (Codex review).
+  readonly property bool vTurnRunning: serviceActive && !vPreview
                                        && (vState === "speaking"
                                            || vState === "thinking"
                                            || vState === "transcribing")
@@ -471,6 +479,9 @@ Panel {
                          : d.notice ? String(d.notice) : ""
         voice.micMuted = d.muted === true
         voice.vWindow = d.window !== undefined ? String(d.window) : ""
+        // After vState, on purpose: the HUD reads it when its `busy` turns
+        // false, to close a preview without the turn's linger.
+        voice.vPreview = d.preview === true
         if (d.agent !== undefined) voice.vAgent = String(d.agent)
         if (d.level !== undefined) voice.permissionLevel = String(d.level)
         if (d.posture !== undefined) voice.vPosture = String(d.posture)
@@ -536,6 +547,7 @@ Panel {
     locked: voice.readoutLocked
     position: voice.pref("hudPosition", "top") === "bottom" ? "bottom" : "top"
     textScale: voice.readoutScale
+    preview: voice.vPreview
     // A click on the readout opens the whole conversation -- the answer to
     // "the popup is too small" for anything longer than a glance.
     onOpenConversation: conversation.running = true
@@ -691,7 +703,7 @@ Panel {
     }
   }
   onTargetsChanged: if (cursor >= targets.length) cursor = Math.max(0, targets.length - 1)
-  onOpenedChanged: if (!opened) { cursorActive = false; lastExchange.expanded = false }
+  onOpenedChanged: if (!opened) { cursorActive = false; lastExpanded = false }
 
   // Open the overlay, on a page: {"page": "agents", "agent": "sarah"}.
   function summon(payload) {
@@ -925,7 +937,9 @@ Panel {
           visible: voice.vTurnRunning || voice.readoutLocked
           enabled: voice.vTurnRunning
           opacity: enabled ? 1.0 : 0.35
-          text: "STOP" + (voice.lastWho !== "" ? "  " + voice.lastWho : "")
+          // Says why it is inert, in its own fixed slot.
+          text: !voice.vTurnRunning ? "STOP · nothing running"
+                : "STOP" + (voice.lastWho !== "" ? "  " + voice.lastWho : "")
           iconText: "\u{f06d7}"
           bordered: true
           hasCursor: voice.cursorOn("stop")
@@ -961,20 +975,26 @@ Panel {
             // "idle" turning into "transcribing" never rewraps the row of
             // chips onto another line. Elided past the popup's width; the
             // full name is in the tooltip.
+            // Measured bold, as a busy chip draws, plus a little room for
+            // the busy icon (Codex review: a proportional font near the
+            // wrap could still add a row when a turn began).
             TextMetrics {
               id: chipNow
               font.family: voice.fontFamily
               font.pixelSize: Style.font.caption
+              font.bold: chip.selected
               text: chip.text
             }
             TextMetrics {
               id: chipWidest
               font.family: voice.fontFamily
               font.pixelSize: Style.font.caption
+              font.bold: true
               text: chip.name + "  ·  transcribing"
             }
             width: voice.readoutLocked
-                   ? Math.min(chips.width, implicitWidth + Math.max(0, chipWidest.width - chipNow.width))
+                   ? Math.min(chips.width, implicitWidth + Math.max(0, chipWidest.width - chipNow.width)
+                                           + (chip.busyNow ? 0 : Style.space(4)))
                    : Math.min(chips.width, implicitWidth)
             iconText: busyNow ? "\u{f0e4e}" : "\u{f06a9}"
             bordered: true
@@ -1119,7 +1139,7 @@ Panel {
         width: parent.width
         spacing: Style.space(4)
         visible: voice.engineInstalled
-        property bool expanded: false
+        readonly property bool expanded: voice.lastExpanded
         readonly property bool folded: voice.readoutLocked && !expanded
 
         Item {
@@ -1146,7 +1166,7 @@ Panel {
               anchors.margins: -Style.space(6)
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onClicked: lastExchange.expanded = !lastExchange.expanded
+              onClicked: voice.lastExpanded = !voice.lastExpanded
             }
           }
         }

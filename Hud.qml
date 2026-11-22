@@ -61,6 +61,14 @@ PanelWindow {
   property string position: "top"
   // 0.85, 1 or 1.25: small, medium (the bar's own size) or large.
   property real textScale: 1.0
+  // The payload is the Display page's preview (readout.py). Its end closes
+  // the readout at once: the linger is for reading a real answer.
+  property bool preview: false
+  property bool wasPreview: false
+  // A real turn taking over mid-preview lingers as a turn does. The widget
+  // sets `preview` after the state, so at the end of a preview `busy` has
+  // already gone false and this does not fire while busy.
+  onPreviewChanged: if (busy) wasPreview = preview
   readonly property real bodySize: Math.round(Style.font.body * textScale)
   readonly property real captionSize: Math.round(Style.font.caption * textScale)
   // The header names the state and, with several agents, whose turn it is;
@@ -99,6 +107,11 @@ PanelWindow {
     if (busy) {
       linger.stop()
       showing = true
+      wasPreview = preview
+    } else if (showing && wasPreview) {
+      linger.stop()
+      showing = false
+      wasPreview = false
     } else if (showing) {
       // Restart, not start: a rapid followup -> capture -> followup bounce
       // would otherwise leave an earlier timer to close it mid-sentence.

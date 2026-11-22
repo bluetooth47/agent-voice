@@ -335,7 +335,8 @@ def test_the_popup_keeps_its_last_heard_slot_and_its_stop_button():
     last = last[:last.index("\n        Item {")]
     assert "visible: voice.engineInstalled" in last
     assert "lastTranscript" not in last
-    stop = panel[panel.index('text: "STOP"') - 400:panel.index('text: "STOP"')]
+    at = panel.index('"STOP · nothing running"')
+    stop = panel[at - 500:at]
     assert "visible: voice.vTurnRunning || voice.readoutLocked" in stop
     assert "enabled: voice.vTurnRunning" in stop
 

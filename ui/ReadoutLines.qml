@@ -51,10 +51,12 @@ Column {
   }
   // Fixed from the font, never from the text: this is the whole point.
   readonly property int slotHeight: Math.ceil(Math.max(fm.lineSpacing, fm.height) * root.linesEach) + 1
-  // Roughly what fits in a slot; the elide below catches what this misses.
+  // Roughly what fits in a slot, with a margin for glyphs wider than the
+  // average and for word wrap; the elide below catches what this misses,
+  // at the cost of the very last words (Codex review: noted, not solved).
   readonly property int tailChars: Math.max(24, Math.floor(
-      Math.max(0, root.width - root.barWidth - root.barGap)
-      / Math.max(1, fm.averageCharacterWidth)) * root.linesEach - 4)
+      Math.floor(Math.max(0, root.width - root.barWidth - root.barGap)
+                 / Math.max(1, fm.averageCharacterWidth)) * root.linesEach * 0.85))
 
   // The end of `s` that fits, from a sentence (or failing that a word)
   // boundary, with an ellipsis where it was cut.

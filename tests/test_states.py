@@ -889,14 +889,17 @@ def test_the_stop_is_the_loudest_thing_in_the_panel():
     """
     panel = _uncommented(PANEL)
 
-    at = panel.index('text: "STOP"')
+    at = panel.index('"STOP · nothing running"')
     block = panel[panel.rindex("Button {", 0, at):]
     block = block[:block.index("\n        }")]
     assert "voice.urgent" in block, \
         "the stop is drawn in a status colour like everything around it"
     assert "width: parent.width" in block, "it should span the panel"
     assert "bordered: true" in block, "a button, not a word"
-    assert "visible: voice.vTurnRunning" in block
+    # Shown during a turn; since M3 also kept in place, inert, between turns
+    # when the readout is locked, so the popup does not bounce (bug B).
+    assert "visible: voice.vTurnRunning || voice.readoutLocked" in block
+    assert "enabled: voice.vTurnRunning" in block
     assert "voice.stopTurn()" in block
     assert "\\u{f06d7}" in block, \
         "no stop sign -- the octagon is from the same Material Design set " \
