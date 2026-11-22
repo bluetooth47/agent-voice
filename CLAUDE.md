@@ -1,13 +1,59 @@
 # Working on agentvoice
 
+## Where to work: the clone, never the plugin folder
+
+Work in the development clone, `~/Projects/agent-voice`. Never edit, test or
+save notes through `~/.config/omarchy/plugins/duaneoca.agentvoice`.
+
+The reason is Omarchy, not this project. The shell runs
+`inotifywait -m -r -e close_write,create,delete,move` over the whole plugins
+folder (`/usr/share/omarchy/shell/services/PluginRegistry.qml:726`) and
+exempts only top-level hidden entries, `.git/` and `__pycache__/`
+(`localPluginIdForPath`, :791). Any other write (a Markdown note, an
+editor's swap file, a `.pytest_cache`) makes `shell.qml` call
+`reloadPlugins()` after 150 ms, which unloads and reloads every panel,
+service and widget on the desktop. That was bug H; one shell logged 507 of
+those reloads in a day. Omarchy's files are never edited to fix it.
+
+How it is laid out since M0:
+
+- **The plugin path is a symlink** to a deploy checkout,
+  `~/.local/share/agentvoice-plugin`. `inotifywait -r` does not follow a
+  symlink, so nothing written in that checkout reloads anything, a deploy
+  included. Omarchy finds, lists and loads the plugin through the link as
+  before (`io.voxtype.settings` was already one); `omarchy plugin remove`
+  unlinks it and leaves the checkout. Going back to a real folder: `rm` the
+  link and `mv` the checkout back.
+- **The deploy checkout changes only through `bin/agentvoice-deploy`**, run
+  from the clone. It refuses a dirty clone, a red (strict) check, a target
+  that is not its own checkout of this plugin or has local edits, and running
+  from inside the plugins folder. It fetches the commit and checks it out
+  detached, offers `./install.sh --yes` once the daemon is idle, and says
+  (never runs) `omarchy-restart-shell` when QML changed: the shell reads QML
+  only when it starts. The way back is the same command with an older
+  commit; it prints the one it replaced and logs every deploy to
+  `~/.local/state/agentvoice/deploys.log`.
+- **`./bin/agentvoice-check` writes nothing in the tree**: no bytecode, no
+  pytest cache, and its last line proves it. A file anything else writes
+  during the run (an editor, an agent working in the clone) fails that line
+  too, and the line names it.
+- **Pushes go to `fork` only.** In the clone, `upstream` (duaneoca) has its
+  push URL disabled and `remote.pushDefault` is `fork`. The deploy checkout
+  has no `origin`, so `omarchy plugin update` refuses at the fetch instead of
+  pulling someone else's HEAD onto a detached deploy.
+- **After `omarchy-restart-shell`, the shell's watcher is new.** Moving a
+  watched folder leaves the old watcher on its inodes under the old name; a
+  restart is what ends that (found in M0).
+
 ## Before every commit
 
 ```bash
 ./bin/agentvoice-check
 ```
 
-Twelve static checks plus the test suite: two seconds for the checks, about
-thirty with the tests. It exists because
+Fourteen static checks plus the test suite: two seconds for the checks, about
+two and a half minutes with the tests. The last check is that the run wrote
+nothing in the tree (see above). It exists because
 this project shipped a string of bugs that reached the user first: an unbound
 shell variable, a gum box rendered 298 columns wide, a Python method whose
 body was orphaned into dead code after a `return`, and three settings that

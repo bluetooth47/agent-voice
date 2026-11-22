@@ -12,9 +12,18 @@ something a person should read first. Hence this file.
 The short version:
 
 ```bash
-./bin/agentvoice-check                     # before every commit, ~30s
+./bin/agentvoice-check                     # before every commit, ~2.5min
 AGENTVOICE_BOX=1 ./bin/agentvoice-check    # plus eight real installs, ~10min
+bin/agentvoice-deploy [COMMIT]             # put a commit into the live plugin
 ```
+
+Work in a clone outside `~/.config/omarchy/plugins` (here,
+`~/Projects/agent-voice`), never in the installed plugin folder: Omarchy
+reloads every plugin on any write in that folder. `agentvoice-deploy` is the
+one way the live copy changes, and it leaves the live checkout on a detached
+HEAD, so `omarchy plugin update` is not the way to update this plugin
+here. Deploy a commit instead. The details are in CLAUDE.md, "Where to
+work".
 
 Run the first one. Run the second if you touched `install.sh` — every install
 bug this project has had hid behind something the development machine already

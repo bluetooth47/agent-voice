@@ -1546,3 +1546,58 @@ to about 25s (three).
 
 Small numbers: n=4 and n=2, from one evening. Enough to place the cost
 against §33's floor, not to gate anything.
+
+## 40. M0 baseline for the redesign round (M30 reruns it as a pair)
+
+i7-1185G7 (8 threads, 62 GiB), 2026-11-21, the installed daemon at
+`92c71ff` (orders-guard; the journal's build line says `92c71ff-dirty`),
+`claude` 2.1.330, `codex-cli` 0.171.0, sherpa wake engine (threshold 20%,
+boost 150%, second check on), Whisper `base.en`, trailing pause 1600 ms,
+mic and speaker on a Shokz OpenRun Pro 2 (Bluetooth). Raw numbers:
+`bench/baselines/m0.json`. The protocol is §33's.
+
+### S: send to first text, Sora (Claude Haiku, low, ask), 20 runs
+
+| run | start | median | p95 | min | max | failed |
+|---|---|---|---|---|---|---|
+| 1 | cold | 3.21s | 4.53s | 2.43s | 4.71s | 0 |
+| 1 | warm | 1.71s | 2.42s | 1.09s | 3.43s | 0 |
+| 2 | cold | 3.05s | 4.08s | 2.82s | 4.24s | 0 |
+| 2 | warm | **1.62s** | **2.08s** | 1.30s | 3.02s | 0 |
+
+**Provisional.** Sora's warm median was 0.64 to 0.76s in §33 to §39 and is
+1.6 to 1.7s here, cold 1.8 → 3.1s. Both runs agree with each other, but
+neither was on a quiet machine: the load average was 5.6 to 6.9 throughout
+(the daemon itself about 15% of a core, a VPN client in bursts, my own test
+runs), and run 1 overlapped a Codex review. Phases 11 to 16 judged their
+gates on "quiet runs". So this is either load or a real slowdown since §39
+(claude 2.1.328 → 2.1.330, the API that day, or the orders-guard build), and
+these numbers cannot say which. Before anything is gated on them: a quiet
+rerun, interleaved with a §39 build if the gap stays.
+
+### J: real turns from the journal, since the 92c71ff install (00:10 to 18:10)
+
+`turn_latency.py --since "2026-11-21 00:10"` (`--build 92c71ff` finds
+nothing: its pattern does not accept the `-dirty` suffix, recorded in
+`phaseM0notes.md`).
+
+| agent | turns | end → word median | p95 | wake turns | wake → word median | p95 |
+|---|---|---|---|---|---|---|
+| Theo (claude) | 105 | 9.7s | 21.1s | 6 | 24.1s | 33.6s |
+
+Sora and Hazel had no voice turns in the window. As in §33, this is the
+user's day (tool runs included), the real-use check, never the gate.
+
+### The automatic wake test (synthesized voices, not the user)
+
+`agentvoice wake-test auto`, 162 clips, through the live settings above:
+
+| name | tries | hits | by the spotter | by the second check |
+|---|---|---|---|---|
+| theo | 24 | 14 | 5 | 9 |
+| sora | 24 | 21 | 10 | 11 |
+| hazel | 24 | 19 | 6 | 13 |
+| full stop | 12 | 8 | 8 | — |
+
+78 distractors, **one false wake**: "Thank you" (voice ryan-high) woke
+Theo. Synthesized voices; the manual test is the real rate.

@@ -42,7 +42,10 @@ inside an agent's CLI) and the daemon.
 
 | Path | What |
 |---|---|
-| `~/.config/omarchy/plugins/duaneoca.agentvoice/` | **The repo, and also the live plugin.** Writing any file here restarts the shell (see Known issues). |
+| `~/Projects/agent-voice/` | **The development clone. Work here.** Remotes: `fork` (push), `upstream` (duaneoca, push disabled). |
+| `~/.config/omarchy/plugins/duaneoca.agentvoice` | **The live plugin path: a symlink** to the deploy checkout below (since M0). Never written directly. |
+| `~/.local/share/agentvoice-plugin/` | **The deploy checkout** the symlink points at, on a detached HEAD. Changed only by `bin/agentvoice-deploy`. |
+| `~/.local/state/agentvoice/deploys.log` | One line per deploy: time, previous commit, new commit, target. |
 | `~/.local/share/agentvoice/app/` | **An installed copy** of the daemon. The service runs this copy, not the repo. Update it with `./install.sh --yes`. |
 | `~/.local/share/agentvoice/{venv,models,verifiers,wakewords}` | Interpreter, wheels, Vosk/Whisper/Piper/sherpa models, trained verifiers. |
 | `~/.local/share/agentvoice/agents/<id>/` | One folder per agent (`main` for the main agent): `role.md`, `personality.md`, `instructions.md`, `skills/<name>/SKILL.md`, `notes/`, `.history/`. See section 6. |
@@ -458,9 +461,13 @@ Summarized from CLAUDE.md and merged-plan.md section 3; read the full text.
 
 ## 10. Development workflow
 
+- **Where:** in the clone, `~/Projects/agent-voice`. The plugin folder
+  changes only through `bin/agentvoice-deploy` (see CLAUDE.md, "Where to
+  work").
 - **Before any commit:** run `./bin/agentvoice-check`: static checks
   (settings ↔ UI, parse, shellcheck-ish, pinned downloads, QML property
-  lint, states drawn) then pytest. `AGENTVOICE_BOX=1` for real installs under
+  lint, states drawn) then pytest, then a check that the run wrote nothing
+  in the tree. `AGENTVOICE_BOX=1` for real installs under
   bubblewrap when `install.sh` changes. CI (`.github/workflows/check.yml`)
   runs `check` and `full` (`AGENTVOICE_NO_SKIPS=1`).
 - **Tests** cover `speech_text`, `permission_hook`, `runtime.Config`, the
@@ -470,6 +477,8 @@ Summarized from CLAUDE.md and merged-plan.md section 3; read the full text.
   `test_tools_skills`, `test_notes`, `test_collab` (replays
   `fixtures/collab/recorded-session.json`), `test_turn_latency`. Do not test
   QML behaviour or the real microphone.
+- **Deploying:** `bin/agentvoice-deploy [--install] [COMMIT]` from the
+  clone; the way back is the same with an older commit.
 - **Installing:** `./install.sh --yes` copies to
   `~/.local/share/agentvoice/app` and restarts the service. **This kills any
   voice turn in progress**, including the one you may be running inside. Do
@@ -480,7 +489,10 @@ Summarized from CLAUDE.md and merged-plan.md section 3; read the full text.
     `phase-b` … `phase-g`, `latency-2`, `test-fixes`,
     `voice-latency-and-conversation`.
   - **Push only to the `fork` remote (bluetooth47/agent-voice). Never push to
-    `origin` (duaneoca/agent-voice).**
+    duaneoca/agent-voice** (`upstream` in the clone; its push URL is
+    disabled).
+  - The redesign round runs as phases M0–M30 (`notes/master-plan.md`),
+    branch `phase-mN`, notes `phaseMNnotes.md`.
   - The user's own uncommitted work may be in the tree, so don't commit
     blindly.
   - End commit messages with the Co-Authored-By line.
@@ -506,27 +518,29 @@ Summarized from CLAUDE.md and merged-plan.md section 3; read the full text.
   - 15: user-started collaboration, passing a conversation, shared chats;
   - 16: agent-started collaboration (crew tools, call socket, levels).
 - **Installed:** `orders-guard` at 92c71ff (installed 2026-11-21 00:12,
-  pushed to fork; 2790 tests green). Phase 16 (c47aae1) is its parent.
+  pushed to fork; 2790 tests green). Phase 16 (c47aae1) is its parent. The
+  deploy checkout is at the end of `phase-m0` (tooling only; the daemon is
+  still 92c71ff's code).
+- **M0 done (2026-11-21):** the clone, the symlinked plugin path,
+  `agentvoice-deploy`, the check writing nothing; `dev` and `main` are at
+  `phase-m0` on the fork. Theo's project folder is the clone.
 - **Named agents in daily use:** "Theo" (Opus, Piper voice `theo`) is the
   main agent. "Sora" is a Haiku extra agent (its `notesWrite` is deny in
   settings). Theo's browser tools are off.
-- **Next:** Phase 17 of merged-plan.md is the user's own. Merging the phase
-  branches back into `dev` has not happened.
+- **Next:** the redesign round, M1 to M29, run by
+  `~/Documents/agent-reconfiguration-plan/phase-runner/master_runner.py`;
+  M30 hands off to Phase 17 (the user's own).
 
 ---
 
 ## 12. Known issues
 
-- **The shell restarts when any file in the plugin folder is written**
-  (including `__pycache__` from importing daemon code, or test output).
-  Treat the repo as read-only unless the user has agreed to a restart.
+- ~~The shell reloads when any file in the plugin folder is written~~ (bug
+  H): fixed in M0 by the clone, the symlink and `agentvoice-deploy`.
 - **Voice commands only fire when said alone** ("stop", "goodbye", "full
   stop", "take over"); inside a longer sentence they go to the agent as
   ordinary text.
 - **The popup resizes** as the last-heard line appears and disappears.
-- **`dev` and `main` are 32 and 39 commits behind `orders-guard`.**
-- **Local `main` tracks `origin/main`** (ahead 35). Never push there; push
-  only to `fork`.
 - `collab.py` and `crew_mcp.py` docstrings still describe call files in
   `$RUNDIR/crew/calls/`; the code uses `crew/calls.sock`.
 - The orders guard matches Bash on command text only.
