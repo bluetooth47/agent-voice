@@ -45,6 +45,17 @@ if ! git -C "$ROOT" ls-files --error-unmatch manifest.json >/dev/null 2>&1; then
   exit 1
 fi
 
+# The check writes nothing inside the tree (bug H). Omarchy watches the whole
+# plugins folder with `inotifywait -r` and reloads every plugin on any write
+# there that is not under `.git/` or `__pycache__/`
+# (/usr/share/omarchy/shell/services/PluginRegistry.qml:726 and :791), and
+# pytest's `.pytest_cache` used to be one: running this in the plugin folder
+# reloaded the desktop shell. So no bytecode and no pytest cache, from any
+# Python this script starts; check 14 at the end proves the tree is unchanged.
+export PYTHONDONTWRITEBYTECODE=1
+tree_files() { find "$ROOT" -path "$ROOT/.git" -prune -o -print | LC_ALL=C sort; }
+tree_before="$(tree_files)"
+
 # 1. every schema key has a control on the settings page
 #
 # Settings.qml only. It used to read Panel.qml as well, which made the check
@@ -414,7 +425,7 @@ fi
 
 # 13. the behavioural tests, when pytest is available
 if [[ -x $PY ]] && "$PY" -c "import pytest" 2>/dev/null; then
-  if out=$("$PY" -m pytest "$ROOT/tests" -q 2>&1); then
+  if out=$("$PY" -m pytest -p no:cacheprovider "$ROOT/tests" -q 2>&1); then
     summary="$(tail -1 <<<"$out")"
     # On a runner that installed the whole stack, a skip means a test that
     # was meant to run did not. Opt-in rather than part of AGENTVOICE_STRICT,
@@ -444,6 +455,20 @@ elif [[ -n ${AGENTVOICE_STRICT:-}${CI:-}${AGENTVOICE_NO_SKIPS:-} ]]; then
   fail=1
 else
   say "tests" "skipped (pip install -r requirements-dev.txt)"
+fi
+
+# 14. the check left no new file in the tree (the master plan's "static check
+# 15": the fifteenth line this prints). Last, so it covers everything above,
+# the tests included. A file another program creates during the run (an
+# editor's swap file) is reported too: it would have reloaded the shell just
+# the same, and the line names it.
+left=$(LC_ALL=C comm -13 <(printf '%s\n' "$tree_before") <(tree_files))
+if [[ -n $left ]]; then
+  say "the check left no new file in the tree" "FAIL"
+  sed "s|^$ROOT/|    |" <<<"$left" | head -20
+  fail=1
+else
+  say "the check left no new file in the tree" "ok"
 fi
 
 exit $fail
