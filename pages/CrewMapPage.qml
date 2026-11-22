@@ -303,8 +303,19 @@ Column {
     page.queue = page.queue.concat([{ crewLinks: trimmed(links, quarantine), crewQuarantine: quarantine.slice(), what: what }])
     nextCheck()
   }
+  // Not while a crew list this page saved is still unconfirmed: the check
+  // compares the pair this page believes is saved with the file on disk
+  // (Codex review of M9, pass 2), and until the store has read its own
+  // write back the file may be behind this page by exactly that save. The
+  // store keeps a key in `pending` until shell.json agrees (or the write
+  // fails, or its deadline passes); its `busy` drops for a moment between
+  // two queued writes, which made the slow-write preview refuse itself.
+  function crewSettling() {
+    var p = page.s.store.pending || {}
+    return p.crewLinks !== undefined || p.crewQuarantine !== undefined
+  }
   function nextCheck() {
-    if (!page.queue.length || checker.running || checker.head !== null) return
+    if (!page.queue.length || checker.running || checker.head !== null || crewSettling()) return
     var head = page.queue[0]
     checker.head = head
     checker.launched = false
@@ -312,7 +323,8 @@ Column {
     checker.gotOut = false
     checker.gotExit = false
     checker.code = -1
-    checker.pending = JSON.stringify({ crewLinks: head.crewLinks, crewQuarantine: head.crewQuarantine }) + "\n"
+    checker.pending = JSON.stringify({ crewLinks: head.crewLinks, crewQuarantine: head.crewQuarantine,
+                                       saved: { crewLinks: rawOf("crewLinks"), crewQuarantine: rawOf("crewQuarantine") } }) + "\n"
     checker.running = true
   }
   // Saved only on exit status 0 *and* {"ok": true, both lists}: a checker
@@ -356,6 +368,10 @@ Column {
   function writeQuarantine(list) {
     page.s.crewOwnWrite(null, list)
     page.s.put("crewQuarantine", list)
+  }
+  Connections {
+    target: page.s.store
+    function onPendingChanged() { if (!page.crewSettling()) page.nextCheck() }
   }
   Process {
     id: checker

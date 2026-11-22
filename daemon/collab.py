@@ -3031,7 +3031,9 @@ CREW_CHECK_MAX = 64 * 1024
 def cli_crew(args: list[str], stdin, out, err, cfg=None) -> int:
     """`agentvoice crew check`: whether the Crew map may save a pair of
     lists (phase M9). One JSON line on stdin, `{"crewLinks": [...],
-    "crewQuarantine": [...]}`; on stdout `{"ok": true, "crewLinks": ...,
+    "crewQuarantine": [...]}`, optionally with `"saved": {both lists}`, the
+    pair the caller believes is saved now, refused when the file says
+    otherwise; on stdout `{"ok": true, "crewLinks": ...,
     "crewQuarantine": ...}` (normalised, exit 0) or `{"ok": false, "why":
     ...}` (exit 1). Judged by crew_links.check_write against the agents and
     the lists saved now, read from the settings on disk; settings that
@@ -3056,13 +3058,36 @@ def cli_crew(args: list[str], stdin, out, err, cfg=None) -> int:
         # RecursionError: a line of nested brackets under the size limit
         # (Codex review of M9). A refusal, never a traceback.
         return refuse("what came in was not JSON")
-    if not isinstance(asked, dict) or set(asked) != {"crewLinks", "crewQuarantine"}:
+    if not isinstance(asked, dict) or set(asked) - {"saved"} != {"crewLinks", "crewQuarantine"}:
         return refuse("what came in was not the two crew lists")
     if cfg is None:
         from runtime import Config
         cfg = Config()
     if not cfg.settings_readable():
         return refuse("the settings can't be read, so nothing can be checked against them")
+    # `saved`: the pair the page believes is on disk. A page whose copy is
+    # behind the file -- changed in another window, by an agent, by `omarchy
+    # bar set` -- would overwrite that change with a list built before it,
+    # so it is refused here, where the file is read (Codex review of M9).
+    if "saved" in asked:
+        seen = asked["saved"]
+        def canon(v):
+            # JavaScript writes 1.0 as 1: whole floats compared as integers,
+            # so a hand-written oddity cannot make the page's own reset fail.
+            def norm(x):
+                if isinstance(x, float) and x.is_integer():
+                    return int(x)
+                if isinstance(x, list):
+                    return [norm(i) for i in x]
+                if isinstance(x, dict):
+                    return {k: norm(i) for k, i in x.items()}
+                return x
+            return json.dumps(norm(v), sort_keys=True, separators=(",", ":"))
+        if (not isinstance(seen, dict) or set(seen) != {"crewLinks", "crewQuarantine"}
+                or canon(seen["crewLinks"]) != canon(cfg["crewLinks"])
+                or canon(seen["crewQuarantine"]) != canon(cfg["crewQuarantine"])):
+            return refuse("the crew links changed outside Settings while this was being "
+                          "saved, so it was not; what is shown now is what is saved")
     known = ["main"] + [spec["id"] for spec in cfg.all_agents()]
     got, why = crew_links.check_write(asked["crewLinks"], asked["crewQuarantine"], known,
                                       saved_links=cfg["crewLinks"],

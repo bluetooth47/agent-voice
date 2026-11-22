@@ -630,7 +630,7 @@ def test_the_send_sheet_will_not_send_into_quarantine():
 
 # --- the page's save queue, run in node (M9, and Codex review pass 1) -------------------
 
-QUEUE_FUNCTIONS = ["trimmed", "savedPair", "rawOf", "commit", "nextCheck", "checked", "refused",
+QUEUE_FUNCTIONS = ["trimmed", "savedPair", "rawOf", "crewSettling", "commit", "nextCheck", "checked", "refused",
                    "applyChecked", "writeLinks", "writeQuarantine"]
 
 
@@ -646,14 +646,14 @@ def queue_js(calls: str, cfg: dict) -> object:
 var writes = [], runs = [];
 var page = {{ intoQuarantine: ["ask", "delegate"], queue: [], saveNote: "", expectSaved: "",
               pendingQuarantine: "", lastAction: "",
-              s: {{ cfg: {json.dumps(cfg)}, crewCanon: crewCanon, crewOwnWrite: function() {{}},
+              s: {{ cfg: {json.dumps(cfg)}, crewCanon: crewCanon, crewOwnWrite: function() {{}}, store: {{ pending: {{}} }},
                     put: function(k, v) {{ writes.push([k, v]); page.s.cfg[k] = v }} }} }};
 var checker = {{ running: false, head: null, launched: false, pending: "", out: "", gotOut: false,
                 gotExit: false, code: -1 }};
 Object.defineProperty(checker, "running", {{ get: function() {{ return this._r || false }},
   set: function(v) {{ this._r = v; if (v) runs.push(JSON.parse(this.pending)) }} }});
 {fns}
-page.trimmed = trimmed; page.nextCheck = nextCheck; page.refused = refused;
+page.trimmed = trimmed; page.nextCheck = nextCheck; page.refused = refused; page.crewSettling = crewSettling;
 // The checker finishing: what the process printed and its exit status.
 function finish(out, code) {{
   var h = checker.head; checker.running = false; checker.head = null;
@@ -743,3 +743,39 @@ def test_the_queue_moves_on_when_the_checker_exits():
     on = on[:on.index("\n    }\n")]
     assert "Qt.callLater(page.nextCheck)" in on
     assert "checker.head !== null" in _body(src, "nextCheck")
+
+
+def test_crew_check_refuses_when_the_file_is_not_what_the_page_saw():
+    """Codex review of M9, pass 2: the page's copy of the settings can lag
+    the file; the check compares the pair the page saw with the file."""
+    saved = [link("main", "sora", ["ask"], askFirst=False)]
+    cfg = _Cfg(links=saved, quarantine=["hazel"])
+    ask = {"crewLinks": [], "crewQuarantine": ["hazel"]}
+    same = _crew_cli(json.dumps({**ask, "saved": {"crewLinks": saved, "crewQuarantine": ["hazel"]}}) + "\n", cfg)
+    assert same[0] == 0
+    for seen in ({"crewLinks": [], "crewQuarantine": ["hazel"]},
+                 {"crewLinks": saved, "crewQuarantine": []},
+                 {"crewLinks": saved},
+                 "everything"):
+        code, out, _ = _crew_cli(json.dumps({**ask, "saved": seen}) + "\n", cfg)
+        assert code == 1 and "changed outside Settings" in json.loads(out)["why"], seen
+    # Key order and JavaScript's 1 for 1.0 are the same list.
+    odd = _Cfg(links=[{"to": "sora", "from": "main", "allow": ["ask"], "n": 1.0}])
+    seen = {"crewLinks": [{"from": "main", "to": "sora", "allow": ["ask"], "n": 1}], "crewQuarantine": []}
+    assert _crew_cli(json.dumps({"crewLinks": [], "crewQuarantine": [], "saved": seen}) + "\n", odd)[0] == 0
+
+
+@needs_node
+def test_the_page_sends_what_it_saw_and_waits_for_its_own_write():
+    got = queue_js("""
+      page.s.store.pending = { crewQuarantine: ["x"], voice: "y" };
+      commit([], [], "one");
+      var whileBusy = runs.length;
+      page.s.store.pending = { voice: "y" }; nextCheck();
+      return { whileBusy: whileBusy, runs: runs };""",
+                   {"crewLinks": L1, "crewQuarantine": []})
+    assert got["whileBusy"] == 0
+    assert got["runs"] == [{"crewLinks": [], "crewQuarantine": [], "saved": {"crewLinks": L1, "crewQuarantine": []}}]
+    src = PAGE.read_text()
+    conn = src[src.index("target: page.s.store"):]
+    assert "onPendingChanged" in conn[:conn.index("\n  }")] and "page.nextCheck()" in conn[:conn.index("\n  }")]
