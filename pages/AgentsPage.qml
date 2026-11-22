@@ -382,6 +382,11 @@ Column {
     readonly property string model: isMain ? pg.mainModel : String(entry.model || "")
     readonly property string effort: isMain ? pg.mainEffort : String(entry.effort || "")
     readonly property var efforts: isMain ? s.vEfforts : (Array.isArray(info.efforts) ? info.efforts : [])
+    // Whether `efforts` is the daemon's answer for the model in force. An
+    // extra agent the daemon has not built yet is listed with no efforts and
+    // no posture, which says nothing about its model (Codex review, M5).
+    readonly property bool effortsKnown: isMain ? s.serviceActive && s.vEffortsKnown
+                                                : Array.isArray(info.efforts) && String(info.posture || "") !== ""
     readonly property var levels: isMain ? s.agentLevels
                                          : (Array.isArray(info.levels) ? info.levels : ["ask", "edits", "trusted"])
     readonly property string level: isMain ? pg.mainLevel : String(entry.level || "ask")
@@ -392,6 +397,9 @@ Column {
     // 0 (or nothing) for an extra agent is "same as the main agent".
     readonly property int speed: isMain ? pg.mainSpeed : Number(entry.speed || 0)
     readonly property int speedHeard: speed > 0 ? speed : pg.mainSpeed
+    // The pace ▶ Test asks for, by playSample's own rule (a speed out of
+    // range plays at the main agent's), so its button knows its own sample.
+    readonly property int testPace: speedHeard >= 50 && speedHeard <= 200 ? speedHeard : pg.mainSpeed
     readonly property string projectDir: isMain ? s.projectDir : String(entry.projectDir || "")
     readonly property var tools: isMain ? s.setting("mainTools", {}) : (entry.tools || ({}))
     // Exactly "allow" is allow; anything else is what the daemon reads as
@@ -592,10 +600,10 @@ Column {
           // picker shows it as saved, so "Default" clears it, and when the
           // model takes no effort at all the reset link does (Codex review,
           // M5; the old Effort row had a reset of its own).
-          readonly property bool staleEffort: blk.effort !== "" && blk.efforts.indexOf(blk.effort) < 0
-                                              && (blk.efforts.length > 0 || blk.s.serviceActive)
+          readonly property bool staleEffort: blk.effort !== "" && blk.effortsKnown && blk.efforts.indexOf(blk.effort) < 0
           hint: staleEffort
-                ? "⚠  The effort saved is not one this model takes, so the default is in use."
+                ? (blk.efforts.length > 0 ? "⚠  The effort saved is not one this model takes, so the default is in use."
+                                          : "⚠  An effort is saved, and this model takes none: reset clears it.")
                 : "Only for voice. A new model starts a new conversation; effort keeps it."
           changed: staleEffort
           onReset: blk.write("effort", "")
@@ -833,7 +841,7 @@ Column {
             // About a minute of the voice it would speak in, at its own pace.
             Button {
               id: testButton
-              readonly property bool playing: blk.s.samplePlaying === blk.voiceHeard && blk.s.samplePace === blk.speedHeard
+              readonly property bool playing: blk.s.samplePlaying === blk.voiceHeard && blk.s.samplePace === blk.testPace
               anchors.verticalCenter: parent.verticalCenter
               text: playing ? "■ Stop" : "▶ Test"
               bordered: true
@@ -844,7 +852,7 @@ Column {
                            : playing ? "Stop the sample" : "Hear about a minute of this voice at its speed"
               foreground: blk.s.foreground
               fontFamily: blk.s.fontFamily
-              onClicked: blk.s.playSample(blk.voiceHeard, blk.speedHeard)
+              onClicked: blk.s.playSample(blk.voiceHeard, blk.testPace)
             }
           }
         }

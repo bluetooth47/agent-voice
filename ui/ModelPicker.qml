@@ -36,7 +36,10 @@ Rectangle {
   signal modelCommitted(string value)
   signal effortCommitted(string value)
 
-  implicitWidth: row.implicitWidth + 2
+  // From the selectors' natural widths, not the row's: the row holds the
+  // widths they were given, so a picker narrowed once would ask for that
+  // narrower width ever after (Codex review, M5).
+  implicitWidth: modelSel.implicitWidth + (effortSel.visible ? effortSel.implicitWidth + 1 : 0) + 2
   implicitHeight: row.implicitHeight + 2
   radius: Style.cornerRadius
   color: "transparent"
@@ -52,7 +55,7 @@ Rectangle {
       // The room left once effort has its natural width: a long model name
       // elides here rather than pushing effort out of the picker.
       width: Math.max(0, Math.min(implicitWidth, picker.width - 2 -
-                                  (effortSel.visible ? effortSel.implicitWidth + 1 : 0)))
+                                  (effortSel.visible ? effortSel.width + 1 : 0)))
       framed: false
       label: "Model"
       options: picker.models
@@ -74,6 +77,9 @@ Rectangle {
     CompactSelector {
       id: effortSel
       visible: picker.efforts.length > 0 || picker.effortReason !== ""
+      // Effort elides too, past what leaves the model a usable target (an
+      // unknown saved effort is shown as saved, however long).
+      width: Math.max(0, Math.min(implicitWidth, picker.width - 3 - Math.min(modelSel.implicitWidth, Style.space(90))))
       framed: false
       label: "Effort"
       options: picker.efforts

@@ -445,23 +445,55 @@ def test_each_extra_agent_writes_through_its_own_index():
 
 @needs_node
 def test_two_agents_sharing_a_voice_at_different_speeds_each_test_their_own():
+    """Each card's Test is its own sample: the player records the pace it
+    started at, the other speed is queued rather than taken as a stop, and
+    the same voice at the same speed stops (Codex review, M5)."""
     play = function_source(ROOT / "Settings.qml", "playSample")
     script = f"""
 var root = {{ setting: function(k, d) {{ return d }}, samplePlaying: "", samplePace: 0,
              sampleNext: "", sampleNextPace: 0 }};
 var sampler = {{ running: false, command: [] }};
 {play}
+var out = [];
 playSample("amy-medium", 100);
+out.push([root.samplePlaying, root.samplePace, sampler.command[4]]);
 sampler.running = true;
 playSample("amy-medium", 150);
-var queued = [root.sampleNext, root.sampleNextPace, sampler.running];
-root.sampleNext = ""; sampler.running = true; root.samplePlaying = "amy-medium"; root.samplePace = 150;
+out.push([root.sampleNext, root.sampleNextPace, sampler.running]);
+// The player's onRunningChanged starts the queued one through playSample.
+var v = root.sampleNext, p = root.sampleNextPace; root.sampleNext = "";
+playSample(v, p);
+out.push([root.samplePlaying, root.samplePace, sampler.command[4]]);
+sampler.running = true;
 playSample("amy-medium", 150);
-console.log(JSON.stringify([queued, [root.sampleNext, sampler.running]]))
+out.push([root.sampleNext, sampler.running]);
+console.log(JSON.stringify(out))
 """
-    queued, stopped = run_js(script)
+    started, queued, second, stopped = run_js(script)
+    assert started == ["amy-medium", 100, "100"]
     assert queued == ["amy-medium", 150, False], "the other speed is queued, not taken as a stop"
+    assert second == ["amy-medium", 150, "150"], "and plays at its own pace, recorded"
     assert stopped == ["", False], "the same voice at the same speed stops"
+
+
+def test_the_test_button_asks_for_and_recognises_the_same_pace():
+    """A speed out of range plays at the main agent's; the button must
+    compare with that pace, or it says Test while its sample plays."""
+    text = scan(PAGE).nocomment
+    assert "testPace: speedHeard >= 50 && speedHeard <= 200 ? speedHeard : pg.mainSpeed" in text
+    assert "blk.s.samplePace === blk.testPace" in text
+    assert "blk.s.playSample(blk.voiceHeard, blk.testPace)" in text
+
+
+def test_an_effort_is_called_stale_only_on_the_daemons_answer():
+    """An extra agent the daemon has not built yet is listed with no efforts;
+    that must not offer to clear a valid saved effort (Codex review, M5)."""
+    text = scan(PAGE).nocomment
+    assert 'Array.isArray(info.efforts) && String(info.posture || "") !== ""' in text
+    assert "s.serviceActive && s.vEffortsKnown" in text
+    assert 'staleEffort: blk.effort !== "" && blk.effortsKnown &&' in text
+    settings = scan(ROOT / "Settings.qml").nocomment
+    assert "root.vEffortsKnown = Array.isArray(d.efforts)" in settings
 
 
 def test_a_stale_effort_can_be_cleared_and_a_long_model_cannot_hide_effort():
@@ -476,4 +508,7 @@ def test_a_stale_effort_can_be_cleared_and_a_long_model_cannot_hide_effort():
     assert "effort: blk.effort\n" in row
     assert "width: Math.min(implicitWidth, parent.width)" in row
     picker = scan(ROOT / "ui" / "ModelPicker.qml").nocomment
-    assert "picker.width - 2 -" in picker and "effortSel.implicitWidth" in picker
+    assert "picker.width - 2 -" in picker and "effortSel.width + 1" in picker
+    # Its own preferred width from natural widths, never from given ones.
+    assert "implicitWidth: modelSel.implicitWidth + (effortSel.visible ? effortSel.implicitWidth + 1 : 0) + 2" in picker
+    assert "picker.width - 3 - Math.min(modelSel.implicitWidth" in picker

@@ -319,6 +319,7 @@ Item {
   // The effort levels the running agent takes with its model, lowest first,
   // as the daemon works them out. Empty means no effort control.
   property var vEfforts: []
+  property bool vEffortsKnown: false
   // The extra agents as the daemon sees them: per name, the effort levels its
   // model takes, the permission levels its program can honour, and why it
   // cannot be woken or cannot answer, if so.
@@ -1337,6 +1338,9 @@ Item {
         // field is not published, and a control left over from the last one
         // would be a control that does nothing.
         root.vEfforts = Array.isArray(d.efforts) ? d.efforts : []
+        // Whether that list is the daemon's answer or only the default: the
+        // Agents page calls a saved effort stale only on an answer (M5).
+        root.vEffortsKnown = Array.isArray(d.efforts)
         root.vCrew = Array.isArray(d.crew) ? d.crew : []
         root.vLive = (d.live && typeof d.live === "object") ? d.live : ({})
         root.vAgentFiles = (d.agent_files && typeof d.agent_files === "object") ? d.agent_files : ({})
