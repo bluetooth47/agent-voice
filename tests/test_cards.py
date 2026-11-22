@@ -857,3 +857,17 @@ def test_the_journal_says_how_a_lookup_was_judged_and_nothing_of_the_card(tmp_pa
     assert shown[0] == f"card {card['id']} shown to the panel"
     assert shown[1].startswith(f"card {card['id']} shown, unchecked: ")
     assert not any("secret-canary-91" in ln for ln in lines)
+
+
+def test_the_journal_says_why_a_card_came_down():
+    lines = []
+    locked = {"now": False}
+    desk = cards.Desk(summon=lambda cid: None, is_locked=lambda: locked["now"], log=lines.append)
+    assert desk.post({"tool": "Bash"}, 0.2) is None
+    assert desk.post({"tool": "Bash"}, 10, stop=lambda: True) is None
+    t, card = cardhelp.post_async(desk, {"tool": "Bash"})
+    locked["now"] = True
+    t.join(5)
+    down = [ln.split(":", 1)[1].strip() if " down:" not in ln else ln.split("down:")[1].strip()
+            for ln in lines if " down:" in ln or "locked" in ln]
+    assert down == ["nobody answered", "the asker stopped waiting", "the screen locked; denied"]

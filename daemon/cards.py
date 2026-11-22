@@ -285,6 +285,7 @@ class Desk:
                     on_posted()
                 except Exception:       # noqa: BLE001 -- cannot change the answer
                     pass
+            why = "nobody answered"
             while True:
                 left = card.deadline - self.clock()
                 if left <= 0:
@@ -292,7 +293,8 @@ class Desk:
                 if card.done.wait(min(0.1, left)):
                     return card.answer
                 if self._locked():
-                    self._finish(card, {"allow": False, "reason": LOCKED_SINCE})
+                    if self._finish(card, {"allow": False, "reason": LOCKED_SINCE}):
+                        self.log(f"card {card.id}: the screen locked; denied")
                     continue
                 if stop is not None:
                     try:
@@ -300,11 +302,12 @@ class Desk:
                     except Exception:   # noqa: BLE001
                         gone = True
                     if gone:
+                        why = "the asker stopped waiting"
                         break
         finally:
             settled = self._finish(card, None)
         if settled:
-            self.log(f"card {card.id} down: nobody answered")
+            self.log(f"card {card.id} down: {why}")
             return None
         return card.answer
 
