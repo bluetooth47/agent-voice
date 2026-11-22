@@ -950,3 +950,22 @@ def test_without_an_atomic_no_replace_nothing_is_published(tmp_path, monkeypatch
     assert not (paths.AGENTS_DIR / "sora" / "skills" / "deploy").exists()
     assert agentfs.history("sora", "skills/deploy/SKILL.md") == []
     assert not list((paths.AGENTS_DIR / "sora" / "skills").glob(".import-*"))
+
+
+def test_a_name_in_two_of_codexs_folders_is_one_skill(cfg_factory, tmp_path):
+    """Found live after the install: Omarchy links its skills into both
+    ~/.codex/skills and ~/.agents/skills, and Codex offers each name once,
+    from ~/.codex/skills (recorded). One card in the agent's lane; the
+    second copy neither listed as given nor as Unused."""
+    write_skill(codex_home() / "skills" / "crash", "crash", desc="Diagnose a crash.")
+    write_skill(shared_home() / "crash", "crash", desc="Diagnose a crash.")
+    rec = FIXTURE["codex"]["baseline_skills"]["duplicates"]
+    assert "listed once, from ~/.codex/skills" in rec
+    ext = skillscan.scan()["skills"]
+    view = [s for s in skillscan.agent_view("codex", frozenset(), [], [], ext, "index") if s.get("native")]
+    assert [(s["source"], s["delivered"]) for s in view] == [("codex-user", True), ("agents", False)]
+    assert view[1]["why"] == "the one in ~/.codex/skills is offered instead"
+    cfg = cfg_factory(mainProgram="codex")
+    got = skillscan.lanes(cfg)
+    assert [s["source"] for s in got["lanes"][0]["skills"]] == ["codex-user"]
+    assert got["unused"] == []

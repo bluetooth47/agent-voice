@@ -433,20 +433,37 @@ def agent_view(program: str, off, own: list[dict], communal: list[dict],
     if family is None:
         return entries
     ours = {s["name"] for s in entries}
+    first: dict[str, dict] = {}
     for s in external:
         if s["family"] != family:
             continue
         names = set(s.get("aliases") or ()) | {s["name"]}
         on = off is not None and not (names & set(off))
         shadowed = bool(names & ours) or s["folder"] in ours
+        # One name is offered once: a skill in both ~/.codex/skills and
+        # ~/.agents/skills (Omarchy links its own into each) is listed by
+        # Codex from ~/.codex/skills only (recorded), and SOURCES' order is
+        # that order. claude.ai's synced skills have names of their own.
+        key = native_key(s)
+        earlier = first.get(key)
         why = ("its switch list cannot be read, so it is off" if off is None
                else "switched off for this agent" if not on
                else "an Agent Voice skill of the same name is given instead" if shadowed
+               else f"the one in {earlier['source_label']} is offered instead" if earlier
                else f"switched off in your own {agentfs.PROGRAM_LABELS.get(program, program)} settings"
                if s.get("user_off") else "")
+        first.setdefault(key, s)
         entries.append({**s, "native": True, "on": on, "shadowed": shadowed,
-                        "delivered": not why, "why": why})
+                        "duplicate": earlier is not None, "delivered": not why, "why": why})
     return entries
+
+
+def native_key(s: dict) -> str:
+    """What makes two skills a CLI finds the same one to it: its family
+    and name, the claude.ai synced ones apart (Claude lists those under a
+    name of their own, `anthropic-skills:<name>`)."""
+    space = "synced:" if s["source"] == "claude-synced" else ""
+    return f"{s['family']}:{space}{s['name']}"
 
 
 def lanes(cfg, texts=None) -> dict:
@@ -486,9 +503,11 @@ def lanes(cfg, texts=None) -> dict:
 
 
 def _card_id(s: dict) -> str:
-    """A card's id across lanes: an external skill's own id, or where an
-    Agent Voice skill lives and its name."""
-    return s["id"] if "id" in s else f"{s['source']}:{s['name']}"
+    """A card's id across lanes: for a skill a CLI finds by itself, the one
+    skill it is to that CLI (native_key, so a second copy of a name is not
+    Unused while the first is given); for an Agent Voice skill, where it
+    lives and its name."""
+    return native_key(s) if "family" in s else f"{s['source']}:{s['name']}"
 
 
 def find(source_id: str) -> tuple[dict, Path]:

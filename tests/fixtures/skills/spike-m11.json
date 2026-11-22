@@ -31,7 +31,8 @@
     "baseline_skills": {"~/.codex/skills": ["diagnose-crash", "omarchy", "omarchy-app", "workmap-pages"],
                         "~/.codex/skills/.system": ["imagegen", "openai-docs", "skill-creator", "skill-installer"],
                         "plugins": ["documents:documents", "pdf:pdf", "spreadsheets:excel-live-control", "template-creator:template-creator", "visualize:visualize"],
-                        "~/.agents/skills": "read too: with CODEX_HOME set to an empty folder, the links there (diagnose-crash, omarchy, omarchy-app) were still listed, from ~/.agents/skills"},
+                        "~/.agents/skills": "read too: with CODEX_HOME set to an empty folder, the links there (diagnose-crash, omarchy, omarchy-app) were still listed, from ~/.agents/skills",
+                        "duplicates": "with the real CODEX_HOME, diagnose-crash, omarchy and omarchy-app (in both ~/.codex/skills and ~/.agents/skills) were each listed once, from ~/.codex/skills (alias r0)"},
     "overrides": [
       {"c": "skills.config=[{name=\"omarchy-app\",enabled=false}]", "gone": ["omarchy-app"]},
       {"c": "skills.config=[{path=\"~/.codex/skills/workmap-pages/SKILL.md\",enabled=false}]", "gone": ["workmap-pages"]},
