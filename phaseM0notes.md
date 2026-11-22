@@ -153,7 +153,7 @@ setting and snapshot; pytest flag; check 14 at the end), new
 | `local.vpn-hub`, `io.voxtype.settings` | — | — | load after both restarts; the user checked both after restart 1 |
 | Synthetic reply | — | — | `agentvoice type sora` with "Reply with the single word OK": "OK", first token 1473 ms |
 | Synthetic wake | — | — | `agentvoice wake-test auto`: 162 clips, Theo 14/24, Sora 21/24, Hazel 19/24, full stop 8/12, 1 false wake in 78 distractors |
-| `git rev-parse dev main fork/dev fork/main` | — | — | see the end of this file |
+| `git rev-parse dev main fork/dev fork/main` | — | — | pass: one commit (a543a24, the notes commit, before this line was added; the end of this file has the final check) |
 | `git push --dry-run origin main` (plugin repo, before the rename) | — | — | fails, exit 128 ("DISABLED-never-push-origin"); after the rename there is no `origin`, and `upstream` fails the same way |
 
 The first "Settings stays open" try failed: Settings closed. The shell
@@ -275,3 +275,11 @@ and after. Second pass: not run (owed).
   retest yes.
 - Restart 2 (user OK): title restored (screenshot).
 - Typed to Sora "Reply with the single word OK": she said "OK".
+
+## Refs at the end
+
+After fast-forwarding `dev` and `main` to the notes commit a543a24 and
+pushing them to `fork`, `git rev-parse dev main fork/dev fork/main phase-m0
+fork/phase-m0` printed one commit. `git push --dry-run upstream main` and
+`git push --dry-run origin main` both fail (exit 128). This line's commit
+was then fast-forwarded and pushed the same way.
