@@ -15,151 +15,236 @@
 # and on any write there outside `.git/` and `__pycache__/` (:791) the shell
 # reloads every plugin: panels, services and widgets. So nobody works in the
 # plugin folder. Work happens in a clone (~/Projects/agent-voice), and the
-# plugin folder only ever changes here, in one checkout: one reload, on purpose.
+# plugin folder only ever changes here, in one checkout.
 #
 # What it does, in order, and stops at the first refusal:
 #   1. refuses to run from inside the plugins folder (it is the clone's tool);
 #   2. refuses a clone with uncommitted or untracked changes: what is deployed
 #      must be a commit, or nobody can say what is running;
-#   3. refuses a plugin folder with uncommitted changes to tracked files:
-#      somebody edited the live copy, and the checkout would trample it;
-#   4. runs ./bin/agentvoice-check on the commit (HEAD in place, any other
-#      commit in a temporary worktree outside the plugins folder) and refuses
-#      a red one;
-#   5. fetches the commit into the plugin folder's repository (writes only
-#      under .git/, which the watcher ignores) and checks it out detached:
-#      this is the reload;
-#   6. offers ./install.sh --yes, run from the plugin folder, so the installer
-#      copies what was just deployed;
-#   7. if any QML changed, says so: QML reaches the running shell only after
-#      `omarchy-restart-shell`, which this never runs.
+#   3. refuses a plugin folder that is not its own checkout of this plugin
+#      (a subfolder of some other repository, the clone itself), that has
+#      edits to tracked files, or that has untracked files where install.sh
+#      copies whole folders (daemon/, bin/, desktop/): they would be installed
+#      though no commit has them;
+#   4. runs ./bin/agentvoice-check on exactly that commit, in a fresh worktree
+#      outside the plugins folder, strict (no skipped tests, qmllint present),
+#      and refuses a red one;
+#   5. takes a lock, checks again that the plugin folder has not moved or been
+#      edited meanwhile, fetches the commit into its repository (only .git/ is
+#      written, which the watcher ignores) and checks it out detached;
+#   6. prints the way back, and, if any QML changed, says so: QML reaches the
+#      running shell only after `omarchy-restart-shell`, which this never runs;
+#   7. offers ./install.sh --yes, run from the plugin folder so the installer
+#      copies what was just deployed, once the daemon is idle.
 #
-# The way back is the same command with an older commit. It prints the one it
-# replaced, and appends each deploy to $XDG_STATE_HOME/agentvoice/deploys.log.
+# The way back is the same command with an older commit (one that only the
+# plugin folder has is fetched from there). Each deploy is appended to
+# $XDG_STATE_HOME/agentvoice/deploys.log.
 #
 # AGENTVOICE_PLUGIN_DIR overrides the plugin folder (tests use it). If that
 # path is a symlink to a checkout elsewhere, the checkout is what is updated.
 set -euo pipefail
+# A repository chosen by the environment would make every git call below
+# about some other checkout than the one named.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE
 
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
-PLUGINS="$HOME/.config/omarchy/plugins"
-PLUGIN="${AGENTVOICE_PLUGIN_DIR:-$PLUGINS/duaneoca.agentvoice}"
+PLUGIN_ID=duaneoca.agentvoice
+PLUGINS="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins"
+PLUGIN="${AGENTVOICE_PLUGIN_DIR:-$PLUGINS/$PLUGIN_ID}"
 LOG="${XDG_STATE_HOME:-$HOME/.local/state}/agentvoice/deploys.log"
+SCRATCH="${XDG_CACHE_HOME:-$HOME/.cache}/agentvoice-deploy"
+
+die() { echo "agentvoice-deploy: $*" >&2; exit 1; }
+say() { echo "agentvoice-deploy: $*"; }
 
 install=ask wait_s=300 dry=0 want=HEAD
 while (($#)); do
   case $1 in
     --install) install=yes ;;
     --no-install) install=no ;;
-    --wait) shift; wait_s="${1:?--wait needs seconds}" ;;
+    --wait)
+      shift
+      [[ ${1:-} =~ ^[0-9]{1,5}$ ]] || { echo "agentvoice-deploy: --wait takes whole seconds" >&2; exit 2; }
+      wait_s=$((10#$1)) ;;
     --dry-run) dry=1 ;;
-    -h|--help) sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "agentvoice-deploy: unknown option $1" >&2; exit 2 ;;
     *) want=$1 ;;
   esac
   shift
 done
-[[ $wait_s =~ ^[0-9]+$ ]] || { echo "agentvoice-deploy: --wait takes whole seconds" >&2; exit 2; }
 
-die() { echo "agentvoice-deploy: $*" >&2; exit 1; }
-say() { echo "agentvoice-deploy: $*"; }
+# Is $1 the folder $2 or inside it? Both resolved, with a trailing slash so a
+# sibling named "plugins-old" is not mistaken for "plugins".
+inside() {
+  local a b
+  a="$(readlink -f -- "$1" 2>/dev/null || printf '%s' "$1")/"
+  b="$(readlink -f -- "$2" 2>/dev/null || printf '%s' "$2")/"
+  [[ $a == "$b"* ]]
+}
+manifest_id() {   # manifest_id REPO COMMIT -> the plugin id that commit declares
+  git -C "$1" show "$2:manifest.json" 2>/dev/null |
+    python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true
+}
 
-# 1. never from inside the plugins folder. Compared resolved, so a symlinked
-# path cannot slip past, and with a trailing slash so a sibling named
-# "plugins-old" is not mistaken for it.
-real_root="$(readlink -f "$ROOT")"
-real_plugins="$(readlink -f "$PLUGINS" 2>/dev/null || echo "$PLUGINS")"
-case "$real_root/" in
-  "$real_plugins"/*) die "this is the plugin folder; run it from the development clone (~/Projects/agent-voice)" ;;
-esac
+# 1. never from inside the plugins folder: not the script, not the shell.
+inside "$ROOT" "$PLUGINS" &&
+  die "this is the plugin folder; run it from the development clone (~/Projects/agent-voice)"
+inside "$PWD" "$PLUGINS" && die "run it from outside the plugins folder"
 
-# 2. a clean clone. Untracked files count: the check would run over them, and
-# they are not in the commit that gets deployed.
-if [[ -n "$(git -C "$ROOT" status --porcelain)" ]]; then
-  git -C "$ROOT" status --short | sed 's/^/    /' >&2
+# 2. a clean clone. Untracked files count, whatever status.showUntrackedFiles
+# says: the check would run over them, and they are not in the commit.
+st="$(git -C "$ROOT" status --porcelain --untracked-files=all)" || die "git status failed in $ROOT"
+if [[ -n $st ]]; then
+  printf '%s\n' "$st" | sed 's/^/    /' >&2
   die "the clone has uncommitted or untracked changes; commit or stash them first"
 fi
-sha="$(git -C "$ROOT" rev-parse --verify --quiet "$want^{commit}")" ||
-  die "no commit called '$want' in $ROOT"
 
-# 3. the plugin folder: a git checkout with no edits to tracked files.
-target="$(readlink -f "$PLUGIN" 2>/dev/null || true)"
+# 3. the plugin folder: its own checkout of this plugin, and nothing more.
+target="$(readlink -f -- "$PLUGIN" 2>/dev/null || true)"
 [[ -n $target && -d $target ]] || die "no plugin folder at $PLUGIN"
-git -C "$target" rev-parse --git-dir >/dev/null 2>&1 ||
+real_root="$(readlink -f -- "$ROOT")"
+{ inside "$target" "$real_root" || inside "$real_root" "$target"; } &&
+  die "the plugin folder and the clone overlap ($target); refusing to deploy into the clone"
+top="$(git -C "$target" rev-parse --show-toplevel 2>/dev/null)" ||
   die "$PLUGIN is not a git checkout; reinstall it with omarchy plugin add"
-if [[ -n "$(git -C "$target" status --porcelain --untracked-files=no)" ]]; then
-  git -C "$target" status --short --untracked-files=no | sed 's/^/    /' >&2
-  die "the plugin folder has local edits to tracked files; nothing was changed"
-fi
-prev="$(git -C "$target" rev-parse --verify --quiet HEAD || echo none)"
+[[ "$(readlink -f -- "$top")" == "$target" ]] ||
+  die "$PLUGIN is not a checkout of its own (it is inside $top); nothing was changed"
+[[ "$(manifest_id "$target" HEAD)" == "$PLUGIN_ID" ]] ||
+  die "$PLUGIN does not hold the $PLUGIN_ID plugin at HEAD; nothing was changed"
 
-say "deploy ${sha:0:12} ($(git -C "$ROOT" log -1 --format=%s "$sha"))"
+target_dirty() {
+  local s
+  s="$(git -C "$target" status --porcelain --untracked-files=no)" || die "git status failed in $target"
+  if [[ -n $s ]]; then
+    printf '%s\n' "$s" | sed 's/^/    /' >&2
+    echo "the plugin folder has local edits to tracked files"; return
+  fi
+  # install.sh copies daemon/, bin/ and desktop/ whole (install.sh:745), so a
+  # stray module there would be installed though no checked commit has it.
+  # Ignored files count too; bytecode does not (Python rebuilds stale bytecode).
+  s="$(git -C "$target" ls-files --others -- daemon bin desktop)" || die "git ls-files failed in $target"
+  s="$(grep -v -e '/__pycache__/' <<<"$s" || true)"
+  if [[ -n $s ]]; then
+    printf '%s\n' "$s" | sed 's/^/    /' >&2
+    echo "the plugin folder has untracked files that install.sh would install"; return
+  fi
+}
+why="$(target_dirty)"
+[[ -z $why ]] || die "$why; nothing was changed"
+prev="$(git -C "$target" rev-parse --verify HEAD)"
+
+# The commit: from the clone, or, for the way back, from the plugin folder.
+if ! sha="$(git -C "$ROOT" rev-parse --verify --quiet "$want^{commit}")"; then
+  sha="$(git -C "$target" rev-parse --verify --quiet "$want^{commit}")" ||
+    die "no commit called '$want' in $ROOT or $PLUGIN"
+  ((dry)) || git -C "$ROOT" fetch --quiet --no-tags "$target" "$sha"
+fi
+[[ "$(manifest_id "$ROOT" "$sha")" == "$PLUGIN_ID" ]] || ((dry)) ||
+  die "${sha:0:12} is not a commit of the $PLUGIN_ID plugin"
+
+say "deploy ${sha:0:12} ($(git -C "$ROOT" log -1 --format=%s "$sha" 2>/dev/null || echo '?'))"
 say "into   $PLUGIN$([[ $target != "$PLUGIN" ]] && echo " -> $target")"
 say "was    ${prev:0:12}"
-if [[ $sha == "$prev" ]]; then
-  say "already deployed; nothing to do"
-  exit 0
-fi
 if ((dry)); then
-  say "dry run: would run the check, fetch, check out detached, install=$install"
+  say "dry run: would check ${sha:0:12}, fetch, check out detached, install=$install"
   exit 0
 fi
 
-# 4. a green check on exactly that commit.
-if [[ $sha == "$(git -C "$ROOT" rev-parse HEAD)" ]]; then
-  "$ROOT/bin/agentvoice-check" || die "the check is red; nothing was deployed"
+# The way back must work from the clone: keep the commit being replaced there.
+git -C "$ROOT" cat-file -e "$prev^{commit}" 2>/dev/null ||
+  git -C "$ROOT" fetch --quiet --no-tags "$target" "$prev"
+# The log is opened before anything changes, so a full disk stops us here.
+mkdir -p "$(dirname "$LOG")" && : >>"$LOG" || die "cannot write $LOG; nothing was changed"
+
+# 4. a green, strict check on exactly that commit, in a fresh worktree, with
+# scratch space and the working directory outside the plugins folder.
+mkdir -p "$SCRATCH"
+inside "$SCRATCH" "$PLUGINS" && die "scratch folder $SCRATCH is inside the plugins folder"
+wt="$(mktemp -d "$SCRATCH/check.XXXXXX")"
+cleanup() { git -C "$ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || rm -rf "$wt"; git -C "$ROOT" worktree prune; }
+trap cleanup EXIT
+git -C "$ROOT" worktree add --quiet --detach "$wt" "$sha"
+mkdir -p "$wt.tmp"
+trap 'cleanup; rm -rf "$wt.tmp"' EXIT
+py="${AGENTVOICE_PYTHON:-}"
+if [[ -z $py ]]; then   # the clone's interpreter; the worktree has no bench/.venv
+  for cand in "$HOME/.local/share/agentvoice/venv/bin/python" \
+              "$ROOT/bench/.venv/bin/python" "$(command -v python3 || true)"; do
+    [[ -x $cand ]] && "$cand" -c "import pytest" 2>/dev/null && { py="$cand"; break; }
+  done
+fi
+(cd "$wt" && TMPDIR="$wt.tmp" AGENTVOICE_STRICT=1 AGENTVOICE_PYTHON="$py" AGENTVOICE_BOX= \
+   ./bin/agentvoice-check) || die "the check is red on ${sha:0:12}; nothing was deployed"
+cleanup; rm -rf "$wt.tmp"; trap - EXIT
+
+# 5. one deploy at a time, and nothing moved under us during the check.
+gitdir="$(git -C "$target" rev-parse --absolute-git-dir)"
+exec 9>"$gitdir/agentvoice-deploy.lock"   # inside .git/: the watcher ignores it
+flock -n 9 || die "another deploy into $PLUGIN is running"
+[[ "$(git -C "$target" rev-parse --verify HEAD)" == "$prev" ]] ||
+  die "the plugin folder moved during the check; nothing was changed"
+why="$(target_dirty)"
+[[ -z $why ]] || die "$why (since the check started); nothing was changed"
+
+if [[ $sha != "$prev" ]] || git -C "$target" symbolic-ref -q HEAD >/dev/null; then
+  git -C "$target" fetch --quiet --no-tags "$ROOT" "$sha"
+  # --no-overwrite-ignore: an ignored local file in the way is a refusal, not
+  # something to replace without a word.
+  git -C "$target" -c advice.detachedHead=false checkout --quiet --no-overwrite-ignore --detach "$sha"
+  [[ "$(git -C "$target" rev-parse HEAD)" == "$sha" ]] || die "checkout did not land on ${sha:0:12}"
+  printf '%s\t%s\t%s\t%s\n' "$(date -Is)" "$prev" "$sha" "$target" >>"$LOG" ||
+    say "WARNING: deployed, but could not append to $LOG"
+  say "deployed ${sha:0:12}. The way back: bin/agentvoice-deploy ${prev:0:12}"
 else
-  wt="$(mktemp -d "${TMPDIR:-/tmp}/agentvoice-deploy.XXXXXX")"
-  cleanup() { git -C "$ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || rm -rf "$wt"; }
-  trap cleanup EXIT
-  git -C "$ROOT" worktree add --quiet --detach "$wt" "$sha"
-  "$wt/bin/agentvoice-check" || die "the check is red on ${sha:0:12}; nothing was deployed"
-  cleanup
-  trap - EXIT
+  say "${sha:0:12} was already deployed"
 fi
 
-# 5. fetch (only .git/ is written), then the one checkout that reloads.
-git -C "$target" fetch --quiet --no-tags "$ROOT" "$sha"
-git -C "$target" -c advice.detachedHead=false checkout --quiet --detach "$sha"
-mkdir -p "$(dirname "$LOG")"
-printf '%s\t%s\t%s\t%s\n' "$(date -Is)" "$prev" "$sha" "$target" >>"$LOG"
-say "deployed. The way back: bin/agentvoice-deploy ${prev:0:12}"
+# 6. QML is read by the shell, not the daemon.
+if [[ $sha != "$prev" && -n "$(git -C "$target" diff --name-only "$prev" "$sha" -- '*.qml' '*qmldir' || echo unknown)" ]]; then
+  say "QML changed: run omarchy-restart-shell? (not run; it restarts the whole desktop shell)"
+fi
 
-# 6. the installer, once no turn is underway: install.sh restarts the daemon,
-# which ends any voice turn mid-sentence.
+# 7. the installer, once no turn or task is underway: install.sh restarts the
+# daemon, which ends any voice turn mid-sentence. Anything that cannot be
+# read as idle counts as busy.
 idle() {
-  local st
-  st="$(agentvoice status 2>/dev/null)" || return 0   # not installed: nothing to interrupt
-  python3 -I -c '
+  systemctl --user is-active --quiet agentvoice.service 2>/dev/null || return 0   # not running: nothing to interrupt
+  command -v agentvoice >/dev/null || return 1
+  timeout 10 agentvoice status 2>/dev/null | python3 -I -c '
 import json, sys
-s = json.loads(sys.argv[1] or "{}")
-busy = ("capture", "transcribing", "thinking", "speaking", "followup")
-live = s.get("live") or {}
-sys.exit(1 if s.get("state") in busy or any(v != "idle" for v in live.values()) else 0)
-' "$st"
+try:
+    s = json.load(sys.stdin)
+except ValueError:
+    sys.exit(1)
+done = ("completed", "cancelled", "failed", "refused")   # collab.DONE
+live = s.get("live") if isinstance(s, dict) else None
+tasks = s.get("tasks") or []
+ok = (s.get("state") in ("off", "locked", "yielded", "listening")
+      and isinstance(live, dict) and all(v == "idle" for v in live.values())
+      and isinstance(tasks, list)
+      and all(isinstance(t, dict) and t.get("state") in done for t in tasks))
+sys.exit(0 if ok else 1)
+'
 }
 if [[ $install == ask ]]; then
+  install=no
   if [[ -t 0 ]]; then
-    read -r -p "Run ./install.sh --yes now? [y/N] " a
-    [[ $a == [yY]* ]] && install=yes || install=no
-  else
-    install=no
+    read -r -p "Run ./install.sh --yes now? [y/N] " a || a=""
+    [[ $a == [yY]* ]] && install=yes
   fi
 fi
 if [[ $install == yes ]]; then
-  waited=0
+  deadline=$((SECONDS + wait_s)) told=0
   until idle; do
-    ((waited >= wait_s)) && die "the daemon stayed busy for ${wait_s}s; deployed but not installed (run ./install.sh --yes in $PLUGIN)"
-    ((waited == 0)) && say "waiting for the daemon to go idle (up to ${wait_s}s)"
-    sleep 2; waited=$((waited + 2))
+    ((SECONDS < deadline)) ||
+      die "the daemon stayed busy for ${wait_s}s; deployed but not installed (run ./install.sh --yes in $PLUGIN)"
+    ((told)) || { say "waiting for the daemon to go idle (up to ${wait_s}s)"; told=1; }
+    sleep 2
   done
-  (cd "$target" && ./install.sh --yes) || die "install.sh failed; the deployed commit stays checked out"
+  (cd "$target" && ./install.sh --yes) || die "install.sh failed; ${sha:0:12} stays checked out"
 else
   say "not installed: the daemon still runs the previous build (./install.sh --yes in $PLUGIN)"
-fi
-
-# 7. QML is read by the shell, not the daemon.
-if [[ $prev == none ]] ||
-   [[ -n "$(git -C "$target" diff --name-only "$prev" "$sha" -- '*.qml' '*qmldir' 2>/dev/null || echo unknown)" ]]; then
-  say "QML changed: run omarchy-restart-shell? (not run; it restarts the whole desktop shell)"
 fi

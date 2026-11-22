@@ -10,6 +10,25 @@ fail=0
 
 say() { printf '  %-46s %s\n' "$1" "$2"; }
 
+# The check writes nothing inside the tree (bug H). Omarchy watches the whole
+# plugins folder with `inotifywait -r` and reloads every plugin on any write
+# there that is not under `.git/` or `__pycache__/`
+# (/usr/share/omarchy/shell/services/PluginRegistry.qml:726 and :791), and
+# pytest's `.pytest_cache` used to be one: running this in the plugin folder
+# reloaded the desktop shell. So no bytecode and no pytest cache, from any
+# Python this script starts -- including the interpreter probe just below,
+# which is why this comes first. Check 14 at the end proves it: a snapshot of
+# the tree's paths (relative, NUL-separated, kept outside the tree) and a
+# marker file whose time every later write is newer than. A file created and
+# removed during the run still shows, as its folder's changed time.
+export PYTHONDONTWRITEBYTECODE=1
+SNAP="$(mktemp -d "${TMPDIR:-/tmp}/agentvoice-check.XXXXXX")" ||
+  { say "scratch folder" "FAIL: mktemp"; exit 1; }
+trap 'rm -rf "$SNAP"' EXIT
+tree_files() { (cd "$ROOT" && find . -path ./.git -prune -o -print0) | LC_ALL=C sort -z; }
+touch "$SNAP/marker" && tree_files > "$SNAP/before" ||
+  { say "the check writes nothing in the tree" "FAIL: could not list the tree"; exit 1; }
+
 # Resolved once, and used for the syntax check as well as the tests. Syntax is
 # version-specific: nesting the same quote inside an f-string is legal from
 # 3.12 and a SyntaxError before it, so checking with whatever `python3` happens
@@ -44,17 +63,6 @@ if ! git -C "$ROOT" ls-files --error-unmatch manifest.json >/dev/null 2>&1; then
   say "repository" "FAIL: not a git checkout, so the file checks would be vacuous"
   exit 1
 fi
-
-# The check writes nothing inside the tree (bug H). Omarchy watches the whole
-# plugins folder with `inotifywait -r` and reloads every plugin on any write
-# there that is not under `.git/` or `__pycache__/`
-# (/usr/share/omarchy/shell/services/PluginRegistry.qml:726 and :791), and
-# pytest's `.pytest_cache` used to be one: running this in the plugin folder
-# reloaded the desktop shell. So no bytecode and no pytest cache, from any
-# Python this script starts; check 14 at the end proves the tree is unchanged.
-export PYTHONDONTWRITEBYTECODE=1
-tree_files() { find "$ROOT" -path "$ROOT/.git" -prune -o -print | LC_ALL=C sort; }
-tree_before="$(tree_files)"
 
 # 1. every schema key has a control on the settings page
 #
@@ -457,18 +465,26 @@ else
   say "tests" "skipped (pip install -r requirements-dev.txt)"
 fi
 
-# 14. the check left no new file in the tree (the master plan's "static check
+# 14. the check wrote nothing in the tree (the master plan's "static check
 # 15": the fifteenth line this prints). Last, so it covers everything above,
-# the tests included. A file another program creates during the run (an
-# editor's swap file) is reported too: it would have reloaded the shell just
-# the same, and the line names it.
-left=$(LC_ALL=C comm -13 <(printf '%s\n' "$tree_before") <(tree_files))
-if [[ -n $left ]]; then
-  say "the check left no new file in the tree" "FAIL"
-  sed "s|^$ROOT/|    |" <<<"$left" | head -20
-  fail=1
+# the tests included. A file another program writes during the run (an
+# editor's swap file, an agent working in the clone) is reported too: it
+# would have reloaded the shell just the same, and the line names it.
+if ! tree_files > "$SNAP/after"; then
+  say "the check wrote nothing in the tree" "FAIL: could not list the tree"; fail=1
 else
-  say "the check left no new file in the tree" "ok"
+  left=$( { LC_ALL=C comm -z -13 "$SNAP/before" "$SNAP/after" | tr '\0' '\n' | sed 's/^/new      /'
+            LC_ALL=C comm -z -23 "$SNAP/before" "$SNAP/after" | tr '\0' '\n' | sed 's/^/gone     /'
+            (cd "$ROOT" && find . -path ./.git -prune -o -newer "$SNAP/marker" -print) |
+              sed 's/^/written  /'; } 2>&1 ) || left="${left}
+FAIL: the comparison itself failed"
+  if [[ -n $left ]]; then
+    say "the check wrote nothing in the tree" "FAIL"
+    sed 's/^/    /' <<<"$left" | head -20
+    fail=1
+  else
+    say "the check wrote nothing in the tree" "ok"
+  fi
 fi
 
 exit $fail
