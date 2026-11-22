@@ -742,3 +742,149 @@ def test_unreadable_cli_settings_mark_nothing_off(tmp_path):
     (claude_home() / "settings.json").write_text("{not json")
     (codex_home() / "config.toml").write_text("[[[nope")
     assert not any(s["user_off"] for s in skillscan.scan()["skills"])
+
+
+# --- Codex review of M11, pass 1 ------------------------------------------------------------
+
+def test_a_skills_folder_swapped_for_a_link_after_the_check_is_not_written_through(tmp_path, monkeypatch):
+    """1: the copy is staged and published by the skills folder's open
+    descriptor. Swapping the folder for a link once that is open leaves
+    the write in the folder that was checked, never the link's target."""
+    machine(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    real = agentfs._open_skills_dir
+
+    def open_then_swap(target):
+        fd = real(target)
+        skills = paths.AGENTS_DIR / target / "skills"
+        os.rename(skills, paths.AGENTS_DIR / target / "skills-real")
+        os.symlink(elsewhere, skills)
+        return fd
+    monkeypatch.setattr(agentfs, "_open_skills_dir", open_then_swap)
+    skillscan.import_skill("codex-user:deploy", "sora")
+    assert list(elsewhere.iterdir()) == []
+    assert (paths.AGENTS_DIR / "sora" / "skills-real" / "deploy" / "SKILL.md").is_file()
+
+
+def test_a_skills_folder_that_is_a_link_is_refused(tmp_path):
+    machine(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    os.symlink(elsewhere, paths.AGENTS_DIR / "sora" / "skills")
+    with pytest.raises(agentfs.AgentFsError, match="symlink"):
+        skillscan.import_skill("codex-user:deploy", "sora")
+    assert list(elsewhere.iterdir()) == []
+
+
+def test_a_name_that_appears_mid_copy_is_never_replaced(tmp_path, monkeypatch):
+    machine(tmp_path)
+    real = agentfs._read_skill
+    calls = []
+
+    def second_read_makes_one(root):
+        got = real(root)
+        calls.append(1)
+        if len(calls) == 2:      # the check after staging: somebody makes an empty one
+            (paths.AGENTS_DIR / "sora" / "skills" / "deploy").mkdir()
+        return got
+    monkeypatch.setattr(agentfs, "_read_skill", second_read_makes_one)
+    with pytest.raises(agentfs.AgentFsError, match="appeared"):
+        skillscan.import_skill("codex-user:deploy", "sora")
+    assert list((paths.AGENTS_DIR / "sora" / "skills" / "deploy").iterdir()) == []
+    assert not list((paths.AGENTS_DIR / "sora" / "skills").glob(".import-*"))
+
+
+def test_a_history_that_cannot_be_written_leaves_no_live_skill(tmp_path, monkeypatch):
+    """5: the saved version comes first; when it fails nothing is published."""
+    machine(tmp_path)
+
+    def no_history(*a, **k):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(agentfs, "_save_version", no_history)
+    with pytest.raises(OSError):
+        skillscan.import_skill("codex-user:deploy", "sora")
+    assert not (paths.AGENTS_DIR / "sora" / "skills" / "deploy").exists()
+    assert not list((paths.AGENTS_DIR / "sora" / "skills").glob(".import-*"))
+
+
+def test_a_failed_publish_takes_its_saved_version_back(tmp_path, monkeypatch):
+    machine(tmp_path)
+    monkeypatch.setattr(agentfs, "_rename_noreplace", lambda *a: (_ for _ in ()).throw(OSError(5, "EIO")))
+    with pytest.raises(OSError):
+        skillscan.import_skill("codex-user:deploy", "sora")
+    assert agentfs.history("sora", "skills/deploy/SKILL.md") == []
+
+
+def test_an_unreadable_list_names_every_skill_however_many(cfg_factory, tmp_path):
+    """2: the fail-closed list is not the pages' 200-skill view."""
+    for i in range(skillscan.MAX_SKILLS + 5):
+        write_skill(claude_home() / "skills" / f"c{i:03d}", f"c{i:03d}")
+    write_skill(codex_home() / "skills" / "deploy", "deploy")
+    cfg = cfg_factory(mainSkillsOff="?")
+    assert "deploy" in skillscan.native_off(cfg, "", "codex", set())
+    assert len(skillscan.native_off(cfg, "", "claude", set())) == skillscan.MAX_SKILLS + 5
+
+
+def test_a_folder_too_large_to_list_whole_closes_rather_than_names_some(cfg_factory, tmp_path, monkeypatch):
+    monkeypatch.setattr(skillscan, "MAX_ENTRIES", 3)
+    for i in range(5):
+        write_skill(codex_home() / "skills" / f"s{i}", f"s{i}")
+    cfg = cfg_factory(mainSkillsOff="?")
+    with pytest.raises(skillscan.SkillsUnknown):
+        skillscan.native_off(cfg, "", "codex", set())
+    # The pages still show what fits.
+    assert len(skillscan.scan()["skills"]) == 3
+
+
+def test_an_unreadable_plugin_list_closes_the_fail_closed_list(cfg_factory, tmp_path):
+    (claude_home() / "settings.json").write_text(json.dumps({"enabledPlugins": {"x@y": True}}))
+    (claude_home() / "plugins").mkdir()
+    (claude_home() / "plugins" / "installed_plugins.json").write_text("{broken")
+    cfg = cfg_factory(mainSkillsOff="?")
+    with pytest.raises(skillscan.SkillsUnknown):
+        skillscan.native_off(cfg, "", "claude", set())
+
+
+def test_a_skill_whose_front_matter_names_it_otherwise_is_off_by_both_names(cfg_factory, tmp_path):
+    """3: ~/.codex/skills/release-tools whose front matter says deploy."""
+    write_skill(codex_home() / "skills" / "release-tools", "deploy",
+                text="---\nname: deploy\ndescription: Ship it.\n---\nx\n")
+    got = by_id(skillscan.scan())["codex-user:release-tools"]
+    assert got["aliases"] == ["deploy", "release-tools"] and got["front_name"] == "deploy"
+    for switched in ("deploy", "release-tools"):
+        cfg = cfg_factory(mainSkillsOff=[switched])
+        assert skillscan.native_off(cfg, "", "codex", set()) == ["deploy", "release-tools"]
+        view = skillscan.agent_view("codex", frozenset({switched}), [], [], [got], "index")
+        assert view[0]["delivered"] is False
+    cfg = cfg_factory(mainSkillsOff="?")
+    assert skillscan.native_off(cfg, "", "codex", set()) == ["deploy", "release-tools"]
+    # An Agent Voice skill of either name hides it.
+    view = skillscan.agent_view("codex", frozenset(), [{"name": "deploy", "problem": "", "source": "main"}],
+                                [], [got], "index")
+    assert next(s for s in view if s.get("native"))["shadowed"] is True
+
+
+def test_the_alias_map_is_kept_while_nothing_moved(tmp_path, monkeypatch):
+    write_skill(codex_home() / "skills" / "release-tools", "deploy",
+                text="---\nname: deploy\ndescription: Ship it.\n---\nx\n")
+    skillscan._ALIAS_MEMO.clear()
+    assert skillscan.alias_map("codex")["release-tools"] == {"deploy", "release-tools"}
+    reads = []
+    real = skillscan._head
+    monkeypatch.setattr(skillscan, "_head", lambda p: reads.append(p) or real(p))
+    skillscan.alias_map("codex")
+    assert reads == []                                   # nothing moved: no file read
+    (codex_home() / "skills" / "release-tools" / "SKILL.md").write_text(
+        "---\nname: ship\ndescription: Ship it.\n---\nxy\n")
+    assert skillscan.alias_map("codex")["release-tools"] == {"ship", "release-tools"}
+
+
+def test_switching_off_omarchy_switches_off_the_bundled_omarchy_skill(cfg_factory):
+    """4: one name, one switch -- Agent Voice's own Omarchy skill too."""
+    cfg = cfg_factory(omarchySkill=True, mainSkillsOff=["omarchy"], voiceAgents=[
+        {"name": "sora", "id": "sora", "agent": "claude"}])
+    assert cfg.tools_for("")["omarchySkill"] is False
+    assert cfg.tools_for("sora")["omarchySkill"] is True
+    # An unreadable list leaves the built-in switch to its own setting.
+    assert cfg_factory(omarchySkill=True, mainSkillsOff="?").tools_for("")["omarchySkill"] is True

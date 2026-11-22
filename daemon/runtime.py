@@ -879,8 +879,18 @@ class Config:
         else:
             spec = next((a for a in self.all_agents() if a["id"] == agent_id), None)
             own = (spec or {}).get("tools") or tool_choices(None)
-        return {k: (own[k] == "on" if own[k] != "inherit" else self.get_bool(g))
-                for k, g in TOOL_GLOBALS.items()}
+        out = {k: (own[k] == "on" if own[k] != "inherit" else self.get_bool(g))
+               for k, g in TOOL_GLOBALS.items()}
+        # One skill name is one switch (phase M11): "omarchy" in its
+        # skillsOff switches off the Omarchy skill Agent Voice bundles too,
+        # not only a copy in ~/.claude/skills (Codex review of M11).
+        try:
+            off = self.skills_off_for(agent_id)
+        except Exception:
+            off = None
+        if off is not None and "omarchy" in off:
+            out["omarchySkill"] = False
+        return out
 
     def tool_switches(self, agent_id: str | None) -> tuple[dict, dict]:
         """This agent's own switches for the tools found on this machine,

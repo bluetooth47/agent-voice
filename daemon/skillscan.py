@@ -109,11 +109,12 @@ def agents_dir(r) -> Path:
     return r.home / ".agents" / "skills"
 
 
-def _listing(folder: Path, hidden: bool = False) -> list[str]:
+def _listing(folder: Path, hidden: bool = False, strict: bool = False) -> list[str]:
     """Entry names in `folder`, sorted, bounded. [] when it is not there;
-    SkillsUnknown when it is there and cannot be read. The folder itself
-    may be a link (Omarchy's ~/.agents/skills holds links; a person may link
-    the whole folder)."""
+    SkillsUnknown when it is there and cannot be read -- or, when `strict`,
+    when it holds more than MAX_ENTRIES, so a list meant to name every
+    skill never names only some. The folder itself may be a link (Omarchy's
+    ~/.agents/skills holds links; a person may link the whole folder)."""
     try:
         with os.scandir(folder) as it:
             names = []
@@ -122,6 +123,8 @@ def _listing(folder: Path, hidden: bool = False) -> list[str]:
                     continue
                 names.append(e.name)
                 if len(names) >= MAX_ENTRIES:
+                    if strict and next(it, None) is not None:
+                        raise SkillsUnknown(f"{folder.name} holds more than {MAX_ENTRIES} entries")
                     break
     except FileNotFoundError:
         return []
@@ -132,48 +135,116 @@ def _listing(folder: Path, hidden: bool = False) -> list[str]:
     return sorted(names)
 
 
-def _places(r) -> list[tuple[str, str, Path, str]]:
-    """Every (source, name the CLI knows it by, folder, plugin) the CLIs read
-    a skill from, by listing their folders. Raises SkillsUnknown when one is
-    there and cannot be listed."""
+def _places(r, strict: bool = False) -> list[tuple[str, str, Path, str]]:
+    """Every (source, folder name -- as `plugin:folder` for a plugin's --,
+    folder, plugin) the CLIs read a skill from, by listing their folders.
+    Raises SkillsUnknown when one is there and cannot be listed. At most
+    MAX_SKILLS for the pages; `strict` (what the daemon switches off when a
+    list is unreadable) lists every one, and raises rather than name only
+    some: a folder too large, or a plugin list that cannot be read (Codex
+    review of M11)."""
     out: list[tuple[str, str, Path, str]] = []
     user = r.claude_dir / "skills"
-    for n in _listing(user):
+    for n in _listing(user, strict=strict):
         if n == "synced":
             continue                    # the claude.ai buckets, below
         out.append(("claude-user", n, user / n, ""))
-    for bucket in _listing(user / "synced"):
-        for n in _listing(user / "synced" / bucket):
+    for bucket in _listing(user / "synced", strict=strict):
+        for n in _listing(user / "synced" / bucket, strict=strict):
             if (user / "synced" / bucket / n).is_dir():
                 out.append(("claude-synced", n, user / "synced" / bucket / n, ""))
+    import tooldetect
+    reader = tooldetect._Reader()
     try:
-        import tooldetect
-        plugins = tooldetect.enabled_plugins(r, tooldetect._Reader())
+        plugins = tooldetect.enabled_plugins(r, reader)
     except Exception:               # noqa: BLE001 -- a plugin list that cannot be read lists none
-        plugins = []
+        plugins, reader.problems = [], ["the plugin list cannot be read"]
+    if strict and reader.problems:
+        raise SkillsUnknown("Claude Code's plugin list cannot be read")
     for plugin, root in plugins:
         if not _PLUGIN.fullmatch(plugin):
             continue
-        for n in _listing(root / "skills"):
+        for n in _listing(root / "skills", strict=strict):
             out.append(("claude-plugin", f"{plugin}:{n}", root / "skills" / n, plugin))
-    for n in _listing(r.codex_home / "skills"):
+    for n in _listing(r.codex_home / "skills", strict=strict):
         out.append(("codex-user", n, r.codex_home / "skills" / n, ""))
     shared = agents_dir(r)
-    for n in _listing(shared):
+    for n in _listing(shared, strict=strict):
         out.append(("agents", n, shared / n, ""))
-    return out[:MAX_SKILLS]
+    return out if strict else out[:MAX_SKILLS]
+
+
+def _front_name(folder: Path, plugin: str) -> str:
+    """The name a skill's own front matter gives it ("" when none can be
+    read), as `plugin:name` for a plugin's."""
+    head = _head(folder / "SKILL.md")
+    if head is None:
+        return ""
+    front, _ = agentfs._front_matter(head.decode("utf-8", errors="replace"))
+    name = str((front or {}).get("name") or "").strip()
+    if not name:
+        return ""
+    return f"{plugin}:{name}" if plugin else name
+
+
+def _aliases(name: str, folder: Path, plugin: str) -> set[str]:
+    """Every name a CLI might know this skill by: its folder's and its front
+    matter's, which may differ outside Agent Voice (Codex review of M11).
+    Naming both is harmless: a name that names nothing is ignored by both
+    CLIs (recorded)."""
+    out = {name, _front_name(folder, plugin)}
+    return {n for n in out if n and SKILL_REF.fullmatch(n)}
 
 
 def native_names(program: str) -> list[str]:
-    """The names a program's CLI finds by itself now, from folder listings
-    only (no file is read): what is switched off when an agent's list cannot
-    be read. Raises SkillsUnknown when a folder cannot be listed."""
+    """Every name a program's CLI might know a skill it finds by itself by,
+    now: what is switched off when an agent's list cannot be read. Every
+    folder is listed in full; SkillsUnknown when one cannot be, or holds
+    more than can be listed."""
     family = FAMILY.get(program)
     if family is None:
         return []
-    names = {name for src, name, _, _ in _places(roots())
-             if SOURCES[src]["family"] == family and SKILL_REF.fullmatch(name)}
+    names: set[str] = set()
+    for src, name, folder, plugin in _places(roots(), strict=True):
+        if SOURCES[src]["family"] == family:
+            names |= _aliases(name, folder, plugin)
     return sorted(names)
+
+
+#: The aliases of each skill a family's CLI finds, kept while nothing in
+#: its folders moved (a listing and a stat per skill, no file read), so the
+#: idle poll stays cheap: family -> (stamp, {alias: every alias}).
+_ALIAS_MEMO: dict = {}
+
+
+def alias_map(program: str) -> dict[str, set[str]]:
+    """{a name: every name that skill goes by} for the skills `program`'s
+    CLI finds by itself. A folder that cannot be listed gives what could
+    be; this widens a switch, it never narrows one."""
+    family = FAMILY.get(program)
+    if family is None:
+        return {}
+    try:
+        places = [p for p in _places(roots()) if SOURCES[p[0]]["family"] == family]
+    except SkillsUnknown:
+        return {}
+    stamp = []
+    for _, name, folder, _ in places:
+        try:
+            st = os.stat(folder / "SKILL.md")
+            stamp.append((str(folder), st.st_mtime_ns, st.st_size, st.st_ino))
+        except OSError:
+            stamp.append((str(folder), 0, -1, 0))
+    have = _ALIAS_MEMO.get(family)
+    if have is not None and have[0] == stamp:
+        return have[1]
+    out: dict[str, set[str]] = {}
+    for _, name, folder, plugin in places:
+        names = _aliases(name, folder, plugin)
+        for n in names:
+            out.setdefault(n, set()).update(names)
+    _ALIAS_MEMO[family] = (stamp, out)
+    return out
 
 
 def _head(path: Path) -> bytes | None:
@@ -199,6 +270,7 @@ def _one(r, src: str, name: str, folder: Path, plugin: str) -> dict:
     """One skill found outside Agent Voice, as the pages show it."""
     bare = name.split(":", 1)[1] if plugin else name
     entry = {"id": f"{src}:{name}", "name": name, "folder": bare, "source": src,
+             "aliases": [name] if SKILL_REF.fullmatch(name) else [],
              "family": SOURCES[src]["family"], "source_label": SOURCES[src]["label"],
              "path": _shown(r, folder), "linked": folder.is_symlink(),
              "description": "", "size": 0, "files": 0, "problem": "", "copy_problem": ""}
@@ -222,6 +294,13 @@ def _one(r, src: str, name: str, folder: Path, plugin: str) -> dict:
         entry["problem"] = why
     else:
         entry["description"] = " ".join(str(front.get("description", "")).split())[:400]
+        # The name its front matter gives it, when that differs from its
+        # folder's: a CLI may know it by either, so both are switched.
+        own_name = str(front.get("name") or "").strip()
+        known = {name, f"{plugin}:{own_name}" if plugin and own_name else own_name}
+        entry["aliases"] = sorted(n for n in known if n and SKILL_REF.fullmatch(n))
+        if own_name and own_name != bare:
+            entry["front_name"] = own_name[:64]
     tree, why = agentfs.walk_skill(real)
     if tree:
         entry["files"] = len(tree)
@@ -332,6 +411,11 @@ def native_off(cfg, agent_id: str, program: str, own_names=()) -> list[str]:
         names |= set(native_names(program))
     else:
         names |= set(off)
+        # And every other name a skill so named goes by (its folder's, its
+        # front matter's), so the switch holds whichever the CLI uses.
+        aliases = alias_map(program)
+        for n in list(names):
+            names |= aliases.get(n, set())
     return sorted(n for n in names if isinstance(n, str) and SKILL_REF.fullmatch(n))
 
 
@@ -352,8 +436,9 @@ def agent_view(program: str, off, own: list[dict], communal: list[dict],
     for s in external:
         if s["family"] != family:
             continue
-        on = off is not None and s["name"] not in off
-        shadowed = s["folder"] in ours or s["name"] in ours
+        names = set(s.get("aliases") or ()) | {s["name"]}
+        on = off is not None and not (names & set(off))
+        shadowed = bool(names & ours) or s["folder"] in ours
         why = ("its switch list cannot be read, so it is off" if off is None
                else "switched off for this agent" if not on
                else "an Agent Voice skill of the same name is given instead" if shadowed

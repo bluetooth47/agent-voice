@@ -142,7 +142,7 @@ ShellRoot {
           box = overlay.confirmBox()
           text = box ? box.title + JSON.stringify(box.lines) + box.warning : ""
           overlay.check(box !== null, "giving a skill asks first")
-          overlay.check(text.indexOf(".agents/skills/crash-notes") >= 0 && text.indexOf("Sora only") >= 0,
+          overlay.check(String(text).indexOf(".agents/skills/crash-notes") >= 0 && String(text).indexOf("Sora only") >= 0,
                         "the confirm says where it is copied from and who gets it")
           probe.running = true
           break

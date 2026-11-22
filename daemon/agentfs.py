@@ -1385,6 +1385,90 @@ def _read_skill(root: Path) -> tuple[list[tuple[str, bytes, int]], str]:
     return files, digest.hexdigest()
 
 
+def _open_skills_dir(target: str) -> int:
+    """`target`'s skills folder, opened one component at a time from the
+    data folder with no link followed (made, 0700, when missing). The
+    caller holds the lock and closes it. AgentFsError when the agent has
+    no folder or a link is in the way."""
+    import errno
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    home = paths.COMMUNAL_DIR if target == COMMUNAL else paths.AGENTS_DIR
+    chain = [home.name] + ([] if target == COMMUNAL else [target])
+    try:
+        fd = os.open(home.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    except OSError:
+        raise AgentFsError(f"{target} has no folder") from None
+    try:
+        for part in chain + ["skills"]:
+            try:
+                nfd = os.open(part, flags, dir_fd=fd)
+            except FileNotFoundError:
+                if part != "skills":
+                    raise AgentFsError(f"{target} has no folder") from None
+                os.mkdir(part, 0o700, dir_fd=fd)
+                nfd = os.open(part, flags, dir_fd=fd)
+            except OSError as e:
+                if e.errno in (errno.ELOOP, errno.ENOTDIR):
+                    raise AgentFsError(f"{part} is a symlink or not a folder, which is refused here") from None
+                raise AgentFsError(f"{part} cannot be opened ({e.strerror})") from None
+            os.close(fd)
+            fd = nfd
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _write_beneath(root_fd: int, rel: str, data: bytes, mode: int) -> None:
+    """Write one file of a staged skill, every folder on the way made and
+    opened relative to `root_fd` with no link followed."""
+    parts = Path(rel).parts
+    if not parts or any(p in ("", ".", "..") for p in parts):
+        raise AgentFsError(f"{rel} is not a path inside the skill")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    fd = os.dup(root_fd)
+    try:
+        for part in parts[:-1]:
+            try:
+                os.mkdir(part, 0o700, dir_fd=fd)
+            except FileExistsError:
+                pass
+            nfd = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+        out = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                      mode, dir_fd=fd)
+        with os.fdopen(out, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+    finally:
+        os.close(fd)
+
+
+def _rename_noreplace(dir_fd: int, old: str, new: str) -> None:
+    """Rename `old` to `new` inside one folder, failing rather than
+    replacing anything at `new` (renameat2 RENAME_NOREPLACE): a plain
+    rename onto an empty folder someone made in the meantime replaces it."""
+    import ctypes
+    import errno
+    libc = ctypes.CDLL(None, use_errno=True)
+    fn = getattr(libc, "renameat2", None)
+    if fn is not None:
+        if fn(dir_fd, old.encode(), dir_fd, new.encode(), 1) == 0:
+            return
+        err = ctypes.get_errno()
+        if err == errno.EEXIST:
+            raise AgentFsError(f"a skill named {new} appeared while it was copied")
+        if err not in (errno.ENOSYS, errno.EINVAL):
+            raise OSError(err, os.strerror(err))
+    try:
+        os.stat(new, dir_fd=dir_fd, follow_symlinks=False)
+        raise AgentFsError(f"a skill named {new} appeared while it was copied")
+    except FileNotFoundError:
+        os.rename(old, new, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+
+
 def import_skill(target: str, name: str, source: Path) -> dict:
     """Copy the skill folder `source` (found outside Agent Voice) into
     `target`'s skills as `name`: an agent's folder id, or communal. Refused,
@@ -1417,49 +1501,49 @@ def import_skill(target: str, name: str, source: Path) -> dict:
     _, why = parse_skill(name, text)
     if why:
         raise AgentFsError(f"it cannot be copied: {why}")
-    base = _base(target)
     with _locked():
-        for d in ([] if target == COMMUNAL else [paths.AGENTS_DIR]) + [base, base / "skills"]:
-            _no_link(d)
-        if not base.is_dir():
-            raise AgentFsError(f"{target} has no folder")
-        if target != COMMUNAL and (paths.AGENTS_DIR / target).resolve().parent \
-                != paths.AGENTS_DIR.resolve():
-            raise AgentFsError(f"{target} has no folder")
-        skills_root = base / "skills"
-        paths.private_dir(skills_root)
-        _no_link(skills_root)
-        dest = skills_root / name
-        if os.path.lexists(dest):
-            raise AgentFsError(f"{target} already has a skill named {name}; "
-                               "rename or remove that one first")
-        import tempfile
-        stage = Path(tempfile.mkdtemp(prefix=".import-", dir=skills_root))
-        try:
-            for rel, data, mode in files:
-                for parent in reversed(Path(rel).parents[:-1]):
-                    d = stage / parent
-                    if not d.is_dir():
-                        os.mkdir(d, 0o700)
-                fd = os.open(stage / rel, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
-                             | os.O_CLOEXEC, mode)
-                with os.fdopen(fd, "wb") as f:
-                    f.write(data)
-                    f.flush()
-                    os.fsync(f.fileno())
-            # The original again: copied as it was when it was checked, or
-            # not at all.
-            _, after = _read_skill(root)
-            if after != before:
-                raise AgentFsError("it changed while it was copied; nothing was copied, try again")
-            if os.path.lexists(dest):
-                raise AgentFsError(f"{target} already has a skill named {name}")
-            os.rename(stage, dest)
-        except BaseException:
-            shutil.rmtree(stage, ignore_errors=True)
-            raise
         file = f"skills/{name}/SKILL.md"
-        _save_version(target, file, text, "import")
+        skills_fd = _open_skills_dir(target)
+        try:
+            try:
+                os.stat(name, dir_fd=skills_fd, follow_symlinks=False)
+                raise AgentFsError(f"{target} already has a skill named {name}; "
+                                   "rename or remove that one first")
+            except FileNotFoundError:
+                pass
+            # Staged and published inside the skills folder by its open
+            # descriptor, never by its path again: a folder swapped for a
+            # link after it was checked cannot redirect a write (Codex
+            # review of M11).
+            stage = f".import-{os.getpid()}-{os.urandom(6).hex()}"
+            os.mkdir(stage, 0o700, dir_fd=skills_fd)
+            version = None
+            try:
+                stage_fd = os.open(stage, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                   dir_fd=skills_fd)
+                try:
+                    for rel, data, mode in files:
+                        _write_beneath(stage_fd, rel, data, mode)
+                finally:
+                    os.close(stage_fd)
+                # The original again: copied as it was when it was checked,
+                # or not at all.
+                _, after = _read_skill(root)
+                if after != before:
+                    raise AgentFsError("it changed while it was copied; nothing was copied, try again")
+                # The saved version first, so a history that cannot be
+                # written leaves no live skill behind (Codex review of M11).
+                version = _save_version(target, file, text, "import")
+                _rename_noreplace(skills_fd, stage, name)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    shutil.rmtree(stage, dir_fd=skills_fd)
+                if version is not None:
+                    with contextlib.suppress(OSError):
+                        version.unlink()
+                raise
+        finally:
+            os.close(skills_fd)
         _prune(target, file)
     copied_bytes = sum(len(d) for _, d, _ in files)
     try:
