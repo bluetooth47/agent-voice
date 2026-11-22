@@ -132,6 +132,53 @@ def test_each_setting_is_listed_with_the_page_that_changes_it():
     assert pages["agentvoiceSkill"] == "Communal"
 
 
+def _installed_layout(tmp_path, monkeypatch, link=True):
+    """The installed daemon runs from app/, which holds daemon/, bin/ and
+    desktop/ and neither manifest.json nor pages/: the plugin folder Omarchy
+    loads (a link to the deploy checkout) is where they are."""
+    app = tmp_path / "app"
+    app.mkdir()
+    monkeypatch.setattr(paths, "ROOT", app)
+    cfgdir = tmp_path / "xdgcfg"
+    monkeypatch.setattr(paths, "_XDG_CONFIG", cfgdir)
+    plugin = cfgdir / "omarchy" / "plugins" / av.PLUGIN_ID
+    plugin.parent.mkdir(parents=True)
+    if link:
+        plugin.symlink_to(ROOT)
+    return plugin
+
+
+def test_the_installed_daemon_finds_the_settings_through_the_plugin_link(tmp_path, monkeypatch):
+    """Found live after M14's first install: with ROOT at app/, the Settings
+    section came out empty and no test could tell."""
+    _installed_layout(tmp_path, monkeypatch)
+    assert av.source_root() is not None
+    got = text()
+    assert "`commandsInSentences`" in got and "### Conversation" in got
+    assert "not available on this install" not in got
+    assert av.page_of_keys()["agentvoiceSkill"] == "Communal"
+
+
+def test_with_no_manifest_anywhere_the_text_says_so_and_the_stamp_moves(cfg_factory, tmp_path, monkeypatch):
+    cfg = _cfg(cfg_factory)
+    with_it = av.stamp(cfg)
+    _installed_layout(tmp_path, monkeypatch, link=False)
+    assert av.source_root() is None
+    got = text()
+    assert "not available on this install" in got and "### Conversation" not in got
+    assert av.stamp(cfg) != with_it
+
+
+def test_a_plugin_folder_that_appears_later_marks_it_stale(cfg_factory, tmp_path, monkeypatch):
+    cfg = _cfg(cfg_factory)
+    plugin = _installed_layout(tmp_path, monkeypatch, link=False)
+    root = tmp_path / "r"
+    av.build(root, cfg)
+    assert not av.stale(cfg, root)
+    plugin.symlink_to(ROOT)
+    assert av.stale(cfg, root)
+
+
 def test_the_page_labels_are_the_sidebars():
     settings = (ROOT / "Settings.qml").read_text()
     labels = re.findall(r'\{ id: "(\w+)",\s+label: "([^"]+)"', settings)

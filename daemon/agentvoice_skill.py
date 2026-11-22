@@ -101,6 +101,19 @@ def plugin_dir() -> str | None:
 
 # --- what it is built from --------------------------------------------------------
 
+PLUGIN_ID = "duaneoca.agentvoice"
+
+
+def source_root() -> Path | None:
+    """The folder holding `manifest.json` and `pages/`: the checkout this file
+    is in, or, for the installed daemon (which lives in `app/`, a copy of
+    daemon/, bin/ and desktop/ only), the plugin folder Omarchy loads. Read
+    only: a read there reloads nothing. None when neither has them."""
+    for root in (paths.ROOT, paths._XDG_CONFIG / "omarchy" / "plugins" / PLUGIN_ID):
+        if (root / "manifest.json").is_file() and (root / "pages").is_dir():
+            return root
+    return None
+
 _PAGE_PUT = re.compile(r'\b(?:put|putMap)\("([A-Za-z][A-Za-z0-9]*)"')
 
 
@@ -108,7 +121,12 @@ def page_of_keys(pages_dir: Path | None = None) -> dict[str, str]:
     """Setting key -> the sidebar page whose control changes it, read from
     the page files themselves (`s.put("key", …)`). A key no page changes is
     not here, and so not in the skill: it has no place to point at."""
-    folder = pages_dir or paths.ROOT / "pages"
+    if pages_dir is None:
+        root = source_root()
+        if root is None:
+            return {}
+        pages_dir = root / "pages"
+    folder = pages_dir
     out: dict[str, str] = {}
     for f in sorted(folder.glob("*Page.qml")):
         label = PAGE_LABELS.get(f.stem)
@@ -124,7 +142,12 @@ def page_of_keys(pages_dir: Path | None = None) -> dict[str, str]:
 
 
 def manifest_settings(manifest: Path | None = None) -> list[dict]:
-    path = manifest or paths.ROOT / "manifest.json"
+    if manifest is None:
+        root = source_root()
+        if root is None:
+            return []
+        manifest = root / "manifest.json"
+    path = manifest
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         schema = data["barWidget"]["schema"]
@@ -359,7 +382,9 @@ def markdown(table: dict, wake: list[dict], settings: list[dict],
               "Each setting, by the page of the settings window that changes it. Open "
               "the window from the Agent Voice bar icon's panel. A setting is the "
               "person's to change."]
-    lines += settings_lines(settings, pages, note)
+    lines += settings_lines(settings, pages, note) or [
+        "", "(The list of settings is not available on this install: the settings "
+        "window shows them all.)"]
     lines += ["", "## Files", ""] + files_lines()
     return "\n".join(lines) + "\n"
 
@@ -454,9 +479,11 @@ def stamp(cfg=None, *, wake=None, mode=None) -> str:
     if mode is None:
         mode = cfg.commands_in_sentences()
     here = Path(__file__).resolve().parent
+    src = source_root()
     parts = [_digest(Path(__file__)), _digest(here / "speech_text.py"),
-             _digest(paths.ROOT / "manifest.json")]
-    parts += [_digest(f) for f in sorted((paths.ROOT / "pages").glob("*Page.qml"))]
+             _digest(src / "manifest.json") if src else "-"]
+    if src:
+        parts += [_digest(f) for f in sorted((src / "pages").glob("*Page.qml"))]
     parts.append(json.dumps([[w.get("id"), w.get("label"), w.get("phrase")] for w in wake],
                             sort_keys=True))
     parts.append(str(mode))

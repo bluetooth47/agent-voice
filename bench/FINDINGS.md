@@ -1974,3 +1974,23 @@ Notes tab reads `lanes` every 8 s and its own folder every 4 s while it is
 drawn; each is one `agentvoice` process, whose Python start-up costs more than
 the reading itself, and a reading that changed nothing is not applied, so the
 cards are not rebuilt.
+
+## 48. M14: what the Agent Voice skill adds to a turn
+
+Measured 2026-11-22 on the installed build (49e527e, first install) with
+`bench/preamble_size.py` (sizes only; tokens are characters / 4).
+
+| what | before | after |
+|---|---|---|
+| Codex, Gemini, Antigravity, Copilot preamble | 6,837 chars (~1,709 tokens) | 7,138 chars (~1,785 tokens): +299 chars, one line saying where the file is |
+| Claude Code preamble (the skill loads through the CLI, not the preamble) | 856 chars | 856 chars |
+| the skill's own front matter, which Claude Code lists in its own context | n/a | 377 chars (name and description), the body read only when asked |
+
+The first install built a 10,252-character SKILL.md, not the 19,355 the same
+generator gives from the checkout: the installed daemon runs from `app/`,
+which has no `manifest.json` or `pages/`, so its Settings section was empty.
+No test saw it (the suite runs from the checkout). `source_root()` now falls
+back to the plugin folder Omarchy loads, and a test lays out `app/` with an
+empty ROOT. "S on `sora`" was not rerun: a Claude turn pays for the skill's
+front matter only, and no Codex turn was run (Codex is bypassed for this
+round).
