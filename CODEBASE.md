@@ -565,10 +565,10 @@ Summarized from CLAUDE.md and merged-plan.md section 3; read the full text.
   - 14: notes, crew MCP server, audit log;
   - 15: user-started collaboration, passing a conversation, shared chats;
   - 16: agent-started collaboration (crew tools, call socket, levels).
-- **Installed:** `orders-guard` at 92c71ff (installed 2026-11-21 00:12,
-  pushed to fork; 2790 tests green). Phase 16 (c47aae1) is its parent. The
-  deploy checkout is at the end of `phase-m0` (tooling only; the daemon is
-  still 92c71ff's code).
+- **Installed:** `phase-m2` at a2deeb6 (deployed and installed
+  2026-11-21 by the M2 runner; 2918 tests green): the first daemon change
+  of the redesign round. Before it, `orders-guard` at 92c71ff. The QML of
+  M1 and M2 shows only after an `omarchy-restart-shell` (stop point 1).
 - **M0 done (2026-11-21):** the clone, the symlinked plugin path,
   `agentvoice-deploy`, the check writing nothing; `dev` and `main` are at
   `phase-m0` on the fork. Theo's project folder is the clone.
