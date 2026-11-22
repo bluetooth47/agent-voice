@@ -22,6 +22,7 @@ NotesPanel 1.0 NotesPanel.qml
 PageHeader 1.0 PageHeader.qml
 Pill 1.0 Pill.qml
 PromptPreview 1.0 PromptPreview.qml
+ReadoutLines 1.0 ReadoutLines.qml
 SearchField 1.0 SearchField.qml
 SegmentedChoice 1.0 SegmentedChoice.qml
 SendSheet 1.0 SendSheet.qml

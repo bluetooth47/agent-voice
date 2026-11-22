@@ -240,6 +240,14 @@ DEFAULTS = {
     "useVerifier": True,
     "hud": True,
     "hudLingerMs": 2000,
+    # phase M3: drawn by the screen alone; the daemon publishes the kept
+    # reply either way (readout.py). No TOML alias: without Omarchy there is
+    # no screen to draw them, and a fallback-config key nothing reads would
+    # be a setting that does nothing.
+    "hudSize": "locked",
+    "hudKeepReply": True,
+    "hudPosition": "top",
+    "hudTextSize": "medium",
     "bargeFactor": 150,
     "permissions": {},
     "agentModels": {},

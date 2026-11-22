@@ -245,13 +245,23 @@ instruction says once.
 
 ### Reading it back
 
-The readout that appears while it works sizes itself to what it is showing.
-It was a fixed 280 wide with the question cut at three lines and the answer
-at six -- and the daemon cut the answer at 400 characters before it ever got
-there -- so anything worth reading was an ellipsis. Now it widens to fit, up
-to 40% of the screen; grows taller, up to 60%; and past that it scrolls,
-pinned to the newest sentence as it is spoken unless you scroll back to
-reread. Hovering keeps it open; clicking it opens the whole conversation.
+The readout that appears while it works has two sizes (Display & privacy →
+**Readout size**). **Locked**, the default, keeps it one size from turn to
+turn: two fixed lines, the agent's last answer (dim, with an accent bar) and
+what is being said now (bright), each cut short with an ellipsis when it is
+long. Nothing appears or disappears, so neither the readout nor the popup's
+last-heard lines move while you talk. **Dynamic** sizes it to what it is
+showing: it widens to fit, up to 40% of the screen; grows taller, up to 60%;
+and past that it scrolls, pinned to the newest sentence as it is spoken
+unless you scroll back to reread. Either way, hovering keeps it open and
+clicking it opens the whole conversation.
+
+The last answer stays on screen while you reply to it (**Keep the last
+answer on screen while I talk**). It clears, together with what you said,
+when the screen locks, when you talk to another agent or switch chats, and
+after ten minutes with nothing new. The readout can sit at the top or the
+bottom of the screen, with small, medium or large text, and **Preview**
+shows it for four seconds with sample text (`agentvoice hud-preview`).
 
 The conversation is the session's exchanges, newest at the bottom, with a
 line where each new conversation began, which turns failed or were stopped,

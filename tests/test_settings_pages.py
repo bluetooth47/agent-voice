@@ -7,8 +7,10 @@ the page it belongs to, so this holds it: every key the manifest declares is
 shows the gate, the Agents card names the voice) is fine; a second control
 for it is the scattering coming back.
 
-The popup's five quick toggles, voice and permission level are the deliberate
-exception, and live in Panel.qml, not in pages/. So is the Voice page's
+The popup's five quick toggles and voice are the deliberate exception, and
+live in Panel.qml, not in pages/. Its permission level was one too until M3
+removed it (bug D): permissions are per agent, with one home on the Agents
+page. So is the Voice page's
 library, whose "Use for" sets an agent's voice: it goes through the overlay's
 `assignVoice`, never a page's own put, so the Agents card stays the voice's
 one home and the library is a shortcut to it (held below).
@@ -118,13 +120,13 @@ VIA_PIECE = {"EndpointEditor": ("endpointUrl", "endpointModel", "endpointIsAgent
 # A field or key written outside a page, and the one named overlay function
 # that may do it. The Voice library's "Use for" goes through assignVoice (held
 # above); removing, restoring and undoing an agent rewrites the whole list
-# through AgentFolders' saveAgents. The popup's level and voice pickers are
-# the documented exception (module docstring); M3 removes the level.
+# through AgentFolders' saveAgents. The popup's voice picker is the
+# documented exception (module docstring); its level picker went in M3.
 OUTSIDE_WRITERS: dict[tuple[str, str], set[str]] = {
     ("Settings.qml", "function assignVoice"): {"voice", "voiceAgents", "field:voice"},
     ("Settings.qml", "function trainVerifier"): {"engine"},
     ("AgentFolders.qml", "function saveAgents"): {"voiceAgents"},
-    ("Panel.qml", "*"): {"permissions", "voice"},
+    ("Panel.qml", "*"): {"voice"},
 }
 
 DEFAULTS_ONLY = {"agentEfforts", "agentModels", "mainTools", "permissions",
@@ -255,3 +257,17 @@ def test_field_homes_catches_a_second_writer():
     assert writers["voice"] >= {"AgentsPage.qml"}
     assert "ConversationPage.qml" not in writers.get("narration", set())
     assert writers["endpointUrl"] == {"AgentsPage.qml"}
+
+
+def test_the_popup_no_longer_writes_a_permission_level():
+    """Bug D (phase M3): the popup's "what Claude Code may do" picker was a
+    second, global way to set -- and promote to trusted -- what is now set
+    per agent on the Agents page. Read with the comments stripped, so a
+    sentence about the old picker does not count as the picker."""
+    from qml_scan import scan
+    panel = scan(ROOT / "Panel.qml").nocomment
+    assert '"permissions"' not in panel
+    for gone in ("setMainLevel", "trustPending", "Trust it"):
+        assert gone not in panel, gone
+    agents = (ROOT / "pages" / "AgentsPage.qml").read_text()
+    assert re.search(r'\b(?:put|putMap)\("permissions"', agents), "its one home"

@@ -254,3 +254,107 @@ def test_controls_is_imported_under_a_namespace():
     raw = (ROOT / "Settings.qml").read_text()
     assert "import QtQuick.Controls as QQC" in raw
     assert "\nimport QtQuick.Controls\n" not in raw
+
+
+# --- phase M3: one size, the kept answer, where and how big ----------------
+
+M3_KEYS = ("hudSize", "hudKeepReply", "hudPosition", "hudTextSize")
+
+
+def test_the_four_readout_settings_exist_in_all_three_places():
+    """Manifest schema and defaults, the daemon's DEFAULTS, and a control
+    that writes it on the Display page (test_settings_pages holds that it is
+    the only page)."""
+    import runtime
+    manifest = json.loads((ROOT / "manifest.json").read_text())["barWidget"]
+    schema = {k["key"]: k for k in manifest["schema"]}
+    display = _code(ROOT / "pages" / "DisplayPage.qml")
+    expected = {"hudSize": "locked", "hudKeepReply": True, "hudPosition": "top",
+                "hudTextSize": "medium"}
+    for key in M3_KEYS:
+        assert key in schema, key
+        assert manifest["defaults"][key] == expected[key] == schema[key]["defaultValue"], key
+        assert runtime.DEFAULTS[key] == expected[key], key
+        assert f'page.s.put("{key}"' in display, f"{key} has no control"
+    assert schema["hudSize"]["options"] == ["locked", "dynamic"]
+    assert schema["hudPosition"]["options"] == ["top", "bottom"]
+    assert schema["hudTextSize"]["options"] == ["small", "medium", "large"]
+
+
+def test_an_unreadable_value_falls_back_to_the_steady_one():
+    """The plan's "unreadable" column: anything but "dynamic" is locked,
+    anything but false keeps the reply, anything but "bottom" is the top,
+    anything but small or large is medium."""
+    panel = _code(ROOT / "Panel.qml")
+    assert 'voice.pref("hudSize", "locked") !== "dynamic"' in panel
+    assert 'voice.pref("hudKeepReply", true) !== false' in panel
+    assert 'voice.pref("hudPosition", "top") === "bottom" ? "bottom" : "top"' in panel
+    scale = panel[panel.index("readonly property real readoutScale"):]
+    scale = scale[:scale.index("}")]
+    assert '"small" ? 0.85 : v === "large" ? 1.25 : 1.0' in scale
+    assert 'position === "bottom" ? "bottom" : "top"' in HUD
+
+
+def test_locked_draws_the_two_fixed_lines_and_dynamic_the_old_ones():
+    assert "ReadoutLines {" in HUD
+    block = HUD[HUD.index("ReadoutLines {"):]
+    block = block[:block.index("\n        }")]
+    assert "visible: hud.locked" in block
+    assert 'reply: hud.reply !== "" ? hud.reply : hud.keptReply' in block
+    # The dynamic texts are hidden in locked mode, so nothing comes and goes.
+    after = HUD[HUD.index("ReadoutLines {"):]
+    after = after[after.index("\n        }") + 1:]
+    found = re.findall(r"visible: ([^\n]+)", after)
+    assert len(found) == 4, found
+    for line in found:
+        assert line.startswith("!hud.locked"), line
+    # One width in locked mode, never the measured text.
+    assert "textWidth: locked ? lockedWidth - pad * 2" in HUD
+
+
+def test_the_fixed_lines_are_plain_text_and_a_fixed_height():
+    lines = _code(ROOT / "ui" / "ReadoutLines.qml")
+    assert "textFormat: Text.PlainText" in lines
+    assert "AutoText" not in lines and "RichText" not in lines
+    # The slot's height comes from the font and the line count alone.
+    slot = lines[lines.index("component Slot"):]
+    assert "height: root.slotHeight" in slot
+    height = lines[lines.index("readonly property int slotHeight"):]
+    height = height[:height.index("\n")]
+    assert "text" not in height.split(":", 1)[1].lower()
+    assert "maximumLineCount: root.linesEach" in slot
+
+
+def test_the_popup_keeps_its_last_heard_slot_and_its_stop_button():
+    """Bug B: the section was `visible: voice.lastTranscript !== ""` and
+    the STOP button `visible: voice.vTurnRunning`, so both came and went with
+    every turn and the popup bounced. Measured with bench/preview's readout
+    target: 428-557 px before, 481 px in every state locked (FINDINGS §42)."""
+    panel = _code(ROOT / "Panel.qml")
+    last = panel[panel.index("id: lastExchange"):]
+    last = last[:last.index("\n        Item {")]
+    assert "visible: voice.engineInstalled" in last
+    assert "lastTranscript" not in last
+    stop = panel[panel.index('text: "STOP"') - 400:panel.index('text: "STOP"')]
+    assert "visible: voice.vTurnRunning || voice.readoutLocked" in stop
+    assert "enabled: voice.vTurnRunning" in stop
+
+
+def test_a_lock_clears_the_popups_copy_of_both_lines_at_once():
+    """A locked payload carries no text, and the widget keeps a field it is
+    not sent, so the popup would have kept the last exchange through the
+    lock (and shown it after). Cleared in the same parse as the state."""
+    panel = _code(ROOT / "Panel.qml")
+    parse = panel[panel.index('if (voice.vState === "locked") {'):]
+    parse = parse[:parse.index("}")]
+    for field in ("lastTranscript", "lastReply", "lastKept"):
+        assert f'voice.{field} = ""' in parse, field
+
+
+def test_the_hud_is_handed_the_new_settings():
+    panel = _code(ROOT / "Panel.qml")
+    block = panel[panel.index("  Hud {"):]
+    block = block[:block.index("\n  }") + 4]
+    for wired in ("keptReply:", "locked:", "position:", "textScale:"):
+        assert wired in block, wired
+    assert 'keptReply: voice.keepReply ? voice.lastKept : ""' in block

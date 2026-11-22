@@ -61,6 +61,124 @@ Column {
       onCommitted: function(v) { page.s.put("hudLingerMs", v) }
       onReset: page.s.resetKey("hudLingerMs")
     }
+
+    // phase M3 (feedback items 3 and 20). All dimmed with the switch, like
+    // the duration: none of them means anything with the readout off.
+    SettingRow {
+      width: parent.width
+      disabledReason: page.s.setting("hud", true) === true ? "" : "Only while the readout is shown."
+      label: "Size"
+      hint: page.s.setting("hudSize", "locked") === "dynamic"
+            ? "Grows and shrinks to fit what it shows."
+            : "Always the same size: two fixed lines, the last answer and what is being said now."
+      help: "Locked keeps the readout, and the popup's last-heard lines, the same size " +
+            "from one turn to the next, so nothing on screen jumps while you talk. Long " +
+            "text shows its newest words; click the readout for the whole conversation."
+      changed: page.s.changed("hudSize")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onReset: page.s.resetKey("hudSize")
+      SegmentedChoice {
+        options: [
+          { value: "locked", label: "Locked" },
+          { value: "dynamic", label: "Dynamic" }
+        ]
+        // Anything but "dynamic" is locked, as the readout itself reads it.
+        value: page.s.setting("hudSize", "locked") === "dynamic" ? "dynamic" : "locked"
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onCommitted: function(v) { page.s.put("hudSize", v) }
+      }
+    }
+
+    ToggleRow {
+      width: parent.width
+      enabled: page.s.setting("hud", true) === true
+      opacity: enabled ? 1 : 0.45
+      label: "Keep the last answer on screen while I talk"
+      hint: "The answer stays above what you are saying, so replying to it does not make it vanish."
+      help: "It clears, with what you said, when the screen locks, when you talk to " +
+            "another agent or switch chats, and after ten minutes with nothing new."
+      checked: page.s.setting("hudKeepReply", true) !== false
+      changed: page.s.changed("hudKeepReply")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onToggled: page.s.put("hudKeepReply", !checked)
+      onReset: page.s.resetKey("hudKeepReply")
+    }
+
+    SettingRow {
+      width: parent.width
+      disabledReason: page.s.setting("hud", true) === true ? "" : "Only while the readout is shown."
+      label: "Position"
+      hint: "Which edge of the screen, on the right and clear of the bar."
+      help: "The popup from the bar icon stays under the icon either way."
+      changed: page.s.changed("hudPosition")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onReset: page.s.resetKey("hudPosition")
+      SegmentedChoice {
+        options: [
+          { value: "top", label: "Top" },
+          { value: "bottom", label: "Bottom" }
+        ]
+        value: page.s.setting("hudPosition", "top") === "bottom" ? "bottom" : "top"
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onCommitted: function(v) { page.s.put("hudPosition", v) }
+      }
+    }
+
+    SettingRow {
+      width: parent.width
+      disabledReason: page.s.setting("hud", true) === true ? "" : "Only while the readout is shown."
+      label: "Text size"
+      hint: "Medium is the bar's own text size."
+      changed: page.s.changed("hudTextSize")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onReset: page.s.resetKey("hudTextSize")
+      SegmentedChoice {
+        options: [
+          { value: "small", label: "Small" },
+          { value: "medium", label: "Medium" },
+          { value: "large", label: "Large" }
+        ]
+        value: ["small", "large"].indexOf(String(page.s.setting("hudTextSize", "medium"))) >= 0
+               ? String(page.s.setting("hudTextSize", "medium")) : "medium"
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onCommitted: function(v) { page.s.put("hudTextSize", v) }
+      }
+    }
+
+    // Not a setting: shows the readout for four seconds with sample text,
+    // through the running daemon, so it is drawn exactly as a turn is.
+    Row {
+      width: parent.width
+      spacing: Style.space(10)
+      Button {
+        id: previewButton
+        text: "Preview"
+        iconText: "\u{f0208}"
+        bordered: true
+        enabled: page.s.hudPreviewBlocked === ""
+        opacity: enabled ? 1 : 0.45
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        tooltipText: "Show the readout for four seconds with sample text"
+        onClicked: page.s.previewHud()
+      }
+      // Why it does nothing, when it would do nothing.
+      Hint {
+        anchors.verticalCenter: previewButton.verticalCenter
+        width: parent.width - previewButton.width - parent.spacing
+        text: page.s.hudPreviewBlocked !== "" ? page.s.hudPreviewBlocked
+              : "Four seconds, with sample text, where the readout appears."
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+      }
+    }
   }
 
   SettingsGroup {

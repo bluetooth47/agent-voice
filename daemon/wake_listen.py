@@ -70,6 +70,7 @@ import chats as chat_schema  # noqa: E402
 import collab  # noqa: E402
 import narration  # noqa: E402
 import omarchy_skill  # noqa: E402
+import readout  # noqa: E402
 import sessions  # noqa: E402
 from runtime import (  # noqa: E402
     REPLY_MAX, RUNTIME_DIR, Config, History, Speaker, StateFile, instructions_text, speed_pct,
@@ -1731,6 +1732,9 @@ class Daemon:
         #: rebuild, by agent id ("" the main agent), as (line, its turn count
         #: then, when). Shown in the readout until its next turn is answered.
         self._notices: dict[str, tuple[str, int, float]] = {}
+        #: phase M3: the readout's kept reply, when its lines clear, and the
+        #: Display page's preview. See readout.py.
+        self.readout = readout.Readout()
         #: The permission level the main agent's conversation last ran
         #: under. Compared as a level, not as the hook-or-not flag: Ask and
         #: Edits share the flag, and lowering Edits to Ask must still
@@ -1978,6 +1982,36 @@ class Daemon:
               f"{'locked' if self.locked else 'unlocked'} "
               f"(told, not polled){OFF}", flush=True)
         self._publish()
+        return True
+
+    def readout_for(self) -> readout.Readout:
+        """The readout's state (phase M3). Made here when missing: test
+        daemons built with Daemon.__new__ never ran __init__."""
+        r = getattr(self, "readout", None)
+        if r is None:
+            r = self.readout = readout.Readout()
+        return r
+
+    def apply_readout_command(self, cmd: str | None) -> bool:
+        """`agentvoice hud-preview`, the Display page's Preview button: four
+        seconds of sample text through the state file. True if it was one.
+
+        Refused, and said so, while the screen is locked; over a turn under
+        way it simply does not show (readout.PREVIEWABLE decides, at every
+        publish, so a wake word in the middle of it wins at once)."""
+        if cmd != "hud-preview":
+            return False
+        if self.locked:
+            print(f"  {DIM}(readout preview: not while the screen is locked){OFF}",
+                  flush=True)
+            return True
+        seconds = self.readout_for().preview()
+        print(f"  {DIM}(readout preview for {seconds:.0f}s){OFF}", flush=True)
+        self._recompose()
+        # A little after the end, so the clock has passed it when it looks.
+        t = threading.Timer(seconds + 0.05, self._recompose)
+        t.daemon = True
+        t.start()
         return True
 
     #: Where the wake test's readout goes: beside the state file.
@@ -2249,6 +2283,8 @@ class Daemon:
         self._notices = {**self._notices, p.id or "": (
             f"{label}: new chat — {because}.", getattr(p, "turn_id", 0),
             time.time())}
+        # phase M3: the reply kept for the readout was the old chat's.
+        self.readout_for().forget(p.id or "")
         self._recompose()
         return False
 
@@ -2763,6 +2799,9 @@ class Daemon:
         # phase M2: a notice outlives the turn it explained only until the
         # agent answers again, and today's limit count rolls over at midnight.
         if self.expire_notices():
+            self._recompose()
+        # phase M3: ten minutes with nothing new, and the readout clears.
+        if self.readout_for().expire():
             self._recompose()
         if self.limit_hits_rolled():
             self.publish_agent()
@@ -4108,6 +4147,7 @@ class Daemon:
             # the words, which costs tokens and says so on screen.
             p.session_id, p.replay, how = None, replay_context(chat), "replayed"
         p.chat_id, p.chat_continued = chat["id"], True
+        self.readout_for().forget(p.id or "")
         try:
             self.chats.set_current(p.id, chat["id"])
         except (OSError, ValueError):
@@ -4120,6 +4160,7 @@ class Daemon:
         """Start `p` afresh: no session, no chat until its next turn."""
         p.session_id, p.chat_id, p.chat_continued, p.replay = None, None, False, ""
         p.terminal = None
+        self.readout_for().forget(p.id or "")
         try:
             self.chats.set_current(p.id, None)
         except (OSError, ValueError):
@@ -4192,8 +4233,11 @@ class Daemon:
             elif p.busy:
                 print(f"  {YEL}agent “{p.label}” is working; continue it when it "
                       f"has finished{OFF}", flush=True)
-            else:
-                self.continue_chat(p, chat)
+            elif self.continue_chat(p, chat) != "refused":
+                # phase M3: switched from the conversation view, so no turn
+                # follows to replace the old chat's words on screen.
+                self.readout_for().forget(p.id or "", clear=True)
+                self._recompose()
             return True
         if verb == "task-cancel":
             # collab: Cancel on the Collaboration list, `agentvoice tasks cancel`.
@@ -4204,6 +4248,8 @@ class Daemon:
             p = self._persona_by_id("" if arg in ("", "main") else arg)
             if p is not None and not p.busy:
                 self.new_chat(p)
+                self.readout_for().forget(p.id or "", clear=True)
+                self._recompose()
                 print(f"  {CYA}agent “{p.label or 'main'}”: new chat{OFF}", flush=True)
             return True
         return False
@@ -4797,7 +4843,9 @@ class Daemon:
         return out
 
     def _mirror_panel(self, payload: dict) -> None:
-        if self.panel is not None:
+        # The preview's sample turn is the readout's alone: Omarchy's Agents
+        # panel would show the main agent "speaking" for four seconds.
+        if self.panel is not None and not payload.get("preview"):
             self.panel.publish(str(payload.get("state", "off")),
                                self.panel_agents(payload))
 
@@ -4823,6 +4871,11 @@ class Daemon:
         HUD. Neither holds a brief or a request. Absent when there are none,
         so the state file reads as before."""
         state, extra = self._compose_line(state, extra)
+        if not self.locked:
+            # phase M3: the kept reply, texts cleared and staying cleared,
+            # and the preview. Before the muted flag below, so a preview
+            # laid over a muted microphone still says it is muted.
+            state, extra = self.readout_for().compose(state, extra)
         # Said outright now that a muted readout can show an agent
         # speaking (phase M2, testresults #10): the popup's Mute button
         # read "muted" off the state being "off", and would have offered
@@ -4833,10 +4886,13 @@ class Daemon:
             # Decided here, under the state file's own lock, because a turn
             # thread may compose from a microphone state read before the lock
             # landed: nothing anybody said or any agent answered goes out
-            # while the screen is locked.
+            # while the screen is locked. And what was on screen before it
+            # stays gone after the unlock (phase M3).
+            self.readout_for().lock()
             return "locked", {k: v for k, v in extra.items()
                               if k not in ("transcript", "reply", "partial", "thinking",
-                                           "who", "who_label", "collab", "tasks")}
+                                           "who", "who_label", "collab", "tasks",
+                                           "last_reply", "preview")}
         # phase M2, bug I: why a rebuild ended an agent's conversation, for
         # the HUD's extra line. Here rather than in the sticky fields so that
         # a lock, above, takes it off the screen with everything else.
@@ -5215,6 +5271,8 @@ class Daemon:
                 if self.apply_lock_command(cmd):
                     continue
                 if self.apply_wake_test_command(cmd):
+                    continue
+                if self.apply_readout_command(cmd):
                     continue
                 mic_cmd = self.apply_open_mic_command(cmd)
                 # phase M2, bug K: the open microphone ended -- the popup's

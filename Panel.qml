@@ -82,6 +82,24 @@ Panel {
   // "followup" after a reply (M2). "" from a daemon that does not say.
   property string vWindow: ""
 
+  // --- the readout (phase M3) ---------------------------------------------------
+  // The agent's previous answer, while the turn under way has none of its
+  // own yet (the wake word clears `reply`). The daemon keeps it and says
+  // when it is gone (readout.py); whether it is drawn is hudKeepReply.
+  property string lastKept: ""
+  // Locked: two fixed lines, the same height every turn. Anything but
+  // "dynamic" is locked, so an unreadable value gets the steady one.
+  readonly property bool readoutLocked: voice.pref("hudSize", "locked") !== "dynamic"
+  readonly property bool keepReply: voice.pref("hudKeepReply", true) !== false
+  // small / medium / large; medium is the bar's own body size.
+  readonly property real readoutScale: {
+    var v = voice.pref("hudTextSize", "medium")
+    return v === "small" ? 0.85 : v === "large" ? 1.25 : 1.0
+  }
+  // The top line: this turn's answer, else the kept one.
+  readonly property string readoutReply: voice.lastReply !== "" ? voice.lastReply
+                                         : voice.keepReply ? voice.lastKept : ""
+
   readonly property bool live: serviceActive && vState !== "off"
 
   // Quote one argument for a shell: the floating-terminal launcher takes a
@@ -341,8 +359,18 @@ Panel {
     if (home !== "" && d.indexOf(home) === 0) return "~" + d.slice(home.length)
     return d
   }
-  readonly property color permissionColor:
-    voice.permissionLevel === "trusted" ? voice.urgent : voice.dim
+  // What the main agent may do, and where, in words: its chip's tooltip
+  // (phase M3). The popup's own level picker is gone -- permissions are per
+  // agent, set on the Agents page -- but what is in force stays one hover
+  // away, because it is the thing to check before speaking.
+  readonly property string mainPosture:
+    (voice.vGoverned ? "in " + voice.projectLabel + " · " : "")
+    + (voice.vPosture !== "" ? voice.vPosture
+       : voice.permissionLevel === "trusted" ? "nothing is asked"
+       : voice.permissionLevel === "edits" ? "edits without asking, asks for commands"
+       : "asks before every change")
+    + (voice.vRemembers ? "" : " · does not remember")
+    + (voice.vOverriding === "" ? "" : " · instead of " + voice.vOverriding)
 
   // systemd is the authority on whether the daemon exists; the state file only
   // says what it is doing. Both are needed: a stale state file outlives a
@@ -420,9 +448,20 @@ Panel {
         // Drawn on the panel's level meter; absent when nothing is listening.
         voice.levelDb = d.level_db !== undefined ? d.level_db : -99
         if (d.gate_db !== undefined) voice.gateDb = d.gate_db
-        if (d.levels !== undefined) voice.agentLevels = d.levels
         voice.agentLive = (d.live && typeof d.live === "object") ? d.live : ({})
         if (d.reply !== undefined) voice.lastReply = String(d.reply)
+        // Only with a reply field: a payload that does not speak about the
+        // exchange (a level update) must not blank the kept answer.
+        if (d.reply !== undefined)
+          voice.lastKept = d.last_reply !== undefined ? String(d.last_reply) : ""
+        // A lock takes both lines off at once, here as well as in the
+        // daemon: a locked payload carries no text, and a field that is not
+        // sent keeps its old value on screen.
+        if (voice.vState === "locked") {
+          voice.lastTranscript = ""
+          voice.lastReply = ""
+          voice.lastKept = ""
+        }
         // Absent with a single agent, and then cleared rather than kept: a
         // name left over from when there were several would be wrong.
         voice.lastWho = d.who_label !== undefined ? String(d.who_label) : ""
@@ -491,6 +530,12 @@ Panel {
     reply: voice.lastReply
     who: voice.lastWho
     collab: voice.collabLine
+    // phase M3: the previous answer while this turn has none (hudKeepReply),
+    // the size, the edge it sits at and its text size.
+    keptReply: voice.keepReply ? voice.lastKept : ""
+    locked: voice.readoutLocked
+    position: voice.pref("hudPosition", "top") === "bottom" ? "bottom" : "top"
+    textScale: voice.readoutScale
     // A click on the readout opens the whole conversation -- the answer to
     // "the popup is too small" for anything longer than a glance.
     onOpenConversation: conversation.running = true
@@ -502,15 +547,16 @@ Panel {
   // corner: nothing to change, nothing to pick, and no sign of which of your
   // agents was doing what. Now: the microphone level, a stop button big
   // enough to find in a hurry, every agent and what it is doing, the five
-  // switches people flip day to day, the voice, and the main agent's
-  // permission level. Everything else stays in the overlay.
+  // switches people flip day to day and the voice. Everything else stays in
+  // the overlay -- the main agent's permission level included since M3: it
+  // is set per agent, on the Agents page, and the popup's copy was a second
+  // way to promote an agent to "trusted" (feedback item 2, bug D).
 
   property real levelDb: -99
   // The gate in use, when it follows the room; see Settings.gateInForce.
   property real gateDb: NaN
   // name -> what that agent is doing, with more than one agent.
   property var agentLive: ({})
-  property var agentLevels: ["ask", "edits", "trusted"]
 
   // One copy of the settings for the popup's own controls, so a switch shows
   // its new position the moment it is clicked instead of after shell.json
@@ -575,26 +621,6 @@ Panel {
     return ({})
   }
   readonly property string mainLabel: cleanLabel(pref("mainName", "")) || capitalised(voice.activePhrase)
-
-  // The main agent's level as saved for it, else as the daemon reports it.
-  readonly property string mainLevel: {
-    var all = pref("permissions", {})
-    var v = all && typeof all === "object" ? all[voice.mainAgent] : undefined
-    return typeof v === "string" && v !== "" ? v : voice.permissionLevel
-  }
-  // Stored per agent, like the overlay does: trust is a judgement about one
-  // program, and must not follow `omarchy default agent` to the next.
-  function setMainLevel(value) {
-    if (voice.mainAgent === "") return
-    var all = {}
-    var current = pref("permissions", {})
-    if (current && typeof current === "object")
-      for (var k in current) all[k] = current[k]
-    all[voice.mainAgent] = value
-    store.set("permissions", all)
-  }
-  // Moving to "trusted" from a popup takes a second click.
-  property bool trustPending: false
 
   function agentState(name) {
     if (!voice.serviceActive) return "off"
@@ -665,7 +691,7 @@ Panel {
     }
   }
   onTargetsChanged: if (cursor >= targets.length) cursor = Math.max(0, targets.length - 1)
-  onOpenedChanged: if (!opened) { cursorActive = false; trustPending = false }
+  onOpenedChanged: if (!opened) { cursorActive = false; lastExchange.expanded = false }
 
   // Open the overlay, on a page: {"page": "agents", "agent": "sarah"}.
   function summon(payload) {
@@ -889,9 +915,16 @@ Panel {
         // theme's alarm colour, and an octagon from the same icon set as the
         // bar icon. It kills the agent's whole process group, not just the
         // talking.
+        //
+        // Locked readout (phase M3): always in its place, dimmed and inert
+        // between turns, because a button that comes and goes with every
+        // turn bounces the popup as much as the last-heard lines did -- and
+        // a stop button is better found where it always is.
         Button {
           width: parent.width
-          visible: voice.vTurnRunning
+          visible: voice.vTurnRunning || voice.readoutLocked
+          enabled: voice.vTurnRunning
+          opacity: enabled ? 1.0 : 0.35
           text: "STOP" + (voice.lastWho !== "" ? "  " + voice.lastWho : "")
           iconText: "\u{f06d7}"
           bordered: true
@@ -908,6 +941,7 @@ Panel {
       // One chip per agent: who, and what it is doing. A click opens that
       // agent's card in the overlay.
       Flow {
+        id: chips
         width: parent.width
         spacing: Style.space(6)
         visible: voice.engineInstalled
@@ -916,11 +950,32 @@ Panel {
           // Ids; "" is the main agent.
           model: [""].concat(voice.crew.map(function(a) { return voice.agentId(a) }))
           Button {
+            id: chip
             required property string modelData
             readonly property var entry: voice.crewEntry(modelData)
             readonly property string st: voice.agentState(modelData)
             readonly property bool busyNow: st === "thinking" || st === "speaking" || st === "transcribing"
-            text: (modelData === "" ? voice.mainLabel : voice.agentLabel(entry)) + "  ·  " + st
+            readonly property string name: modelData === "" ? voice.mainLabel : voice.agentLabel(entry)
+            text: name + "  ·  " + st
+            // Locked readout (phase M3): as wide as its longest state, so
+            // "idle" turning into "transcribing" never rewraps the row of
+            // chips onto another line. Elided past the popup's width; the
+            // full name is in the tooltip.
+            TextMetrics {
+              id: chipNow
+              font.family: voice.fontFamily
+              font.pixelSize: Style.font.caption
+              text: chip.text
+            }
+            TextMetrics {
+              id: chipWidest
+              font.family: voice.fontFamily
+              font.pixelSize: Style.font.caption
+              text: chip.name + "  ·  transcribing"
+            }
+            width: voice.readoutLocked
+                   ? Math.min(chips.width, implicitWidth + Math.max(0, chipWidest.width - chipNow.width))
+                   : Math.min(chips.width, implicitWidth)
             iconText: busyNow ? "\u{f0e4e}" : "\u{f06a9}"
             bordered: true
             selected: busyNow
@@ -929,8 +984,9 @@ Panel {
             fontFamily: voice.fontFamily
             fontSize: Style.font.caption
             tooltipText: modelData === ""
-                         ? "Answers to “" + voice.activePhrase + "” · " + (voice.usingEndpoint ? "endpoint" : (voice.programLabel(voice.mainAgent) || "no agent"))
-                         : "Answers to “" + String(entry.name || "") + "” · " + voice.programLabel(String(entry.agent || "claude"))
+                         ? voice.mainLabel + " answers to “" + voice.activePhrase + "” · " + (voice.usingEndpoint ? "endpoint" : (voice.programLabel(voice.mainAgent) || "no agent"))
+                           + (voice.serviceActive && voice.mainAgent !== "" ? " · " + voice.mainPosture : "")
+                         : name + " answers to “" + String(entry.name || "") + "” · " + voice.programLabel(String(entry.agent || "claude"))
             onClicked: voice.summon({ page: "agents", agent: modelData === "" ? "main" : modelData })
           }
         }
@@ -1044,96 +1100,27 @@ Panel {
             onChanged: function(v) { if (v !== voice.pref("voice", "lessac-medium")) store.set("voice", v) }
           }
         }
-
-        Column {
-          width: parent.width
-          spacing: Style.space(4)
-          visible: !voice.usingEndpoint && voice.mainAgent !== ""
-
-          Text {
-            text: "What " + voice.programLabel(voice.mainAgent) + " may do"
-            color: voice.fg
-            font.family: voice.fontFamily
-            font.pixelSize: Style.font.body
-          }
-          SegmentedChoice {
-            width: parent.width
-            options: {
-              var out = []
-              for (var i = 0; i < voice.agentLevels.length; i++) {
-                var v = String(voice.agentLevels[i])
-                out.push({ value: v,
-                           label: v === "trusted" ? "Trust all" : v === "edits" ? "Edits ok"
-                                  : voice.agentLevels.indexOf("edits") >= 0 ? "Ask first" : "Read-only" })
-              }
-              return out
-            }
-            value: voice.trustPending ? "trusted" : voice.mainLevel
-            foreground: voice.fg
-            accent: voice.mainLevel === "trusted" ? voice.urgent : Commons.Color.accent
-            fontFamily: voice.fontFamily
-            onCommitted: function(v) {
-              if (v === "trusted") { voice.trustPending = true; return }
-              voice.trustPending = false
-              voice.setMainLevel(v)
-            }
-          }
-          Row {
-            visible: voice.trustPending
-            spacing: Style.space(8)
-            Text {
-              anchors.verticalCenter: parent.verticalCenter
-              text: "Run anything, unasked?"
-              color: voice.urgent
-              font.family: voice.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-            Button {
-              text: "Trust it"
-              bordered: true
-              foreground: voice.urgent
-              accent: voice.urgent
-              fontFamily: voice.fontFamily
-              onClicked: { voice.trustPending = false; voice.setMainLevel("trusted") }
-            }
-            Button {
-              text: "Cancel"
-              bordered: true
-              foreground: voice.fg
-              fontFamily: voice.fontFamily
-              onClicked: voice.trustPending = false
-            }
-          }
-          // Where, as well as what: the level means nothing without the
-          // folder it applies to.
-          Text {
-            width: parent.width
-            elide: Text.ElideMiddle
-            text: (voice.vGoverned ? "in " + voice.projectLabel + " · " : "")
-                  + (voice.vPosture !== "" ? voice.vPosture
-                     : voice.mainLevel === "trusted" ? "nothing is asked"
-                     : voice.mainLevel === "edits" ? "edits without asking, asks for commands"
-                     : "asks before every change")
-                  + (voice.vRemembers ? "" : " · does not remember")
-                  + (voice.vOverriding === "" ? "" : " · instead of " + voice.vOverriding)
-            textFormat: Text.PlainText
-            color: voice.permissionColor
-            font.family: voice.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-        }
       }
 
       // --- last exchange ---
-      // What it last heard. On screen, because the whole problem with an
-      // interface you cannot see is being unsure whether it understood you.
-      // Folded to a few lines; the conversation view has the rest.
+      // What it last heard, and what it answered. On screen, because the
+      // whole problem with an interface you cannot see is being unsure
+      // whether it understood you.
+      //
+      // Always there (phase M3, bug B). It used to appear only once
+      // something had been heard and vanish at every wake word, and the
+      // whole popup bounced up and down with it through a conversation.
+      // Locked (hudSize, the default): two fixed lines, the answer above
+      // what is being said now, the same height whatever they hold.
+      // Dynamic: the old folded text, which grows with what it shows but
+      // keeps its slot when empty. "more" unfolds either, on request.
       Column {
         id: lastExchange
         width: parent.width
         spacing: Style.space(4)
-        visible: voice.lastTranscript !== ""
+        visible: voice.engineInstalled
         property bool expanded: false
+        readonly property bool folded: voice.readoutLocked && !expanded
 
         Item {
           width: parent.width
@@ -1147,6 +1134,8 @@ Panel {
           Text {
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
+            // In a row of fixed height, so coming and going moves nothing.
+            visible: voice.lastTranscript !== "" || voice.readoutReply !== ""
             text: lastExchange.expanded ? "less" : "more"
             color: moreHover.containsMouse ? voice.fg : voice.dim
             font.family: voice.fontFamily
@@ -1161,17 +1150,51 @@ Panel {
             }
           }
         }
+
+        ReadoutLines {
+          width: parent.width
+          visible: lastExchange.folded
+          reply: voice.readoutReply
+          transcript: voice.lastTranscript
+          replyPlaceholder: "No answer yet"
+          transcriptPlaceholder: voice.serviceActive ? "Nothing heard yet" : "Not listening"
+          pixelSize: Style.font.body
+          fontFamily: voice.fontFamily
+          foreground: voice.fg
+          replyAccent: Commons.Color.accent
+          nowAccent: voice.barIconColor
+        }
+
+        // Dynamic, or unfolded. The kept answer first: it came before what
+        // is being said now. Only while this turn has no answer of its own.
         Text {
           width: parent.width
           wrapMode: Text.WordWrap
+          visible: !lastExchange.folded && voice.lastReply === "" && voice.readoutReply !== ""
           maximumLineCount: lastExchange.expanded ? 1000 : 2
           elide: Text.ElideRight
-          text: voice.lastTranscript
+          text: "→ " + voice.readoutReply
+          textFormat: Text.PlainText
+          color: voice.dim
+          font.family: voice.fontFamily
+          font.pixelSize: Style.font.body
+        }
+        Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          visible: !lastExchange.folded
+          maximumLineCount: lastExchange.expanded ? 1000 : 2
+          elide: Text.ElideRight
+          // A placeholder rather than nothing: the slot stays, so the popup
+          // does not jump when the first words arrive.
+          text: voice.lastTranscript !== "" ? voice.lastTranscript
+                : voice.serviceActive ? "Nothing heard yet" : "Not listening"
           // Not AutoText: this is a transcript of speech and of a model's
           // reply, so it is attacker-shaped input as far as the bar is
           // concerned. Rich text would hide characters behind markup.
           textFormat: Text.PlainText
-          color: voice.fg
+          color: voice.lastTranscript !== "" ? voice.fg : voice.dim
+          font.italic: voice.lastTranscript === ""
           font.family: voice.fontFamily
           font.pixelSize: Style.font.body
         }
@@ -1180,7 +1203,7 @@ Panel {
         Text {
           width: parent.width
           wrapMode: Text.WordWrap
-          visible: voice.lastReply !== ""
+          visible: !lastExchange.folded && voice.lastReply !== ""
           maximumLineCount: lastExchange.expanded ? 1000 : 3
           elide: Text.ElideRight
           text: "→ " + voice.lastReply

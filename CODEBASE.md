@@ -90,8 +90,9 @@ are new). Never hard-code a path; add it there instead.
 ```
 manifest.json        plugin manifest: kinds bar-widget + overlay; barWidget.schema/defaults = every setting
 Panel.qml            bar icon + its popup: STOP, level meter, agent chips, 5 quick toggles, voice,
-                     permission; passes the collaboration line to the HUD
+                     last heard (no permission picker since M3); passes the readout to the HUD
 Hud.qml              layer-shell readout beside the bar during a turn (hidden at once on lock);
+                     locked (ui/ReadoutLines, one size) or dynamic (sized to fit), top or bottom;
                      shows the collaboration line ("Theo → Sora: passing")
 Settings.qml         the overlay: shared state `s`, SettingsStore, launch functions, conversation view,
                      permission prompt, send sheet, sidebar frame, Ctrl+1..9 page jumps (1850 lines)
@@ -176,7 +177,14 @@ This file is the entry point (`main()`), and its structure is:
   today, last}`: turns cut at `maxUtteranceMs` today, kept across a daemon
   restart through the old state file); and when a rebuild ended a
   conversation every publish but a locked one carries `notice` (why; the
-  HUD's extra line, until that agent's next turn).
+  HUD's extra line, until that agent's next turn). Since M3 a turn with no
+  answer yet carries `last_reply` (the answer before it, for the readout's
+  top line), and the Display page's Preview publishes four seconds of a
+  sample `speaking` payload with `preview: true` (`agentvoice
+  hud-preview`; never mirrored to Omarchy's Agents panel). Both readout
+  lines clear together, and stay cleared, on a lock, an agent switch, a
+  chat switch from the conversation view and ten idle minutes: see
+  `readout.py`.
 - **Rebuilds keep the conversation (M2, bug I).** `reconcile_agent` (main)
   and `_rebuild_persona` (extra agents) always build a new adapter when the
   program, folder, endpoint, level or model changes, so no process started
@@ -218,6 +226,7 @@ This file is the entry point (`main()`), and its structure is:
 | `audit.py` | `audit.record()` takes only typed fields (ids, names, integers); a bad value is written as "?". A test AST-walks every call. |
 | `speech_text.py` | Markdown → speakable prose, sentence boundaries, code blocks → "Code omitted", `safe_for_terminal`, `as_prompt`; `pass_command` ("pass/send this to NAME …") and `is_take_over`. |
 | `permission_hook.py` | Claude Code **PreToolUse hook**. Writes `permissions/<id>.request`, summons the overlay, waits for the response. Levels: `ask` / `edits` / `trusted`. Fails *closed*; hook settings use `onFailure: "block"`. Crew rules: notes reads allowed, notes writes asked at Ask and refused when `notesWrite` is deny; collaboration tools pass (the daemon asks). Loading the agent's own skill is a read. **Orders guard** (`orders_write`, 92c71ff): see section 8. Security-critical. |
+| `readout.py` | M3, bug B: the readout's kept reply (`last_reply`), when both lines clear and stay cleared (`gone`: lock, agent or chat switch, `KEEP_S` 600 s idle), and the 4 s preview. Pure, on an injectable clock; `Daemon._compose` calls it for every unlocked payload. |
 | `sessions.py` | M2, bug I: the pure rule for whether a conversation survives an adapter rebuild (`carry`, `spec_changes`, `why`). |
 | `crew.py` | Multiple agents: `Persona` (own adapter/session/voice, plus `task`, `saved_conversation`, `turn_id`, `answering` for collaboration), `route()` picks who was addressed by wake name. With extra agents, each turn runs on its own thread. |
 | `chats.py` | Saved conversations (opt-in `saveChats`), 0600, `index.json`. Shared chats (Phase 15): `owner`, `participants`, `shared_with`, per-speaker `sessions`; `may_replay`, `may_continue`. CLI includes `may-continue`. |
@@ -350,6 +359,7 @@ Notes and collaboration exist only for Claude Code and Codex
 | `NotesPanel.qml` | One notes folder: list, editor, history with View/Restore, lock, Open folder. |
 | `PageHeader.qml` | Page title row. |
 | `PromptPreview.qml` | What an agent is told, piece by piece, each labelled with its source. Read only. |
+| `ReadoutLines.qml` | M3: the locked readout, two fixed-height slots (last answer, dim with an accent bar; what is being said now, bright), each showing the end of its text, PlainText. Used by the HUD and the popup. |
 | `SegmentedChoice.qml` | Segmented enum control. |
 | `SendSheet.qml` | "Send to another agent": target, editable brief, what goes with it; sends via `agentvoice pass`. |
 | `SettingRow.qml` | One setting on one line. |

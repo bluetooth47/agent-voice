@@ -211,7 +211,7 @@ case "\${1:-}" in
     # Clearing this session's conversation is real and has no undo; a
     # preview's Clear button only logs it (M1). Reading passes through.
     if [ "\${2:-}" = clear ]; then printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0; fi ;;
-  start|stop|restart|toggle|enable|disable|mic|open-mic|interrupt|lock|unlock|type|talk|talk-end|permit|wake-test|calibrate|pass|tasks)
+  start|stop|restart|toggle|enable|disable|mic|open-mic|interrupt|lock|unlock|type|talk|talk-end|permit|wake-test|calibrate|pass|tasks|hud-preview)
     printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0 ;;
 esac
 exec '$tmp/bin/agentvoice.rest' "\$@"

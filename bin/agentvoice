@@ -13,6 +13,7 @@
 #                                  it is polled by the widget twice a second,
 #                                  where a nonzero exit is journal noise.
 #   agentvoice interrupt           stop the reply in progress, keep listening
+#   agentvoice hud-preview         sample text on the readout for 4s
 #   agentvoice talk                push-to-talk pressed: listen now, or, if it
 #                                  is mid-reply, stop it
 #   agentvoice talk-end            push-to-talk released: that was the turn
@@ -166,6 +167,18 @@ case "${1:-status}" in
         send_command "open-mic off"
         ;;
       *) echo "usage: agentvoice open-mic on [AGENT_ID] | off" >&2; exit 2 ;;
+    esac
+    ;;
+  hud-preview)
+    # The Display page's Preview button (phase M3): four seconds of sample
+    # text on the readout, published through the state file so the HUD
+    # draws it exactly as it draws a turn. Only over an idle readout: a turn
+    # under way is the real thing, and a locked screen shows nothing.
+    active || { echo "agentvoice is not running" >&2; exit 1; }
+    case "$(vstate)" in
+      listening|off) send_command hud-preview ;;
+      locked) echo "the screen is locked; the readout shows nothing then" >&2; exit 1 ;;
+      *) echo "a turn is under way; the readout is showing the real thing" >&2; exit 1 ;;
     esac
     ;;
   wake-test)
@@ -435,7 +448,7 @@ case "${1:-status}" in
     active && echo yes || echo no
     ;;
   *)
-    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|interrupt|monitor|calibrate|voice|permit|pending|history|chats|pass|tasks|agents|endpoint|open-mic|wake-test|status|is-active]" >&2
+    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|interrupt|hud-preview|monitor|calibrate|voice|permit|pending|history|chats|pass|tasks|agents|endpoint|open-mic|wake-test|status|is-active]" >&2
     exit 2
     ;;
 esac

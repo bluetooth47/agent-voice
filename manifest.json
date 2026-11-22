@@ -94,6 +94,10 @@
       "bargeFactor": 150,
       "hud": true,
       "hudLingerMs": 2000,
+      "hudSize": "locked",
+      "hudKeepReply": true,
+      "hudPosition": "top",
+      "hudTextSize": "medium",
       "useVerifier": true,
       "yieldToRecorders": true,
       "logSpeech": false,
@@ -676,6 +680,47 @@
         "max": 10000,
         "step": 500,
         "description": "Measured from the end of the exchange, including the follow-up window. Zero closes it immediately."
+      },
+      {
+        "key": "hudSize",
+        "type": "enum",
+        "label": "Readout size",
+        "options": [
+          "locked",
+          "dynamic"
+        ],
+        "defaultValue": "locked",
+        "description": "Locked keeps the readout, and the popup's last-heard lines, one size from turn to turn: two fixed lines, the agent's last answer and what is being said now, with long text cut short. Dynamic grows and shrinks to fit what it shows."
+      },
+      {
+        "key": "hudKeepReply",
+        "type": "bool",
+        "label": "Keep the last answer on screen while I talk",
+        "defaultValue": true,
+        "description": "The agent's last answer stays above what you are saying, so replying to it does not make it vanish. It clears when the screen locks, when you talk to another agent or switch chats, and after ten minutes with nothing new."
+      },
+      {
+        "key": "hudPosition",
+        "type": "enum",
+        "label": "Readout position",
+        "options": [
+          "top",
+          "bottom"
+        ],
+        "defaultValue": "top",
+        "description": "Which edge of the screen the readout sits at, on the right, clear of the bar. The popup stays under its bar icon."
+      },
+      {
+        "key": "hudTextSize",
+        "type": "enum",
+        "label": "Readout text size",
+        "options": [
+          "small",
+          "medium",
+          "large"
+        ],
+        "defaultValue": "medium",
+        "description": "The size of the readout's text. Medium is the bar's own text size."
       },
       {
         "key": "useVerifier",

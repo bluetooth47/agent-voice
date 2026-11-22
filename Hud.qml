@@ -8,6 +8,7 @@ import qs.Commons
 // undefined. Omarchy's own QML writes Commons.Color for the same reason.
 import qs.Commons as Commons
 import qs.Ui
+import "ui"
 
 // What it is doing, while it is doing it, without taking the keyboard.
 //
@@ -23,12 +24,17 @@ import qs.Ui
 // zone ignored, the same shape Omarchy's own notifications use. It can never
 // steal focus and never moves anything else on screen.
 //
-// It sizes itself to what it is showing. It was a fixed 280 wide with the
-// transcript cut at three lines and the answer at six, so anything worth
-// reading was an ellipsis -- reported from use as "if a response or prompt is
-// too long the popup is too small". Now it widens to fit, up to a share of the
-// screen; grows taller, up to most of it; and past that it scrolls, following
-// the answer down as it is spoken unless you have scrolled back to reread.
+// Two sizes (phase M3, hudSize). Locked, the default: one width and one
+// height whatever it shows -- a header and two fixed lines, the agent's last
+// answer and what is being said now (ui/ReadoutLines), long text showing its
+// newest words -- so nothing on it appears, disappears or moves from one turn
+// to the next. Dynamic, the earlier behaviour: it sizes itself to what it is
+// showing. That was a fixed 280 wide with the transcript cut at three lines
+// and the answer at six, so anything worth reading was an ellipsis --
+// reported from use as "if a response or prompt is too long the popup is too
+// small" -- and it widens to fit, up to a share of the screen; grows taller,
+// up to most of it; and past that it scrolls, following the answer down as
+// it is spoken unless you have scrolled back to reread.
 PanelWindow {
   id: hud
 
@@ -46,6 +52,22 @@ PanelWindow {
   // passing", "Sora (for Theo): working", "Sora finished". Empty otherwise.
   property string collab: ""
   property color accent: Commons.Color.foreground
+  // phase M3. The agent's previous answer, drawn while this turn has none of
+  // its own yet; "" when hudKeepReply is off or there is none to keep.
+  property string keptReply: ""
+  // Locked (one size, two fixed lines) or dynamic (sized to fit).
+  property bool locked: true
+  // "top" or "bottom": the edge of the screen it sits at, on the right.
+  property string position: "top"
+  // 0.85, 1 or 1.25: small, medium (the bar's own size) or large.
+  property real textScale: 1.0
+  readonly property real bodySize: Math.round(Style.font.body * textScale)
+  readonly property real captionSize: Math.round(Style.font.caption * textScale)
+  // The header names the state and, with several agents, whose turn it is;
+  // in locked mode it carries the collaboration line too, so that line does
+  // not come and go as a row of its own.
+  readonly property string headerText: (who !== "" ? who + " · " + stateLabel : stateLabel)
+                                       + (locked && collab !== "" ? " · " + collab : "")
 
   // `var`, not QtObject: the bar is reached for position and thickness, and
   // a QtObject-typed handle makes those unresolvable to qmllint -- which
@@ -111,6 +133,9 @@ PanelWindow {
   readonly property real screenWidth: hud.screen ? hud.screen.width : 1920
   readonly property real screenHeight: hud.screen ? hud.screen.height : 1080
   readonly property int minWidth: Style.space(280)
+  // Locked: one width, from the text size, bounded like the dynamic one.
+  readonly property int lockedWidth: Math.round(Math.max(minWidth,
+                                                         Math.min(maxWidth, Style.space(440) * textScale)))
   // A share of the screen rather than a number: wide enough that a long
   // answer reads in lines, not a column, and still a corner readout.
   readonly property int maxWidth: Math.max(minWidth,
@@ -124,23 +149,31 @@ PanelWindow {
   TextMetrics {
     id: heardWidth
     font.family: hud.fontFamily
-    font.pixelSize: Style.font.body
+    font.pixelSize: hud.bodySize
     text: hud.transcript === "" ? "" : "“" + hud.transcript + "”"
   }
   TextMetrics {
     id: replyWidth
     font.family: hud.fontFamily
-    font.pixelSize: Style.font.body
-    text: hud.reply === "" ? "" : "→ " + hud.reply
+    font.pixelSize: hud.bodySize
+    text: hud.reply !== "" ? "→ " + hud.reply : hud.keptReply !== "" ? "→ " + hud.keptReply : ""
+  }
+  TextMetrics {
+    id: headerWidth
+    font.family: hud.fontFamily
+    font.pixelSize: hud.captionSize
+    text: hud.headerText
   }
   readonly property real wanted: Math.max(heardWidth.width, replyWidth.width,
-                                          header.implicitWidth)
-  readonly property int textWidth: Math.round(Math.min(maxWidth - pad * 2,
-                                                       Math.max(minWidth - pad * 2,
-                                                                wanted + Style.space(2))))
+                                          headerIcon.implicitWidth + Style.space(6) + headerWidth.width)
+  readonly property int textWidth: locked ? lockedWidth - pad * 2
+                                   : Math.round(Math.min(maxWidth - pad * 2,
+                                                         Math.max(minWidth - pad * 2,
+                                                                  wanted + Style.space(2))))
 
   visible: showing
   implicitWidth: textWidth + pad * 2
+  // Locked: everything in the body is a fixed height, so this is a constant.
   implicitHeight: Math.min(maxHeight, body.implicitHeight + pad * 2)
 
   color: "transparent"
@@ -149,12 +182,15 @@ PanelWindow {
   WlrLayershell.layer: WlrLayer.Overlay
   WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
 
-  // Below a top bar, above a bottom one, and clear of a vertical one. Falls
-  // back to a plain corner offset when the bar does not say where it is.
+  // At the edge hudPosition names (phase M3; it used to follow the bar),
+  // on the right: below a top bar, above a bottom one, and clear of a
+  // vertical one. Falls back to a plain corner offset when the bar does not
+  // say where it is.
   readonly property string barSide: bar && bar.position ? bar.position : "top"
+  readonly property string edge: position === "bottom" ? "bottom" : "top"
   anchors {
-    top: hud.barSide !== "bottom"
-    bottom: hud.barSide === "bottom"
+    top: hud.edge === "top"
+    bottom: hud.edge === "bottom"
     right: true
   }
   margins {
@@ -220,29 +256,38 @@ PanelWindow {
 
         Item {
           width: parent.width
-          height: header.implicitHeight
+          height: Math.max(headerIcon.implicitHeight, headerLabel.implicitHeight)
 
-          Row {
-            id: header
-            spacing: Style.space(6)
-            Text {
-              text: hud.icon
-              color: hud.accent
-              font.family: hud.fontFamily
-              font.pixelSize: Style.font.body
-            }
-            Text {
-              text: hud.who !== "" ? hud.who + " · " + hud.stateLabel : hud.stateLabel
-              textFormat: Text.PlainText
-              color: Commons.Color.tooltip.text
-              font.family: hud.fontFamily
-              font.pixelSize: Style.font.caption
-            }
+          Text {
+            id: headerIcon
+            anchors.verticalCenter: parent.verticalCenter
+            text: hud.icon
+            color: hud.accent
+            font.family: hud.fontFamily
+            font.pixelSize: hud.bodySize
+          }
+          Text {
+            id: headerLabel
+            anchors.left: headerIcon.right
+            anchors.leftMargin: Style.space(6)
+            anchors.right: clickHint.visible ? clickHint.left : parent.right
+            anchors.rightMargin: clickHint.visible ? Style.space(6) : 0
+            anchors.verticalCenter: parent.verticalCenter
+            text: hud.headerText
+            // Agents' names and the collaboration line are text somebody
+            // typed or a model wrote.
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            maximumLineCount: 1
+            color: Commons.Color.tooltip.text
+            font.family: hud.fontFamily
+            font.pixelSize: hud.captionSize
           }
 
           // Said only while the pointer is here, so it never costs room in a
           // readout that is mostly glanced at.
           Text {
+            id: clickHint
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             visible: hover.hovered
@@ -250,25 +295,53 @@ PanelWindow {
             color: Qt.rgba(Commons.Color.tooltip.text.r, Commons.Color.tooltip.text.g,
                            Commons.Color.tooltip.text.b, 0.6)
             font.family: hud.fontFamily
-            font.pixelSize: Style.font.caption
+            font.pixelSize: hud.captionSize
           }
         }
 
+        // Locked: the two fixed lines.
+        ReadoutLines {
+          width: parent.width
+          visible: hud.locked
+          reply: hud.reply !== "" ? hud.reply : hud.keptReply
+          transcript: hud.transcript
+          pixelSize: hud.bodySize
+          fontFamily: hud.fontFamily
+          foreground: Commons.Color.tooltip.text
+          replyAccent: Commons.Color.accent
+          nowAccent: hud.accent
+        }
+
+        // Dynamic from here down: the lines come and go and wrap in full.
         Text {
           width: parent.width
-          visible: hud.collab !== ""
+          visible: !hud.locked && hud.collab !== ""
           wrapMode: Text.WordWrap
           text: hud.collab
           // Agents' names are any text somebody typed.
           textFormat: Text.PlainText
           color: hud.accent
           font.family: hud.fontFamily
-          font.pixelSize: Style.font.caption
+          font.pixelSize: hud.captionSize
+        }
+
+        // The previous answer, while this turn has none yet: it came before
+        // what is being said now, so it sits above it.
+        Text {
+          width: parent.width
+          visible: !hud.locked && hud.reply === "" && hud.keptReply !== ""
+          wrapMode: Text.WordWrap
+          text: "→ " + hud.keptReply
+          textFormat: Text.PlainText
+          color: Qt.rgba(Commons.Color.tooltip.text.r, Commons.Color.tooltip.text.g,
+                         Commons.Color.tooltip.text.b, 0.6)
+          font.family: hud.fontFamily
+          font.pixelSize: hud.bodySize
         }
 
         Text {
           width: parent.width
-          visible: hud.transcript !== ""
+          visible: !hud.locked && hud.transcript !== ""
           wrapMode: Text.WordWrap
           text: "“" + hud.transcript + "”"
           // Whatever was said out loud, and whatever a model answered, are
@@ -278,7 +351,7 @@ PanelWindow {
           textFormat: Text.PlainText
           color: Commons.Color.tooltip.text
           font.family: hud.fontFamily
-          font.pixelSize: Style.font.body
+          font.pixelSize: hud.bodySize
         }
 
         // The answer, growing a sentence at a time as it is said. Dimmed
@@ -286,14 +359,14 @@ PanelWindow {
         // than by reading them.
         Text {
           width: parent.width
-          visible: hud.reply !== ""
+          visible: !hud.locked && hud.reply !== ""
           wrapMode: Text.WordWrap
           text: "→ " + hud.reply
           textFormat: Text.PlainText
           color: Qt.rgba(Commons.Color.tooltip.text.r, Commons.Color.tooltip.text.g,
                          Commons.Color.tooltip.text.b, 0.8)
           font.family: hud.fontFamily
-          font.pixelSize: Style.font.body
+          font.pixelSize: hud.bodySize
         }
       }
     }

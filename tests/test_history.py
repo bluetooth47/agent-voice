@@ -262,8 +262,15 @@ def test_no_qml_reads_a_colour_through_a_bare_color():
 
 
 def test_the_readout_no_longer_cuts_the_text_off():
-    assert "maximumLineCount" not in HUD
-    assert "ElideRight" not in HUD
+    """In dynamic mode. Locked mode (phase M3) cuts on purpose, in
+    ui/ReadoutLines, and the one-line header elides its status; neither is
+    the transcript or the answer of a dynamic readout."""
+    dynamic = HUD[HUD.index("ReadoutLines {"):]
+    dynamic = dynamic[dynamic.index("\n        }") + 1:]
+    assert "maximumLineCount" not in dynamic
+    assert "ElideRight" not in dynamic
+    header = HUD[HUD.index("id: headerLabel"):HUD.index("id: clickHint")]
+    assert HUD.count("maximumLineCount") == header.count("maximumLineCount") == 1
 
 
 def test_the_readout_scrolls_past_its_limit_and_follows_the_answer():

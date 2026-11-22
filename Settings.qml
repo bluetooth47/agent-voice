@@ -454,6 +454,23 @@ Item {
   }
   Process { id: interrupt; command: ["agentvoice", "interrupt"] }
 
+  // The Display page's Preview (phase M3): four seconds of sample text on
+  // the readout, published through the daemon's state file so the HUD draws
+  // it exactly as it draws a turn. A button that cannot work says why, here,
+  // where the page can show it.
+  readonly property string hudPreviewBlocked:
+    !root.engineInstalled ? "The voice engine is not installed yet."
+    : !root.serviceActive ? "Start Agent Voice first: the preview goes through it."
+    : root.setting("hud", true) !== true ? "The readout is switched off."
+    : root.vState === "locked" ? "Not while the screen is locked."
+    : (root.vState === "listening" || root.vState === "off") ? ""
+    : "A turn is under way: the readout is showing the real thing."
+  function previewHud() {
+    if (root.hudPreviewBlocked !== "") return
+    hudPreviewer.running = true
+  }
+  Process { id: hudPreviewer; command: ["agentvoice", "hud-preview"] }
+
   // "Test my wake word" on the Listening page. The daemon counts wakes
   // instead of answering them and writes wake-test.json beside the state.
   property var vWakeTest: ({})

@@ -1671,3 +1671,39 @@ empty window: it ran out its lead-in, which for the open microphone is the
 rest of `openMicIdleMin`, **up to 600 s** at the default. Not measured on
 the live daemon (needs the microphone open: `phaseM2notes.md`, Not
 verified).
+
+## 42. M3: how far the popup and the HUD moved through one turn (bug B)
+
+Measured 2026-11-21 with `bench/preview/targets/readout.qml`, which rewrites
+the state file through six states of one turn (idle with the previous
+exchange, capture at the wake word, a partial, thinking, speaking a
+three-sentence answer, the follow-up window) and logs the popup's content
+height and the HUD's implicit size after each. One main agent and two extra
+agents (the user's real settings, read-only), the real theme, 1920×1080
+monitor at scale 1. Logical pixels.
+
+```
+bench/preview/preview.sh --state bench/preview/states/showcase.json \
+  --wait 2.4 --gap 2 --shots 6 readout                     # this build
+/tmp/m3-old/bench/preview/preview.sh ... readout           # phase-m2, same target
+bench/preview/preview.sh --live-config --arg dynamic ...   # hudSize dynamic
+```
+
+| state | popup before (M2) | popup locked | popup dynamic | HUD before | HUD locked | HUD dynamic |
+|---|---|---|---|---|---|---|
+| idle | 494 | 481 | 430 | hidden | hidden | hidden |
+| capture | 428 | 481 | 430 | 233×34 | 367×98 | 467×65 |
+| partial | 463 | 481 | 430 | 233×51 | 367×98 | 467×82 |
+| thinking | 512 | 481 | 479 | 398×51 | 367×98 | 467×82 |
+| speaking | 557 | 481 | 493 | 467×96 | 367×98 | 467×96 |
+| follow-up | 522 | 481 | 458 | 467×96 | 367×98 | 467×96 |
+| **range** | **129 px** | **0 px** | 63 px | 234 px wide, 62 tall | **0 × 0** | 0 wide, 31 tall |
+
+Before, the popup lost its LAST HEARD section at every wake word (66 px) and
+gained the STOP button for thinking and speaking; locked keeps both in
+place (the STOP button dimmed and inert between turns) and the chips as
+wide as their longest state. Dynamic keeps the section (its slot never
+empties) but still grows with the answer and the STOP button, by design.
+The dynamic HUD is wider than before from the start because the kept
+answer is measured into its width. Not measured in the real shell: the
+preview's Quickshell is the shell's, but nothing here was restarted.
