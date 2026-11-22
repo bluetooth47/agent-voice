@@ -888,3 +888,65 @@ def test_switching_off_omarchy_switches_off_the_bundled_omarchy_skill(cfg_factor
     assert cfg.tools_for("sora")["omarchySkill"] is True
     # An unreadable list leaves the built-in switch to its own setting.
     assert cfg_factory(omarchySkill=True, mainSkillsOff="?").tools_for("")["omarchySkill"] is True
+
+
+# --- Codex review of M11, pass 2 ------------------------------------------------------------
+
+def test_more_enabled_plugins_than_are_read_closes_the_fail_closed_list(cfg_factory, tmp_path, monkeypatch):
+    import tooldetect
+    monkeypatch.setattr(tooldetect, "MAX_PLUGINS", 2)
+    plugins, enabled = {}, {}
+    for i in range(3):
+        root = tmp_path / f"p{i}"
+        write_skill(root / "skills" / f"s{i}", f"s{i}")
+        plugins[f"p{i}@m"] = [{"installPath": str(root)}]
+        enabled[f"p{i}@m"] = True
+    # A disabled plugin sorted first does not use up the room.
+    plugins["a-off@m"] = [{"installPath": str(tmp_path / "off")}]
+    (claude_home() / "settings.json").write_text(json.dumps({"enabledPlugins": enabled}))
+    (claude_home() / "plugins").mkdir()
+    (claude_home() / "plugins" / "installed_plugins.json").write_text(json.dumps({"plugins": plugins}))
+    cfg = cfg_factory(mainSkillsOff="?")
+    with pytest.raises(skillscan.SkillsUnknown):
+        skillscan.native_off(cfg, "", "claude", set())
+    monkeypatch.setattr(tooldetect, "MAX_PLUGINS", 3)
+    assert skillscan.native_off(cfg, "", "claude", set()) == ["p0:s0", "p1:s1", "p2:s2"]
+
+
+def test_the_alias_map_reads_every_skill_not_the_pages_view(cfg_factory, tmp_path):
+    for i in range(skillscan.MAX_SKILLS + 5):
+        (claude_home() / "skills" / f"c{i:03d}").mkdir(parents=True)
+    write_skill(codex_home() / "skills" / "release-tools", "deploy",
+                text="---\nname: deploy\ndescription: Ship it.\n---\nx\n")
+    skillscan._ALIAS_MEMO.clear()
+    cfg = cfg_factory(mainSkillsOff=["release-tools"])
+    assert skillscan.native_off(cfg, "", "codex", set()) == ["deploy", "release-tools"]
+
+
+def test_an_alias_inventory_that_cannot_be_read_closes(cfg_factory, tmp_path, monkeypatch):
+    monkeypatch.setattr(skillscan, "MAX_ENTRIES", 2)
+    for i in range(4):
+        write_skill(codex_home() / "skills" / f"s{i}", f"s{i}")
+    skillscan._ALIAS_MEMO.clear()
+    with pytest.raises(skillscan.SkillsUnknown):
+        skillscan.native_off(cfg_factory(mainSkillsOff=["s0"]), "", "codex", set())
+    # With nothing to switch off there is nothing to alias, and nothing to read.
+    assert skillscan.native_off(cfg_factory(), "", "codex", set()) == []
+
+
+def test_without_an_atomic_no_replace_nothing_is_published(tmp_path, monkeypatch):
+    import ctypes
+    machine(tmp_path)
+
+    class NoRenameat2:
+        def __init__(self, *a, **k):
+            pass
+
+        def __getattr__(self, name):
+            raise AttributeError(name)
+    monkeypatch.setattr(ctypes, "CDLL", NoRenameat2)
+    with pytest.raises(agentfs.AgentFsError, match="cannot publish"):
+        skillscan.import_skill("codex-user:deploy", "sora")
+    assert not (paths.AGENTS_DIR / "sora" / "skills" / "deploy").exists()
+    assert agentfs.history("sora", "skills/deploy/SKILL.md") == []
+    assert not list((paths.AGENTS_DIR / "sora" / "skills").glob(".import-*"))

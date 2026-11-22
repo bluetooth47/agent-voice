@@ -1921,6 +1921,12 @@ the folder by its content. The daemon builds one only when the folders or
 a switch change (the switch list is in its cache key), never on an idle
 poll.
 
+What the idle poll pays per agent for its switches (`skillscan.native_off`
+with one name off: a full listing of the CLI's skill folders and a stat
+per skill, the alias map reused while nothing moved): **1.29 ms median**
+for Claude (26 skills here; one 33 ms outlier in 50, the first read of the
+plugin settings), 0.93 ms for Codex.
+
 S on `sora` was not rerun: the index a Codex agent is told only ever
 shrinks under M11 (a skill switched off leaves it), and Claude's
 `--settings` grows by one small JSON key.

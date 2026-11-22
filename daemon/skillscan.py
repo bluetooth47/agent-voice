@@ -219,15 +219,14 @@ _ALIAS_MEMO: dict = {}
 
 def alias_map(program: str) -> dict[str, set[str]]:
     """{a name: every name that skill goes by} for the skills `program`'s
-    CLI finds by itself. A folder that cannot be listed gives what could
-    be; this widens a switch, it never narrows one."""
+    CLI finds by itself, from every one of them (the strict listing, not
+    the pages' 200: Codex review of M11, pass 2). SkillsUnknown when they
+    cannot all be listed: a switch could then miss the name the CLI uses,
+    so the caller closes rather than guess."""
     family = FAMILY.get(program)
     if family is None:
         return {}
-    try:
-        places = [p for p in _places(roots()) if SOURCES[p[0]]["family"] == family]
-    except SkillsUnknown:
-        return {}
+    places = [p for p in _places(roots(), strict=True) if SOURCES[p[0]]["family"] == family]
     stamp = []
     for _, name, folder, _ in places:
         try:
@@ -412,8 +411,9 @@ def native_off(cfg, agent_id: str, program: str, own_names=()) -> list[str]:
     else:
         names |= set(off)
         # And every other name a skill so named goes by (its folder's, its
-        # front matter's), so the switch holds whichever the CLI uses.
-        aliases = alias_map(program)
+        # front matter's), so the switch holds whichever the CLI uses. Not
+        # knowing them all raises SkillsUnknown: the caller closes.
+        aliases = alias_map(program) if names else {}
         for n in list(names):
             names |= aliases.get(n, set())
     return sorted(n for n in names if isinstance(n, str) and SKILL_REF.fullmatch(n))

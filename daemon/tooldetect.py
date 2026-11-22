@@ -344,9 +344,14 @@ def enabled_plugins(roots: Roots, reader: _Reader) -> list[tuple[str, Path]]:
     if not isinstance(plugins, dict):
         return []
     out = []
-    for key in sorted(k for k in plugins if isinstance(k, str))[:MAX_PLUGINS]:
-        if enabled.get(key) is not True:
-            continue
+    keys = sorted(k for k in plugins if isinstance(k, str) and enabled.get(k) is True)
+    if len(keys) > MAX_PLUGINS:
+        # Said, so a caller that must name every one (the skill scan's
+        # fail-closed list, M11) knows this is not all of them.
+        reader.problems.append(f"more than {MAX_PLUGINS} plugins are enabled; only the first "
+                               f"{MAX_PLUGINS} are read")
+        keys = keys[:MAX_PLUGINS]
+    for key in keys:
         entries = plugins[key]
         entries = entries if isinstance(entries, list) else [entries]
         entry = next((e for e in entries if isinstance(e, dict)

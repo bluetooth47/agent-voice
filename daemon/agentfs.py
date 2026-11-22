@@ -1462,11 +1462,11 @@ def _rename_noreplace(dir_fd: int, old: str, new: str) -> None:
             raise AgentFsError(f"a skill named {new} appeared while it was copied")
         if err not in (errno.ENOSYS, errno.EINVAL):
             raise OSError(err, os.strerror(err))
-    try:
-        os.stat(new, dir_fd=dir_fd, follow_symlinks=False)
-        raise AgentFsError(f"a skill named {new} appeared while it was copied")
-    except FileNotFoundError:
-        os.rename(old, new, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+    # No atomic no-replace here (an old C library, a filesystem without it):
+    # a check then a plain rename could still replace a folder made in
+    # between, so nothing is published (Codex review of M11, pass 2).
+    raise AgentFsError("this filesystem cannot publish a skill without risking replacing one; "
+                       "nothing was copied")
 
 
 def import_skill(target: str, name: str, source: Path) -> dict:
