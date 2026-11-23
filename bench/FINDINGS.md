@@ -2074,3 +2074,30 @@ The first version read the decisions with `audit.read()`, which parses both
 audit files whole: with each at its 1 MB rotation size, 87 ms a read, every
 5 s. It now reads the last 256 KB of each and parses only lines naming a
 permission: 1.2 ms over the same two full files (median of 11).
+
+## 51. M17: what checking launch extras costs
+
+Measured 2026-11-22 on the i7-1185G7 (8 threads), scratch XDG folders under
+/tmp, the venv's Python. Scripts lived in /tmp and are not kept.
+
+**At launch, in the adapter.** `launch_extras.checked` -- every element of
+an agent's extra flags judged against its program's list, its words and the
+shape rules -- costs 23 µs median (24.5 p95, 2,000 runs) for four flags and
+88 µs for the sixteen allowed; it runs when a process starts (Claude Code's
+warm process, once per idle period; Codex, once a turn), beside a process
+start of about a second. `popen_env`, the daemon's environment with an
+agent's variables on top, checked: 221 µs. An agent with no extras pays
+neither: `_extras_argv` returns at once and Popen is handed `env=None`, as
+before M17.
+
+**On the idle poll.** The daemon hands each idle agent its launch settings
+on every poll (`apply_launch`). The environment file is read only when its
+stat changed: `env_for` costs 23 µs from the cache and 36 µs re-read (a
+one-key file), so eight agents cost well under a millisecond a poll.
+
+**On the page.** `agentvoice agents flags check PROGRAM` (one Python process
+judging the saved flags and the one being typed, 250 ms after the last
+keystroke) and `agents env ID list --json` (names only): 243 ms median each
+(15 runs, max 292 and 311). The flag check runs only while the tab is open
+and something was typed or saved; the names are read when the tab opens and
+after each change. Nothing polls.

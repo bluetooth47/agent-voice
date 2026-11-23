@@ -493,6 +493,12 @@ case "${1:-status}" in
     #   agentvoice agents templates [--json]   starters for an empty box
     #   agentvoice agents runinfo ID [--json]  how it runs: command line (redacted),
     #                              session, servers, log lines, permission decisions
+    #   agentvoice agents duplicate ID         a copy, switched off, no grants (JSON)
+    #   agentvoice agents reset ID < entry     back to defaults, old one to the trash
+    #   agentvoice agents unreset NAME         put a reset agent back from the trash
+    #   agentvoice agents flags check PROGRAM < JSON list   would each extra flag pass
+    #   agentvoice agents env ID list [--json] | set NAME [--line] < value | unset NAME | clear
+    #                              an agent's environment variables; never prints a value
     REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
     PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
     shift

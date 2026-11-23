@@ -416,6 +416,35 @@ class Adapter(ABC):
         except Exception:               # noqa: BLE001 -- a fake, or gone
             return False
 
+    # --- how it is launched (phase M17, Agent details → Advanced) -------------
+
+    #: Flags the person added to its command line. Passed only by an adapter
+    #: that calls `_extras_argv()` while it builds its argv (Claude Code and
+    #: Codex), and checked there, at launch, against what is never passed
+    #: (launch_extras): a setting written past the page is refused at the
+    #: moment it would run. Set by the daemon between turns.
+    extra_args: tuple = ()
+    #: Environment variables for its process, from the 0600 file
+    #: (launch_extras.env_for), set by the daemon between turns and checked
+    #: again at launch by `_popen_env()`. Never logged, never published.
+    extra_env: dict | None = None
+    #: Whether the daemon carries its conversation from turn to turn. Read
+    #: by the daemon, which sends every turn with no session when it is off;
+    #: nothing in an adapter's argv depends on it.
+    resume: bool = True
+
+    def _extras_argv(self) -> list[str]:
+        """The extra flags, checked for this program; LaunchRefused when one
+        is never passed."""
+        import launch_extras
+        return launch_extras.checked(self.name, list(self.extra_args or ()))
+
+    def _popen_env(self) -> dict | None:
+        """The environment for Popen: None (inherited, as before) with no
+        extra variables, else the daemon's own with them on top, checked."""
+        import launch_extras
+        return launch_extras.popen_env(self.name, self.extra_env or {})
+
     def handed_servers(self) -> list[dict]:
         """The MCP servers this agent's next process is given, as
         {"name", "source", "on"}: "agentvoice" (Agent Voice's own),

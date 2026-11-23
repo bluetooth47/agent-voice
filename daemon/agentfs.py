@@ -974,6 +974,112 @@ def restore(name: str) -> dict:
     return entry
 
 
+def duplicate_folder(source: str, dest: str) -> dict:
+    """A new agent's folder, `dest`, holding a copy of what `source` is told
+    and knows how to do: its role, personality, instructions and skills
+    (phase M17, Duplicate). Not its notes, not its saved versions: a copy is
+    a new agent, and what the first one learned stays with it. Refused when
+    `dest` exists. Each skill is copied the way a skill found on this
+    machine is (import_skill: beneath its folder, no link followed, checked
+    and hashed before and after); one that breaks a rule is left out and
+    named. Returns {"files", "skills", "left": [{"name", "why"}]}."""
+    if dest in (MAIN, COMMUNAL) or not _valid_agent(dest):
+        raise AgentFsError(f"{dest!r} cannot be a new agent's folder")
+    if source == COMMUNAL or not _valid_agent(source):
+        raise AgentFsError(f"{source!r} is not an agent")
+    _no_link(paths.AGENTS_DIR)
+    _no_link(_base(source))
+    texts = {}
+    for name in AGENT_FILES:
+        path, _ = _resolve(source, name)
+        texts[name] = _raw_text(path)           # None when missing
+    skills = [rel.split("/")[1] for rel in _skill_files(source)]
+    starters = _templates("agent")
+    with _locked():
+        _no_link(paths.AGENTS_DIR)
+        if os.path.lexists(_base(dest)):
+            raise AgentFsError(f"a folder for {dest} already exists")
+        for name, text in texts.items():
+            _write_locked(dest, name, text if text is not None else starters.get(name, ""),
+                          None, "duplicate")
+    copied, left = [], []
+    for name in skills:
+        try:
+            import_skill(dest, name, _base(source) / "skills" / name)
+            copied.append(name)
+        except AgentFsError as e:
+            left.append({"name": name, "why": str(e)})
+    return {"files": sorted(texts), "skills": copied, "left": left}
+
+
+def reset_folder(agent_id: str, settings_json: str) -> dict:
+    """Reset an agent's folder to the starting templates (phase M17, Reset to
+    defaults): the folder and its settings entry go to the trash first, as
+    for a removal, so Restore -- or the Undo -- gives the agent back whole;
+    then a fresh folder is made under the same id. If that fails, the old
+    one is put back. Returns {"trash": its trash name, "made": [files]}."""
+    if agent_id == MAIN:
+        raise AgentFsError("the main agent cannot be reset here: it cannot go to the trash, "
+                           "so nothing could undo it")
+    name = trash(agent_id, settings_json)
+    try:
+        made = create(agent_id)
+    except BaseException:
+        with contextlib.suppress(Exception):
+            restore(name)
+        raise
+    return {"trash": name, "made": made}
+
+
+def undo_reset(name: str) -> dict:
+    """Put back an agent that was reset (phase M17): the trash entry `name`
+    returns to its folder, and the fresh folder made in its place goes to
+    the trash as a folder no agent uses -- so this too can be undone, from
+    the trash list. Like restore() otherwise: returns the settings entry,
+    and leaves an entry whose settings cannot be read where it is."""
+    m = _TRASHED.fullmatch(name or "")
+    if not m or not _valid_agent(m.group(1)):
+        raise AgentFsError(f"not a trash entry: {name!r}")
+    agent_id = m.group(1)
+    with _locked():
+        tdir = _trash_dir(create=True)
+        src = tdir / name
+        _no_link(src)
+        if not os.path.isdir(src):
+            raise AgentFsError(f"nothing in the trash called {name}")
+        side = _sidecar(tdir, name)
+        try:
+            entry = json.loads(_decode(*_read_bytes(side)))
+        except (OSError, ValueError, AgentFsError):
+            raise AgentFsError(f"the settings saved with {name} cannot be read; "
+                               f"it is left in the trash") from None
+        if not isinstance(entry, dict):
+            raise AgentFsError(f"the settings saved with {name} are not an object; "
+                               f"it is left in the trash")
+        dest = _base(agent_id)
+        _no_link(paths.AGENTS_DIR)
+        _no_link(dest)
+        aside = None
+        if os.path.lexists(dest):
+            aside = f"{agent_id}-{time.time_ns():019d}"
+            if aside == name or os.path.lexists(tdir / aside):
+                raise AgentFsError("a trash entry with that name exists; try again")
+            _atomic_write(_sidecar(tdir, aside),
+                          json.dumps({"id": agent_id, "orphan": True}).encode("utf-8"))
+            os.rename(dest, tdir / aside)
+        try:
+            os.rename(src, dest)
+        except BaseException:
+            if aside is not None:
+                with contextlib.suppress(OSError):
+                    os.rename(tdir / aside, dest)
+                    _sidecar(tdir, aside).unlink()
+            raise
+        with contextlib.suppress(OSError):
+            side.unlink()
+    return entry
+
+
 def is_folder_only(entry: dict) -> bool:
     """A trash entry with no agent to put back: a folder no agent used,
     trashed from Agent details, or one trashed with an empty settings entry.
@@ -2597,6 +2703,29 @@ def main(argv=None) -> int:
     p.add_argument("name")
     p = sub.add_parser("trash-list")
     p.add_argument("--json", action="store_true")
+    # Phase M17: agent management and launch extras (agent_manage.py,
+    # launch_extras.py).
+    p = sub.add_parser("duplicate", help="a new agent copied from ID, switched off, with its "
+                                         "grants at their defaults; prints its entry as JSON")
+    p.add_argument("id")
+    p = sub.add_parser("reset", help="ID back to its defaults, folder and settings, after "
+                                     "moving both to the trash; current entry on stdin")
+    p.add_argument("id")
+    p.add_argument("--line", action="store_true",
+                   help="the entry is one line of JSON (the page writes it so)")
+    p = sub.add_parser("unreset", help="put back an agent that was reset, from its trash name")
+    p.add_argument("name")
+    p = sub.add_parser("flags", help="whether extra flags would be passed (a JSON list on stdin)")
+    p.add_argument("action", choices=("check",))
+    p.add_argument("program")
+    p = sub.add_parser("env", help="an agent's extra environment variables: names only are "
+                                   "ever printed; a value comes on stdin")
+    p.add_argument("id")
+    p.add_argument("action", choices=("list", "set", "unset", "clear"))
+    p.add_argument("name", nargs="?")
+    p.add_argument("--line", action="store_true",
+                   help="set: the value is one line holding a JSON string")
+    p.add_argument("--json", action="store_true")
     p = sub.add_parser("write", help="text on stdin, never as an argument")
     p.add_argument("target")
     p.add_argument("file")
@@ -2704,6 +2833,15 @@ def main(argv=None) -> int:
             print(trash(a.id, raw))
         elif a.cmd == "restore":
             print(json.dumps(restore(a.name), ensure_ascii=False))
+        elif a.cmd in ("duplicate", "reset", "unreset"):
+            import agent_manage
+            return agent_manage.cli(a)
+        elif a.cmd == "flags":
+            import launch_extras
+            return launch_extras.flags_cli(a.program)
+        elif a.cmd == "env":
+            import launch_extras
+            return launch_extras.env_cli(a.id, a.action, a.name, a.line, a.json)
         elif a.cmd == "trash-list":
             t = trash_list()
             _print(t, a.json, "\n".join(f"{e['name']}  {e['label']}" for e in t)

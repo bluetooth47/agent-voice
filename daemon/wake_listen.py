@@ -75,6 +75,7 @@ import readout  # noqa: E402
 import try_it  # noqa: E402
 import sessions  # noqa: E402
 import runinfo  # noqa: E402
+import launch_extras  # noqa: E402
 from runtime import (  # noqa: E402
     REPLY_MAX, RUNTIME_DIR, Config, History, Speaker, StateFile, instructions_text, speed_pct,
 )
@@ -3526,11 +3527,13 @@ class Daemon:
                 if getattr(agent, attr, ()) != want:
                     setattr(agent, attr, want)
                     changed = True
-        if changed:
+        launched = self.apply_launch(agent, p)
+        if changed or launched:
             try:
                 agent.cancel()
             except Exception:
                 pass
+        if changed:
             # Structural: which tools, and the plugin folder's name (an id
             # and a hash), never a skill's text.
             have = [k for k, a in (("desktop", "desktop_tools"), ("browser", "browser_tools"))
@@ -3551,7 +3554,62 @@ class Daemon:
             who = getattr(p, "label", "") or getattr(p, "name", "") or "main"
             print(f"  {DIM}tools for “{who}”: {' · '.join(have) or 'none'}"
                   f"{' · plugins ' + Path(folder).name if folder else ''}{OFF}", flush=True)
-        return changed
+        return changed or launched
+
+    def launch_for(self, p) -> dict:
+        """How persona `p`'s program is launched (phase M17,
+        Config.launch_for), read fresh. Anything odd is the defaults: it
+        resumes, 90 seconds, nothing extra."""
+        try:
+            aid = "" if p is None or getattr(p, "main", False) else (getattr(p, "id", "") or "")
+            return self.cfg.launch_for(aid)
+        except Exception:
+            return {"resume": True, "idle_s": 90, "args": ()}
+
+    def apply_launch(self, agent, p=None) -> bool:
+        """Hand `agent` how it is launched (phase M17, Agent details →
+        Advanced): its extra flags and environment variables, whether its
+        conversation is resumed, and its hung-turn limit. True when the
+        flags or the environment changed: both are read when its process
+        starts -- and checked again there, at launch (launch_extras) -- so
+        the caller lets the idle process go, as for the tool switches; the
+        conversation is kept. The limit is read by each turn's watchdog and
+        resume by answer(), so neither needs a new process.
+
+        The environment is read from its 0600 file outside any settings
+        guard, because a file changes with no setting change; only when the
+        file did (launch_extras caches by its stat). Logged as counts, never
+        a name or a value."""
+        launch = self.launch_for(p)
+        fid = "main" if p is None or getattr(p, "main", False) else (getattr(p, "id", "") or "")
+        who = getattr(p, "label", "") or getattr(p, "name", "") or "main"
+        moved = False
+        want_args = tuple(launch.get("args") or ())
+        if tuple(getattr(agent, "extra_args", ()) or ()) != want_args:
+            agent.extra_args, moved = want_args, True
+        env, problem = ({}, "")
+        if fid:
+            try:
+                env, problem = launch_extras.env_for(fid)
+            except Exception as e:          # never worth a turn; nothing passed
+                env, problem = {}, type(e).__name__
+        key = f"env-{fid}"
+        if problem:
+            self.say_once(key, f"  {YEL}environment variables for “{who}”: not used — "
+                               f"{launch_extras.env_path()} {problem}{OFF}")
+        else:
+            getattr(self, "_said", {}).pop(key, None)
+        if (getattr(agent, "extra_env", None) or {}) != env:
+            agent.extra_env, moved = dict(env), True
+        agent.resume = bool(launch.get("resume", True))
+        if not hasattr(agent, "base_url"):
+            # An endpoint keeps its own timeout (endpointTimeoutS, Agents page).
+            agent.idle_timeout_s = float(launch.get("idle_s") or 90)
+        if moved:
+            n, m = len(want_args), len(env)
+            print(f"  {DIM}launch for “{who}”: {n} extra flag{'s' if n != 1 else ''} · "
+                  f"{m} environment variable{'s' if m != 1 else ''}{OFF}", flush=True)
+        return moved
 
     def reconcile_voice(self) -> None:
         """Load the voice the settings ask for, if that is not what is loaded.
@@ -4272,6 +4330,11 @@ class Daemon:
             return
 
         out.publish("thinking", **last)
+        if not getattr(self.agent, "resume", True) and self.session_id:
+            # Phase M17: resume is off for this agent, so every turn starts
+            # fresh (one that set a session since -- a skipped open-mic
+            # turn, a task -- is not carried either).
+            self.session_id = None
         # collab: this turn, by number, and that it is under way: a call an
         # agent makes is accepted only from the turn it was made in (Phase 16).
         persona.turn_id = getattr(persona, "turn_id", 0) + 1
@@ -4538,6 +4601,17 @@ class Daemon:
         self.remember(text, reply, last, kind=kind,
                       stopped=self._interrupt.is_set(), new=new_conversation,
                       thinking="".join(thinking_parts).strip()[:THINKING_MAX])
+        if not getattr(self.agent, "resume", True) and self.session_id:
+            # Phase M17: resume off. Nothing of this turn carries to the next
+            # (the warm process holding it is let go by the next prepare(),
+            # which asks for no session), and an "allow all in this chat"
+            # given during it ends with it.
+            sid, self.session_id = self.session_id, None
+            try:
+                import permission_hook
+                permission_hook.revoke(sid)
+            except Exception:
+                pass
 
     def remember(self, heard: str, reply: str, last: dict, *, kind: str,
                  stopped: bool, new: bool, thinking: str = "") -> None:
@@ -4647,6 +4721,9 @@ class Daemon:
         # older chat's top-level session is its owner's.
         mine = chat_schema.sessions_of(chat).get(collab.external(p.id), {})
         if (agent is not None and getattr(agent, "remembers", False)
+                # Phase M17: with resume off a session is never carried, so
+                # the chat is replayed instead (where it may be).
+                and getattr(agent, "resume", True)
                 and mine.get("session_id")
                 and mine.get("backend") == getattr(agent, "name", "")
                 and mine.get("project_dir", "") == here):
@@ -4766,8 +4843,36 @@ class Daemon:
             return True
         if verb == "chat-new":
             p = self._persona_by_id("" if arg in ("", "main") else arg)
-            if p is not None and not p.busy:
+            if p is None:
+                # Not echoed: the id came from the command file.
+                print(f"  {YEL}no such agent to start fresh{OFF}", flush=True)
+            elif p.busy:
+                # Said rather than dropped (phase M17, Start fresh): its turn
+                # owns the session until it ends.
+                print(f"  {YEL}agent “{p.label or 'main'}” is working; start it fresh "
+                      f"when it has finished{OFF}", flush=True)
+            else:
+                old_sid = p.session_id
                 self.new_chat(p)
+                # Phase M17: only this agent's conversation ends. Its idle
+                # process holds the old one and goes now rather than at the
+                # next turn, and an "allow all in this chat" given in it
+                # ends with it.
+                if p.agent is not None:
+                    try:
+                        p.agent.cancel()
+                    except Exception:
+                        pass
+                if old_sid:
+                    try:
+                        import permission_hook
+                        permission_hook.revoke(old_sid)
+                    except Exception:
+                        pass
+                try:
+                    self.agent_ring.add(p.id or "main", "fresh")
+                except Exception:       # noqa: BLE001 -- a page is never worth a command
+                    pass
                 self.forget_readout(p, clear=True)
                 self._recompose()
                 print(f"  {CYA}agent “{p.label or 'main'}”: new chat{OFF}", flush=True)
@@ -5428,7 +5533,9 @@ class Daemon:
         """
         old = p.spec or {}
         kept = ("effort", "voice", "speed", "instructions", "name", "label",
-                "narration", "tools", "notesWrite", "collaboration", "acceptsWork")
+                "narration", "tools", "notesWrite", "collaboration", "acceptsWork",
+                # Phase M17: handed to the running adapter by apply_launch.
+                "resume", "idleTimeoutS", "extraArgs")
         same = {k: v for k, v in spec.items() if k not in kept}
         was = {k: v for k, v in old.items() if k not in kept}
         if same == was and p.agent is not None:

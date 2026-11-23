@@ -34,6 +34,8 @@ import threading
 from pathlib import Path
 from typing import Any, Iterator
 
+from launch_extras import LaunchRefused
+
 from .base import (
     Adapter, Chunk, Drain, Watchdog, feed, installed,
     stop_tree,
@@ -265,7 +267,13 @@ class Codex(Adapter):
         return (home / "auth.json").exists()
 
     def _argv(self, text: str, session_id: str | None) -> list[str]:
-        argv = ["codex", "exec", "--json", "--skip-git-repo-check"]
+        # Phase M17: the person's extra flags, checked here, at launch,
+        # against what is never passed (launch_extras). Straight after
+        # `exec`: a flag that wants a value and was given none then meets
+        # `--json`, which clap will not take as a value, so Codex says so
+        # instead of starting -- placed before `resume ID` it would take
+        # `resume`, and the session id would become the request.
+        argv = ["codex", "exec", *self._extras_argv(), "--json", "--skip-git-repo-check"]
         if getattr(self, "ephemeral", False):
             # A quiet side turn (Phase 16, ask_agent): no session file kept.
             argv.append("--ephemeral")
@@ -390,7 +398,9 @@ class Codex(Adapter):
     def send(self, text: str, session_id: str | None = None) -> Iterator[Chunk]:
         try:
             argv = self._argv(text, session_id)
-        except ConfigUnaccounted as e:
+            # Phase M17: its own environment variables, checked like its flags.
+            env = self._popen_env()
+        except (ConfigUnaccounted, LaunchRefused) as e:
             yield Chunk(error=str(e))
             return
         prompt = self.with_preamble(text)
@@ -400,7 +410,7 @@ class Codex(Adapter):
             # additional input from stdin...") and never returns -- and the
             # prompt now rides the same channel rather than argv, which any
             # local account can read out of /proc.
-            proc = subprocess.Popen(argv, cwd=self.cwd, stdin=subprocess.PIPE,
+            proc = subprocess.Popen(argv, cwd=self.cwd, env=env, stdin=subprocess.PIPE,
                                     start_new_session=True,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     text=True, bufsize=1)

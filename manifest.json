@@ -96,6 +96,9 @@
       "mainNotesWrite": "allow",
       "mainCollaboration": "announce",
       "mainAcceptsWork": true,
+      "mainResume": true,
+      "mainIdleTimeoutS": 90,
+      "mainExtraArgs": [],
       "bargeIn": false,
       "bargeOnHeadset": true,
       "bargeFactor": 150,
@@ -665,6 +668,23 @@
         "label": "Main agent accepts work from agents",
         "defaultValue": true,
         "description": "Whether other agents may give the main agent a task or pass it a conversation. Off, it can still be asked questions. A pass you start yourself is not affected."
+      },
+      {
+        "key": "mainResume",
+        "type": "bool",
+        "label": "Main agent resumes its conversation",
+        "defaultValue": true,
+        "description": "Whether each turn carries on the main agent's conversation. Off, every turn starts fresh and it remembers nothing between them. Set on Agent details, Advanced."
+      },
+      {
+        "key": "mainIdleTimeoutS",
+        "type": "integer",
+        "label": "Main agent hung-turn limit (s)",
+        "min": 30,
+        "max": 600,
+        "step": 10,
+        "defaultValue": 90,
+        "description": "How long the main agent's program may say nothing at all before its turn is stopped. A turn that is still producing output is never stopped. Set on Agent details, Advanced."
       },
       {
         "key": "bargeOnHeadset",

@@ -614,6 +614,10 @@ def test_nothing_turns_a_found_tool_on_outside_a_confirm():
 def test_the_tools_tab_writes_through_set_agent_tool_alone():
     from qml_scan import scan
     src = scan(ROOT / "pages" / "AgentDetailsPage.qml").nocomment
+    # Since M17 the page puts the main agent's launch settings, in one
+    # function (test_agent_pages holds which keys); nothing else is put.
+    at = src.index("function putLaunch(")
+    src = src[:at] + src[src.index("\n  }", at):]
     assert not re.search(r"\b(put|putMap)\(", src)
     assert 'command = ["agentvoice", "tools", "dismiss", page.target]' in src
     assert '["agentvoice", "tools", "scan", "--rescan", "--json"]' in src

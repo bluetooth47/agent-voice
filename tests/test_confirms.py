@@ -78,6 +78,16 @@ DESTRUCTIVE: dict[str, tuple[dict[str, list[str]], list[re.Pattern]]] = {
     # texts (their History keeps them), so it is asked through the import's
     # ToolConfirm, never a plain click; the dry run before it changes nothing.
     "agents import": ({"CommunalImport.qml": ["commitImport"]}, [call("commitImport")]),
+    # Phase M17: an agent reset to its defaults -- its folder and settings
+    # to the trash first, so Restore undoes it, but what it was told is
+    # replaced at once. AgentFolders also resets again after a failed
+    # undo's save (`onFailed`): a rollback of the user's own undo.
+    "agents reset": ({"AgentFolders.qml": ["resetAgent", "onFailed"]},
+                     [call("folders.resetAgent")]),
+    # And an environment variable removed, one or all: the value is kept
+    # nowhere else (launch_extras), so it cannot be put back but by typing.
+    "agents env unset": ({"AgentDetailsPage.qml": ["removeEnv"]}, [call("removeEnv")]),
+    "agents env clear": ({"AgentDetailsPage.qml": ["clearEnv"]}, [call("clearEnv")]),
 }
 
 # How each verb looks where it is built.
@@ -92,6 +102,9 @@ SPELLING = {
     "crew reset": '"crew reset"',
     "notes combine": '"notes", "combine"',
     "agents import": '"--confirm", String(planned.token)',
+    "agents reset": '["reset"',
+    "agents env unset": '"unset", name]',
+    "agents env clear": '"env", page.target, "clear"]',
 }
 
 # Functions a call may sit in without a confirmation of its own, because
@@ -103,7 +116,8 @@ WRAPPERS = {("AgentFolders.qml", "function remove"), ("AgentFolders.qml", "funct
             ("Settings.qml", "function removeEverything"), ("Settings.qml", "function clearSession"),
             ("pages/CrewMapPage.qml", "function removeLink"),
             ("pages/CrewMapPage.qml", "function linkEveryone"),
-            ("pages/CrewMapPage.qml", "function quarantineAgent")}
+            ("pages/CrewMapPage.qml", "function quarantineAgent"),
+            ("AgentFolders.qml", "function resetAgent")}
 
 
 def _built_in(scanned, spelling):

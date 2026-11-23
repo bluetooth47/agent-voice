@@ -112,6 +112,12 @@ FIELD_HOMES: dict[str, tuple[str | None, str | None]] = {
     "endpointIsAgent": ("AgentsPage.qml", "endpointIsAgent"),
     "endpointTimeoutS": ("AgentsPage.qml", "endpointTimeoutS"),
     "endpointHistoryTurns": ("AgentsPage.qml", "endpointHistoryTurns"),
+    # Phase M17: how it is launched, on Agent details → Advanced; an extra
+    # agent's through the overlay's setAgentField (OVERLAY_HOMES below), the
+    # main agent's twins put there directly.
+    "resume": ("AgentDetailsPage.qml", "mainResume"),
+    "idleTimeoutS": ("AgentDetailsPage.qml", "mainIdleTimeoutS"),
+    "extraArgs": ("AgentDetailsPage.qml", "mainExtraArgs"),
     "id": (None, None),
     "instructions": (None, None),
 }
@@ -133,6 +139,9 @@ OUTSIDE_WRITERS: dict[tuple[str, str], set[str]] = {
     ("Settings.qml", "function setAgentTool"): {"mainTools", "voiceAgents", "field:tools"},
     # Phase M11: the skills switched off for an agent.
     ("Settings.qml", "function setAgentSkill"): {"mainSkillsOff", "voiceAgents", "field:skillsOff"},
+    # Phase M17: an extra agent's launch fields.
+    ("Settings.qml", "function setAgentField"): {"voiceAgents", "field:resume",
+                                                 "field:idleTimeoutS", "field:extraArgs"},
     ("Settings.qml", "function trainVerifier"): {"engine"},
     ("AgentFolders.qml", "function saveAgents"): {"voiceAgents"},
     ("Panel.qml", "*"): {"voice"},
@@ -150,7 +159,10 @@ DEFAULTS_ONLY = {"agentEfforts", "agentModels", "mainTools", "permissions",
                  "mainSkillsOff",
                  # Phase M15: the agents that take nothing from Communal, a
                  # list written on Communal → Who gets it.
-                 "communalOff"}
+                 "communalOff",
+                 # Phase M17: the main agent's extra flags, a list written on
+                 # Agent details → Advanced.
+                 "mainExtraArgs"}
 
 # A key or an agent field whose one writer is an overlay function, and the
 # one page that calls it (phase M10). The page is its home: a call from any
@@ -160,6 +172,11 @@ OVERLAY_HOMES: dict[str, tuple[str, str]] = {
     "field:tools": ("setAgentTool", "AgentDetailsPage.qml"),
     "mainSkillsOff": ("setAgentSkill", "AgentDetailsPage.qml"),
     "field:skillsOff": ("setAgentSkill", "AgentDetailsPage.qml"),
+    # Phase M17: an extra agent's launch fields. (The main agent's twins are
+    # put by that page directly, so they need no entry here.)
+    "field:resume": ("setAgentField", "AgentDetailsPage.qml"),
+    "field:idleTimeoutS": ("setAgentField", "AgentDetailsPage.qml"),
+    "field:extraArgs": ("setAgentField", "AgentDetailsPage.qml"),
 }
 
 

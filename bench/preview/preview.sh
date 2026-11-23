@@ -253,6 +253,13 @@ case "\${1:-}" in
     if [ "\${2:-}" = export ] && [ \$# -eq 3 ]; then
       mkdir -p '$tmp/exports'; set -- "\$@" '$tmp/exports'
     fi
+    # An agent's environment variables (M17) live under XDG_CONFIG_HOME, which
+    # is the real one unless --live-config: always a scratch folder here, so a
+    # preview never writes, or reads back, a real key.
+    if [ "\${2:-}" = env ]; then
+      mkdir -p '$tmp/envconfig'
+      env XDG_CONFIG_HOME='$tmp/envconfig' XDG_DATA_HOME='$tmp/data' $tools_env '$repo/bin/agentvoice' "\$@"; exit \$?
+    fi
     env XDG_CONFIG_HOME="\${XDG_CONFIG_HOME:-$real_config}" XDG_DATA_HOME='$tmp/data' $tools_env '$repo/bin/agentvoice' "\$@"; exit \$? ;;
   skills)
     # Skills on this machine (M11): the synthetic one above, and a copy

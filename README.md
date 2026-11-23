@@ -717,12 +717,46 @@ turns are in it; how long it may go quiet before it is stopped; the MCP
 servers it is given, beside the ones its program said it started (only
 Claude Code says); everything it is sent ahead of a request, each piece's
 text shown only when you press Show; its recent log lines; and its recent
-permission decisions. Nothing on the tab changes anything. No command line
+permission decisions. No command line
 ever holds what was said (requests go on stdin) and anything that looks
 like a key is shown as •••. The log lines are structural (timings, tools by
 name, failures by kind) and never hold speech, even with speech logging on;
 the permission decisions record the tool's name and what was decided, never
 the command or the file. `agentvoice agents runinfo NAME` prints the same.
+
+**How it is launched.** The same tab changes how the agent's program is
+started, from its next turn:
+
+- **Resume its conversation**: off, every turn starts fresh and it
+  remembers nothing between them. **Start fresh** ends this agent's
+  conversation now (the old one stays in Chats), after you confirm.
+- **Stop a turn after**: how long its program may say nothing at all (30
+  to 600 seconds, 90 by default) before the turn is stopped. A turn still
+  producing output is never stopped.
+- **Extra flags** for Claude Code and Codex, added to the end of the
+  command line. Each one asks first, marked ⚠. A flag that would change
+  what the agent may do without asking, or its settings, hooks, MCP
+  servers, plugins, tools, folders, prompt, session or output, is refused
+  with the reason -- on the page, and again by the daemon when the program
+  starts, whoever wrote the setting; while one is saved, the program is not
+  started at all and each turn says why. Every account on the computer can
+  read a command line, so a key never belongs in a flag.
+- **Environment variables** for Claude Code and Codex: an API key such as
+  `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, kept in
+  `~/.config/agentvoice/agent-env.json` (readable by you alone), never in
+  the settings. A value is never shown again, logged or printed. A name
+  that changes which code runs, where files are found or where traffic
+  goes (`PATH`, `LD_*`, `PYTHON*`, the proxies, `*_BASE_URL`, `CLAUDE_*`,
+  `CODEX_*` and others) is refused.
+- **Duplicate** makes a new agent from this one, switched off until you
+  give it its own wake phrase: a copy of its role, personality,
+  instructions and skills, its program, model and voice, and none of what
+  it was allowed -- it starts at Ask, with no tool switched on, no crew
+  link, chat, note, session, flag or environment variable. A quarantined
+  agent is not copied.
+- **Reset to defaults** puts an extra agent back as a new one, keeping its
+  name, wake phrase, chats and crew links. Its folder and settings go to
+  the trash first, so Undo, or Restore from the trash list, puts it back.
 
 ### In Omarchy's Agents panel
 

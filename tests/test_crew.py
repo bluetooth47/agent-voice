@@ -55,7 +55,10 @@ class TestConfigAgents:
             "detected": {},
             "skillsOff": [],
             "notesWrite": "allow", "collaboration": "announce", "acceptsWork": True,
-            "projectDir": "~/code", "endpoint": None}]
+            "projectDir": "~/code",
+            # Phase M17: how it is launched, at the defaults.
+            "resume": True, "idleTimeoutS": 90, "extraArgs": [],
+            "endpoint": None}]
 
     def test_the_program_defaults_to_claude(self, cfg_factory):
         assert cfg_factory(voiceAgents=[{"name": "friday"}]).agents()[0]["agent"] == "claude"

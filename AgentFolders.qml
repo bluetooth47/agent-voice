@@ -33,6 +33,9 @@ Item {
   property int epoch: 0
   // The last agent moved to the trash: { name, label, index }, or null.
   property var trashed: null
+  // Phase M17: the last agent reset to its defaults: { name (its trash
+  // entry), label, id }, or null. Its Undo puts the old one back.
+  property var resetDone: null
   // From launch until its result has been handled, so a second operation
   // cannot start in the moment between the process ending and its result
   // being read, and take that result's place (Phase 10 review).
@@ -187,6 +190,36 @@ Item {
     restore(af.trashed.name, af.trashed.index)
   }
 
+  // Phase M17: a copy of agent `id` ("main" too) -- its folder first, then
+  // its entry added to the list, switched off. What the copy holds is the
+  // daemon's decision (agent_manage.py): no grant, no secret, no session.
+  function duplicate(id) {
+    if (s.voiceAgents.length >= s.maxAgents) {
+      af.note = "There are already " + s.maxAgents + " agents; remove one first."
+      return
+    }
+    if (pending("duplicate", id)) return
+    op(["duplicate", id], "", { verb: "duplicate", id: id })
+  }
+
+  // Phase M17: the entry at `index` back to a new agent's settings and its
+  // folder to the starting templates. Both go to the trash first, so Undo,
+  // or Restore from the trash list, gives the agent back whole.
+  function resetAgent(index) {
+    var a = s.voiceAgents[index] || {}
+    var entry = {}
+    for (var k in a) entry[k] = a[k]
+    entry.id = s.agentId(a)
+    if (pending("reset", entry.id) || pending("trash", entry.id)) return
+    op(["reset", entry.id, "--line"], JSON.stringify(entry) + "\n",
+       { verb: "reset", id: entry.id, index: index, label: s.agentLabel(a) || "this agent" })
+  }
+  function undoReset() {
+    if (af.resetDone === null) return
+    op(["unreset", af.resetDone.name], "",
+       { verb: "unreset", name: af.resetDone.name, id: af.resetDone.id })
+  }
+
   // Put a trash entry back: its folder, and its settings entry at `index`
   // (the end when not given). An entry trashed as an orphan folder has no
   // settings to put back, so only its folder returns.
@@ -194,6 +227,14 @@ Item {
     var t = null
     for (var i = 0; i < af.trash.length; i++) if (af.trash[i].name === name) t = af.trash[i]
     var orphan = t !== null && t.orphan === true
+    // Phase M17: its id still in the list means it was reset (ids are never
+    // reused): putting it back replaces the reset one, folder and entry,
+    // and the fresh folder goes to the trash in its turn.
+    var tid = String(name).replace(/-[0-9]{19}$/, "")
+    if (!orphan && tid !== "main" && af.hasAgent(tid)) {
+      op(["unreset", name], "", { verb: "unreset", name: name, id: tid })
+      return
+    }
     if (!orphan && s.voiceAgents.length >= s.maxAgents) {
       af.note = "There are already " + s.maxAgents + " agents; remove one first."
       return
@@ -234,6 +275,16 @@ Item {
        { verb: "keep", id: target, file: file })
   }
 
+  // Phase M17: `chats new ID`, after a reset: that agent's conversation
+  // only. Nothing to report when it cannot run: the daemon is not running,
+  // so there is no conversation to end.
+  Process { id: freshAfterReset }
+  function startFresh(id) {
+    if (freshAfterReset.running) return
+    freshAfterReset.command = ["agentvoice", "chats", "new", id]
+    freshAfterReset.running = true
+  }
+
   function exportFolder(target) {
     op(["export", target], "", { verb: "export", id: target })
   }
@@ -248,6 +299,9 @@ Item {
     target: af.s ? af.s.store : null
     function onSaved(key) {
       if (key !== "voiceAgents") return
+      // Phase M17: a reset agent's conversation ends with the rest, even
+      // when nothing the daemon rebuilds for (program, level) moved.
+      if (af.rollback !== null && af.rollback.verb === "reset") af.startFresh(af.rollback.id)
       af.rollback = null
       af.release()
     }
@@ -256,7 +310,22 @@ Item {
       if (af.rollback === null) { af.release(); return }
       var r = af.rollback
       af.rollback = null
-      if (r.verb === "trash") {
+      if (r.verb === "duplicate") {
+        // The copy's folder, with no agent to use it: to the trash.
+        af.op(["trash", r.id, "--line"], JSON.stringify({ id: r.id, orphan: true }) + "\n",
+              { verb: "rolledback" })
+        af.note = "The agent list could not be saved (" + message + "), so " +
+                  r.label + " was not added; its folder went to the trash."
+      } else if (r.verb === "reset") {
+        af.resetDone = null
+        af.op(["unreset", r.name], "", { verb: "rolledback" })
+        af.note = "The agent list could not be saved (" + message + "), so " +
+                  r.label + " was not reset; its folder was put back."
+      } else if (r.verb === "unreset") {
+        af.op(["reset", r.id, "--line"], JSON.stringify(r.entry) + "\n", { verb: "rolledback" })
+        af.note = "The agent list could not be saved (" + message + "), so " +
+                  r.label + " was not put back; it is reset again, and the trash keeps it."
+      } else if (r.verb === "trash") {
         af.trashed = null
         af.op(["restore", r.name], "", { verb: "rolledback" })
         af.note = "The agent list could not be saved (" + message + "), so " +
@@ -334,6 +403,69 @@ Item {
       af.note = "An edit to " + what.id + "'s " + what.file + " was left unsaved when its editor closed, " +
                 "and could not be saved then: " +
                 (err.indexOf("conflict:") === 0 ? "the file had changed since it was opened." : why + ".")
+    } else if (what.verb === "duplicate") {
+      var d = null
+      try { d = JSON.parse(out) } catch (e) { d = null }
+      if (!d || !d.entry || typeof d.entry !== "object" || typeof d.entry.id !== "string") {
+        af.note = "Not copied: " + why + "."
+        return
+      }
+      var added = entries(-1)
+      added.push(d.entry)
+      var left = (d.left || []).map(function(x) { return String(x.name) }).join(", ")
+      af.note = ""
+      af.done = "Made " + s.agentLabel(d.entry) + ", switched off. Give it a wake phrase of its own " +
+                "on the Agents page, then switch it on." +
+                (left !== "" ? " Skills not copied: " + left + "." : "")
+      af.rollback = { verb: "duplicate", id: d.entry.id, label: s.agentLabel(d.entry) || "the copy" }
+      af.awaitingSave = true
+      saveAgents(added)
+    } else if (what.verb === "reset") {
+      var rs = null
+      try { rs = JSON.parse(out) } catch (e) { rs = null }
+      if (!rs || !rs.entry || typeof rs.entry !== "object" ||
+          !/^[a-z0-9][a-z0-9-]{0,47}-[0-9]{19}$/.test(String(rs.trash || ""))) {
+        af.note = "Nothing was reset: " + why + "."
+        return
+      }
+      var where = -1
+      var was = s.voiceAgents[what.index] || {}
+      if (s.agentId(was) === what.id) where = what.index
+      for (var w = 0; where < 0 && w < s.voiceAgents.length; w++)
+        if (s.agentId(s.voiceAgents[w] || {}) === what.id) where = w
+      if (where < 0) {
+        // Gone from the list meanwhile: the old folder goes back, as it was.
+        af.op(["unreset", rs.trash], "", { verb: "rolledback" })
+        af.note = what.label + " was removed while it was being reset; nothing was reset."
+        return
+      }
+      var reset = entries(-1)
+      rs.entry.id = what.id
+      reset[where] = rs.entry
+      af.note = ""
+      af.resetDone = { name: rs.trash, label: what.label, id: what.id }
+      af.rollback = { verb: "reset", name: rs.trash, label: what.label, id: what.id }
+      af.awaitingSave = true
+      saveAgents(reset)
+    } else if (what.verb === "unreset") {
+      var back2 = null
+      try { back2 = JSON.parse(out) } catch (e) { back2 = null }
+      if (!back2 || typeof back2 !== "object") {
+        af.note = "Could not put it back: " + why + "."
+        return
+      }
+      back2.id = what.id
+      if (af.resetDone && af.resetDone.name === what.name) af.resetDone = null
+      var list2 = entries(-1), at2 = -1
+      for (var u = 0; u < list2.length; u++) if (s.agentId(list2[u]) === what.id) at2 = u
+      if (at2 < 0) list2.push(back2)
+      else list2[at2] = back2
+      af.note = ""
+      af.done = "Put " + (s.agentLabel(back2) || "it") + " back as it was before the reset."
+      af.rollback = { verb: "unreset", id: what.id, entry: back2, label: s.agentLabel(back2) || "the agent" }
+      s.focusAgent = what.id
+      af.awaitingSave = true
+      saveAgents(list2)
     } else if (what.verb === "export") {
       if (out !== "" && err === "") {
         af.note = ""

@@ -656,18 +656,38 @@ def test_the_view_refuses_an_agent_that_is_not_there(cfg_factory):
         runinfo.view("../etc", cfg_factory())
 
 
-def test_the_page_draws_everything_as_plain_text_and_writes_nothing():
+def test_the_page_draws_everything_as_plain_text_and_writes_only_its_launch_settings():
     """The Advanced tab, read rather than run (CLAUDE.md): every Text in the
-    new part is PlainText, it calls only `agents runinfo` and `agents prompt`
-    and the log terminal, and writes no setting."""
-    src = (ROOT / "pages/AgentDetailsPage.qml").read_text()
+    part is PlainText, it reads through `agents runinfo` and `agents prompt`
+    and the log terminal. M16's part wrote no setting; since M17 the tab
+    edits how the agent is launched, and a setting is written there only by
+    `putLaunch` -- the main agent's three twins, or the overlay's
+    setAgentField for an extra agent -- and nowhere else in the part."""
+    from qml_scan import scan
+    scanned = scan(ROOT / "pages/AgentDetailsPage.qml")
+    src = scanned.src
     start = src.index("// What is running (phase M16)")
     end = src.index('label: "Id"')
-    part = src[start:end]
+    # Code only: comments blanked at the same offsets (a comment naming
+    # setAgentField is not a call of it).
+    part = scanned.nocomment[start:end]
     assert part.count("Text {") == part.count("textFormat: Text.PlainText")
     assert '"agents", "runinfo"' in part and '"agents", "prompt"' in part
+    at = part.index("function putLaunch(")
+    body = part[at:part.index("\n  }", at)]
+    rest = part[:at] + part[at + len(body):]
     for writer in ("s.put(", "setAgentField", "setAgentTool", '"bar", "set"'):
-        assert writer not in part
+        assert writer not in rest, writer
+    import re
+    assert set(re.findall(r's\.put\("(\w+)"', body)) == {"mainResume", "mainIdleTimeoutS",
+                                                          "mainExtraArgs"}
+    assert "s.setAgentField(page.target, field, value)" in body
+    # M16's read-only rows, from the command line to the decisions, still
+    # call nothing that writes: not even putLaunch.
+    m16 = part[part.index('label: "Command line"'):part.index('label: "Recent permission decisions"')]
+    m16 = m16[:m16.index('label: "Extra flags"')] + m16[m16.index('label: "Working directory"'):]
+    m16 = m16[:m16.index("ToggleRow {")] + m16[m16.index('label: "Timeouts"'):]
+    assert "putLaunch" not in m16 and "changeEnv" not in m16
     assert "concealed: true" in part
     # The terminal is handed a constant: nothing from settings in it.
     assert '"journalctl --user -u agentvoice -n 300 -f"' in part

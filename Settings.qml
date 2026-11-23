@@ -1482,6 +1482,48 @@ Item {
     return true
   }
 
+  // Phase M17: how an extra agent is launched -- whether its conversation is
+  // resumed, its hung-turn limit, its extra flags. The one writer of those
+  // three voiceAgents[i] fields (FIELD_HOMES), called from Agent details'
+  // Advanced only; the main agent's twins are written there directly
+  // (mainResume, mainIdleTimeoutS, mainExtraArgs). Keeps every other field
+  // and agent as it is. The flags are checked again by the daemon at
+  // launch, whatever is saved here.
+  function setAgentField(agentId, field, value) {
+    if (field === "resume") {
+      if (value !== true && value !== false) return false
+    } else if (field === "idleTimeoutS") {
+      if (typeof value !== "number" || value !== Math.round(value) || value < 30 || value > 600)
+        return false
+    } else if (field === "extraArgs") {
+      if (!Array.isArray(value) || value.length > 16) return false
+      for (var k = 0; k < value.length; k++)
+        if (typeof value[k] !== "string" || value[k].length > 200) return false
+    } else {
+      return false
+    }
+    var list = [], found = false
+    for (var i = 0; i < root.voiceAgents.length; i++) {
+      var a = root.voiceAgents[i] || {}
+      var copy = {}
+      var names = Object.keys(a)
+      for (var j = 0; j < names.length; j++)
+        Object.defineProperty(copy, names[j], { value: a[names[j]], enumerable: true,
+                                                writable: true, configurable: true })
+      copy.id = root.agentId(a)
+      if (copy.id === agentId) {
+        if (field === "resume") copy.resume = value
+        else if (field === "idleTimeoutS") copy.idleTimeoutS = value
+        else copy.extraArgs = value.slice()
+        found = true
+      }
+      list.push(copy)
+    }
+    if (!found) return false
+    root.put("voiceAgents", list)
+    return true
+  }
+
   // Who speaks in `v` now: "main" and the display names of extra agents.
   function voiceUsers(v) {
     var out = []

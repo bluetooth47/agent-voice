@@ -25,6 +25,8 @@ import weakref
 from pathlib import Path
 from typing import Iterator
 
+from launch_extras import LaunchRefused
+
 from .base import (
     Adapter, Chunk, Drain, SPOKEN_STYLE, Watchdog, installed, private_config_file,
     prompt_file, stop_tree,
@@ -444,6 +446,12 @@ class ClaudeCode(Adapter):
             argv += ["--model", self.model]
         if self.effort and self.effort in self.efforts():
             argv += ["--effort", self.effort]
+        # Phase M17: the person's extra flags, checked here, at launch,
+        # against what is never passed (launch_extras), so a setting written
+        # past the page is refused when it would run. Last, so a flag that
+        # wants a value can take none of ours: it gets nothing, and claude
+        # says so instead of starting.
+        argv += self._extras_argv()
         return argv
 
     def efforts(self) -> tuple[str, ...]:
@@ -484,7 +492,10 @@ class ClaudeCode(Adapter):
         # that matters is not in the environment on this machine anyway --
         # endpoint_key() prefers the login keyring.
         argv = self._argv("", session_id)
-        proc = subprocess.Popen(argv, cwd=self.cwd,
+        # Phase M17: its own environment variables on top of the daemon's,
+        # checked like its flags; None when it has none, as before.
+        env = self._popen_env()
+        proc = subprocess.Popen(argv, cwd=self.cwd, env=env,
                                 stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True, bufsize=1,
@@ -543,9 +554,11 @@ class ClaudeCode(Adapter):
                 stale = self._forget()
                 try:
                     self._spawn(session_id)
-                except OSError:
-                    self._arm_expiry()
-                    return
+                except (OSError, LaunchRefused):
+                    # Said by the turn's own send(), which reaches the same
+                    # check. The process let go above is still stopped below:
+                    # this returned past it before M17, and left it running.
+                    pass
             self._arm_expiry()
         if stale is not None and stale.poll() is None:
             stop_tree(stale, signal.SIGTERM)
@@ -566,13 +579,25 @@ class ClaudeCode(Adapter):
             if fresh or not self._ready_for(session_id):
                 stale = self._forget()
                 self.last_start = "cold"
-                self._spawn(session_id)
+                try:
+                    self._spawn(session_id)
+                except BaseException:
+                    # The one let go is not this turn's to keep, and nobody
+                    # else holds it now (phase M17: a refused launch raises
+                    # here as a failed start always could).
+                    if stale is not None and stale.poll() is None:
+                        stop_tree(stale, signal.SIGTERM)
+                    raise
             self._busy = True
             return self._proc, self._errors, stale
 
     def send(self, text: str, session_id: str | None = None) -> Iterator[Chunk]:
         try:
             proc, errors, stale = self._take(session_id)
+        except LaunchRefused as e:
+            # Phase M17: our own words, naming the flag and never its value.
+            yield Chunk(error=str(e))
+            return
         except OSError as e:
             yield Chunk(error=f"could not start claude: {e}")
             return
@@ -587,6 +612,9 @@ class ClaudeCode(Adapter):
                 # the CLI itself. Once more from cold, then give up honestly.
                 try:
                     proc, errors, _ = self._take(session_id, fresh=True)
+                except LaunchRefused as e:
+                    yield Chunk(error=str(e))
+                    return
                 except OSError as e:
                     yield Chunk(error=f"could not start claude: {e}")
                     return

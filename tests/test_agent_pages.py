@@ -89,8 +89,19 @@ def test_the_agents_card_shows_a_summary_and_links_to_the_editor():
 
 # --- what the pages may write ---------------------------------------------------
 
-def test_agent_details_writes_no_setting():
-    assert not re.search(r"\b(put|putMap)\(", text("pages/AgentDetailsPage.qml"))
+def test_agent_details_writes_only_its_launch_settings():
+    """Agent details wrote no setting until M17, whose Advanced tab is the
+    home of how an agent is launched: the main agent's three twins, put in
+    one function (`putLaunch`), and nothing else put anywhere on the page.
+    The tool and skill switches go through overlay functions (M10, M11)."""
+    from qml_scan import scan
+    src = scan(ROOT / "pages" / "AgentDetailsPage.qml").nocomment
+    at = src.index("function putLaunch(")
+    body = src[at:src.index("\n  }", at)]
+    rest = src[:at] + src[at + len(body):]
+    assert not re.search(r"\b(put|putMap)\(", rest)
+    assert set(re.findall(r'\bput\("(\w+)"', body)) == {"mainResume", "mainIdleTimeoutS",
+                                                        "mainExtraArgs"}
 
 
 def test_communal_writes_only_the_tools_for_every_agent():

@@ -236,7 +236,7 @@ reloads a model on every poll. Miss the third and the fix waits for something
 unrelated to be touched, which is how "switching engines and back" became
 folklore for "make it notice".
 
-## Nine ways this fails open, and the rules that close them
+## Ten ways this fails open, and the rules that close them
 
 Each of these was a real path from "somebody said something near the
 microphone" to "something ran". They are listed because every one of them is
@@ -346,6 +346,21 @@ every skill in the user's own folders whatever Agent Voice gives them, so
 a skill switched off is switched off where the CLI looks too
 (`skillOverrides`, `skills.config`: `skillscan.native_off`), and a list
 that cannot be read switches off every one the CLI finds.
+
+**A flag the person adds is still a flag.** Since M17 an agent's program can
+be given extra flags and environment variables (Agent details → Advanced),
+and one of either switches the guard off: `--bare` and `--safe-mode` start
+Claude Code with no hooks, `CLAUDE_CODE_SIMPLE=1` does the same, `PYTHONPATH`
+loads code into the hook itself, `ANTHROPIC_BASE_URL` sends the key
+elsewhere. So `launch_extras.py` judges both **in the adapter, at launch**
+(`_extras_argv`, `_popen_env`), refuses even after a confirm and whoever
+wrote the setting, and a refusal starts no process and says why -- dropping
+the flag quietly would be a control that does nothing. The list is per
+program and written three ways (exact names off `--help`, category words
+that catch next month's flags, and shapes: no bare word, no `--`, one short
+flag per element); a program with no list is passed nothing. A new adapter
+that takes extras needs its own list first, and a new flag Agent Voice sets
+itself joins the list as `own`.
 
 **A transcript and a model reply are untrusted input to the UI.** Any `Text`
 showing one needs `textFormat: Text.PlainText`: `AutoText` renders anything

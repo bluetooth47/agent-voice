@@ -206,6 +206,35 @@ def communal_off_choice(raw) -> frozenset[str] | None:
     return frozenset(raw)
 
 
+#: The hung-turn limit (phase M17): seconds of complete silence from an
+#: agent's program before its turn is stopped. The bounds of the control.
+IDLE_TIMEOUT_MIN, IDLE_TIMEOUT_MAX, IDLE_TIMEOUT_DEFAULT = 30, 600, 90
+
+
+def idle_timeout_choice(raw) -> int:
+    """`idleTimeoutS` as written: a whole number of seconds, held inside the
+    bounds; anything that is not a number reads as the default, 90 -- what
+    every adapter used before the setting existed."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return IDLE_TIMEOUT_DEFAULT
+    try:
+        value = int(raw)
+    except (ValueError, OverflowError):
+        return IDLE_TIMEOUT_DEFAULT
+    return max(IDLE_TIMEOUT_MIN, min(IDLE_TIMEOUT_MAX, value))
+
+
+def resume_choice(raw) -> bool:
+    """`resume` as written: only an explicit false is off (a string "false"
+    from a hand edit too), so an entry from before M17, or an odd value,
+    keeps resuming as it always did."""
+    if raw is False:
+        return False
+    if isinstance(raw, str) and raw.strip().lower() in ("false", "0", "no", "off"):
+        return False
+    return True
+
+
 def speed_pct(value, fallback: int = 100) -> int:
     """A speaking speed as a whole percent inside the bounds, or `fallback`.
 
@@ -396,6 +425,18 @@ DEFAULTS = {
     # alias: the fallback config has no page to link agents from.
     "crewLinks": [],
     "crewQuarantine": [],
+    # Phase M17: how the main agent is launched (Agent details → Advanced).
+    # Whether its conversation is carried from turn to turn (only an
+    # explicit false is off: unreadable resumes, as before M17); the
+    # seconds of silence before a turn is presumed hung (30 to 600; the
+    # adapters' 90 before M17); and extra flags for its program, checked
+    # at launch by launch_extras (a list, so defaults-only in the manifest;
+    # unreadable passes nothing). Extra agents keep theirs in their entry,
+    # as `resume`, `idleTimeoutS` and `extraArgs`. No TOML alias: the
+    # fallback config has no page to set them from.
+    "mainResume": True,
+    "mainIdleTimeoutS": 90,
+    "mainExtraArgs": [],
     # Phase M15: the agents that take nothing from Communal, by id ("main"
     # for the main agent): no communal rules or defaults in their prompt and
     # no communal skills. Communal notes stay reachable through the notes
@@ -887,6 +928,13 @@ class Config:
                 "collaboration": collab_choice(entry, "collaboration"),
                 "acceptsWork": accepts_choice(entry, "acceptsWork"),
                 "projectDir": folder.strip() if isinstance(folder, str) else "",
+                # Phase M17: how it is launched (Agent details → Advanced):
+                # whether its conversation is resumed, its hung-turn limit,
+                # and its extra flags as written -- judged at launch by
+                # launch_extras; None when they cannot be read (then none).
+                "resume": resume_choice(entry.get("resume")),
+                "idleTimeoutS": idle_timeout_choice(entry.get("idleTimeoutS")),
+                "extraArgs": _extra_args(entry.get("extraArgs")),
                 # Its own OpenAI-compatible endpoint, when its program is
                 # "endpoint" (plan 7b); None otherwise.
                 "endpoint": (endpoint_entry(entry.get("endpointUrl"),
@@ -979,6 +1027,29 @@ class Config:
                 return None
             got = spec.get("skillsOff")
         return None if got is None else frozenset(got)
+
+    def launch_for(self, agent_id: str | None) -> dict:
+        """How this agent is launched (phase M17): {"resume": bool,
+        "idle_s": seconds, "args": its extra flags as written, a tuple, or
+        None when they cannot be read -- then none are passed}. `agent_id`
+        is "" or "main" for the main agent. Settings that cannot be read,
+        and an agent they do not have, are the defaults: it resumes, 90
+        seconds, nothing extra. Read fresh by whoever asks; the flags are
+        judged by the adapter at launch, not here."""
+        default = {"resume": True, "idle_s": IDLE_TIMEOUT_DEFAULT, "args": ()}
+        if not self.settings_readable():
+            return default
+        if not agent_id or agent_id == "main":
+            args = _extra_args(self._values.get("mainExtraArgs"))
+            return {"resume": resume_choice(self._values.get("mainResume")),
+                    "idle_s": idle_timeout_choice(self._values.get("mainIdleTimeoutS")),
+                    "args": None if args is None else tuple(args)}
+        spec = next((a for a in self.all_agents() if a["id"] == agent_id), None)
+        if spec is None:
+            return default
+        args = spec.get("extraArgs")
+        return {"resume": spec["resume"], "idle_s": spec["idleTimeoutS"],
+                "args": None if args is None else tuple(args)}
 
     def communal_off(self) -> frozenset[str]:
         """The ids in `communalOff` (phase M15). Empty -- everybody takes
@@ -1142,6 +1213,13 @@ class Config:
     def main_label(self, phrase: str = "") -> str:
         """The main agent's display name: `mainName`, else its wake phrase."""
         return display_name(self["mainName"], phrase or self.get_str("phrase"))
+
+
+def _extra_args(raw):
+    """`extraArgs` as written (launch_extras.args_choice): a list of strings,
+    or None when it cannot be read."""
+    from launch_extras import args_choice
+    return args_choice(raw)
 
 
 def endpoint_entry(url, model, is_agent=False, timeout_s=0,

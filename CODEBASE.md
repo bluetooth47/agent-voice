@@ -60,6 +60,7 @@ inside an agent's CLI) and the daemon.
 | `~/.config/omarchy/shell.json` | **Main settings store.** The bar widget writes the keys here (`omarchy bar set`). |
 | `~/.config/agentvoice/agentvoice.toml` | Fallback config for machines without Omarchy. |
 | `~/.config/agentvoice/endpoint-keys.json` | API keys for endpoints, keyed by host. |
+| `~/.config/agentvoice/agent-env.json` | M17: each agent's extra environment variables (`launch_extras.py`), 0600 in a 0700 folder, written atomically under `.agent-env.lock`; never a link, never in shell.json. Values are never printed, logged or published (runinfo, the page and the CLI show names only). A file other accounts can read is not used. Inside the orders guard (`CONFIG_DIR`). |
 | `$XDG_RUNTIME_DIR/agentvoice/` | Runtime IPC, see below. |
 | `~/.local/state/omarchy/agents/usage/agentvoice-<key>.json` | Records that Omarchy's Agents panel shows. |
 
@@ -251,6 +252,8 @@ This file is the entry point (`main()`), and its structure is:
 | `transfer.py` | M12: moving and copying a skill between Agent Voice's own folders (agents and Communal), and Undo. Only the person moves anything (the pages and `agentvoice skills move\|copy\|undo`; no agent tool; the orders guard asks an agent that runs them). One transfer under agentfs's lock: anything left unfinished settled first; the source read whole by descriptor with no link followed, within the bounds every skill keeps (64 files, 2 MiB, 256 KB a file, a SKILL.md `parse_skill` accepts) and hashed; a journal record (`agents/.transfers/<op>.open.json`, inside the orders guard); the folder staged in the destination's skills folder (`.t-<op>`) by its descriptor; the source hashed again; a move hides the source (`.t-<op>-gone`) and then publishes by one no-replace rename (never in two places, at worst in neither for a moment); the history travels; the record finished (`<op>.json`, 100 kept). `recover()` finishes a published record and rolls back any other; the daemon calls it at start before any agent is built, and on its poll without waiting for the lock. Undo is tied to the digest: a move goes back only while the destination is unchanged and the source free of that name; a copy or an import is taken back only while it is unchanged and (a copy) the original still is too. One audit line each (`skill_move`, `skill_copy`, `skill_undo`): ids, name, size. Since M13 the journal is shared with notes: a record's `kind` sends it to notemoves.py for validation, settling and undo; `working()`/`busy()` mark a transfer or recovery in progress, so notes' own settle-before-read stays out of it; `history(kind=)`. Since M15 `kind: "import"` goes to communal_import.py the same way. |
 | `crew_links.py` | M8: crew links and quarantine, pure. `parse_links`/`parse_quarantine` (unreadable → None and why), `Crew` (`abilities`, `allows`, `asks_first`, `reach`, `reached_by`; none out of quarantine, only ask/delegate into it), `everyone(ids)` for "Link everyone as before", `refusal()` with audit codes `no-link`, `quarantined`, `crew-unreadable`. `QUARANTINE_BRIEF_MAX` 1000. M9: `check_write()`, what the Crew map may save (stricter than reading: no id nobody has unless that link or quarantined id is already saved, nothing out of a quarantined agent, only ask/delegate into one), run by `agentvoice crew check` (`collab.cli_crew`: one JSON line on stdin, JSON verdict on stdout, settings read from disk, nothing written). The Crew map page mirrors it; `test_crew_links.py` runs the page's JS against it in node. |
 | `audit.py` | `audit.record()` takes only typed fields (ids, names, integers); a bad value is written as "?". A test AST-walks every call. Since M16 the kind `permission` (written by the hook: tool name by pattern, decision, how, level, each from a fixed list; never an argument or a path) and `wait_s`, which gives up on the lock rather than wait. |
+| `launch_extras.py` | M17: an agent's extra flags and environment variables, **checked at launch in the adapter** (`checked`, `checked_env`, `popen_env`), never only on the page. A denylist per program written three ways: exact names read off `claude --help` 2.1.330 and `codex exec --help` 0.171.0, each with its category (`level`, `hooks`, `config`, `mcp`, `tools`, `skills`, `dirs`, `prompt`, `session`, `stream`, `own`, `model`, `writes`, `elsewhere`, `exits`); words that put any flag's name in a category (`permission`, `hook`, `mcp`, `tool`, `dir`, `prompt`, `session`, `format`, `key`, `token`…); and shapes (every element a flag on its own: never a bare word, never `--`, one short flag per element, `--no-X` judged as X, a prefix of a refused name refused). Only Claude Code and Codex are passed any (`PROGRAMS`); a refused one raises `LaunchRefused`, whose words name the flag and never its value (`failure` kind `refused`). Environment names: a denylist of exact names, prefixes and suffixes (PATH, HOME, LD_*, PYTHON*, NODE_*, XDG_*, the proxies, *_BASE_URL and other addresses, CLAUDE_*, CODEX_*, AGENTVOICE_*, BASH_*, GIT_*…). `agentvoice agents flags check PROGRAM` (one JSON line on stdin) and `agentvoice agents env ID list|set NAME|unset NAME|clear` (a value on stdin; names only ever printed). |
+| `agent_manage.py` | M17: Duplicate and Reset to defaults, the settings-entry half (agentfs does the folders: `duplicate_folder`, `reset_folder`, `undo_reset`). `duplicate_entry`: a new id and wake phrase, switched off, at Ask, no tool switched on, no extra flag or environment variable, every restriction the original has kept (a tool or skill off, notes denied, collaboration off/ask, work refused); a quarantined agent, or any while the list cannot be read, is not copied. `reset_entry`: id, wake phrase, name and switch kept, everything else a new agent's; the old folder and entry go to the trash first so Restore (or Undo) puts it back. `agentvoice agents duplicate ID | reset ID --line | unreset NAME`. |
 | `runinfo.py` | M16: Agent details → Advanced, read only. `redact_argv` (secret-named, header and environment flags, `-c key=value` whose key names a secret, key-shaped words, known key prefixes anywhere, bearer tokens, a URL's password and query; the session id stays); `Ring`, the daemon's per-agent log ring, whose `add` types every field (kind, seconds, tool names by pattern, `failure.KINDS`, the `sessions` changes) so no text fits; `record_for` (one adapter's record); `write`/`read` of `$RUNDIR/runinfo.json`; `view` (the published record, given vs seen servers from `tools/live.json`, the agent's `permission` audit lines) for `agentvoice agents runinfo ID [--json]`. |
 | `speech_text.py` | Markdown → speakable prose, sentence boundaries, code blocks → "Code omitted", `safe_for_terminal`, `as_prompt`; `pass_command` ("pass/send this to NAME …") and `is_take_over`. Since M4 the **command table** (`COMMANDS`: id, phrases, effect, the positions it may sit at, the in-sentence phrases, CLI equivalent, the fixed sentence said when it fires inside a sentence) and **`find_command(text, mode, names)`**: the rules from before M4 first (`exact`), then a command at the start or end (`edges`) or in its own clause (`clause`), with the never-fires rules (an object after it, a negation, quoted or reported speech, a question, two commands). |
 | `voice_commands.py` | `agentvoice commands [--json]`: the table plus each enabled agent's wake phrase, from the settings. |
@@ -290,11 +293,25 @@ waits).
 **What is running** (M16): `launch_argv(session_id)` is the command line
 the next turn would start, from the adapter's own `_argv` (Gemini's and the
 shared CLI adapter's were split out of `send()` for it; an endpoint has
-none); every adapter notes the argv it really handed Popen as
+none; since M17 it holds the extra flags too, or the refusal); every adapter notes the argv it really handed Popen as
 `last_launch` (`_launched`), `launch_running()` says whether that process
 lives, `handed_servers()` lists the MCP servers its next process is given
 by `_argv`'s own conditions, and `prompt_channel` says how the request
 reaches it. `runinfo.record_for` reads only these.
+
+**How it is launched** (M17): `extra_args`, `extra_env` and `resume` on the
+base, set by the daemon between turns (`Daemon.apply_launch`, from
+`Config.launch_for` and the env file), and `idle_timeout_s` (the hung-turn
+limit, read by each turn's `Watchdog`; an endpoint keeps its own). Claude
+Code appends `_extras_argv()` at the end of its argv and Codex straight
+after `exec` (so a flag left wanting a value meets one clap refuses, never
+`resume`); both pass `env=_popen_env()` to Popen. Each check raises
+`LaunchRefused`, which `prepare()` swallows and `send()` turns into one
+error in our own words; no process starts. A changed flag or variable lets
+the idle process go, as a tool switch does. Resume off is the daemon's:
+every turn is sent with no session, the session is dropped (and its
+"allow all in this chat" revoked) when the turn ends, and a continued chat
+is replayed rather than resumed.
 
 **Prompt assembly** (`preamble()`, Phase 11), most stable first so prompt
 caches survive: spoken style → communal rules → communal defaults → "About
@@ -540,6 +557,7 @@ Current keys, grouped:
   `browserTools`, `omarchySkill`, `agentvoiceSkill` (M14: bool, default on;
   the Agent Voice skill, per agent in its tools map beside the other three;
   unreadable reads as off, and so does unreadable settings).
+- **Launch (M17):** `mainResume` (bool, default true; only an explicit false is off), `mainIdleTimeoutS` (30–600, default 90, held in bounds; not a number reads 90), `mainExtraArgs` (list, defaults-only, `[]`; not a list of strings reads as none), and `voiceAgents[i].resume` / `.idleTimeoutS` / `.extraArgs`. Settings unreadable: resume, 90, nothing extra. Written only on Agent details → Advanced: the main twins put directly (`putLaunch`), an extra agent's through `Settings.setAgentField`. `Config.launch_for`. The flags are judged by the adapter at launch, whoever wrote them.
 - **Skills switched off (M11):** `mainSkillsOff` (list, defaults-only, `[]`) and `voiceAgents[i].skillsOff`: skill names (a folder's, or a plugin's `plugin:name`). One name is one switch: the agent's own copy, the communal one and its CLI's own of that name, together. Missing = every skill it would get (as before M11); anything that is not a list of names, or over 256, is unreadable: no communal skill and none its CLI finds, its own still given. Written only through `Settings.setAgentSkill`, from Agent details; `Config.skills_off_for`.
 - **Found tools (M10):** `sharedTools` (map tool id → `"on:<fingerprint>"` / `"off"`, defaults-only, `{}` = everything found off; written on Communal → Tools). An agent's own switches for found tools sit in its tools map beside the built-in three (`mainTools`, `voiceAgents[i].tools`): `mcp:<server>` / `cli:<name>` → `"on:<fingerprint>"` / `"off"`, missing = follow `sharedTools`; anything else reads as off. Written only through `Settings.setAgentTool`, from Agent details. Unreadable settings switch nothing on.
 - **Crew (M8):** `crewLinks` (list of `{from, to, allow, askFirst}` by
@@ -588,6 +606,8 @@ an unknown agent id gets deny / off.
 | `tasks [--json]`, `tasks cancel ID` | Collaboration tasks; cancel sends `task-cancel`. |
 | `agents list\|show\|create\|trash\|restore\|trash-list\|write\|history\|revert\|ack\|preview\|export\|skills\|catalog\|migrate …` | Agent folders (agentfs.py); text on stdin. |
 | `agents runinfo ID [--json]` | M16: `runinfo.view`: the command line ID's next turn starts and the last one it started (redacted; never a prompt), working directory, session, timeouts, the servers it is given and those its program said it started, its recent structural log lines and permission decisions. Says when the service is not running or has not published. |
+| `agents duplicate ID`, `agents reset ID --line < entry`, `agents unreset NAME` | M17 (`agent_manage.py`): a copy, switched off, with no grant, secret or session (its entry printed as JSON, for the page to save); a reset (old folder and entry to the trash first; the reset entry printed); putting a reset agent back (the fresh folder goes to the trash as a folder no agent uses). The orders guard asks an agent running any of them at every level. |
+| `agents flags check PROGRAM < JSON line`, `agents env ID list [--json] \| set NAME [--line] < value \| unset NAME \| clear` | M17 (`launch_extras.py`): whether each extra flag would be passed, by the launch's own judge; an agent's environment variables, names only ever printed. `env … set/unset/clear` is asked at every level when an agent runs it. |
 | `agents prompt ID [--json]` | M15: everything ID's adapter puts ahead of a request, built by `Adapter.preamble_pieces` over what the daemon hands it (parts, instructions, skill text, CLIs, a roster along crew links): each piece's source, precedence and size, the total, and the skills a Claude agent loads beside it. |
 | `agents version TARGET FILE VERSION [--json]` | M15: one saved version's text and a diff from it to the file now. Reads only. |
 | `agents import communal DIR [--confirm TOKEN] [--json]`, `agents import-undo OP`, `agents import-history [--json]` | M15: `communal_import.py`. Without `--confirm` a dry run that changes nothing and prints the token; with it, exactly that, all or nothing. The orders guard asks an agent running `import` or `import-undo` at every level. |
@@ -650,6 +670,11 @@ Summarized from CLAUDE.md and merged-plan.md section 3; read the full text.
   own level in their own per-chat session.
 - Agent folders refuse every symlink. The audit log never holds text.
 - Search tools (`CONTENT_SEARCH`) are judged by what `rg --files` would read.
+- **Extra flags and environment variables (M17)** are checked in the
+  adapter at launch against a per-program denylist (`launch_extras.py`),
+  refused even after a confirm and whoever wrote the setting; a refusal
+  starts no process. Variables live in a 0600 file, never in shell.json,
+  never printed, logged or published.
 - Spoken text and folder text **never go in argv**, because
   `/proc/<pid>/cmdline` is world-readable. Use stdin, prompt files (0600),
   or an HTTPS body.

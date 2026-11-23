@@ -353,6 +353,8 @@ NOTE_WORDS = ("agentvoice notes move", "agentvoice notes copy", "agentvoice note
 #: folder. Reading (list, show, history, version, folder, export, apply) is
 #: not asked. The same text match, on the words with whitespace folded.
 #: Since M15 also `agents import` and `import-undo` (import-history reads).
+#: Since M17 also `agents duplicate`, `reset` and `unreset`, and `agents env
+#: ID set|unset|clear` (`env ID list` and `flags check` only read).
 FOLDER_WORDS = re.compile(
     r"(?:agentvoice agents|agentfs\.py) (?:"
     r"(?:write|revert|ack|trash|restore|create|migrate)(?![\w-])(?! --dry-run)"
@@ -361,7 +363,14 @@ FOLDER_WORDS = re.compile(
     # Phase M15: an import into Communal changes what every agent that takes
     # it is told, and its undo puts that back; the dry run is asked too,
     # since only the token it prints separates it from the commit.
-    r"|import(?:-undo)?(?![\w-]))"
+    r"|import(?:-undo)?(?![\w-])"
+    # Phase M17: a copy of an agent, a reset, and putting a reset one back
+    # write its folder and what the settings will say of it; an agent's
+    # environment variables are how its program is started (a key, or one
+    # sending its traffic elsewhere, had the list missed it). Only the
+    # person does these.
+    r"|(?:duplicate|reset|unreset)(?![\w-])"
+    r"|env \S+ (?:set|unset|clear)(?![\w-]))"
     r"|communal_import\.py")
 
 

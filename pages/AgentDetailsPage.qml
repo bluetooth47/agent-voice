@@ -2104,9 +2104,16 @@ Column {
   function resetRun() {
     page.run = null; page.told = null; page.revealPrompt = false
     page.runError = ""; page.toldError = ""
-    if (page.advancedOpen) { page.loadRun(); page.loadTold() }
+    // Phase M17: what was typed or read for the agent shown before.
+    page.flagDraft = ""; page.flagVerdicts = []; page.draftVerdict = null; page.flagError = ""
+    page.draftChecked = ""
+    page.envNames = []; page.envProblem = ""; page.envNote = ""; page.freshNote = ""
+    flagField.text = ""; envNameField.text = ""; envValueField.text = ""
+    if (page.advancedOpen) { page.loadRun(); page.loadTold(); page.loadEnv(); page.checkFlags() }
   }
-  onAdvancedOpenChanged: if (page.advancedOpen) { page.loadRun(); page.loadTold() }
+  onAdvancedOpenChanged: if (page.advancedOpen) {
+    page.loadRun(); page.loadTold(); page.loadEnv(); page.checkFlags()
+  }
   // The folders and settings an agent is told from: a change re-reads the prompt.
   readonly property string toldWatch: page.watch + JSON.stringify(s.vAgentFiles) + s.folders.epoch
   onToldWatchChanged: if (page.advancedOpen) toldDelay.restart()
@@ -2208,6 +2215,240 @@ Column {
         .filter(function(t) { return t !== "" }).join("  ·  ")
   }
 
+  // --- How it is launched (phase M17): the controls ----------------------------------
+  // Resume, the hung-turn limit and extra flags are settings with this tab as
+  // their one home: the main agent's twins are put here directly, an extra
+  // agent's go through the overlay's setAgentField. Extra flags are judged by
+  // `agentvoice agents flags check`, the very judge the adapter runs at
+  // launch (launch_extras.py), so the page never holds a second copy of the
+  // list. Environment variables live in a 0600 file, never in the settings:
+  // `agents env` takes a value on stdin and never prints one back.
+  readonly property bool flagsOffered: page.program === "claude" || page.program === "codex"
+  readonly property bool endpointAgent: page.program === "endpoint"
+  function launchValue(mainKey, field, fallback) {
+    if (page.isMain) return s.setting(mainKey, fallback)
+    var v = page.entry[field]
+    return v === undefined ? fallback : v
+  }
+  readonly property bool launchResume: {
+    var v = page.launchValue("mainResume", "resume", true)
+    if (v === false) return false
+    return !(typeof v === "string" && ["false", "0", "no", "off"].indexOf(v.trim().toLowerCase()) >= 0)
+  }
+  readonly property int launchIdle: {
+    var v = page.launchValue("mainIdleTimeoutS", "idleTimeoutS", 90)
+    if (typeof v !== "number" || !isFinite(v)) return 90
+    return Math.max(30, Math.min(600, Math.round(v)))
+  }
+  readonly property var launchArgsRaw: page.launchValue("mainExtraArgs", "extraArgs", [])
+  // As launch_extras.args_choice: a list of strings, or unreadable (none passed).
+  readonly property bool launchArgsReadable: {
+    var v = page.launchArgsRaw
+    if (v === undefined || v === null) return true
+    if (!Array.isArray(v) || v.length > 64) return false
+    for (var i = 0; i < v.length; i++) if (typeof v[i] !== "string") return false
+    return true
+  }
+  readonly property var launchArgs: page.launchArgsReadable && Array.isArray(page.launchArgsRaw)
+                                    ? page.launchArgsRaw : []
+  function putLaunch(field, value) {
+    if (page.isMain) {
+      if (field === "resume") s.put("mainResume", value)
+      else if (field === "idleTimeoutS") s.put("mainIdleTimeoutS", value)
+      else if (field === "extraArgs") s.put("mainExtraArgs", value)
+      return true
+    }
+    return s.setAgentField(page.target, field, value)
+  }
+
+  // Each saved flag's verdict, and the one being typed: one call for both.
+  property var flagVerdicts: []
+  property var draftVerdict: null
+  // The exact text draftVerdict judged: a verdict for what was typed before
+  // an edit never approves what is there now.
+  property string draftChecked: ""
+  property string flagDraft: ""
+  property string flagError: ""
+  readonly property string flagWatch: page.program + "|" + JSON.stringify(page.launchArgs) + "|" + page.flagDraft
+  onFlagWatchChanged: if (page.advancedOpen) flagDelay.restart()
+  Timer { id: flagDelay; interval: 250; onTriggered: page.checkFlags() }
+  function checkFlags() {
+    if (flagChecker.running) { flagDelay.restart(); return }
+    page.flagError = ""
+    if (!page.flagsOffered || page.reserved) { page.flagVerdicts = []; page.draftVerdict = null; return }
+    var draft = page.flagDraft.trim()
+    var list = page.launchArgs.slice(0, 16)
+    if (draft !== "") list = list.concat([draft])
+    if (list.length === 0) { page.flagVerdicts = []; page.draftVerdict = null; return }
+    flagChecker.saved = page.launchArgs.slice(0, 16).length
+    flagChecker.draft = draft
+    flagChecker.forKey = page.flagWatch
+    flagChecker.pending = JSON.stringify(list) + "\n"
+    flagChecker.command = ["agentvoice", "agents", "flags", "check", page.program]
+    flagChecker.running = true
+  }
+  Process {
+    id: flagChecker
+    property string forKey: ""
+    property string pending: ""
+    property int saved: 0
+    property string draft: ""
+    stdinEnabled: true
+    onStarted: if (flagChecker.pending !== "") { write(flagChecker.pending); flagChecker.pending = "" }
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var d
+        try { d = JSON.parse(String(text)) } catch (e) { return }
+        if (!d || !Array.isArray(d.flags) || flagChecker.forKey !== page.flagWatch) return
+        page.flagVerdicts = d.flags.slice(0, flagChecker.saved)
+        page.draftVerdict = flagChecker.draft !== "" ? (d.flags[flagChecker.saved] || null) : null
+        page.draftChecked = flagChecker.draft
+      }
+    }
+    stderr: StdioCollector {
+      onStreamFinished: {
+        var t = String(text).trim()
+        if (t !== "") page.flagError = t.replace(/^agentvoice agents: /, "").split("\n").pop()
+      }
+    }
+  }
+  function verdictOf(i) {
+    var v = page.flagVerdicts[i]
+    return v ? v : null
+  }
+  readonly property bool flagsRefused: {
+    for (var i = 0; i < page.flagVerdicts.length; i++)
+      if (page.flagVerdicts[i] && page.flagVerdicts[i].ok === false) return true
+    return page.launchArgs.length > 16
+  }
+  function addFlag() {
+    var draft = page.flagDraft.trim()
+    if (draft === "" || !page.draftVerdict || page.draftVerdict.ok !== true ||
+        page.draftChecked !== draft || page.launchArgs.length >= 16)
+      return false
+    return page.putLaunch("extraArgs", page.launchArgs.concat([draft])) === true
+  }
+  function confirmFlag() {
+    if (page.addFlag()) flagField.text = ""
+  }
+  // The value leaves the field as it is handed over, set or not: a secret is
+  // not kept on screen, nor in this page, longer than that.
+  function submitEnv() {
+    if (page.setEnv(envNameField.text.trim(), envValueField.text)) envNameField.text = ""
+    envValueField.text = ""
+  }
+  function removeFlag(i) {
+    var list = page.launchArgs.slice()
+    list.splice(i, 1)
+    page.putLaunch("extraArgs", list)
+  }
+  // The newest turn in its log, for "the last turn failed" beside the flags.
+  readonly property var lastTurn: {
+    var log = page.run ? (page.run.log || []) : []
+    for (var i = log.length - 1; i >= 0; i--) if (log[i].kind === "turn") return log[i]
+    return null
+  }
+
+  // Environment variables: names only, from `agents env ID list --json`.
+  property var envNames: []
+  property string envProblem: ""
+  property string envNote: ""
+  function loadEnv() {
+    if (envLister.running || page.reserved) return
+    envLister.forAgent = page.target
+    envLister.command = ["agentvoice", "agents", "env", page.target, "list", "--json"]
+    envLister.running = true
+  }
+  Process {
+    id: envLister
+    property string forAgent: ""
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var d
+        try { d = JSON.parse(String(text)) } catch (e) { return }
+        if (!d || !Array.isArray(d.names) || envLister.forAgent !== page.target) return
+        page.envNames = d.names
+        page.envProblem = String(d.problem || "")
+      }
+    }
+  }
+  // One change at a time: set (the value on stdin, as one JSON line, then
+  // forgotten here), unset or clear. The command is built only in the three
+  // functions below; the two that lose a value run only from a confirmation.
+  Process {
+    id: envChanger
+    property string forAgent: ""
+    property string pending: ""
+    property string err: ""
+    property string done: ""
+    property bool started: false
+    stdinEnabled: true
+    onStarted: {
+      envChanger.started = true
+      if (envChanger.pending !== "") { write(envChanger.pending); envChanger.pending = "" }
+    }
+    stderr: StdioCollector { onStreamFinished: envChanger.err = String(text).trim() }
+    onRunningChanged: if (!running) {
+      envChanger.pending = ""
+      if (envChanger.forAgent === page.target)
+        page.envNote = !envChanger.started ? "Not changed: the agentvoice command could not be run."
+                     : envChanger.err !== "" ? "Not changed: " +
+                       envChanger.err.replace(/^agentvoice agents: /, "").split("\n").pop()
+                     : envChanger.done
+      page.loadEnv()
+    }
+  }
+  function changeEnv(args, input, done) {
+    if (envChanger.running || page.reserved) return false
+    envChanger.forAgent = page.target
+    envChanger.err = ""
+    envChanger.started = false
+    envChanger.done = done
+    envChanger.pending = input
+    envChanger.command = args
+    envChanger.running = true
+    return true
+  }
+  function setEnv(name, value) {
+    return page.changeEnv(["agentvoice", "agents", "env", page.target, "set", name, "--line"],
+                          JSON.stringify(value) + "\n",
+                          name + " is set; " + page.name + "'s next process starts with it.")
+  }
+  function removeEnv(name) {
+    page.changeEnv(["agentvoice", "agents", "env", page.target, "unset", name], "",
+                   name + " is removed.")
+  }
+  function clearEnv() {
+    page.changeEnv(["agentvoice", "agents", "env", page.target, "clear"], "",
+                   "Every environment variable of " + page.name + " is removed.")
+  }
+
+  // Start fresh: this agent's conversation only (`chats new ID`).
+  property string freshNote: ""
+  Process {
+    id: freshStarter
+    property string forAgent: ""
+    property string err: ""
+    property bool started: false
+    onStarted: started = true
+    stderr: StdioCollector { onStreamFinished: freshStarter.err = String(text).trim() }
+    onRunningChanged: if (!running && freshStarter.forAgent === page.target) {
+      page.freshNote = !freshStarter.started ? "Not started: the agentvoice command could not be run."
+                     : freshStarter.err !== "" ? "Not started: " + freshStarter.err.split("\n").pop()
+                     : page.name + "'s next turn starts a new conversation. The last one stays in Chats."
+      page.loadRun()
+    }
+  }
+  function startFresh() {
+    if (freshStarter.running || page.reserved) return
+    page.freshNote = ""
+    freshStarter.forAgent = page.target
+    freshStarter.err = ""
+    freshStarter.started = false
+    freshStarter.command = ["agentvoice", "chats", "new", page.target]
+    freshStarter.running = true
+  }
+
   Column {
     width: parent.width
     spacing: Style.space(12)
@@ -2217,8 +2458,8 @@ Column {
       width: parent.width
       wrapMode: Text.WordWrap
       textFormat: Text.PlainText
-      text: "How " + page.name + " runs, what it is connected to and what it did lately. " +
-            "Nothing on this tab changes anything."
+      text: "How " + page.name + " runs, what it is connected to and what it did lately, and how " +
+            "it is launched. A change applies from its next turn; the risky ones ask first."
       color: page.s.dim
       font.family: page.s.fontFamily
       font.pixelSize: Style.font.caption
@@ -2303,6 +2544,304 @@ Column {
       }
     }
 
+    // Phase M17: extra flags. Each judged by the same code the adapter runs
+    // at launch; one refused is never saved, and one saved past the page
+    // stops its program from starting, with the reason, until removed.
+    SettingRow {
+      id: flagsRow
+      width: parent.width
+      stacked: true
+      visible: !page.reserved && !page.endpointAgent
+      label: "Extra flags"
+      hint: page.flagsOffered
+            ? "Added to the end of its command line, every turn, after Agent Voice's own. A flag that " +
+              "changes its permissions, settings, hooks, MCP servers, plugins, tools, folders, prompt, " +
+              "session or output is refused, here and again when it starts."
+            : "Passed to Claude Code and Codex only: no list of what must be refused has been written " +
+              "for " + (page.s.programLabel(page.program) || "its program") + ", so it is passed none."
+      help: "Every account on this computer can read a command line, through /proc, for as long as " +
+            "the program runs. A key or a password never belongs in a flag: set it as an environment " +
+            "variable below, which is kept in a file only you can read."
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      Column {
+        width: parent.width
+        spacing: Style.space(6)
+        Text {
+          width: parent.width
+          visible: !page.launchArgsReadable
+          wrapMode: Text.WordWrap
+          textFormat: Text.PlainText
+          text: "The saved flags cannot be read, so none are passed. Clear them to start again."
+          color: page.s.urgent
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Repeater {
+          model: page.launchArgs
+          Item {
+            id: flagRow
+            required property var modelData
+            required property int index
+            readonly property var verdict: page.verdictOf(index)
+            readonly property bool refused: index >= 16 || (verdict !== null && verdict.ok === false)
+            width: parent.width
+            height: Math.max(flagText.implicitHeight, flagRemove.height)
+            Text {
+              id: flagText
+              anchors.left: parent.left
+              anchors.right: flagRemove.left
+              anchors.rightMargin: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              wrapMode: Text.WrapAnywhere
+              textFormat: Text.PlainText
+              text: String(flagRow.modelData) +
+                    (!page.flagsOffered ? "   · not passed" :
+                     flagRow.index >= 16 ? "   · refused: more than 16 extra flags" :
+                     flagRow.verdict === null ? "" :
+                     flagRow.verdict.ok ? "   ⚠ passed" : "   · refused: " + flagRow.verdict.why)
+              color: flagRow.refused ? page.s.urgent : page.s.foreground
+              font.family: "monospace"
+              font.pixelSize: Style.font.caption
+            }
+            Button {
+              id: flagRemove
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Remove"
+              bordered: true
+              focusable: true
+              foreground: page.s.foreground
+              fontFamily: page.s.fontFamily
+              fontSize: Style.font.caption
+              onClicked: page.removeFlag(flagRow.index)
+            }
+          }
+        }
+        Text {
+          width: parent.width
+          visible: page.flagsOffered && page.flagsRefused
+          wrapMode: Text.WordWrap
+          textFormat: Text.PlainText
+          text: "While a refused flag is here its program is not started at all: every turn says why. " +
+                "Remove it, or clear them all."
+          color: page.s.urgent
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Text {
+          width: parent.width
+          visible: page.launchArgs.length > 0 && page.lastTurn !== null &&
+                   String(page.lastTurn.error || "") !== ""
+          wrapMode: Text.WordWrap
+          textFormat: Text.PlainText
+          text: page.lastTurn === null ? "" :
+                "Its last turn failed (" + String(page.lastTurn.error) + "). If that began when a flag " +
+                "was added, clear them and try again."
+          color: page.s.urgent
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Flow {
+          width: parent.width
+          spacing: Style.space(8)
+          visible: page.flagsOffered && page.launchArgsReadable
+          TextField {
+            id: flagField
+            width: Math.min(parent.width, Style.space(260))
+            placeholderText: "--flag or --flag=value"
+            enabled: page.launchArgs.length < 16
+            foreground: page.s.foreground
+            font.family: "monospace"
+            onTextChanged: page.flagDraft = text
+          }
+          DangerButton {
+            id: addFlagButton
+            text: "Add"
+            question: "Pass " + page.flagDraft.trim() + " to " + page.name + "'s program on every turn?"
+            confirmText: "Add"
+            maxWidth: flagsRow.width
+            enabled: page.draftVerdict !== null && page.draftVerdict.ok === true &&
+                     page.draftChecked === page.flagDraft.trim() && page.launchArgs.length < 16
+            foreground: page.s.foreground
+            urgent: page.s.urgent
+            fontFamily: page.s.fontFamily
+            onConfirmed: page.confirmFlag()
+          }
+          Button {
+            visible: page.launchArgs.length > 0 || !page.launchArgsReadable
+            text: "Clear all"
+            bordered: true
+            focusable: true
+            tooltipText: "Pass no extra flag. Nothing is lost that cannot be typed again."
+            foreground: page.s.foreground
+            fontFamily: page.s.fontFamily
+            onClicked: page.putLaunch("extraArgs", [])
+          }
+        }
+        Button {
+          visible: !page.launchArgsReadable
+          text: "Clear them"
+          bordered: true
+          focusable: true
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          onClicked: page.putLaunch("extraArgs", [])
+        }
+        Text {
+          width: parent.width
+          visible: page.flagsOffered && page.flagDraft.trim() !== ""
+          wrapMode: Text.WordWrap
+          textFormat: Text.PlainText
+          text: page.draftVerdict === null || page.draftChecked !== page.flagDraft.trim() ? "Checking…" :
+                page.draftVerdict.ok
+                  ? "⚠ Not one Agent Voice knows to be a way round its settings. It is passed as you " +
+                    "typed it, after you confirm; a flag its program does not know stops every turn " +
+                    "until it is removed."
+                  : "Refused, and not saved: " + page.draftVerdict.why + "."
+          color: page.draftVerdict !== null && page.draftVerdict.ok === false &&
+                 page.draftChecked === page.flagDraft.trim() ? page.s.urgent : page.s.dim
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Text {
+          width: parent.width
+          visible: page.flagError !== ""
+          wrapMode: Text.WordWrap
+          textFormat: Text.PlainText
+          text: "Could not check them: " + page.flagError
+          color: page.s.urgent
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+    }
+
+    // Phase M17: environment variables, in a 0600 file. Names only are shown.
+    SettingRow {
+      id: envRow
+      width: parent.width
+      stacked: true
+      visible: !page.reserved && !page.endpointAgent
+      label: "Environment variables"
+      hint: page.flagsOffered
+            ? "Set for its program's process, and kept in a file only you can read " +
+              "(~/.config/agentvoice/agent-env.json), never in the settings. A value is never shown " +
+              "again, logged or sent anywhere: to change one, set it again."
+            : "Set for Claude Code and Codex only, so " + page.name + " is given none."
+      help: "A name that changes which code runs, where files are found, where its traffic goes, or " +
+            "how its program or Agent Voice works is refused: PATH, HOME, LD_*, PYTHON*, NODE_*, " +
+            "XDG_*, the proxies, *_BASE_URL and the other addresses, CLAUDE_*, CODEX_*, AGENTVOICE_* " +
+            "and others. API keys such as ANTHROPIC_API_KEY or OPENAI_API_KEY are what this is for."
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      Column {
+        width: parent.width
+        spacing: Style.space(6)
+        Text {
+          width: parent.width
+          visible: page.envProblem !== ""
+          wrapMode: Text.WordWrap
+          textFormat: Text.PlainText
+          text: "Its environment file cannot be used (" + page.envProblem + "), so no agent is given " +
+                "any of these until it is put right."
+          color: page.s.urgent
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Repeater {
+          model: page.envNames
+          Item {
+            id: envItem
+            required property var modelData
+            width: parent.width
+            height: Math.max(envText.implicitHeight, envRemove.height)
+            Text {
+              id: envText
+              anchors.left: parent.left
+              anchors.right: envRemove.left
+              anchors.rightMargin: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              elide: Text.ElideRight
+              textFormat: Text.PlainText
+              text: String(envItem.modelData) + "   · set" + (page.flagsOffered ? "" : ", not passed")
+              color: page.s.foreground
+              font.family: "monospace"
+              font.pixelSize: Style.font.caption
+            }
+            DangerButton {
+              id: envRemove
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Remove"
+              question: "Remove " + String(envItem.modelData) + "? Its value is kept nowhere else."
+              confirmText: "Remove"
+              maxWidth: envRow.width
+              enabled: !envChanger.running
+              foreground: page.s.foreground
+              urgent: page.s.urgent
+              fontFamily: page.s.fontFamily
+              onConfirmed: page.removeEnv(String(envItem.modelData))
+            }
+          }
+        }
+        Flow {
+          width: parent.width
+          spacing: Style.space(8)
+          visible: page.flagsOffered
+          TextField {
+            id: envNameField
+            width: Math.min(parent.width, Style.space(180))
+            placeholderText: "NAME"
+            foreground: page.s.foreground
+            font.family: "monospace"
+          }
+          TextField {
+            id: envValueField
+            width: Math.min(parent.width, Style.space(220))
+            placeholderText: "value"
+            password: true
+            foreground: page.s.foreground
+            font.family: "monospace"
+          }
+          Button {
+            text: "Set"
+            bordered: true
+            focusable: true
+            enabled: !envChanger.running && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(envNameField.text.trim())
+            // No tooltip: the row's hint says it, and a tooltip here was
+            // drawn over the Remove button of the variable just above.
+            foreground: page.s.foreground
+            fontFamily: page.s.fontFamily
+            onClicked: page.submitEnv()
+          }
+          DangerButton {
+            visible: page.envNames.length > 1
+            text: "Remove all"
+            question: "Remove all " + page.envNames.length + " of " + page.name + "'s environment " +
+                      "variables? Their values are kept nowhere else."
+            confirmText: "Remove all"
+            maxWidth: envRow.width
+            enabled: !envChanger.running
+            foreground: page.s.foreground
+            urgent: page.s.urgent
+            fontFamily: page.s.fontFamily
+            onConfirmed: page.clearEnv()
+          }
+        }
+        Text {
+          width: parent.width
+          visible: page.envNote !== ""
+          wrapMode: Text.WordWrap
+          textFormat: Text.PlainText
+          text: page.envNote
+          color: page.envNote.indexOf("Not ") === 0 ? page.s.urgent : page.s.foreground
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+    }
+
     SettingRow {
       width: parent.width
       stacked: true
@@ -2344,24 +2883,109 @@ Column {
       label: "Conversation"
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      Text {
+      Column {
         width: parent.width
-        wrapMode: Text.WrapAnywhere
-        textFormat: Text.PlainText
-        text: {
-          var x = page.runSession
-          if (!x) return ""
-          if (!x.remembers) return "Starts fresh every turn: its program keeps no conversation here."
-          if (!x.id) return page.run.endpoint ? "Keeps the last " + page.run.endpoint.history_turns +
-                                                " turns and sends them with each request."
-                                              : "No conversation yet: its next turn starts one."
-          return "Session " + x.id + " · its next turn resumes it · " + Number(x.turns || 0) +
-                 (Number(x.turns || 0) === 1 ? " turn" : " turns") + " in it since Agent Voice started"
+        spacing: Style.space(6)
+        Text {
+          width: parent.width
+          wrapMode: Text.WrapAnywhere
+          textFormat: Text.PlainText
+          text: {
+            var x = page.runSession
+            if (!x) return ""
+            if (!x.remembers) return "Starts fresh every turn: its program keeps no conversation here."
+            if (x.resume === false) return "Resume is off: every turn starts fresh."
+            if (!x.id) return page.run.endpoint ? "Keeps the last " + page.run.endpoint.history_turns +
+                                                  " turns and sends them with each request."
+                                                : "No conversation yet: its next turn starts one."
+            return "Session " + x.id + " · its next turn resumes it · " + Number(x.turns || 0) +
+                   (Number(x.turns || 0) === 1 ? " turn" : " turns") + " in it since Agent Voice started"
+          }
+          color: page.s.foreground
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
         }
-        color: page.s.foreground
+      }
+    }
+
+    // Phase M17: resume, and Start fresh. Resume off sends every turn with no
+    // session (the daemon decides, turn by turn); Start fresh ends this
+    // agent's conversation only, and its "allow all in this chat" with it.
+    ToggleRow {
+      width: parent.width
+      visible: !page.reserved && !page.endpointAgent
+      label: "Resume its conversation"
+      hint: page.launchResume ? "Each turn carries on from the last."
+                              : "Every turn starts fresh: it remembers nothing between them."
+      help: "Off, it is sent each request with no conversation behind it, as if just started, and a " +
+            "saved chat continued with it is read back to it instead. Its process is started again " +
+            "for every turn, which costs about a second."
+      disabledReason: ["claude", "codex", "agy"].indexOf(page.program) >= 0 ? ""
+                      : (page.s.programLabel(page.program) || "Its program") + " keeps no conversation here, " +
+                        "so every turn starts fresh anyway."
+      checked: page.launchResume
+      changed: !page.launchResume
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onToggled: page.putLaunch("resume", !checked)
+      onReset: page.putLaunch("resume", true)
+    }
+    Flow {
+      width: parent.width
+      visible: !page.reserved
+      spacing: Style.space(10)
+      Text {
+        width: Math.min(implicitWidth, parent.width)
+        wrapMode: Text.WordWrap
+        textFormat: Text.PlainText
+        text: "End " + page.name + "'s conversation now; its next turn starts a new one."
+        color: page.s.dim
         font.family: page.s.fontFamily
         font.pixelSize: Style.font.caption
+        height: Math.max(implicitHeight, freshButton.height)
+        verticalAlignment: Text.AlignVCenter
       }
+      DangerButton {
+        id: freshButton
+        text: "Start fresh"
+        question: "End " + page.name + "'s conversation? This one stays in Chats."
+        confirmText: "Start fresh"
+        enabled: !freshStarter.running
+        foreground: page.s.foreground
+        urgent: page.s.urgent
+        fontFamily: page.s.fontFamily
+        onConfirmed: page.startFresh()
+      }
+    }
+    Text {
+      width: parent.width
+      visible: page.freshNote !== ""
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: page.freshNote
+      color: page.freshNote.indexOf("Not ") === 0 ? page.s.urgent : page.s.foreground
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    // Phase M17: the hung-turn limit, per agent (an endpoint's is on the
+    // Agents page, with the rest of its endpoint).
+    KnobRow {
+      width: parent.width
+      visible: !page.reserved && !page.endpointAgent
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      label: "Stop a turn after"
+      description: "Seconds with nothing at all from its program. A turn that is still producing " +
+                   "output is never stopped." +
+                   (page.program === "agy" ? " Antigravity counts it from the start of the turn." : "")
+      value: page.launchIdle
+      defaultValue: 90
+      changed: page.launchIdle !== 90
+      minimum: 30; maximum: 600; stepSize: 10
+      unit: " s"
+      onCommitted: function(v) { page.putLaunch("idleTimeoutS", Math.round(v)) }
+      onReset: page.putLaunch("idleTimeoutS", 90)
     }
 
     SettingRow {
@@ -2384,8 +3008,8 @@ Column {
             var parts = ["Stopped after " + Math.round(Number(t.idle_s || 0)) + " seconds with nothing from it"]
             if (t.keep_warm_s !== undefined)
               parts.push("between turns its process waits " + Math.round(Number(t.keep_warm_s) / 60) +
-                         " minutes for the next one, then is let go")
-            return parts.join("; ") + (page.run && page.run.endpoint ? "." : ". Fixed in this version.")
+                         " minutes for the next one, then is let go (fixed in this version)")
+            return parts.join("; ") + "."
           }
           color: page.s.foreground
           font.family: page.s.fontFamily
@@ -2621,7 +3245,8 @@ Column {
           font.family: "monospace"
           font.pixelSize: Style.font.caption
         }
-        Row {
+        Flow {
+          width: parent.width
           spacing: Style.space(8)
           Button {
             text: "Open folder"
@@ -2644,6 +3269,38 @@ Column {
             fontFamily: page.s.fontFamily
             onClicked: page.s.folders.exportFolder(page.target)
           }
+          // Phase M17: a new agent from this one. What the copy holds is the
+          // daemon's decision (agent_manage.py); it is made switched off.
+          Button {
+            text: "Duplicate"
+            iconText: "\u{f018f}"
+            tooltipText: page.s.voiceAgents.length >= page.s.maxAgents
+                         ? "There are already " + page.s.maxAgents + " agents; remove one first"
+                         : "A new agent, switched off, with a copy of its role, personality, " +
+                           "instructions and skills, and none of its permissions"
+            bordered: true
+            focusable: true
+            enabled: !page.folderMissing && !page.s.folders.busy &&
+                     page.s.voiceAgents.length < page.s.maxAgents
+            foreground: page.s.foreground
+            fontFamily: page.s.fontFamily
+            onClicked: page.s.folders.duplicate(page.target)
+          }
+          // Phase M17: the folder and the settings entry go to the trash
+          // first (agent_manage.reset), so Undo or Restore gives it back.
+          DangerButton {
+            id: resetButton
+            visible: !page.isMain && page.index >= 0
+            text: "Reset to defaults"
+            question: "Reset " + page.name + " to a new agent's settings and folder? Restore undoes it."
+            confirmText: "Reset"
+            maxWidth: parent.width
+            enabled: !page.s.folders.busy
+            foreground: page.s.foreground
+            urgent: page.s.urgent
+            fontFamily: page.s.fontFamily
+            onConfirmed: page.s.folders.resetAgent(page.index)
+          }
           // Moves the folder and the settings entry to the trash; Undo and
           // the trash list below give it back.
           DangerButton {
@@ -2658,6 +3315,35 @@ Column {
             fontFamily: page.s.fontFamily
             onConfirmed: page.s.folders.remove(page.index)
           }
+        }
+        Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          textFormat: Text.PlainText
+          text: "Duplicate makes a new agent, switched off until you give it a wake phrase of its own: " +
+                "a copy of " + page.name + "'s role, personality, instructions and skills, its program, " +
+                "model, voice and folder. Nothing it was allowed comes with it: it starts at Ask, with " +
+                "no tool switched on, no crew link, no chat, note, session, extra flag or environment " +
+                "variable; anything switched off for " + page.name + " stays off."
+          color: page.s.dim
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          textFormat: Text.PlainText
+          text: page.isMain
+                ? "The main agent cannot be reset here: it cannot go to the trash, so nothing could undo it."
+                : "Reset to defaults puts back its role, personality, instructions, skills and notes as a " +
+                  "new agent's (the starting templates), and its program (Claude Code), model, effort, " +
+                  "voice, permission level (Ask), tools, skills switched off, notes and collaboration " +
+                  "switches, project folder, resume, hung-turn limit and extra flags. Kept: its name, " +
+                  "wake phrase, switch, chats, crew links and environment variables. Its conversation " +
+                  "ends. Its folder and settings go to the trash first, so Restore puts it back as it was."
+          color: page.s.dim
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
         }
       }
     }
@@ -2800,6 +3486,32 @@ Column {
           }
         }
       }
+    }
+  }
+
+  // Phase M17: a reset from this page, with the way back.
+  Flow {
+    width: parent.width
+    visible: page.s.folders.resetDone !== null
+    spacing: Style.space(12)
+    Text {
+      width: Math.min(implicitWidth, parent.width)
+      wrapMode: Text.WordWrap
+      text: page.s.folders.resetDone ? "Reset " + page.s.folders.resetDone.label +
+                                       " to its defaults; the old folder and settings are in the trash." : ""
+      textFormat: Text.PlainText
+      color: page.s.foreground
+      font.family: page.s.fontFamily
+    }
+    Button {
+      text: "Undo"
+      iconText: "\u{f054c}"
+      bordered: true
+      focusable: true
+      enabled: !page.s.folders.busy
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onClicked: page.s.folders.undoReset()
     }
   }
 

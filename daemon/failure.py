@@ -28,6 +28,9 @@ import time
 #: key" is not an expired login, and a 429 is not an outage.
 _KINDS: tuple[tuple[str, re.Pattern], ...] = tuple(
     (kind, re.compile(pattern, re.IGNORECASE)) for kind, pattern in (
+        # Phase M17: an extra flag or variable Agent Voice never passes
+        # (launch_extras.LaunchRefused, our own sentence).
+        ("refused", r"agent voice did not start it"),
         ("hung", r"stopped responding after"),
         ("start", r"could not start|exited before it could be asked|"
                   r"command not found|is not installed"),
@@ -56,6 +59,8 @@ KINDS = tuple(kind for kind, _ in _KINDS) + ("unknown",)
 
 #: What each kind sounds like. "{name}" is the agent, as people say it.
 _SAID = {
+    "refused": "{name} was not started: one of its launch settings is never passed. "
+               "Agent details, Advanced, says which.",
     "hung": "{name} stopped responding, so I stopped it.",
     "start": "{name} would not start.",
     "insecure": "{name} needs an https address before I will send it your key.",

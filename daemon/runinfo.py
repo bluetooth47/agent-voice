@@ -138,7 +138,7 @@ def shown_line(argv) -> str:
 # --- the log ring --------------------------------------------------------------------
 
 #: What a line may say happened.
-LOG_KINDS = ("turn", "rebuilt", "dropped")
+LOG_KINDS = ("turn", "rebuilt", "dropped", "fresh")
 #: A tool's name as the CLIs report it ("Bash", "mcp__agentvoice-crew__notes_read",
 #: Codex's item types). Anything else is "?".
 _TOOL = re.compile(r"[A-Za-z0-9_.:@/-]{1,96}")
@@ -264,6 +264,9 @@ def render(line: dict) -> str:
         return (f"started again for a new {what}" if what else "started again") + tail
     if kind == "dropped":
         return f"conversation dropped after a failure ({line.get('error') or 'unknown'})"
+    if kind == "fresh":
+        # Phase M17: Start fresh, or New chat, from Settings or the CLI.
+        return "started fresh: new conversation"
     return "?"
 
 
@@ -301,8 +304,12 @@ def record_for(agent, *, session_id=None, turns: int = 0, busy: bool = False,
     rec["prompt_channel"] = str(getattr(agent, "prompt_channel", "") or "")
     remembers = bool(getattr(agent, "remembers", False))
     sid = session_id if isinstance(session_id, str) and session_id else None
-    rec["session"] = {"id": sid, "remembers": remembers, "resumes": bool(remembers and sid),
-                      "turns": int(turns or 0)}
+    resume = getattr(agent, "resume", True) is not False
+    rec["session"] = {"id": sid, "remembers": remembers,
+                      "resumes": bool(remembers and sid and resume),
+                      "turns": int(turns or 0),
+                      # Phase M17: off, every turn starts fresh.
+                      "resume": bool(resume)}
     timeouts = {"idle_s": float(getattr(agent, "idle_timeout_s", 0) or 0)}
     warm = getattr(agent, "keep_warm_s", None)
     if isinstance(warm, (int, float)) and not isinstance(warm, bool):
@@ -346,10 +353,12 @@ def record_for(agent, *, session_id=None, turns: int = 0, busy: bool = False,
 
 def _own_error(e: Exception) -> str:
     """An adapter's refusal to build a line, when the words are its own (a
-    ConfigUnaccounted is written in this repo); otherwise only the class."""
+    ConfigUnaccounted, or since M17 a LaunchRefused, which names a flag and
+    never its value); otherwise only the class."""
     try:
         from adapters.codex import ConfigUnaccounted
-        if isinstance(e, ConfigUnaccounted):
+        from launch_extras import LaunchRefused
+        if isinstance(e, (ConfigUnaccounted, LaunchRefused)):
             from speech_text import safe_for_terminal
             return safe_for_terminal(str(e))[:400]
     except Exception:                   # noqa: BLE001
