@@ -66,7 +66,8 @@ def clips(names: list[str], stop: str):
 
 def tally(results: list[dict], names: list[str], stop: str) -> dict:
     """Per name: tries, hits, which path caught each; and false wakes."""
-    per = {n: {"tries": 0, "hits": 0, "spotter": 0, "second check": 0, "other": 0}
+    per = {n: {"tries": 0, "hits": 0, "spotter": 0, "second check": 0, "confirmed": 0,
+               "other": 0}
            for n in [*names, *([stop] if stop else [])]}
     false = []
     distract = 0
@@ -76,7 +77,8 @@ def tally(results: list[dict], names: list[str], stop: str) -> dict:
             row["tries"] += 1
             if r["woke"] == r["want"]:
                 row["hits"] += 1
-                key = r["how"] if r["how"] in ("spotter", "second check") else "other"
+                key = (r["how"] if r["how"] in ("spotter", "second check", "confirmed")
+                       else "other")
                 row[key] += 1
         else:
             distract += 1
@@ -117,6 +119,9 @@ def first_wake(pipe, chunks) -> tuple[str, str]:
     if getattr(pipe, "_sherpa", None) is not None:
         pipe._sherpa.reset()
     pipe._burst_cutter().clear()
+    forget = getattr(pipe, "forget_wake", None)     # master plan M22
+    if callable(forget):
+        forget()
     pipe.take_near_misses()
     for pcm in chunks:
         if pipe.feed_wake(pcm, frame_db(pcm)):
@@ -182,9 +187,10 @@ def main() -> int:
 
 def _settings(cfg) -> str:
     t = cfg.wake_tuning()
+    both = " · both must agree" if cfg.wake_both_agree() else ""
     return (f"threshold {cfg.get_int('sherpaThresholdPct')}% · boost "
             f"{int(t['short_boost'] * 100)}% · second check "
-            f"{'on, ' + t['engines'] if cfg.get_bool('wakeCrossCheck') else 'off'}")
+            f"{'on, ' + t['engines'] if cfg.get_bool('wakeCrossCheck') else 'off'}{both}")
 
 
 if __name__ == "__main__":

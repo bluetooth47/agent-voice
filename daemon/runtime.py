@@ -324,6 +324,9 @@ DEFAULTS = {
     "sherpaThresholdPct": 15,
     # Vosk + Whisper re-check short bursts sherpa-onnx let pass; crosscheck.py.
     "wakeCrossCheck": True,
+    # Master plan M22: a spotter hit wakes only when the second check names
+    # the same agent. Off is the old behaviour (either stage can wake).
+    "wakeBothAgree": False,
     # The Advanced wake settings: everything tuned by hand to get "theo"
     # waking, each one a setting now. See Config.wake_tuning().
     "shortNameBoostPct": 150,
@@ -515,6 +518,7 @@ TOML_ALIASES = {
     "owwThresholdPct": ("wake", "oww_threshold_pct"),
     "sherpaThresholdPct": ("wake", "sherpa_threshold_pct"),
     "wakeCrossCheck": ("wake", "cross_check"),
+    "wakeBothAgree": ("wake", "both_agree"),
     "shortNameBoostPct": ("wake", "short_name_boost_pct"),
     "crossCheckMinMs": ("wake", "cross_check_min_ms"),
     "crossCheckMaxMs": ("wake", "cross_check_max_ms"),
@@ -850,6 +854,24 @@ class Config:
                 "engines": engines if engines in ("both", "whisper", "vosk") else "both",
                 "trailing": clamp("crossCheckTrailingWords", 0, 6),
                 "whisper_hint": self.get_bool("crossCheckWhisperHint")}
+
+    def wake_both_agree(self) -> bool:
+        """Master plan M22: whether a wake needs both stages to agree.
+
+        True only for a plain true (or "true"/"yes"/"on"/"1" from a hand
+        edit). Anything else -- a number, a list, a typo, settings that
+        cannot be read -- is false, today's behaviour, as Appendix A of the
+        plan fixes it. Read on every apply(), so the choice lands on the next
+        frame with no rebuild.
+        """
+        if not self.settings_readable():
+            return False
+        value = self["wakeBothAgree"]
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return False
 
     def agents(self) -> list[dict]:
         """The extra agents, each woken by its own name, cleaned up.

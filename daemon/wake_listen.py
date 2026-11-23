@@ -445,6 +445,25 @@ class SherpaWake:
         return self.last_hit
 
 
+def _both_agree(cfg) -> bool:
+    """wakeBothAgree through Config.wake_both_agree (master plan M22), or
+    read plainly from a stand-in without it; false when it cannot be read."""
+    read = getattr(cfg, "wake_both_agree", None)
+    try:
+        if callable(read):
+            return bool(read())
+        return cfg.get_bool("wakeBothAgree") is True
+    except Exception:           # noqa: BLE001 -- unreadable is today's behaviour
+        return False
+
+
+#: How long the HUD says a name was heard and not confirmed (master plan M22).
+WAKE_NOTE_S = 4.0
+#: A held wake older than this, by the clock, is dropped rather than decided:
+#: frames it was waiting for went elsewhere (a deaf window, a capture).
+HOLD_STALE_S = 3.0
+
+
 def wanted_names(cfg) -> list[str]:
     """The extra agents' names, in the order they were added.
 
@@ -502,6 +521,15 @@ class Pipeline:
         self.cc_engines = tuning.get("engines", "both")
         self.cc_trailing = tuning.get("trailing", crosscheck.MAX_TRAILING_WORDS)
         self.cc_hint = tuning.get("whisper_hint", True)
+        # Master plan M22: which stages must agree before a wake counts
+        # (crosscheck.decision). Plain attributes, like the threshold: a
+        # different rule needs no different model, so it lands on the next
+        # frame. A hold made under the old rule is not one under the new.
+        decision = crosscheck.decision(self.cross_check, _both_agree(cfg))
+        if decision != getattr(self, "decision", None):
+            self._agreement().clear()
+        self.decision = decision
+        self._chosen_engine = engine
         #: "full stop" spotted in every frame (sherpa-onnx only).
         self.stop_keyword = (cfg.get_bool("fullStopAnytime")
                              if hasattr(cfg, "wake_tuning") else False)
@@ -582,6 +610,9 @@ class Pipeline:
             cutter = self._burst_cutter()
             cutter.min_ms = tuning["burst_min_ms"]
             cutter.max_ms = tuning["burst_max_ms"]
+        # Master plan M22: whether "both must agree" can run with the engine
+        # just built, said in the journal when that changes.
+        self.reconcile_decision()
         # Changing the transcription model used to be a silent no-op: it was
         # built once in __init__ and never consulted again, so the setting
         # appeared to do nothing until the service restarted.
@@ -905,6 +936,10 @@ class Pipeline:
         # reset() does not fully clear them -- measured: feeding an unrelated
         # clip straight after a positive one still fired. A refractory window
         # is the reliable guard.
+        #
+        # Master plan M22: frames a held wake kept for its capture are taken
+        # straight after the frame that woke it, or never.
+        self.carried = []
         if time.time() < self._refractory_until:
             return False
 
@@ -935,12 +970,19 @@ class Pipeline:
         # stream, and it was measured that way (FINDINGS §23).
         if getattr(self, "_sherpa", None) is not None:
             hit = self._sherpa.feed(pcm)
+            # Master plan M22: "both must agree" holds a name until the
+            # second check names the same agent. Never "full stop", which
+            # keeps its own immediate path below in every mode.
+            if getattr(self, "decision", "") == "both" and hit != STOP_PHRASE:
+                return self._both(pcm, level_db, hit)
             if hit:
                 self._refractory_until = time.time() + self.refractory_ms / 1000.0
                 self.heard_phrase = hit
                 self.wake_how = "spotter"
                 # The caller tells "full stop" apart by heard_phrase.
                 self._burst_cutter().clear()
+                if getattr(self, "_agree", None) is not None:
+                    self._agree.clear()             # M22: nothing held survives it
                 return True
             if getattr(self, "cross_check", False):
                 return self._second_check(pcm, level_db)
@@ -949,6 +991,12 @@ class Pipeline:
         if self._oww is not None:
             if self._oww.feed(pcm):
                 self._refractory_until = time.time() + self.refractory_ms / 1000.0
+                if getattr(self, "decision", "") == "both":
+                    # M22: no second check exists here, so a wake is held
+                    # closed rather than taken on one stage. The refractory
+                    # above stops one phrase being counted five times.
+                    self._held(self.phrase, self.decision_why() or "no second check")
+                    return False
                 self.heard_phrase = self.phrase
                 self.wake_how = "openwakeword"
                 return True
@@ -1013,6 +1061,10 @@ class Pipeline:
         self._reset_wake()
         self._loud_frames = 0
         self._refractory_until = time.time() + self.refractory_ms / 1000.0
+        if getattr(self, "decision", "") == "both":
+            # M22: the grammar engine has no second check either.
+            self._held(matched, self.decision_why() or "no second check")
+            return False
         self.heard_phrase = matched
         self.wake_how = "vosk"
         return True
@@ -1084,27 +1136,14 @@ class Pipeline:
         audio = self._burst_cutter().feed(pcm, level_db >= self.wake_gate_db)
         if audio is None:
             return False
-        names = [self.phrase, *self.names]
-        mode = getattr(self, "cc_engines", "both")
-        t0 = time.perf_counter()
-        vosk, has_vote = ("", set()) if mode == "whisper" else self._vosk_vote(audio, names)
-        # Whisper costs about a second, so it is skipped when its vote
-        # cannot change the answer: Vosk alone decides, or both must agree
-        # and Vosk heard nothing it could have heard.
-        if mode == "vosk" or (mode == "both" and not vosk and set(names) <= has_vote):
-            text = ""
-            if mode == "both":
-                return False
-        else:
-            try:
-                text = self._whisper_names(audio, names)
-            except Exception as e:
-                print(f"  {YEL}second check failed: {type(e).__name__}: {e}{OFF}")
-                return False
-        name, why = crosscheck.decide(names, has_vote, vosk, text, mode=mode,
-                                      trailing=getattr(self, "cc_trailing",
-                                                       crosscheck.MAX_TRAILING_WORDS))
-        ms = (time.perf_counter() - t0) * 1000
+        try:
+            verdict = self._ask(audio)
+        except Exception as e:
+            print(f"  {YEL}second check failed: {type(e).__name__}: {e}{OFF}")
+            return False
+        if verdict is None:
+            return False
+        name, why, text, ms = verdict
         heard = (f" — whisper heard \"{safe_for_terminal(text.strip())}\""
                  if speech_is_logged(getattr(self, "_log_speech", False)) else "")
         if not name:
@@ -1123,6 +1162,235 @@ class Pipeline:
         self.heard_phrase = name
         self.wake_how = "second check"
         self._sherpa.reset()
+        return True
+
+    def _ask(self, audio: bytes) -> tuple[str, str, str, float] | None:
+        """The second check's verdict on one burst: (name or "", why, what
+        Whisper wrote, ms), or None when it has nothing to say -- Vosk heard
+        no name it could have heard, so Whisper was not asked. Raises when
+        Whisper fails; the callers say so and wake nobody."""
+        names = [self.phrase, *self.names]
+        mode = getattr(self, "cc_engines", "both")
+        t0 = time.perf_counter()
+        vosk, has_vote = ("", set()) if mode == "whisper" else self._vosk_vote(audio, names)
+        # Whisper costs about a second, so it is skipped when its vote
+        # cannot change the answer: Vosk alone decides, or both must agree
+        # and Vosk heard nothing it could have heard.
+        if mode == "vosk" or (mode == "both" and not vosk and set(names) <= has_vote):
+            text = ""
+            if mode == "both":
+                return None
+        else:
+            text = self._whisper_names(audio, names)
+        name, why = crosscheck.decide(names, has_vote, vosk, text, mode=mode,
+                                      trailing=getattr(self, "cc_trailing",
+                                                       crosscheck.MAX_TRAILING_WORDS))
+        return name, why, text, (time.perf_counter() - t0) * 1000
+
+    # --- "both must agree" (master plan M22) ----------------------------------
+
+    def _agreement(self) -> crosscheck.Agreement:
+        if getattr(self, "_agree", None) is None:
+            self._agree = crosscheck.Agreement(
+                crosscheck.CONFIRM_TAIL_FRAMES,
+                max(1, crosscheck.AGREE_WINDOW_MS // CHUNK_MS))
+        return self._agree
+
+    def _both(self, pcm: bytes, level_db: float, hit: str) -> bool:
+        """One frame on sherpa-onnx when both stages must agree.
+
+        A spotter hit is held -- for at most the agreement's tail, less if
+        the burst ends first -- and the second check is then asked about the
+        speech up to it. The same name wakes; anything else is "held, then
+        dropped". A burst the spotter stayed silent on still goes to the
+        second check, and a name it hears waits a moment for a late spotter.
+        When the second stage cannot run at all, nothing wakes, and each
+        name heard says why (decision_why): never one stage alone.
+        """
+        agree = self._agreement()
+        cutter = self._burst_cutter()
+        blocked = self.decision_why()
+        if blocked:
+            agree.clear()
+            cutter.clear()
+            if hit:
+                self._held(hit, blocked)
+            return False
+        held = agree.pending
+        if held is not None and time.time() - held.get("at", time.time()) > HOLD_STALE_S:
+            # The frames it waited for went somewhere else -- a deaf window
+            # after a reply, a capture -- so this burst is not one burst.
+            self._held(agree.take()["name"], "interrupted before the second check")
+            cutter.clear()
+        audio = cutter.feed(pcm, level_db >= self.wake_gate_db)
+        if agree.waiting_on_check():
+            if agree.frame(pcm) == "due" or audio is not None:
+                return self._confirm(agree.take(), audio)
+            return False
+        if hit:
+            if agree.check_vote(hit):
+                # The second check named it first; the spotter agrees now.
+                vote = agree.take()
+                return self._agreed(hit, vote["frames"] + [pcm], vote.get("why", ""),
+                                    vote.get("ms", 0.0))
+            if agree.pending is not None:
+                self._held(agree.take()["name"], "the spotter heard another name")
+            agree.hold("spotter", hit)
+            agree.pending["at"] = time.time()
+            if agree.tail == 0 or audio is not None:
+                return self._confirm(agree.take(), audio)
+            return False
+        if agree.pending is not None and agree.frame(pcm) == "expired":
+            self._held(agree.take()["name"], "the spotter did not hear it")
+        if audio is None:
+            return False
+        try:
+            verdict = self._ask(audio)
+        except Exception as e:
+            print(f"  {YEL}second check failed: {type(e).__name__}: {e}{OFF}")
+            return False
+        if verdict is None:
+            return False
+        name, why, text, ms = verdict
+        if not name:
+            # As with either stage: a name heard and turned down is a false
+            # wake the second check stopped, and plain talk is nothing.
+            print(f"  {DIM}(second check: no wake — {why}, {ms:.0f}ms){OFF}", flush=True)
+            if why:
+                self._near(f"second check: {why}")
+                self._rejected("second-check")
+            return False
+        if agree.pending is not None:
+            self._held(agree.take()["name"], "the second check heard another name")
+        print(f"  {DIM}(second check: {name} by {why}, {ms:.0f}ms — waiting for "
+              f"the spotter){OFF}", flush=True)
+        agree.hold("check", name)
+        agree.pending.update(at=time.time(), why=why, ms=ms)
+        return False
+
+    def _confirm(self, held: dict, audio: bytes | None) -> bool:
+        """Ask the second check about a held spotter hit: the burst that just
+        ended, or the speech so far when the hit's tail ran out first."""
+        name = held["name"]
+        cutter = self._burst_cutter()
+        if audio is None:
+            audio = cutter.take()
+        cutter.clear()
+        if audio is None:
+            self._held(name, "too short, or inside a sentence, for the second check")
+            return False
+        try:
+            verdict = self._ask(audio)
+        except Exception as e:
+            print(f"  {YEL}second check failed: {type(e).__name__}: {e}{OFF}")
+            self._held(name, "the second check failed")
+            return False
+        if verdict is None:
+            self._held(name, "the second check did not hear it (vosk heard no name)")
+            return False
+        said, why, _text, ms = verdict
+        if said == name:
+            return self._agreed(name, held["frames"], why, ms)
+        self._held(name, f"the second check heard another name ({ms:.0f}ms)" if said
+                   else f"the second check did not hear it ({why or 'no name'}, {ms:.0f}ms)")
+        return False
+
+    def _agreed(self, name: str, frames: list[bytes], why: str, ms: float) -> bool:
+        """Both stages named `name`: wake, carrying what was said meanwhile."""
+        print(f"  {DIM}(both agree: {name} — spotter and second check"
+              f"{' by ' + why if why else ''}, {ms:.0f}ms){OFF}", flush=True)
+        self._refractory_until = time.time() + self.refractory_ms / 1000.0
+        self.heard_phrase = name
+        self.wake_how = "confirmed"
+        self.carried = list(frames)
+        self._burst_cutter().clear()
+        if getattr(self, "_sherpa", None) is not None:
+            self._sherpa.reset()
+        return True
+
+    def _held(self, name: str, why: str) -> None:
+        """A name one stage heard and the other did not confirm: "held, then
+        dropped", counted, noted for the HUD (take_held), and said in the
+        journal. The name is a configured wake name; never what was said."""
+        print(f"  {DIM}(heard {name}, not confirmed — {why}){OFF}", flush=True)
+        self._near(f"not confirmed: {why}")
+        self._rejected("held")
+        held = getattr(self, "held_names", None)
+        if held is None:
+            held = self.held_names = collections.deque(maxlen=8)
+        held.append(name)
+
+    def take_held(self) -> list[str]:
+        """Names heard and not confirmed since the last call, for the HUD."""
+        held = getattr(self, "held_names", None)
+        out = list(held) if held else []
+        if held:
+            held.clear()
+        return out
+
+    def take_carried(self) -> list[bytes]:
+        """Frames a held wake kept for its capture, once (see _agreed)."""
+        carried, self.carried = getattr(self, "carried", None) or [], []
+        return carried
+
+    def forget_wake(self) -> None:
+        """Drop a held wake and the burst under way. Called for every frame
+        the run loop discards while locked or muted: a name said before the
+        lock must not be joined to speech after it."""
+        if getattr(self, "_agree", None) is not None:
+            self._agree.clear()
+        if getattr(self, "_bursts", None) is not None:
+            self._bursts.clear()
+        self.carried = []
+
+    def decision_why(self) -> str:
+        """Why "both must agree" cannot run now, or "" (reconcile_decision)."""
+        field = getattr(self, "_decision_field", None)
+        if field is None:
+            self.reconcile_decision()
+            field = getattr(self, "_decision_field", None) or {}
+        return str(field.get("why", ""))
+
+    def decision_field(self) -> dict:
+        """`wake_decision` for the state file: the mode, whether wakes are held
+        closed, and why "both must agree" cannot run ("" when it can)."""
+        field = getattr(self, "_decision_field", None)
+        if field is None:
+            self.reconcile_decision()
+            field = getattr(self, "_decision_field", None) or {}
+        return dict(field)
+
+    def reconcile_decision(self) -> bool:
+        """Work out again whether "both must agree" can run, say so in the
+        journal when that changes, and True if the state file's field did.
+
+        Called from apply() and from the idle poll outside the config guard:
+        the Vosk model arriving on disk changes the answer with no setting
+        touched (CLAUDE.md, "anything read from a file").
+        """
+        engines = getattr(self, "cc_engines", "both")
+        cross = bool(getattr(self, "cross_check", False))
+        engine = getattr(self, "engine", "vosk")
+        vosk_ok = True
+        if engine == "sherpa" and cross and engines == "vosk":
+            vosk_ok = vosk_model() is not None
+        code = crosscheck.both_blocker(engine, cross, engines, vosk_ok,
+                                       getattr(self, "_chosen_engine", engine) == "sherpa")
+        why = crosscheck.BLOCKERS.get(code, "")
+        mode = getattr(self, "decision", "either")
+        field = {"mode": mode, "closed": mode == "both" and bool(code),
+                 "blocked": code, "why": why}
+        if field == getattr(self, "_decision_field", None):
+            return False
+        self._decision_field = field
+        if field["closed"]:
+            print(f"  {YEL}wakes held closed: both stages must agree, and {why}{OFF}",
+                  flush=True)
+        else:
+            said = {"first": "the first listener alone",
+                    "either": "either stage can wake",
+                    "both": "both stages must agree"}.get(mode, mode)
+            print(f"  {DIM}wake decision: {said}{OFF}", flush=True)
         return True
 
     def _vosk_vote(self, audio: bytes, names: list[str]) -> tuple[str, set[str]]:
@@ -2157,6 +2425,10 @@ class Daemon:
             test.on_near(why)
         # Master plan M21: a wake test is not the Overview's business.
         drop = getattr(self.pipe, "take_rejections", None)
+        if callable(drop):
+            drop()
+        # Nor the HUD's (master plan M22): its near misses already say it.
+        drop = getattr(self.pipe, "take_held", None)
         if callable(drop):
             drop()
         test.tick()
@@ -3209,6 +3481,11 @@ class Daemon:
         # agent answers again, and today's limit count rolls over at midnight.
         if self.expire_notices():
             self._recompose()
+        # Master plan M22: whether "both must agree" can run is asked again
+        # outside the guard (a Vosk model arriving on disk is not a setting
+        # change). The HUD note's expiry is polled above the gate, with the
+        # readout's.
+        self.reconcile_decision()
         if self.limit_hits_rolled():
             self.publish_agent()
         # Master plan M21: the memory figures, every SERVICE_SAMPLE_S.
@@ -3224,7 +3501,25 @@ class Daemon:
         # The names the wake engine can hear may have changed with it.
         self.reconcile_crew()
         self.reconcile_parts()
+        self.reconcile_decision()       # master plan M22
         print(f"  {CYA}knobs updated{OFF}")
+
+    def reconcile_decision(self) -> None:
+        """Master plan M22: ask the pipeline whether "both must agree" can
+        run, and publish `wake_decision` when what the page would show
+        changed -- a setting, an engine falling back, a model arriving."""
+        reconcile = getattr(self.pipe, "reconcile_decision", None)
+        if callable(reconcile):
+            try:
+                reconcile()
+            except Exception:           # noqa: BLE001 -- a readout, not the loop
+                return
+        field = self.decision_field()
+        # Only a field that says something, and differs from the one last
+        # published (crew_fields records it): every other publish carries
+        # it already.
+        if field and field != getattr(self, "_decision_shown", None):
+            self.publish_agent()
 
     def catch_up(self) -> None:
         """The part of refresh() that decides what each agent is and is told,
@@ -4267,6 +4562,7 @@ class Daemon:
             if fired:
                 print(f"  {GRN}● wake{OFF}  {DIM}stopping — go ahead{OFF}",
                       flush=True)
+                self._woke_carried = self.take_carried()    # master plan M22
                 self._woke = True
                 self._interrupt.set()
                 if self.agent:
@@ -4330,6 +4626,60 @@ class Daemon:
         if fired and not self.heard_full_stop():
             how = str(getattr(pipe, "wake_how", "") or "").replace(" ", "-")
             self.keep_stat(stats.record_wake, how)
+        # Master plan M22: a name heard and not confirmed is said on the HUD,
+        # so a wake that got harder to trigger does not feel like a dead mic.
+        held = getattr(pipe, "take_held", None)
+        names = held() if callable(held) else []
+        if names:
+            self.note_held(names[-1])
+
+    def note_held(self, name: str) -> None:
+        """"Theo: heard, not confirmed" on the HUD for WAKE_NOTE_S (master
+        plan M22). The agent's label, never what was said; composed in
+        _compose after the lock check, so a lock takes it off the screen."""
+        p = next((q for q in getattr(self, "crew", {}).values() if q.name == name), None)
+        if p is None and name == getattr(self.pipe, "phrase", None):
+            p = getattr(self, "_main", None)
+        label = (getattr(p, "label", "") if p is not None else "") or name.title()
+        self._wake_note = (f"{label}: heard, not confirmed", time.time() + WAKE_NOTE_S)
+        if getattr(self, "_mic_shown", None) is not None:
+            self._recompose()
+
+    def wake_note_line(self) -> str:
+        """The HUD note while it lasts, else "" (see note_held)."""
+        note = getattr(self, "_wake_note", None)
+        if not note:
+            return ""
+        if time.time() >= note[1]:
+            self._wake_note = None
+            return ""
+        return note[0]
+
+    def expire_wake_note(self) -> bool:
+        """Clear the note once its time is up; True if it went (refresh)."""
+        note = getattr(self, "_wake_note", None)
+        if note and time.time() >= note[1]:
+            self._wake_note = None
+            return True
+        return False
+
+    def take_carried(self) -> list[bytes]:
+        """What a held wake kept for its capture (master plan M22)."""
+        take = getattr(self.pipe, "take_carried", None)
+        return take() if callable(take) else []
+
+    def carry_into(self, frames: list[bytes], buf: bytes, cap, utt) -> tuple[bytes, bool]:
+        """Feed a held wake's frames to the capture it opened, as they would
+        have been fed with the spotter alone (master plan M22). Judged against
+        the gate only: they were recorded before the wake chime voiced()
+        allows for. Returns the buffer and whether any of them was speech."""
+        heard = False
+        for early in frames:
+            buf += early
+            voiced = frame_db(early) >= self.pipe.threshold_db
+            heard = heard or voiced
+            self.hear(cap, utt, early, voiced)
+        return buf, heard
 
     def count_turn(self, persona, clock: dict, typed: bool) -> None:
         """One finished turn for the Overview: who, how it opened, and the
@@ -5927,7 +6277,25 @@ class Daemon:
                 # Conversation page says so beside the longest-turn slider.
                 "limit_hits": self.limit_field(),
                 # Master plan M21: uptime and memory, for the Overview.
-                "service": self.service_field()}
+                "service": self.service_field(),
+                # Master plan M22: which stages must agree, whether wakes are
+                # held closed, and why "both must agree" cannot run.
+                "wake_decision": self._shown_decision()}
+
+    def _shown_decision(self) -> dict:
+        """decision_field(), noted as the one published (reconcile_decision)."""
+        field = self.decision_field()
+        self._decision_shown = field
+        return field
+
+    def decision_field(self) -> dict:
+        """`wake_decision` for the state file (Pipeline.decision_field), or
+        {} from a pipeline that does not say."""
+        field = getattr(self.pipe, "decision_field", None)
+        try:
+            return field() if callable(field) else {}
+        except Exception:               # noqa: BLE001 -- a readout, not a guard
+            return {}
 
     def panel_agents(self, payload: dict) -> list[dict]:
         """Every agent as agents_panel.py draws it, from the payload just
@@ -6056,8 +6424,13 @@ class Daemon:
         # the HUD's extra line. Here rather than in the sticky fields so that
         # a lock, above, takes it off the screen with everything else.
         notices = getattr(self, "_notices", None)
-        if notices:
-            extra = {**extra, "notice": " · ".join(n[0] for n in notices.values())}
+        lines = [n[0] for n in notices.values()] if notices else []
+        # Master plan M22: "heard, not confirmed", for a few seconds.
+        note = self.wake_note_line()
+        if note:
+            lines.append(note)
+        if lines:
+            extra = {**extra, "notice": " · ".join(lines)}
         fields = self.collab.fields()
         if fields["tasks"] or fields["collab"]:
             extra = {**extra, **fields}
@@ -6576,6 +6949,10 @@ class Daemon:
                     # does not keep the last exchange on screen for hours
                     # (Codex review of M3; it was in refresh(), below).
                     self.expire_readout()
+                    # Master plan M22: "heard, not confirmed" ends on time,
+                    # here for the readout's reason.
+                    if self.expire_wake_note():
+                        self._recompose()
 
                 if crew:
                     # Every way out of a capture lands in "wake"; releasing
@@ -6607,6 +6984,11 @@ class Daemon:
                 # discarded here, before it is measured, fed to the wake
                 # word, or buffered.
                 if not self.listening:
+                    # Master plan M22: a wake held for the second check, and
+                    # the burst it belongs to, go with everything else.
+                    forget = getattr(self.pipe, "forget_wake", None)
+                    if callable(forget):
+                        forget()
                     # And a capture already underway is abandoned rather than
                     # suspended. Leaving the phase alone looked harmless --
                     # frames stop arriving -- but `buf` keeps whatever was
@@ -6811,7 +7193,10 @@ class Daemon:
                         else:
                             self.chime("wake", "wake word")
                         woke_at = last_voice = spoke_at = time.time()
-                        heard = False
+                        # Master plan M22: what was said while both stages
+                        # were asked belongs to this capture. Nothing in any
+                        # other mode.
+                        buf, heard = self.carry_into(self.take_carried(), buf, cap, utt)
                         active_lead_in = self.pipe.lead_in_ms
                         last = _empty_turn()
                         shown_partial = ""
@@ -7163,7 +7548,9 @@ class Daemon:
                     else:
                         self.chime("wake", "the wake word stopped the reply")
                     woke_at = last_voice = spoke_at = time.time()
-                    heard = False
+                    # Master plan M22, as in the wake branch.
+                    carried, self._woke_carried = getattr(self, "_woke_carried", None) or [], []
+                    buf, heard = self.carry_into(carried, buf, cap, utt)
                     active_lead_in = self.pipe.lead_in_ms
                     capture_kind = "wake"
                     last = _empty_turn()

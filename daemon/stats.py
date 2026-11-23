@@ -35,7 +35,12 @@ The definitions, fixed here so each number means one thing:
 - **false wakes** (`rejected["second-check"]`) are bursts the second check
   heard a name in and turned down -- exactly that, not every wake that did
   not happen. `rejected["confidence"]` is the grammar engine matching the
-  phrase below the confidence bar.
+  phrase below the confidence bar;
+- **confirmed by the second check** (`wakes["confirmed"]`, master plan M22)
+  are wakes both stages agreed on, with "both must agree" chosen; **held,
+  then dropped** (`rejected["held"]`) are names one stage heard and the
+  other did not confirm -- including every name heard while wakes are held
+  closed because the second stage cannot run.
 
 Nothing here may fail a turn: every writer catches everything and returns
 False, and an unreadable day file is set aside and started again.
@@ -74,9 +79,12 @@ MAX_AGENTS = 64
 #: barge-in are all "followup": no wake word was said for them.
 TURN_KINDS = ("wake", "followup", "talk", "typed", "task")
 #: Which engine accepted a wake (Pipeline.wake_how).
-WAKE_HOWS = ("spotter", "openwakeword", "vosk", "second-check", "other")
+#: "confirmed" is a wake both stages agreed on (wakeBothAgree, master plan M22).
+WAKE_HOWS = ("spotter", "openwakeword", "vosk", "second-check", "confirmed", "other")
 #: Which stage turned a wake down.
-REJECT_STAGES = ("second-check", "confidence")
+#: "held" is a name one stage heard and the other did not confirm in time
+#: (wakeBothAgree, master plan M22): held, then dropped.
+REJECT_STAGES = ("second-check", "confidence", "held")
 #: The waits, each a histogram in milliseconds.
 TIMINGS = ("wake_to_reply", "transcribe", "reply")
 #: Bucket edges in ms: bucket 0 is [0, 50), bucket i is [EDGES[i-1],
@@ -653,9 +661,11 @@ def text(s: dict) -> str:
         lines.append(f"{label}: {part['turn_count']} turns"
                      + (" (" + ", ".join(f"{a} {n}" for a, n in sorted(part["turns"].items())) + ")"
                         if part["turns"] else ""))
-        lines.append(f"  wakes {part['wakes']}, turned down {part['rejected']} "
+        lines.append(f"  wakes {part['wakes']} (confirmed by the second check "
+                     f"{part['wakes_by']['confirmed']}), turned down {part['rejected']} "
                      f"(second check {part['rejected_by']['second-check']}, "
-                     f"confidence {part['rejected_by']['confidence']}), "
+                     f"confidence {part['rejected_by']['confidence']}, "
+                     f"held, then dropped {part['rejected_by']['held']}), "
                      f"cut at the limit {part['limit_hits']}")
         for name, label2 in (("wake_to_reply", "wake to first word"),
                              ("transcribe", "transcription"), ("reply", "reply after you stop")):

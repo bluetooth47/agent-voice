@@ -189,7 +189,11 @@ def test_auto_tally():
     ]
     t = wake_auto.tally(rows, ["theo", "sora"], "")
     assert t["names"]["theo"] == {"tries": 4, "hits": 2, "spotter": 1,
-                                  "second check": 1, "other": 0}
+                                  "second check": 1, "confirmed": 0, "other": 0}
+    # Master plan M22: a wake both stages agreed on has its own column.
+    both = wake_auto.tally([{"text": "Theo.", "want": "theo", "woke": "theo",
+                             "how": "confirmed", "voice": "amy"}], ["theo"], "")
+    assert both["names"]["theo"]["confirmed"] == 1 and both["names"]["theo"]["other"] == 0
     assert t["names"]["sora"]["tries"] == 0
     assert t["false"] == ["“Video” (amy) woke theo"] and t["distractors"] == 2
 

@@ -323,10 +323,17 @@ Column {
                                     + (page.part.rejected_by["second-check"] === 1 ? " false wake" : " false wakes")
                                     + " (second check)"
                                     + (page.part.rejected_by.confidence ? " · " + page.part.rejected_by.confidence
-                                                                          + " unsure" : ""))
+                                                                          + " unsure" : "")
+                                    // Master plan M22: with both stages made to agree.
+                                    + (page.part.rejected_by.held ? " · " + page.part.rejected_by.held
+                                                                    + " held" : ""))
         tooltip: "A false wake here is a burst in which a name was heard and the second check " +
                  "turned it down -- exactly that, not every wake that did not happen. \"Unsure\" " +
-                 "is the grammar engine hearing the phrase below the confidence bar." +
+                 "is the grammar engine hearing the phrase below the confidence bar. \"Held\" " +
+                 "is a name one stage heard and the other did not confirm, with both stages made " +
+                 "to agree (Listening)." +
+                 (page.part && page.part.wakes_by && page.part.wakes_by.confirmed
+                  ? " " + page.part.wakes_by.confirmed + " confirmed by the second check." : "") +
                  (page.part && page.part.limit_hits ? " " + page.part.limit_hits +
                   (page.part.limit_hits === 1 ? " turn was" : " turns were") + " cut at the longest-turn limit." : "")
         tone: page.part && page.part.rejected > 0 ? "busy" : "active"

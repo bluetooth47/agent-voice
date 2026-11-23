@@ -150,7 +150,18 @@ This file is the entry point (`main()`), and its structure is:
 
   An optional personal **verifier** (`verifier.py`) and a **cross-check**
   (`crosscheck.py`: Vosk + Whisper must both hear the same name) sit on top
-  of the engine.
+  of the engine. Since M22 there are three wake decisions
+  (`crosscheck.decision`): **first only** (the spotter alone), **either
+  stage** (a spotter hit wakes at once and the second check rescues a short
+  burst it missed: the default) and **both must agree** (`wakeBothAgree`: a
+  spotter hit is held, `crosscheck.Agreement`, while the second check hears
+  the burst up to it, and wakes only on the same name; the frames said
+  meanwhile are carried into the capture). When the second stage cannot run
+  (`crosscheck.both_blocker`: openWakeWord, Vosk, a sherpa-onnx that fell
+  back, the check switched off, a Vosk-only check with no Vosk model) wakes
+  are held closed and the state file's `wake_decision` says why; nothing
+  falls back to one stage. "Full stop" keeps its immediate path in every
+  mode, and a lock or mute drops a held wake (`Pipeline.forget_wake`).
 - **`Pipeline`** owns the models: wake engine, Whisper (faster-whisper) for
   transcription, and Vosk partials. `Pipeline.apply()` *reconciles* them
   against config: it compares a spec and rebuilds only when that spec
@@ -203,7 +214,12 @@ This file is the entry point (`main()`), and its structure is:
   today, last}`: turns cut at `maxUtteranceMs` today, kept across a daemon
   restart through the old state file); and when a rebuild ended a
   conversation every publish but a locked one carries `notice` (why; the
-  HUD's extra line, until that agent's next turn). Since M3 a turn with no
+  HUD's extra line, until that agent's next turn). Since M22 `notice` also
+  carries "NAME: heard, not confirmed" for four seconds when both stages
+  must agree and one did not, and the sticky fields carry `wake_decision`
+  (`{mode: first | either | both, closed, blocked, why}`: `blocked` is a
+  `crosscheck.BLOCKERS` code saying why "both must agree" cannot run now,
+  whatever is chosen; `closed` that it is chosen anyway). Since M3 a turn with no
   answer yet carries `last_reply` (the answer before it, for the readout's
   top line), and the Display page's Preview publishes four seconds of a
   sample `speaking` payload with `preview: true` (`agentvoice
@@ -274,7 +290,7 @@ This file is the entry point (`main()`), and its structure is:
 | `chat_names.py` | M19: names and summaries. `mode()` (owner only with saving on and readable settings), `due()` / `pick()` (quiet `IDLE_S` 120 s, used within `FRESH_S` a day, `named_for` != `updated`), `Budget` (`PER_HOUR` 10, seeded from the index's `named_at`), `refusal()` (off, locked or undetermined, unreadable crew settings, quarantined owner, owner gone, no program, a different program from the chat's, a backend `try_it.backend_refusal` refuses, busy), `prompt()` (fenced, first exchange plus the newest, `TRANSCRIPT_MAX` 6000), `parse()` / `clean()` (control and format characters out, caps 60 / 160), `make_side()` (level ask, `no_tools`, `ephemeral`, no parts or instructions, not spoken). The daemon's half is `Daemon.name_chats` (the idle poll, below the listening gate, every `LOOK_EVERY_S`) and `_name_one` (a thread; journal gets seconds and lengths). |
 | `eager.py` | Transcribes at pauses while the person is still talking. |
 | `barge.py`, `headset.py` | Barge-in: VAD plus an echo-calibrated gate; only works on a headset. |
-| `crosscheck.py` | Vosk + Whisper must both hear the wake name. |
+| `crosscheck.py` | Vosk + Whisper must both hear the wake name; M22: the three wake decisions, why "both must agree" cannot run (`BLOCKERS`), and the hold (`Agreement`). |
 | `noise_floor.py` | Adaptive gate: room floor median + `gateMarginDb`. |
 | `narration.py` | "Progress talk": fixed-table sentences from the agent's real tool events. Never model-written. |
 | `chimes.py` | wake / heard / done sounds. |
@@ -446,7 +462,7 @@ Notes and collaboration exist only for Claude Code and Codex
 | `AgentDetailsPage.qml` | One agent's folder (Phase 12). Agents picked by `AgentTabs`, keyed by id, main first (M6). Tabs: Personality & instructions (role, personality, instructions editors, each with a one-line `Hint`, starters while empty and a meter; trait chips that rewrite the managed line through `agents traits apply` and save through the personality editor; ▶ Try it, `agentvoice try` with the draft on stdin; the prompt preview), Tools & skills (M10: **the home of an agent's own tool switches**, through `s.setAgentTool`: the built-in desktop/browser/Omarchy chips; notes and collaboration summarised with a link to the Agents card; "Found on this machine" from `agents catalog`'s `detected`, one As every agent / On / Off per tool with its source, masked command, whether it asks and "told, not enforced" for a CLI; On, or following every agent while that is on, first opens a `ui/ToolConfirm` (what it runs, where it is defined, who gets it) and writes `"on:<fingerprint>"` only from its `onConfirmed`; Rescan; the one-time "off since this version" notice with Turn on and Dismiss; since M11 the skills as lanes of `ui/SkillCard`s in `ui/DropLane`s: this agent's (its own and the ones its program finds by itself, each with a switch written through `s.setAgentSkill`), Communal (a switch for this agent), every other agent's (read only), and Unused, each card of which can be given to this agent or Communal as a checked copy through a `ToolConfirm` whose `onConfirmed` runs `agentvoice skills import`; since M12 every card can be dragged to another lane (Ctrl copies) or sent with its Move to…, all through `skillDropped`: an Agent Voice skill moves or copies through `ui/SkillMover`, one found outside is only ever copied, through the one import confirm; a clash or a skill with a problem is refused with why), Notes, Chats, Advanced (M16: what is running, from `agents runinfo` while the tab is open: the next command line and the last one started, the working directory, the conversation, the timeouts, the MCP servers given apart from those the program said it started, the whole prompt from `agents prompt` in a `PromptPreview` with `concealed` (each piece's text only on Show), the agent's recent structural log lines and Open full log, its recent permission decisions; then open/export folder, remove, trash with restore). Writes settings only through `setAgentTool` and `setAgentSkill`; Advanced writes nothing. |
 | `CommunalPage.qml` | Tabs: Rules & defaults (each editor with its `FileHistory`, and Import… beside Export: M15), Who gets it (M15: one switch per agent into `communalOff`, Start fresh = `chats new ID`, and why communal notes stay reachable), Preview (M15: one agent's whole prompt from `agents prompt`, its adapter's own builder, with each piece's source, precedence and size and the total), Tools (desktop tools, browser and Omarchy skill for every agent, moved from the Agents page in M5; since M10 the tools found on this machine, each "on for every agent" through a `ToolConfirm` into `sharedTools`, Rescan, and "Add a command-line tool by name"), Skills, Notes, Chats (multi-agent conversations). States plainly that rules are text, not enforcement. Writes only those six settings (M14 added `agentvoiceSkill`, M15 `communalOff`). |
 | `CrewMapPage.qml` | M8–M9: who may do what to whom, drawn (Map) or as a table (Table). **Map** (M9): agent boxes that drag (positions in `$XDG_STATE_HOME/agentvoice/crew-layout.json`, fractions of the map, never read by the daemon; none saved: a ring), a `ui/CrewEdge` line per link with an arrow at the agent it reaches (a two-way pair bows apart), a label chip on each line ("A D M P", "?" for ask first; on a crowded map only the selected agent's), drag from an agent's dot onto another to link (allows ask), a red zone to quarantine by dragging into (a `DangerButton` armed by the drop; Cancel puts the box back) and out of to release, and an inspector: a line's abilities, Ask me first, Also allow the reverse, Delete line; an agent's reach, Link to, Quarantine/Release. Keyboard: Tab to boxes and labels, Enter opens, arrows move a box, Delete on a label arms Delete line. **Table** (M8): the "no links yet" banner with **Link everyone as before** (a `DangerButton`), From / To / Allows (`ToggleChips`, disabled with the reason into or out of quarantine) / Ask me first (advisory for Trusted agents) / Delete, Add link, per agent Quarantine (confirm: what it loses) or Release, can reach / reached by, and the effective line. An unreadable list gets a banner and "Start again with no links". **Every edit goes through `commit()`**: trimmed for quarantine, queued, checked by `agentvoice crew check`, and written only by `applyChecked()` (quarantine first) through `writeQuarantine` / `writeLinks`; a refusal empties the queue and says "Not saved: …". "Changed outside Settings at HH:MM" comes from the overlay (`crewOutsideAt`). Its reading of the lists mirrors `crew_links.py`, checked in node. |
-| `ListeningPage.qml` | Wake engine, thresholds, gate, Advanced wake tab. |
+| `ListeningPage.qml` | Wake engine, thresholds, gate, Advanced wake tab. M22: **When a wake counts** (First only / Either stage / Both must agree, one control writing `wakeCrossCheck` and `wakeBothAgree`); Both is refused with the reason when the second stage cannot run, and the daemon's `wake_decision.closed` is said under it. |
 | `VoicePage.qml` | Voice, speed, voice library. |
 | `ChatsPage.qml` | M18: the Chats page. A foldable "Saving and privacy" card (folded once chats are saved, until opened): `saveChats`, `chatRetention`, `keepHistory` (moved from Display, same names), where the chats are and their size (`chats stats --json`, read on open, when the saved count moves and after a delete), and **Delete all saved chats** (a `DangerButton` stating the count and scope; `deleteAllChats()` starts `chats delete --all` from its `onConfirmed` only). M19: **Names and summaries** (`chatSummaries`, Off / By the chat's agent, with the measured cost). Under it `Chats { followSummon: true }`. |
 | `ConversationPage.qml` | Turn timing, follow-up, open mic, narration, barge-in. |
@@ -551,7 +567,8 @@ Current keys, grouped:
 
 - **Wake/listening:** `engine`, `phrase`, `mainName`, `owwModel`,
   `owwThresholdPct`, `sherpaThresholdPct`, `shortNameBoostPct`,
-  `wakeConfidencePct`, `wakeAlsoSounds`, `wakeCrossCheck`, `crossCheck*`,
+  `wakeConfidencePct`, `wakeAlsoSounds`, `wakeCrossCheck`, `wakeBothAgree`,
+  `crossCheck*`,
   `useVerifier`, `micThresholdDb`, `adaptiveGate`, `gateMarginDb`,
   `yieldToRecorders`, `fullStopAnytime`.
 - **Turn timing:** `leadInMs`, `minUtteranceMs`, `maxUtteranceMs`,

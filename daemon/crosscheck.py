@@ -20,6 +20,15 @@ alone, held to the strictest form: the transcript is only the name.
 
 Everything here is pure, so it is tested without a model; wake_listen.py
 owns the engines and calls in.
+
+**Which stages must agree** (master plan M22). With the second check on, a
+spotter hit wakes at once and the second check only rescues what the spotter
+missed, so either stage alone can wake. `wakeBothAgree` adds the third
+choice: a spotter hit is held while the second check listens to the same
+burst, and wakes only if it names the same agent. `decision()` names the
+three, `both_blocker()` says when the third cannot run (and the daemon then
+holds wakes closed rather than fall back to one stage), and `Agreement` is
+the hold itself.
 """
 
 from __future__ import annotations
@@ -196,3 +205,148 @@ class Bursts:
         if self.min_ms <= speech_ms <= self.max_ms:
             return audio
         return None
+
+    def take(self) -> bytes | None:
+        """The burst so far, cut here rather than at its end, and start again.
+
+        For "both must agree" (master plan M22): a spotter hit is confirmed
+        on the speech up to it, so a request said in one breath ("Theo,
+        what's the time") is not lost to the trailing-word rule at its end. The same window applies: less speech than
+        `min_ms` is not enough to judge, and a burst already past `max_ms`
+        is a sentence with a name inside it. None for either, or when no
+        burst has started (a name said below the gate).
+        """
+        speech_ms = self._loud * self.frame_ms
+        audio = b"".join(self._buf) if self._buf else None
+        self.clear()
+        if audio is not None and self.min_ms <= speech_ms <= self.max_ms:
+            return audio
+        return None
+
+
+# --- which stages must agree (master plan M22) ---------------------------------
+
+#: The three wake decisions the Listening page offers, in its order.
+#:   first  -- the first listener alone (second check off);
+#:   either -- a spotter hit wakes at once, and the second check rescues a
+#:             short burst the spotter missed (second check on: the default);
+#:   both   -- a spotter hit is held until the second check names the same
+#:             agent (wakeBothAgree).
+DECISIONS = ("first", "either", "both")
+
+#: Frames a spotter hit waits, at most, before the second check is asked
+#: about the speech up to it (the burst ends sooner if the person pauses).
+#: 0: on the hit's own frame. Measured in FINDINGS §55 against 1 and 2,
+#: which were meant to let a word that only starts like a name ("Theodore",
+#: "Hazelnut") be heard to its end: they stopped no more of those, lost five
+#: more real wakes (one-breath requests ran past the trailing-word rule) and
+#: added 0.2-0.4s. The frames a longer tail waits are carried to the capture.
+CONFIRM_TAIL_FRAMES = 0
+
+#: How long, in ms, a second-check vote waits for a late spotter hit on the
+#: same name. The spotter reports a frame or two after the speech stops,
+#: which is usually before the burst ends; this covers the rest.
+AGREE_WINDOW_MS = 600
+
+
+def decision(cross_check: bool, both_agree: bool) -> str:
+    """Which of DECISIONS the two settings make.
+
+    `both_agree` wins whatever `cross_check` says: someone who asked for
+    both stages has not asked for one, and if the second check is off the
+    daemon holds wakes closed and says so (`both_blocker`) rather than wake
+    on the spotter alone.
+    """
+    if both_agree:
+        return "both"
+    return "either" if cross_check else "first"
+
+
+#: Why "both must agree" cannot run, by code. The state file carries both:
+#: the page decides on the code and shows the sentence.
+BLOCKERS = {
+    "oww": "openWakeWord has no second check",
+    "vosk": "Vosk has no second check",
+    "fallback": "sherpa-onnx is not running, and Vosk has no second check",
+    "off": "the second check is switched off",
+    "no-vosk": "the second check votes with Vosk, which is not installed",
+}
+
+
+def both_blocker(engine: str, cross_check: bool, engines: str = "both",
+                 vosk_installed: bool = True, sherpa_chosen: bool = True) -> str:
+    """Why "both must agree" cannot run with the engines as they are: a key
+    of BLOCKERS, or "" when it can.
+
+    `engine` is the engine actually listening (a sherpa-onnx that fell back
+    is "vosk"), `sherpa_chosen` whether sherpa-onnx is the one chosen.
+    """
+    if engine == "openwakeword":
+        return "oww"
+    if engine != "sherpa":
+        return "fallback" if sherpa_chosen else "vosk"
+    if not cross_check:
+        return "off"
+    if engines == "vosk" and not vosk_installed:
+        return "no-vosk"
+    return ""
+
+
+class Agreement:
+    """The hold behind "both must agree": one stage has named an agent and
+    the other has not answered yet.
+
+    Two orders, because the stages report at different moments:
+
+    - the spotter first (the usual one): its hit is held for up to
+      `tail` frames, or until the burst ends, and the second check is then
+      asked about that burst;
+    - the second check first: the burst ended, the second check named
+      somebody, and the spotter -- which reports a frame or two after the
+      speech stops -- has not yet. Its vote waits `window` frames.
+
+    Frames that arrive while a hit is held are kept: they belong to the
+    capture the wake opens, as they would have with the spotter alone.
+    Pure: the caller asks the engines and feeds the answers in.
+    """
+
+    def __init__(self, tail: int = CONFIRM_TAIL_FRAMES, window: int = 3) -> None:
+        self.tail = max(0, int(tail))
+        self.window = max(1, int(window))
+        #: None, or {"stage": "spotter" | "check", "name", "left", "frames"}.
+        self.pending: dict | None = None
+
+    def clear(self) -> None:
+        self.pending = None
+
+    def hold(self, stage: str, name: str) -> None:
+        """Start holding a vote from `stage` for `name`."""
+        self.pending = {"stage": stage, "name": name, "frames": [],
+                        "left": self.tail if stage == "spotter" else self.window}
+
+    def waiting_on_check(self) -> bool:
+        return self.pending is not None and self.pending["stage"] == "spotter"
+
+    def check_vote(self, name: str) -> str:
+        """A second-check vote held from the burst that just ended, or ""."""
+        p = self.pending
+        return p["name"] if p is not None and p["stage"] == "check" and p["name"] == name else ""
+
+    def frame(self, pcm: bytes) -> str:
+        """One more frame while something is held. Returns "due" when a held
+        spotter hit has waited its tail and the second check must be asked
+        now, "expired" when a held second-check vote ran out (the caller
+        drops it), else ""."""
+        p = self.pending
+        if p is None:
+            return ""
+        p["frames"].append(pcm)
+        p["left"] -= 1
+        if p["left"] > 0:
+            return ""
+        return "due" if p["stage"] == "spotter" else "expired"
+
+    def take(self) -> dict | None:
+        """The held vote, and stop holding it."""
+        p, self.pending = self.pending, None
+        return p

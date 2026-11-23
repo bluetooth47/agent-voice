@@ -104,10 +104,35 @@ the short-name boost for names of three sounds or fewer, and "also sounds
 like" per name word: other readings for sherpa-onnx, written as words it
 knows (`thea`) or as phones (`TH IY1 AH0`). Each has a reset.
 
+### When a wake counts
+
+Listening → **When a wake counts** decides which stages have to agree. With
+sherpa-onnx there are two: the spotter, which hears every frame, and the
+second check, Vosk and Whisper listening again to a short burst of speech.
+
+- **First only**: the spotter decides alone. The quickest, and it misses
+  short names such as Theo more often.
+- **Either stage** (the default): a spotter hit wakes at once, and the
+  second check rescues a short burst the spotter missed. Either one can wake
+  it.
+- **Both must agree**: a spotter hit is held while the second check listens
+  to the speech up to it, and wakes only if it hears the same name. The
+  fewest false wakes -- a name inside a sentence, a word that starts like a
+  name -- at the cost of the second check's time before every wake, and of
+  every name the spotter misses (bench/FINDINGS.md §55 has the numbers).
+  What you say while it decides is kept for the turn. A name that was heard
+  and not confirmed shows "heard, not confirmed" on the HUD for a moment.
+
+openWakeWord and Vosk have no second check, so the page refuses **Both must
+agree** on them and says why. Set by hand anyway (or the engine changed
+under it), wakes are held closed and the page and the Overview say so: it
+never quietly wakes on one stage instead. "Full stop" works in every mode.
+`agentvoice monitor` prints the decision in force.
+
 **Test my wake word** (or `agentvoice wake-test start`) counts wakes
 instead of answering them, for ten wakes or 90 seconds. Say the name alone
 with a pause after each, then read off how many tries woke it, which path
-caught each one (spotter or second check), and the near misses the engines
+caught each one (spotter, second check, or both), and the near misses the engines
 turned down. Only reasons are shown, never what was said.
 
 ### A gate that follows the room
@@ -473,8 +498,11 @@ with how many turns it comes from, and "no data yet" when there are none.
 Typed messages, follow-ups and the open microphone have no wake word, so
 they are counted as turns but left out of the wake figure. A "false wake"
 there is exactly a burst in which a name was heard and the second check
-turned it down. Each agent's card has **last chat ›** when it has a saved
-chat.
+turned it down. With **Both must agree** chosen, the wakes both stages
+agreed on are counted as "confirmed by the second check", and a name one
+stage heard and the other did not confirm as "held, then dropped" (also in
+`agentvoice stats`). Each agent's card has **last chat ›** when it has a
+saved chat.
 
 The numbers are counts and timings only: one small file a day in
 `~/.local/share/agentvoice/stats`, readable by you alone, kept 90 days, and

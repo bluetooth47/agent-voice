@@ -2207,3 +2207,71 @@ Its agents at that moment: two processes, both zombies (0 kB). Reading every
 process's `/proc/PID/stat` and the descendants' `status` (368 processes
 visible) costs **10.1 ms median, 11.7 ms p95**; the daemon does it at most
 every 30 s, on the idle poll only.
+
+## 55. M22: what each wake decision catches, lets through and costs
+
+Measured 2026-11-23 on the i7-1185G7 (8 threads) with `bench/wake_modes.py`:
+the daemon's own `Pipeline` (sherpa-onnx at the shipped 15%, the second
+check with Vosk and Whisper base.en, every other value the shipped default),
+fed 200 ms a frame, the frame loop simulated in real time (a frame waits for
+the one before it, so a slow second check delays the wake by what it costs).
+Phrase "theo", agents "sora" and "hazel". Six Piper voices (alan, cori, amy,
+lessac, ryan-high, ryan-medium) at -16 and -24 dBFS over -60 dBFS noise, as
+the automatic wake test makes them: 96 clips that must wake (five bare
+names, "Theo, you there?", two requests said in one breath) and 204 that
+must not. A fresh spotter stream for every clip. Synthesized speech, not a
+person in a room: compare the decisions with each other.
+
+| | first only | either stage (default) | both must agree |
+|---|---|---|---|
+| true accepts | 60/96 | **77/96** | 48/96 |
+| bare names ("Theo.", "Hey Sora."…) | 32/60 | 46/60 | 23/60 |
+| one-breath requests ("Theo, what time is it?") | 20/24 | 20/24 | 18/24 |
+| distractor accepts | 34/204 | 40/204 | **8/204** |
+| — sound-alikes (Video, Cleo, Story, Rodeo…) | 1/108 | 2/108 | 0/108 |
+| — words that start like a name (Theodore, Theology, Hazelnut) | 14/36 | 19/36 | 8/36 |
+| — a name inside a sentence ("I was telling Theo about it") | 19/36 | 19/36 | 0/36 |
+| — ordinary talk | 0/24 | 0/24 | 0/24 |
+| wake after a bare name ends, median / p95 | 0.50 / 0.72 s | 1.14 / 1.55 s | 1.24 / 1.52 s |
+| added over either stage, when the spotter woke it there (35 clips) | — | — | **+0.79 s median, +1.14 s p95** |
+| added over either stage, when the second check woke it there (13) | — | — | +0.00 s |
+| CPU for the 300 clips | 34 s | 426 s | 710 s |
+
+No wrong agent was woken in any mode.
+
+**What "both" costs in wakes.** Of the 29 clips either stage woke and both
+did not, 17 were names the spotter never heard and the second check rescued:
+that is the definition of the mode. 7 were spotter hits Vosk did not agree
+with, 2 had too little speech before the hit for the second check to judge
+(under 300 ms), 2 ran past three words after the name and 1 Whisper turned
+down. Every one is a "held, then dropped" in the stats and on the HUD.
+
+**What it buys.** Five false wakes in six: every name inside a sentence (the
+spotter fires on "Theo" in "I was telling Theo about it" 10 times out of 12;
+the second check hears that the sentence does not open with the name), all
+the sound-alikes, and over half the words that start like a name. The 8 left
+are two "Theodore" by one voice and six "Hazelnut", which Whisper itself
+writes as "Hazel".
+
+**The tail.** `CONFIRM_TAIL_FRAMES` is how long a spotter hit waits before
+the second check hears the speech up to it. 1 and 2 frames were tried so
+that a word which only starts like a name would be heard to its end: they
+stopped exactly the same 8 distractors as 0, caught 5 fewer real wakes (43
+of 96; the extra speech pushed one-breath requests past the trailing-word
+rule, 13 of 24 against 18) and added 0.96 and 1.18 s against 0.79. Shipped
+at **0**: the hit is judged on its own frame.
+
+**Where the time goes.** The added 0.8 s is one Whisper transcription of a
+short burst (faster-whisper pads it to its 30 s window; §24), on the frame
+the spotter fired. Frames queue while it runs, so nothing said meanwhile is
+lost. Three second checks across the three "both" runs (900 clips) took
+far longer: one 4.6 s ("Sora, open the browser please", which still woke),
+and two hit the 10 s timeout on "Ask Hazel when she gets back" and were
+dropped as held. Not traced further; most likely Whisper running on over a
+short burst. The same timeout already applies to the second check's rescue
+in either mode, and while it runs the frame loop waits. The CPU is that transcription, once
+per spotter hit; nothing is added while nobody speaks.
+
+So the Listening page offers "Both must agree" with "about 0.8 s later than
+the spotter alone, and only names both stages hear" beside it, and the
+default stays either stage.

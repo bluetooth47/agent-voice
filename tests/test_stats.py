@@ -539,7 +539,7 @@ def test_rejections_are_counted_and_a_wake_test_is_not(daemon):
     daemon.pipe = Pipe()
     daemon.note_wake(True)
     d = today()
-    assert d["rejected_by"] == {"second-check": 1, "confidence": 1}
+    assert d["rejected_by"] == {"second-check": 1, "confidence": 1, "held": 0}
     assert d["wakes_by"]["second-check"] == 1
     daemon.pipe.queue = ["second-check"]
     daemon.note_wake(False)
@@ -567,7 +567,10 @@ def test_the_pipeline_records_its_rejections_as_codes():
     assert p.take_rejections() == []
     src = (ROOT / "daemon/wake_listen.py").read_text()
     assert src.count('self._rejected("confidence")') == 1
-    assert src.count('self._rejected("second-check")') == 1
+    # Master plan M22: once for either stage, once when both must agree;
+    # and every "held, then dropped" goes through Pipeline._held.
+    assert src.count('self._rejected("second-check")') == 2
+    assert src.count('self._rejected("held")') == 1
 
 
 def test_a_limit_hit_is_counted(daemon):

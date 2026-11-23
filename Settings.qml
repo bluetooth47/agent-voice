@@ -354,6 +354,12 @@ Item {
   // its agents hold: {started_at, rss_mb, agents_mb, agents_procs}, from the
   // state file (master plan M21). Empty from a daemon that does not say.
   property var vService: ({})
+  // Which stages must agree before a wake counts: {mode: first | either |
+  // both, closed, blocked (a code), why}, from the state file (master plan
+  // M22). `blocked`/`why` say why "both must agree" cannot run, whatever is
+  // chosen; `closed` that it is chosen anyway, so wakes are held closed.
+  // Empty from a daemon that does not say.
+  property var vWakeDecision: ({})
   // "Send to another agent" (ui/SendSheet.qml), from the conversation view
   // and a chat row. `fromId` is the source's external id ("main" for the
   // main agent), `chatId` a saved chat or "" for this session.
@@ -829,6 +835,11 @@ Item {
                  page: "listening" })
     if (usingSherpa && !sherpaAvailable)
       out.push({ text: "sherpa-onnx is chosen but not installed, so Vosk is listening instead.",
+                 page: "listening" })
+    // Master plan M22: "both must agree" with no second stage to agree.
+    if (serviceActive && vWakeDecision.closed === true)
+      out.push({ text: "Wakes are held closed: both stages must agree, and "
+                       + String(vWakeDecision.why || "the second check cannot run") + ".",
                  page: "listening" })
     var voice = String(setting("voice", "lessac-medium"))
     if (voiceMissing(voice))
@@ -1751,6 +1762,8 @@ Item {
         root.vLimitHits = (d.limit_hits && typeof d.limit_hits === "object")
                           ? d.limit_hits : ({})
         root.vService = (d.service && typeof d.service === "object") ? d.service : ({})
+        root.vWakeDecision = (d.wake_decision && typeof d.wake_decision === "object")
+                             ? d.wake_decision : ({})
       } catch (e) {}
     }
   }

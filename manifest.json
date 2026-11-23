@@ -51,6 +51,7 @@
       "owwThresholdPct": 90,
       "sherpaThresholdPct": 15,
       "wakeCrossCheck": true,
+      "wakeBothAgree": false,
       "shortNameBoostPct": 150,
       "crossCheckMinMs": 300,
       "crossCheckMaxMs": 2600,
@@ -386,6 +387,13 @@
         "label": "Second check for short names",
         "defaultValue": true,
         "description": "When sherpa-onnx lets a short burst of speech pass, Vosk and Whisper both listen to it, and it wakes if both hear the same name. Caught short names like Theo the spotter missed half the time, with no extra false wakes on the test clips (FINDINGS §24). Keeps the Vosk model loaded (about 114MB)."
+      },
+      {
+        "key": "wakeBothAgree",
+        "type": "bool",
+        "label": "Both stages must agree",
+        "defaultValue": false,
+        "description": "sherpa-onnx only. A wake counts only when the spotter and the second check both hear the same name: on synthesized clips 8 false wakes in 204 against 40, about 0.8 s later than the spotter alone, and only the names both stages hear (48 of 96 against 77; FINDINGS §55). Off, either stage can wake. If the second check cannot run, wakes are held closed and the Listening page says why; it never falls back to one stage."
       },
       {
         "key": "shortNameBoostPct",

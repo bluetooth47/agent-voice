@@ -15,6 +15,8 @@ import "../ui"
 // verifier refines what the engine already heard.
 Column {
   id: page
+  // Found by name by bench/preview/targets/decision.qml.
+  objectName: "listeningPage"
 
   required property var s
 
@@ -66,6 +68,77 @@ Column {
   }
   property bool advancedOpen: false
   readonly property string ccEngines: String(s.setting("crossCheckEngines", "both"))
+
+  // --- when a wake counts (master plan M22) ----------------------------------
+  // One control for two keys, wakeCrossCheck and wakeBothAgree, because these
+  // three are the real choices: "both" with the second check off is not a
+  // fourth, it is wakes held closed, and the daemon says so.
+  readonly property string decision: s.setting("wakeBothAgree", false) === true ? "both"
+                                     : s.setting("wakeCrossCheck", true) === true ? "either" : "first"
+  readonly property var decisionOptions: [
+    { label: "First only", value: "first",
+      tooltip: "The spotter decides alone. No second check." },
+    { label: "Either stage", value: "either",
+      tooltip: "A spotter hit wakes at once; the second check rescues a short name it missed." },
+    { label: "Both must agree", value: "both",
+      tooltip: "A spotter hit waits until the second check hears the same name: about 0.8 s more." }
+  ]
+  // Why "Both must agree" cannot run now, or "". What the page can see for
+  // itself first, so it refuses with the service off too; then the daemon's
+  // answer for what only it knows: an engine that fell back, a Vosk model
+  // that is not on disk.
+  readonly property string bothBlocker: {
+    if (s.usingOww) return "openWakeWord has no second check"
+    if (!s.usingSherpa) return "Vosk has no second check"
+    if (!s.sherpaAvailable) return "sherpa-onnx is not installed, and Vosk, listening instead, has no second check"
+    var d = s.vWakeDecision || {}
+    if (s.serviceActive && (d.blocked === "fallback" || (d.blocked === "no-vosk" && ccEngines === "vosk")))
+      return String(d.why || "")
+    return ""
+  }
+  // Said under the selector when "Both must agree" was refused; cleared by
+  // another pick, and when its cause goes (a note that outlives its cause is
+  // its own bug).
+  property string decisionRefused: ""
+  onBothBlockerChanged: if (bothBlocker === "") decisionRefused = ""
+  function chooseDecision(v) {
+    if (v === "both" && bothBlocker !== "") {
+      decisionRefused = "Not chosen: " + bothBlocker + ", so the two stages could never agree "
+                        + "and no wake would count."
+      // The chip holds a pick for its round trip; this one writes nothing.
+      decisionChoice.holding = false
+      return
+    }
+    decisionRefused = ""
+    // In this order, so every state in between is one of the three.
+    if (v === "both") {
+      s.put("wakeCrossCheck", true)
+      s.put("wakeBothAgree", true)
+    } else {
+      s.put("wakeBothAgree", false)
+      s.put("wakeCrossCheck", v === "either")
+    }
+  }
+  // What to do about wakes held closed, by the daemon's reason.
+  function closedFix(code) {
+    if (code === "fallback") return "Choose another, or install sherpa-onnx (above)."
+    if (code === "off") return "Choose another to wake on one stage, or Either stage and then "
+                               + "Both must agree to switch the second check back on."
+    if (code === "no-vosk") return "Choose another, or let Whisper vote (Advanced → Second check: who votes)."
+    return "Choose another, or switch to sherpa-onnx."
+  }
+  readonly property string decisionHint: {
+    if (!s.sherpaLive)
+      return (s.usingOww ? "openWakeWord" : "Vosk") + " has no second check, so it decides alone "
+             + "whichever is chosen here. The choice is for sherpa-onnx."
+    if (decision === "first")
+      return "The spotter decides alone: the quickest, and short names such as Theo are missed more often."
+    if (decision === "either")
+      return "A spotter hit wakes at once, and the second check rescues a short name the spotter missed. Either can wake it."
+    return "A spotter hit waits until the second check hears the same name: the fewest false wakes, "
+           + "about 0.8 s later than the spotter alone, and only names both stages hear "
+           + "(FINDINGS §55). Say the name above the microphone gate."
+  }
   // Which wake test is shown: "manual" (you say it) or "auto" (synthesized).
   property string testMode: "manual"
   function nameLine(name, row) {
@@ -74,6 +147,7 @@ Column {
     return "“" + name + "”: " + hits + " of " + tries
            + (tries > 0 ? " (" + Math.round(100 * hits / tries) + "%)" : "")
            + (hits > 0 ? " — spotter " + Number(r.spotter || 0) + ", second check " + Number(r["second check"] || 0)
+                         + (Number(r.confirmed || 0) > 0 ? ", both " + Number(r.confirmed) : "")
                          + (Number(r.other || 0) > 0 ? ", other " + Number(r.other) : "") : "")
   }
 
@@ -174,6 +248,61 @@ Column {
 
     SettingRow {
       width: parent.width
+      stacked: true
+      label: "When a wake counts"
+      hint: page.decisionHint
+      changed: page.s.changed("wakeCrossCheck") || page.s.changed("wakeBothAgree")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onReset: {
+        page.decisionRefused = ""
+        page.s.resetKey("wakeBothAgree")
+        page.s.resetKey("wakeCrossCheck")
+      }
+      SegmentedChoice {
+        id: decisionChoice
+        objectName: "decisionChoice"
+        options: page.decisionOptions
+        value: page.decision
+        wrap: true
+        width: parent.width
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onCommitted: function(v) { page.chooseDecision(v) }
+      }
+    }
+
+    Text {
+      objectName: "decisionRefused"
+      width: parent.width
+      visible: page.decisionRefused !== ""
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: page.decisionRefused
+      color: page.s.urgent
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    // The daemon's word that "both" is chosen and cannot run: set by hand,
+    // or the engine changed under it. Nothing wakes on one stage instead.
+    Text {
+      objectName: "decisionClosed"
+      width: parent.width
+      visible: page.s.serviceActive && page.s.vWakeDecision.closed === true
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: "Wakes are held closed: both stages must agree, and "
+            + String(page.s.vWakeDecision.why || "the second check cannot run")
+            + ". Nothing wakes on one stage instead. "
+            + page.closedFix(String(page.s.vWakeDecision.blocked || ""))
+      color: page.s.urgent
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    SettingRow {
+      width: parent.width
       label: "Wake phrase"
       hint: "“" + page.s.activePhrase + "” wakes the main agent. It is set on its card, beside each other agent's name."
       foreground: page.s.foreground
@@ -255,18 +384,8 @@ Column {
         onReset: page.s.resetKey("sherpaThresholdPct")
       }
 
-      ToggleRow {
-        width: parent.width
-        visible: page.s.sherpaLive
-        label: "Second check for short names"
-        hint: "If the spotter misses a short burst, Vosk and Whisper both listen, and it wakes when both hear the same name."
-        checked: page.s.setting("wakeCrossCheck", true) === true
-        changed: page.s.changed("wakeCrossCheck")
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        onToggled: page.s.put("wakeCrossCheck", !checked)
-        onReset: page.s.resetKey("wakeCrossCheck")
-      }
+      // The second check's own switch moved up, into "When a wake counts"
+      // (master plan M22): First only is it off.
 
       KnobRow {
         width: parent.width

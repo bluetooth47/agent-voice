@@ -27,7 +27,8 @@ from paths import VERIFIERS  # noqa: E402
 from runtime import Config  # noqa: E402
 from wake_listen import CHUNK, RATE, OwwWake, frame_db  # noqa: E402
 from wake_listen import SherpaWake, wanted_names  # noqa: E402
-from paths import sherpa_model  # noqa: E402
+from paths import sherpa_model, vosk_model  # noqa: E402
+import crosscheck  # noqa: E402
 
 DIM, RED, GRN, YEL, CYA, BLD, OFF = (
     "\033[2m", "\033[31m", "\033[32m", "\033[33m", "\033[36m", "\033[1m", "\033[0m")
@@ -125,8 +126,29 @@ def run_ab(cfg, threshold, with_verifier, seconds: float = 0.0,
     return 0
 
 
+def decision_line(cfg, engine: str) -> tuple[str, str]:
+    """(mode, the line saying it) for the wake decision the daemon applies
+    with these settings (master plan M22). On the engine chosen: a
+    sherpa-onnx that cannot load is reported by run_sherpa itself."""
+    cross = cfg.get_bool("wakeCrossCheck")
+    mode = crosscheck.decision(cross, cfg.wake_both_agree())
+    engines = cfg.wake_tuning()["engines"]
+    # A sherpa-onnx with no model falls back to Vosk in the daemon.
+    listening = "vosk" if engine == "sherpa" and sherpa_model() is None else engine
+    code = crosscheck.both_blocker(listening, cross, engines,
+                                   vosk_model() is not None if engines == "vosk" else True,
+                                   sherpa_chosen=engine == "sherpa")
+    if mode == "both" and code:
+        return mode, (f"{YEL}wake decision: both stages must agree, and "
+                      f"{crosscheck.BLOCKERS[code]} -- wakes are held closed{OFF}")
+    said = {"first": "the first listener alone",
+            "either": "either stage can wake (a spotter hit at once, or the second check)",
+            "both": "both stages must agree: a spotter hit waits for the second check"}[mode]
+    return mode, f"{DIM}wake decision: {said}{OFF}"
+
+
 def run_sherpa(cfg, gate: float, seconds: float = 0.0, device=None,
-               all_frames: bool = False) -> int:
+               all_frames: bool = False, decision: str = "either") -> int:
     """Show what sherpa-onnx spots, live, built the way the daemon builds it.
 
     The spotter gives a verdict rather than a score, so this prints every
@@ -176,7 +198,14 @@ def run_sherpa(cfg, gate: float, seconds: float = 0.0, device=None,
                 if hit:
                     fires += 1
                     hit_this_burst = hit
-                    print(f"  {GRN}{t:7.1f}s  {level:6.1f} dBFS  ← WOULD FIRE: {hit}{OFF}")
+                    if decision == "both":
+                        # Not a wake on its own (master plan M22): the
+                        # daemon holds it for the second check, which this
+                        # monitor does not run.
+                        print(f"  {CYA}{t:7.1f}s  {level:6.1f} dBFS  ← SPOTTED: {hit} "
+                              f"(held for the second check){OFF}")
+                    else:
+                        print(f"  {GRN}{t:7.1f}s  {level:6.1f} dBFS  ← WOULD FIRE: {hit}{OFF}")
                 elif all_frames:
                     print(f"  {DIM}{t:7.1f}s  {level:6.1f} dBFS{OFF}")
                 if level >= gate:
@@ -213,9 +242,12 @@ def main() -> int:
     cfg = Config()
     engine = cfg.get_str("engine")
     gate = float(cfg["micThresholdDb"])
+    decision, line = decision_line(cfg, engine)
+    print(f"\n  {line}")
 
     if engine == "sherpa":
-        return run_sherpa(cfg, gate, args.seconds, args.device, args.all_frames)
+        return run_sherpa(cfg, gate, args.seconds, args.device, args.all_frames,
+                          decision=decision)
 
     if engine != "openwakeword":
         print(f"  {YEL}The configured engine is {engine}, which scores by grammar "
