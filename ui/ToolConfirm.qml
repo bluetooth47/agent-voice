@@ -92,7 +92,10 @@ FocusScope {
             width: parent.width
             text: String(modelData.value || "")
             textFormat: Text.PlainText
-            wrapMode: Text.WrapAnywhere
+            // At a space where there is one, so a sentence keeps its words
+            // (M20's "How much" split "charac-ters"); anywhere inside a
+            // command line or a path too long for the line.
+            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
             maximumLineCount: 6
             elide: Text.ElideRight
             color: box.foreground

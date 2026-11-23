@@ -206,7 +206,9 @@ def test_the_files_come_from_paths_and_leave_out_what_the_guard_covers():
     t = text()
     section = t.split("## Files", 1)[1]
     assert str(paths.RUNTIME_DIR / "state").replace(str(Path.home()), "~") in section
-    assert str(paths.DATA_DIR / "chats") in section
+    # Master plan M20: the saved chats by the tools that show an agent the
+    # ones it may see, never by the folder that holds every agent's.
+    assert "`chats_search`" in section and str(paths.DATA_DIR / "chats") not in t
     for d in hook._orders_dirs():
         home = str(Path.home())
         for form in (str(d), "~" + str(d)[len(home):] if str(d).startswith(home) else str(d)):

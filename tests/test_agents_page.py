@@ -372,7 +372,7 @@ def test_every_agent_is_drawn_by_the_one_block():
     assert text.count("AgentBlock {") == 2
     assert "model: page.s.voiceAgents.length" in text
     assert "AgentCard {" not in text
-    for card in ("Identity", "Endpoint", "Permissions", "Voice", "Tools", "Collaboration & notes", "Agent"):
+    for card in ("Identity", "Endpoint", "Permissions", "Voice", "Tools", "Collaboration, notes & chats", "Agent"):
         assert f'title: "{card}"' in text, card
 
 

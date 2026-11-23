@@ -9,7 +9,7 @@ import "../ui"
 // strip per agent -- state dot, name, wake phrase, what it runs on, effort,
 // voice and speed, permission level -- that unfolds into cards, two across
 // when there is room: Identity, Endpoint (endpoint agents only),
-// Permissions, Voice, Tools, Collaboration & notes, Agent.
+// Permissions, Voice, Tools, Collaboration, notes & chats, Agent.
 //
 // The main agent and the extra ones are one component, `AgentBlock`, below.
 // They used to be two copies of every row, which is how they drifted apart.
@@ -237,6 +237,18 @@ Column {
   function putAgentAccepts(index, value) {
     updateAgent(index, "acceptsWork", value ? undefined : false)
   }
+  // Master plan M20: "own" is the default, so it is left out. "all" arrives
+  // only from ToolSwitches' question (its onConfirmed).
+  function putAgentChatSearch(index, value) {
+    updateAgent(index, "chatSearch", value === "own" ? undefined : value)
+  }
+  // The quarantine, read for the Chat search row's hint (written on the
+  // Crew map only): a list, or "unreadable" when it is not one.
+  readonly property var crewQuarantine: s.setting("crewQuarantine", [])
+  function quarantineOf(agentId) {
+    if (!Array.isArray(crewQuarantine)) return "unreadable"
+    return crewQuarantine.indexOf(agentId === "" ? "main" : agentId) >= 0
+  }
   // The Rule of Two (merged plan, Phase 13): reading web pages, acting
   // without asking, and being able to change what the other agents are
   // told, all in one agent. A warning, not a block. Denying notes writes
@@ -284,6 +296,7 @@ Column {
       case "notesWrite": s.put("mainNotesWrite", value); break
       case "collaboration": s.put("mainCollaboration", value); break
       case "acceptsWork": s.put("mainAcceptsWork", value); break
+      case "chatSearch": s.put("mainChatSearch", value); break
       }
       return
     }
@@ -302,6 +315,7 @@ Column {
     case "notesWrite": putAgentNotes(index, value); break
     case "collaboration": putAgentCollab(index, value); break
     case "acceptsWork": putAgentAccepts(index, value); break
+    case "chatSearch": putAgentChatSearch(index, value); break
     }
   }
   // The EndpointEditor's edited(key, value), for the main agent; an extra
@@ -414,6 +428,9 @@ Column {
         : (entry.collaboration === undefined ? "announce" : String(entry.collaboration))
     readonly property bool acceptsWork: isMain ? s.setting("mainAcceptsWork", true) !== false
                                                : entry.acceptsWork !== false
+    // Master plan M20: missing is "own" (runtime.chat_search_choice).
+    readonly property string chatSearch: isMain ? String(s.setting("mainChatSearch", "own"))
+        : (entry.chatSearch === undefined ? "own" : String(entry.chatSearch))
     // Missing means on, so lists from before the switch keep every agent.
     readonly property bool on: isMain || entry.enabled !== false
     readonly property string st: s.agentStatus(isMain ? "" : agentId)
@@ -1011,9 +1028,9 @@ Column {
         }
       }
 
-      // --- Collaboration & notes -------------------------------------------------
+      // --- Collaboration, notes & chats -------------------------------------------
       Card {
-        title: "Collaboration & notes"
+        title: "Collaboration, notes & chats"
         foreground: blk.s.foreground
         fontFamily: blk.s.fontFamily
 
@@ -1031,6 +1048,11 @@ Column {
           onNotesPicked: function(value) { blk.write("notesWrite", value) }
           onCollaborationPicked: function(value) { blk.write("collaboration", value) }
           onAcceptsWorkPicked: function(value) { blk.write("acceptsWork", value) }
+          chatSearch: blk.chatSearch
+          agentLabel: blk.label
+          quarantined: blk.pg.quarantineOf(blk.agentId)
+          chatsSaved: blk.s.setting("saveChats", false) === true
+          onChatSearchPicked: function(value) { blk.write("chatSearch", value) }
         }
       }
 

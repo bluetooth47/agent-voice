@@ -233,6 +233,25 @@ def refusal(crew: Crew, frm: str, to: str, ability: str, to_label: str) -> tuple
             f"{VERBS.get(ability, ability)} {to_label}, so nothing was sent."), "no-link"
 
 
+def search_refusal(crew: Crew, frm: str) -> tuple[str, str]:
+    """Why the crew settings refuse `frm` searching or reading saved chats
+    (master plan, M20), as (sentence for the calling agent, audit code), or
+    ("", ""). Chat search reaches what other agents said, so it is held as
+    the crew tools are, by the same reading: crew settings that cannot be
+    read refuse it, and a quarantined agent searches nothing (question 11).
+    A link grants nothing here -- which chats an agent may see is its own
+    `chatSearch` and each chat's own sharing (chat_search.py) -- so there is
+    no target and no ability to check. Run when the call is made and again
+    before its answer is handed back."""
+    if not crew.ok:
+        return (f"The crew settings can't be read ({crew.why}), so no agent may search saved "
+                f"chats until they are fixed on the Crew map."), "crew-unreadable"
+    if frm in crew.quarantined:
+        return ("You are quarantined, so you can't search or read saved chats. The person can "
+                "release you on the Crew map."), "quarantined"
+    return "", ""
+
+
 def quarantined_line(label: str) -> str:
     """What is said when the person passes a conversation into quarantine."""
     return f"{label} is quarantined. Release it on the Crew map first."

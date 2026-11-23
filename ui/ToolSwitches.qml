@@ -34,13 +34,23 @@ import qs.Ui
 //     onCollaborationPicked: function(value) { ... }
 //     acceptsWork: entry.acceptsWork !== false
 //     onAcceptsWorkPicked: function(value) { ... }
+//     chatSearch: entry.chatSearch === undefined ? "own" : String(entry.chatSearch)
+//     agentLabel: "Theo"
+//     quarantined: false                   // or "unreadable"
+//     chatsSaved: true
+//     onChatSearchPicked: function(value) { ... }   // "all" only after the question
 //   }
 //
 // Notes (Phase 14): whether this agent may write its own and the communal
 // notes through Agent Voice's notes tools. Reading is always allowed. Only
 // Claude Code and Codex take the notes tools. Collaboration (Phase 16) sets
 // what an agent can start with other agents and whether it takes work from
-// them.
+// them. Chat search (master plan M20): which saved chats its chat tools may
+// find and read -- none, its own and the ones shared with it, or every one.
+// "Every chat" widens what it reads to every agent's conversations, so it is
+// asked first (a ToolConfirm here), and chatSearchPicked("all") is emitted
+// from that question's onConfirmed and nowhere else
+// (tests/test_chat_search.py).
 Column {
   id: sw
 
@@ -69,6 +79,19 @@ Column {
   signal collaborationPicked(string value)
   property bool acceptsWork: true
   signal acceptsWorkPicked(bool value)
+  // "off", "own" or "all": chatSearch / mainChatSearch (M20). Missing is
+  // "own"; anything else is what the daemon reads as off.
+  property string chatSearch: "own"
+  signal chatSearchPicked(string value)
+  // Its name, for the question before "Every chat".
+  property string agentLabel: ""
+  // true when it is quarantined, "unreadable" when the quarantine list cannot
+  // be read: either way the daemon gives it no chat.
+  property var quarantined: false
+  // saveChats: with nothing saved there is nothing to search.
+  property bool chatsSaved: true
+  // The question before "Every chat" is up.
+  property bool confirmingAll: false
 
   readonly property var desktopPrograms: ["claude", "codex"]
   readonly property var browserPrograms: ["claude"]
@@ -102,6 +125,46 @@ Column {
     allow: "Works with the other agents quietly; it is still shown on screen, in the chat and in the audit log. " +
            "Sending anything to an endpoint is still said out loud."
   })
+
+  // The programs that take the crew server, and so the chat tools (M20).
+  readonly property var chatsPrograms: ["claude", "codex"]
+  readonly property string chatsWhyNot: {
+    if (program === "endpoint") return "An endpoint runs nothing on this machine, so it has no chat tools."
+    if (program === "") return "No program is chosen for it."
+    if (chatsPrograms.indexOf(program) < 0) return "Chat search needs Claude Code or Codex."
+    return ""
+  }
+  readonly property string chatScope: ["off", "own", "all"].indexOf(chatSearch) >= 0 ? chatSearch : "off"
+  // What the scope does not hold, by program: the permission hook asks a
+  // Claude agent below Trusted before it reads the chat files directly;
+  // Codex has no hook, and its read-only sandbox reads files.
+  readonly property string chatsFilesNote: program === "codex"
+      ? "Codex can read the chat files directly at any level: it has no permission hook."
+      : "at Trust everything it could read the chat files directly; below that it is asked first."
+  readonly property string chatsHint: {
+    if (quarantined === "unreadable")
+      return "The crew settings can't be read, so it can search no chat until they are fixed on the Crew map."
+    if (quarantined === true)
+      return "Quarantined, so it can search no chat whatever this says. Release it on the Crew map."
+    if (chatScope === "off")
+      return "It has no chat tools. Even so, " + chatsFilesNote
+    var out = (chatScope === "own" ? "Its own saved chats and the ones shared with it."
+                                   : "Every saved chat, every agent's.") +
+              " Searches are never logged. This holds through its chat tools: " + chatsFilesNote
+    if (!chatsSaved)
+      out += " Nothing is being saved now (Chats page), so there is nothing to search."
+    return out
+  }
+  // Every way in to the choice comes here. "Every chat" only opens the
+  // question; the question's own button says yes to it.
+  function pickChatSearch(v) {
+    if (v === "all") {
+      if (chatScope !== "all") confirmingAll = true
+      return
+    }
+    confirmingAll = false
+    if (v !== chatScope) chatSearchPicked(v)
+  }
 
   function choice(key) {
     var c = (choices && typeof choices === "object") ? choices[key] : undefined
@@ -310,5 +373,56 @@ Column {
       fontFamily: sw.fontFamily
       onCommitted: function(v) { if (v !== (sw.notesDenied ? "deny" : "allow")) sw.notesPicked(v) }
     }
+  }
+  SettingRow {
+    width: parent.width
+    visible: sw.part === "collab"
+    stacked: sw.chatsWhyNot === ""
+    label: "Chat search"
+    hint: sw.chatsWhyNot !== "" ? sw.chatsWhyNot : sw.chatsHint
+    changed: sw.chatsWhyNot === "" && sw.chatScope !== "own"
+    foreground: sw.foreground
+    fontFamily: sw.fontFamily
+    onReset: sw.pickChatSearch("own")
+    SegmentedChoice {
+      id: chatChoice
+      width: parent.width
+      wrap: true
+      visible: sw.chatsWhyNot === ""
+      options: [
+        { value: "off", label: "Off" },
+        { value: "own", label: "Its own and shared" },
+        { value: "all", label: "Every chat" }
+      ]
+      value: sw.chatScope
+      foreground: sw.foreground
+      fontFamily: sw.fontFamily
+      onCommitted: function(v) { sw.pickChatSearch(v) }
+    }
+  }
+  ToolConfirm {
+    width: parent.width
+    visible: sw.part === "collab" && sw.confirmingAll && sw.chatsWhyNot === ""
+    title: "Let " + (sw.agentLabel || "this agent") + " search every saved chat?"
+    lines: [
+      { label: "It can find", value: "Every saved chat: every agent's, including the ones " +
+                                     (sw.agentLabel || "it") + " was never part of" },
+      { label: "Who gets it", value: (sw.agentLabel || "This agent") + " only" },
+      { label: "How much", value: "At most 10 matches a search and 8000 characters a read, through its chat tools. " +
+                                  "What it searches for is never logged." }
+    ]
+    warning: sw.program === "codex"
+             ? "Codex has no permission hook: at any level it could read the chat files directly whatever this says."
+             : "At Trust everything it could read the chat files directly whatever this says."
+    confirmText: "Allow every chat"
+    foreground: sw.foreground
+    accent: sw.accent
+    urgent: sw.urgent
+    fontFamily: sw.fontFamily
+    onConfirmed: { sw.confirmingAll = false; sw.chatSearchPicked("all") }
+    // The chip picked is held as chosen while a write goes round
+    // (SegmentedChoice); nothing was written, so it goes back at once and
+    // a second "Every chat" asks again.
+    onCancelled: { sw.confirmingAll = false; chatChoice.holding = false }
   }
 }

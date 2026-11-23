@@ -107,6 +107,9 @@ FIELD_HOMES: dict[str, tuple[str | None, str | None]] = {
     "notesWrite": ("AgentsPage.qml", "mainNotesWrite"),
     "collaboration": ("AgentsPage.qml", "mainCollaboration"),
     "acceptsWork": ("AgentsPage.qml", "mainAcceptsWork"),
+    # Master plan M20: which saved chats its chat tools may search, on the
+    # Agents page's Collaboration, notes & chats card.
+    "chatSearch": ("AgentsPage.qml", "mainChatSearch"),
     "endpointUrl": ("AgentsPage.qml", "endpointUrl"),
     "endpointModel": ("AgentsPage.qml", "endpointModel"),
     "endpointIsAgent": ("AgentsPage.qml", "endpointIsAgent"),

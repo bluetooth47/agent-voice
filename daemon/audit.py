@@ -67,7 +67,15 @@ KINDS = frozenset({
     # name, allow or deny, how it was reached and the level. No argument,
     # no path: the tool's name is all of the call that is kept.
     "permission",
+    # An agent searched or read saved chats with its chat tools (phase M20):
+    # who, under which scope, how many hits or exchanges came back and how
+    # many bytes, and for a read the chat's id. Never what was searched for.
+    "chat_search", "chat_read",
 })
+#: An agent's chat search scope (phase M20; runtime.CHAT_SEARCH_CHOICES).
+SCOPES = frozenset({"off", "own", "all"})
+#: A saved chat's id (chats.valid_id): random, so it says nothing.
+_CHAT = re.compile(r"[0-9a-f]{16}")
 #: A permission line's fields, each from a fixed list (phase M16).
 DECISIONS = frozenset({"allow", "deny"})
 #: How a decision was reached: the person was asked (and answered, or did
@@ -94,7 +102,12 @@ REASONS = frozenset({"", "denied", "locked", "stale", "unreadable-record",
                      "cycle", "depth", "open-tasks", "inbox-full", "rate", "timeout",
                      "declined", "unheard", "stopped", "busy", "failed", "changed",
                      # phase M8 (crew_links.CODES)
-                     "no-link", "quarantined", "crew-unreadable"})
+                     "no-link", "quarantined", "crew-unreadable",
+                     # phase M20 (chat_search): the settings could not be
+                     # read; no chat by that id the caller may see; chats
+                     # are not being saved; inside work another agent asked
+                     # for; the caller's turn ended before the answer.
+                     "unreadable", "not-found", "not-saved", "for-agent"})
 
 
 def log_path() -> Path:
@@ -120,7 +133,8 @@ def _size(value) -> int | None:
 def record(kind: str, *, frm: str, to: str, note: str = "", task: str = "",
            before: int | None = None, after: int | None = None,
            reason: str = "", state: str = "", tool: str = "", decision: str = "",
-           how: str = "", level: str = "", wait_s: float | None = None) -> bool:
+           how: str = "", level: str = "", wait_s: float | None = None,
+           scope: str = "", hits: int | None = None, chat: str = "") -> bool:
     """Append one line. Returns False when it could not be written; never
     raises, because a log that fails must not fail the write it records
     (the write has already happened by the time this runs).
@@ -139,6 +153,13 @@ def record(kind: str, *, frm: str, to: str, note: str = "", task: str = "",
         line["how"] = how if how in HOWS else "?"
     if level:
         line["level"] = level if level in LEVELS else "?"
+    if scope:
+        line["scope"] = scope if scope in SCOPES else "?"
+    if chat:
+        line["chat"] = chat if isinstance(chat, str) and _CHAT.fullmatch(chat) else "?"
+    n = _size(hits)
+    if n is not None:
+        line["hits"] = n
     if note:
         line["note"] = _name(note)
     if task:

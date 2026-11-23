@@ -248,7 +248,10 @@ def files_lines() -> list[str]:
         return "~" + s[len(home):] if s == home or s.startswith(home + "/") else s
     return [
         f"- `{short(paths.RUNTIME_DIR / 'state')}`: what it is doing now, the same as `agentvoice status`",
-        f"- `{short(paths.DATA_DIR / 'chats')}`: saved conversations, if saving is on",
+        # Master plan M20: the chats an agent may see are the ones its chat
+        # tools show it; the folder holds every agent's, so it is not named.
+        "- Saved conversations, if saving is on: your `chats_search` tool finds the ones you "
+        "may see and `chats_read` reads one. Reading the chat files directly is asked about.",
         f"- `{short(paths.MODELS)}`: the speech models (wake word, transcription)",
         f"- `{short(paths.piper_voices())}`: the voices",
         "- The service's log: `journalctl --user -u agentvoice` (structural lines only "

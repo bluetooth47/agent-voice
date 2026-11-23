@@ -3643,6 +3643,16 @@ class Daemon:
                 agent.collab_listed = want
             elif agent.collab_listed != want:
                 agent.collab_listed, changed = want, True
+            # Master plan M20: the chat tools, listed unless its chat search
+            # is off or it is quarantined -- the same rule, the same reason.
+            try:
+                want = crew_mcp.offers_chats(self.cfg, getattr(p, "id", "") or "")
+            except Exception:
+                want = False
+            if getattr(agent, "chats_listed", None) is None:
+                agent.chats_listed = want
+            elif agent.chats_listed != want:
+                agent.chats_listed, changed = want, True
         # Phase M10: the tools found on this machine, as this agent's own
         # switches, the ones for every agent and each tool's fingerprint now
         # say. All read when a process starts, so a change lets the idle
@@ -5666,7 +5676,8 @@ class Daemon:
         they do for the main agent, and so do its display name and wake
         phrase: the permission hook knows it by id. So do its tool switches
         (Phase 13), which apply_extras hands to the adapter between turns,
-        and its notes write (Phase 14), which the notes server reads fresh.
+        and its notes write (Phase 14), which the notes server reads fresh,
+        and its chat search scope (M20), which the daemon reads fresh.
         Anything else -- program, model, folder, level -- rebuilds the
         adapter, so no process started under the old flags takes another
         turn. The conversation survives a new level or model where the
@@ -5678,7 +5689,11 @@ class Daemon:
         kept = ("effort", "voice", "speed", "instructions", "name", "label",
                 "narration", "tools", "notesWrite", "collaboration", "acceptsWork",
                 # Phase M17: handed to the running adapter by apply_launch.
-                "resume", "idleTimeoutS", "extraArgs")
+                "resume", "idleTimeoutS", "extraArgs",
+                # Master plan M20: read fresh by the daemon on every chat
+                # call; whether the tools are listed is apply_extras' to
+                # catch (chats_listed), letting the idle process go.
+                "chatSearch")
         same = {k: v for k, v in spec.items() if k not in kept}
         was = {k: v for k, v in old.items() if k not in kept}
         if same == was and p.agent is not None:

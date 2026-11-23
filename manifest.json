@@ -97,6 +97,7 @@
       "mainNotesWrite": "allow",
       "mainCollaboration": "announce",
       "mainAcceptsWork": true,
+      "mainChatSearch": "own",
       "mainResume": true,
       "mainIdleTimeoutS": 90,
       "mainExtraArgs": [],
@@ -680,6 +681,18 @@
         "label": "Main agent accepts work from agents",
         "defaultValue": true,
         "description": "Whether other agents may give the main agent a task or pass it a conversation. Off, it can still be asked questions. A pass you start yourself is not affected."
+      },
+      {
+        "key": "mainChatSearch",
+        "type": "enum",
+        "label": "Main agent searches saved chats",
+        "options": [
+          "off",
+          "own",
+          "all"
+        ],
+        "defaultValue": "own",
+        "description": "Which saved chats the main agent can search and read with its chat tools: off, its own and the ones shared with it, or every saved chat (the Agents page asks first). A quarantined agent can search none. What it searches is never logged. A Trusted agent with a shell can read the chat files directly whatever this says. Set on the main agent's card, under Collaboration, notes & chats."
       },
       {
         "key": "mainResume",

@@ -845,7 +845,7 @@ class ChatStore:
 
     def search(self, query: str, agent: str | None = None, limit: int = 200,
                names: dict | None = None, problems: list | None = None,
-               now: float | None = None) -> list[dict]:
+               now: float | None = None, may_see=None) -> list[dict]:
         """Every saved chat that matches `query`, best first, for the search
         box on the Chats page (phase M18): the scorer `find` uses, with the
         last word also matching the start of a word. `agent` (external id)
@@ -856,7 +856,13 @@ class ChatStore:
         `before:DATE`, `after:DATE`. With filters and no words, every chat
         that passes them, newest first. A filter that cannot be read is
         described in `problems` and left out. `names` (normalised name ->
-        id) may be a function, called only when an `agent:` filter is there."""
+        id) may be a function, called only when an `agent:` filter is there.
+
+        Phase M20: `may_see(chat)` -> bool, for an agent's chat search. It is
+        asked of the index entry and again of the chat file, and a chat it
+        refuses is passed over *before* any filter, score or count reads it,
+        so it adds nothing to anything this returns. Both must say yes: the
+        index is only a listing, and a stale one can only hide more."""
         text, filters, bad = parse_query(str(query or "")[:QUERY_MAX], now)
         if problems is not None:
             problems.extend(bad)
@@ -871,6 +877,14 @@ class ChatStore:
         for meta in self.list():
             if not valid_id(meta.get("id")):
                 continue
+            chat = None
+            if may_see is not None:
+                # First, before anything else is read out of it (phase M20).
+                if not may_see(meta):
+                    continue
+                chat = self.load(meta["id"])
+                if chat is None or not may_see(chat):
+                    continue
             if agent is not None:
                 people = set(meta.get("participants") or []) | set(meta.get("agents") or [])
                 if agent != meta.get("owner") and agent not in people:
@@ -883,7 +897,8 @@ class ChatStore:
                     and not isinstance(began, bool) else _when(meta)
                 if began >= filters["before"]:
                     continue
-            chat = self.load(meta["id"])
+            if chat is None:
+                chat = self.load(meta["id"])
             if chat is None:
                 continue
             if "agent" in filters and not agent_matches(meta, chat, filters["agent"], names):
@@ -894,6 +909,39 @@ class ChatStore:
         scored.sort(reverse=True)
         return [{"id": cid, "score": round(got, 3)} for got, _, cid in scored[:limit]]
 
+    @staticmethod
+    def _doomed(index: dict, retention: str, now: float) -> list[dict]:
+        """The index entries the retention setting no longer keeps: older
+        than its days, or past its count, newest first -- pinned chats and
+        every agent's current chat aside. One rule for prune(), which
+        deletes them, and expired(), which an agent's chat search reads
+        (phase M20): a chat waiting for the next prune is already gone."""
+        if retention not in RETENTIONS or retention == "forever":
+            return []
+        # Strings only: a hand-edited value that is not one must not stop
+        # the rule from being worked out (a set of a list would raise).
+        current = index.get("current") if isinstance(index.get("current"), dict) else {}
+        keep_ids = {v for v in current.values() if isinstance(v, str)}
+        ordered = sorted(index["chats"], key=_when, reverse=True)
+        doomed = []
+        if retention.endswith("d"):
+            cutoff = now - int(retention[:-1]) * 86400
+            doomed = [c for c in ordered if _when(c) < cutoff]
+        elif retention.startswith("last"):
+            doomed = ordered[int(retention[4:]):]
+        return [c for c in doomed if isinstance(c, dict)
+                and not c.get("pinned") and c.get("id") not in keep_ids]
+
+    def expired(self, retention: str, now: float | None = None) -> frozenset:
+        """The ids of the chats the next prune would delete (phase M20).
+        Creates nothing."""
+        now = time.time() if now is None else now
+        if retention not in RETENTIONS or retention == "forever" or not self.root.is_dir():
+            return frozenset()
+        with self._locked():
+            return frozenset(str(c.get("id")) for c in self._doomed(self._read_index(),
+                                                                     retention, now))
+
     def prune(self, retention: str, now: float | None = None) -> int:
         """Delete what the retention setting no longer keeps. Pinned chats
         and every agent's current chat stay. Returns how many went."""
@@ -902,18 +950,8 @@ class ChatStore:
         now = time.time() if now is None else now
         with self._locked():
             index = self._read_index()
-            keep_ids = set(index["current"].values())
-            ordered = sorted(index["chats"], key=_when, reverse=True)
-            doomed = []
-            if retention.endswith("d"):
-                cutoff = now - int(retention[:-1]) * 86400
-                doomed = [c for c in ordered if _when(c) < cutoff]
-            elif retention.startswith("last"):
-                doomed = ordered[int(retention[4:]):]
             gone = 0
-            for c in doomed:
-                if c.get("pinned") or c.get("id") in keep_ids:
-                    continue
+            for c in self._doomed(index, retention, now):
                 try:
                     self._path(c["id"]).unlink()
                 except (OSError, ValueError, KeyError):

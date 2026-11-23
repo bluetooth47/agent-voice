@@ -342,6 +342,31 @@ be the whole sentence, so a request that only mentions a chat goes to the
 agent as usual. In a terminal: `agentvoice chats` lists them, and `show`,
 `rename`, `pin`, `delete`, `export`, `continue` and `new` do the rest.
 
+**Agents can search them too.** A Claude Code or Codex agent has two tools
+for saved chats: `chats_search` (the same words and filters as the box, at
+most ten matches, each with its date, who spoke, its name, summary and where
+it matched) and `chats_read` (part of one chat, at most 8000 characters at a
+time). So "Theo, find our chat about the wake word last week" works. Each
+agent's **Chat search** setting (Agents → its card → Collaboration, notes &
+chats) says which chats those tools can reach: **its own and the ones shared
+with it** (the default), **every chat** (after a question that says what that
+means), or **off**. Having spoken in a chat, a crew link or an old session in
+it is not enough: a chat is the agent's to search only if it owns the chat or
+the chat was shared with it. The daemon judges every chat before it reads
+anything out of it, so a chat an agent may not see adds nothing to any count,
+and asking for one by id gets the same answer as a chat that never existed. A
+quarantined agent searches nothing, and with saving off there is nothing to
+search. What an agent searched for is never logged; the audit log records
+who searched, how many matches came back and how many bytes. Inside work
+another agent asked it for (a question, a task) an agent cannot search at
+all, because what it found would go back to that agent.
+
+The scope holds through the tools. The chat files themselves are yours and
+hold every agent's chats, so below Trust everything a Claude agent is asked
+before it reads them directly; a Claude agent at Trust everything, or a Codex
+agent at any level (it has no permission hook), can still read them with its
+own tools or a shell command. The page says so.
+
 "Allow all in this chat" still ends when the service restarts, including
 for a chat continued afterwards.
 

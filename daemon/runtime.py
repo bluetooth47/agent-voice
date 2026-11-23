@@ -105,6 +105,23 @@ def collab_choice(holder: dict, key: str) -> str:
     return value if value in COLLAB_CHOICES else "ask"
 
 
+#: Which saved chats an agent's chat tools may search and read (master plan,
+#: M20): none, its own and the ones shared with it (the replay rule), or
+#: every saved chat.
+CHAT_SEARCH_CHOICES = ("off", "own", "all")
+
+
+def chat_search_choice(holder: dict, key: str) -> str:
+    """`chatSearch` as written: a missing key is "own" (question 6's
+    default: an agent's own chats and the ones shared with it), and a value
+    that is there but is none of the three is "off" -- somebody meant to say
+    something, and a setting that cannot be read shows an agent no chat."""
+    if not isinstance(holder, dict) or key not in holder:
+        return "own"
+    value = holder.get(key)
+    return value if value in CHAT_SEARCH_CHOICES else "off"
+
+
 def accepts_choice(holder: dict, key: str) -> bool:
     """`acceptsWork` as written: only an explicit false is off, as
     `enabled` is, so entries written before the setting existed accept."""
@@ -422,6 +439,12 @@ DEFAULTS = {
     # `acceptsWork`.
     "mainCollaboration": "announce",
     "mainAcceptsWork": True,
+    # Phase M20: which saved chats the main agent's chat tools (chats_search,
+    # chats_read) may find and open: off, own (the chats it owns and the ones
+    # shared with it) or all (every saved chat; the page asks first). A
+    # quarantined agent has none whatever this says. Extra agents keep theirs
+    # in their entry, as `chatSearch`.
+    "mainChatSearch": "own",
     # Phase M8: who may do what to whom (crew_links.py), and who is held
     # apart. Empty is nobody linked: no agent can reach another until the
     # person links them on the Crew map. Lists Omarchy cannot draw a control
@@ -544,6 +567,7 @@ TOML_ALIASES = {
     "mainNotesWrite": ("agent", "main_notes_write"),
     "mainCollaboration": ("agent", "main_collaboration"),
     "mainAcceptsWork": ("agent", "main_accepts_work"),
+    "mainChatSearch": ("agent", "main_chat_search"),
     "conversationMode": ("wake", "conversation_mode"),
     "yieldToRecorders": ("wake", "yield_to_recorders"),
     "logSpeech": ("ui", "log_speech"),
@@ -932,6 +956,8 @@ class Config:
                 # work from them (Phase 16).
                 "collaboration": collab_choice(entry, "collaboration"),
                 "acceptsWork": accepts_choice(entry, "acceptsWork"),
+                # Which saved chats its chat tools may search (phase M20).
+                "chatSearch": chat_search_choice(entry, "chatSearch"),
                 "projectDir": folder.strip() if isinstance(folder, str) else "",
                 # Phase M17: how it is launched (Agent details → Advanced):
                 # whether its conversation is resumed, its hung-turn limit,
@@ -1119,6 +1145,21 @@ class Config:
             return collab_choice(self._values, "mainCollaboration")
         spec = next((a for a in self.all_agents() if a["id"] == agent_id), None)
         return spec["collaboration"] if spec else "off"
+
+    def chat_search_for(self, agent_id: str | None) -> str:
+        """Which saved chats this agent's chat tools may find and open
+        (master plan, M20): "off", "own" or "all". `agent_id` is "" or
+        "main" for the main agent, else an extra agent's id. Settings that
+        cannot be read are "off" (Appendix A: unreadable is off), and so is
+        an agent the settings do not have: nobody's decision is behind it.
+        Quarantine is not decided here (chat_search.scope adds it). Read
+        fresh by the daemon on every call."""
+        if not self.settings_readable():
+            return "off"
+        if not agent_id or agent_id == "main":
+            return chat_search_choice(self._values, "mainChatSearch")
+        spec = next((a for a in self.all_agents() if a["id"] == agent_id), None)
+        return spec["chatSearch"] if spec else "off"
 
     def accepts_work_for(self, agent_id: str | None) -> bool:
         """Whether other agents may give this agent a task or pass it a

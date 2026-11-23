@@ -7,7 +7,7 @@
 // harness's screenshot at --wait finds it still running.
 //   grep PREVIEW /tmp/n.log; cat /tmp/n.writes
 //
-// The notes knob on the main agent's and on Sora's Collaboration & notes
+// The notes knob on the main agent's and on Sora's Collaboration, notes & chats
 // card (Read only, then May write,
 // watching mainNotesWrite and her entry's notesWrite); Sora's Notes tab on
 // Agent details (a seeded note and a dropped file listed, the note opened,

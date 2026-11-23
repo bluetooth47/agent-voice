@@ -1997,6 +1997,12 @@ COLLAB_SAYS = {
     "allow": "Works with the other agents quietly; it is still shown on screen, in the chat "
              "and in the audit log. Sending anything to an endpoint is still said out loud.",
 }
+#: What each `chatSearch` scope does (master plan, M20), in the page's words.
+CHATS_SAYS = {
+    "off": "Has no chat tools.",
+    "own": "Searches and reads its own saved chats and the ones shared with it.",
+    "all": "Searches and reads every saved chat, every agent's.",
+}
 PROGRAM_LABELS = {"claude": "Claude Code", "codex": "Codex", "gemini": "Gemini",
                   "agy": "Antigravity", "antigravity": "Antigravity",
                   "antigravity-cli": "Antigravity", "copilot": "Copilot",
@@ -2169,6 +2175,20 @@ def catalog(agent_id: str, cfg) -> dict:
                                "Other agents may ask it questions, but not give it tasks or "
                                "pass it a conversation.")
                   if program and _runnable(program) or program == "endpoint" else ""}
+    # Master plan M20: which saved chats its chat tools reach. The program
+    # that takes them is the one that takes the notes tools; quarantine (or a
+    # quarantine that cannot be read) gives it none, whatever the scope says.
+    scope = cfg.chat_search_for(me if me != MAIN else "")
+    try:
+        held = cfg.quarantined()
+    except Exception:           # noqa: BLE001 -- unreadable holds
+        held = None
+    chats_why = notes_why
+    if not chats_why and (held is None or me in held):
+        chats_why = ("Quarantined, so it can search no chat." if held is not None else
+                     "The crew settings can't be read, so it can search no chat.")
+    chats_row = {"can": not chats_why, "why_not": chats_why, "scope": scope,
+                 "says": CHATS_SAYS.get(scope, "") if not chats_why else ""}
     # Phase M11: its own skills, the communal ones and the ones its CLI
     # finds by itself, each with its switch (skillsOff) and whether it is
     # really given; and every skill on the machine in its owner's lane.
@@ -2202,6 +2222,7 @@ def catalog(agent_id: str, cfg) -> dict:
                 "error": f"the scan failed ({type(e).__name__})"}
     return {"agent": me, "program": program, "program_label": _label(program),
             "level": level, "tools": tools, "notes": notes_row, "collab": collab_row,
+            "chats": chats_row,
             "skills": entries,
             "takes_communal": communal_on,
             "skills_readable": off is not None,
@@ -2904,6 +2925,9 @@ def main(argv=None) -> int:
                          + (c["why_not"] or c["says"]))
             if c["receives"]:
                 lines.append(f"Receives: {c['receives']}")
+            ch = v["chats"]
+            lines.append(f"Chat search: {ch['scope'] if ch['can'] else 'none'}; "
+                         + (ch["why_not"] or ch["says"]))
             lines.append(f"Skills ({v['delivery']}): {v['delivery_how']}")
             for x in v["skills"]:
                 mark = ("given" if x["delivered"] else "hidden by its own" if x["shadowed"]

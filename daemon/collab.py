@@ -151,6 +151,11 @@ REPORT_MAX = 2000
 CALL_TOOLS = ("list_agents", "ask_agent", "delegate", "pass_conversation",
               "message_agent", "task_status", "cancel_task")
 ACTING = ("ask_agent", "delegate", "pass_conversation", "message_agent")
+#: Master plan M20: the chat tools, which travel over the same socket and
+#: are settled by the same caller check, then answered by chat_search.py.
+#: Not collaboration: no link grants them, no card asks, and they have
+#: their own rate (chat_search.RATE_PER_MIN).
+CHAT_TOOLS = ("chats_search", "chats_read")
 #: Which task kind each acting tool makes.
 TOOL_KIND = {"ask_agent": "ask", "delegate": "delegate",
              "pass_conversation": "pass", "message_agent": "message"}
@@ -769,7 +774,7 @@ def parse_call(raw: bytes, pid: int) -> dict | None:
         return None
     if not (isinstance(data["id"], str) and _CALL.fullmatch(data["id"])):
         return None
-    if data["tool"] not in CALL_TOOLS or not isinstance(data["args"], dict):
+    if data["tool"] not in CALL_TOOLS + CHAT_TOOLS or not isinstance(data["args"], dict):
         return None
     who = data["from"]
     if not (isinstance(who, str) and (who == "" or _AGENT.fullmatch(who))):
@@ -2102,6 +2107,25 @@ class Runtime:
             print(f"  call {call['tool']} refused: {why}", flush=True)
             return reply({"ok": False, "text": why})
         turn = getattr(caller, "turn_id", 0)
+        if call["tool"] in CHAT_TOOLS:
+            # Master plan M20: counted apart from collaboration, before any
+            # work is spawned. Every search reads every chat file.
+            import chat_search
+            me = external(caller.id)
+            with self._lock:
+                recent = self._rate.setdefault(f"{me} chats", deque())
+                now = time.monotonic()
+                while recent and now - recent[0] > 60.0:
+                    recent.popleft()
+                over = len(recent) >= chat_search.RATE_PER_MIN
+                if not over:
+                    recent.append(now)
+            if over:
+                kind = "chat_search" if call["tool"] == "chats_search" else "chat_read"
+                chat_search._audit(kind, me, "", None, None, "rate")
+                return reply({"ok": False, "text": f"You have searched or read saved chats "
+                                                   f"{chat_search.RATE_PER_MIN} times in the last "
+                                                   f"minute; wait a moment."})
         if call["tool"] in ACTING:
             me = external(caller.id)
             with self._lock:
@@ -2134,12 +2158,18 @@ class Runtime:
         label = self.label(ext)
         if p is None or p.agent is None:
             return None, "No agent by that name is running here, so the call was refused."
+        chat = call["tool"] in CHAT_TOOLS
         side = self.side.get(ext)
         if side is not None and side[1] is not None and descends(call["pid"], pid_of(side[1])):
+            if chat:
+                # M20: what it found would go back to the agent that asked.
+                return None, (f"You're answering a question for {side[0].frm_label}, so saved "
+                              f"chats can't be searched from inside it.")
             return None, (f"You're answering a question for {side[0].frm_label}, and can't "
                           f"start other work from inside it.")
         if getattr(p.agent, "name", "") not in STARTERS:
-            return None, f"{label}'s program can't start collaboration."
+            return None, (f"{label}'s program has no chat tools." if chat
+                          else f"{label}'s program can't start collaboration.")
         if not getattr(p, "answering", False):
             return None, (f"That call names {label}, but {label} isn't in the middle of a "
                           f"turn, so it was refused.")
@@ -2164,6 +2194,15 @@ class Runtime:
                         pass
         threading.Thread(target=keep_alive, daemon=True).start()
         try:
+            if tool in CHAT_TOOLS:
+                # Master plan M20: the caller is settled (_caller); which
+                # chats it may see is chat_search's to decide, from the
+                # settings read fresh, and its answer is never a refusal
+                # dressed as collaboration.
+                import chat_search
+                ok, text = chat_search.answer(self, call, p, turn)
+                reply({"ok": ok, "text": text})
+                return
             crew = self._crew()
             me = external(p.id)
             if tool not in ACTING and (me in crew.quarantined or

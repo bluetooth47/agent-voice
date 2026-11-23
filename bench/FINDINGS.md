@@ -2146,3 +2146,35 @@ unchanged). What is left is reading and parsing 8.4 MB of JSON (about
 answers in under a third of a second, after the box's 250 ms pause, and
 this machine has 40 saved chats. The settings are imported for agent names
 only when the query holds `agent:`.
+
+## 53. M20: what an agent's chat search costs
+
+Measured 2026-11-23 on the i7-1185G7 (8 threads), the venv's Python, a
+scratch folder under /tmp; the script lived in /tmp and is not kept. 1000
+synthetic chats of ten exchanges each (11.7 MB on disk, half with a written
+name and summary), owned in turn by Theo, Sora and Hazel, one in ten of the
+others' shared with Theo, so Theo's `own` scope holds about 400 of them.
+`chat_search.answer` was called exactly as the daemon calls it -- both
+checks, the settings read twice, every hit reloaded and judged again, the
+audit line written -- 21 runs each:
+
+| | median | p95 |
+|---|---|---|
+| `own`, a query most chats match ("garden tomato") | 81 ms | 94 ms |
+| `own`, a word no chat holds | 61 ms | 64 ms |
+| `own`, `garden agent:sora after:7d` | 55 ms | 58 ms |
+| `all`, "garden tomato" | 170 ms | 181 ms |
+| `all`, a word no chat holds | 128 ms | 134 ms |
+| `all`, `garden agent:sora after:7d` | 115 ms | 122 ms |
+| the Chats page's own search of every chat, same store | 159 ms | 191 ms |
+| `own` "garden tomato" over a real `calls.sock` (send to answer) | 98 ms | 107 ms |
+| `chats_read` of a 2000-exchange chat, from 1 / from 1990 | 8.6 / 7.8 ms | 8.8 / 8.0 ms |
+
+`own` is *faster* than the page's search, not slower: the visibility check
+runs first, on the index entry, so the 600 chats Theo may not see are never
+opened, let alone scored. `all` costs what the page's search costs plus the
+second check (ten files reloaded) and the answer's formatting, about 10 ms.
+The socket adds about 15 ms. A search answer with ten hits was about 5,000
+characters; a read is capped at 8,000 characters of chat. At the rate limit
+(20 chat calls a minute per agent) the worst an agent can spend is about
+3.5 s of one core a minute on `all`. No index file, as in §52.

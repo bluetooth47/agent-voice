@@ -761,9 +761,11 @@ def test_the_server_speaks_mcp_over_stdio(tmp_path):
     replies = [json.loads(l) for l in out.stdout.splitlines()]
     assert [r["id"] for r in replies] == [1, 2, 3, 4]
     assert replies[0]["result"]["serverInfo"]["name"] == "agentvoice-crew"
-    # the notes tools only: with no other agent switched on, the Phase 16
-    # collaboration tools are not offered (there is nobody to work with)
-    assert len(replies[1]["result"]["tools"]) == 4
+    # the notes tools, and (master plan M20) the two chat tools, which the
+    # default scope ("own") offers: with no other agent switched on, the
+    # Phase 16 collaboration tools are not offered (nobody to work with)
+    assert sorted(t["name"] for t in replies[1]["result"]["tools"]) == [
+        "chats_read", "chats_search", "notes_append", "notes_list", "notes_read", "notes_write"]
     assert not replies[2]["result"].get("isError"), replies[2]
     assert "hello" in replies[3]["result"]["content"][0]["text"]
 
@@ -827,7 +829,11 @@ AUDIT_SAFE = {"author", "target", "name", "kind", "reason", "locked", "valid_nam
               # Phase M16 (permission_hook._record_decision): the agent's id,
               # the tool's name (never its input), and three words from
               # audit's fixed lists: the decision, how it was reached, the level.
-              "who", "tool_name", "decision", "how", "level"}
+              "who", "tool_name", "decision", "how", "level",
+              # Master plan M20 (chat_search._audit): how many hits or
+              # exchanges came back, the bytes handed back, and for a read
+              # the chat's id (random hex) -- never the query.
+              "hit_count", "answer_bytes", "chat_id"}
 
 
 def _names_outside_len(node):

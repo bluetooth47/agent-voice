@@ -126,6 +126,13 @@ CREW_WRITES = {"notes_write", "notes_append"}
 #: not two: the pattern DESKTOP_SELF_ASKED uses for the screenshot.
 CREW_SELF_ASKED = {"list_agents", "ask_agent", "delegate", "pass_conversation",
                    "message_agent", "task_status", "cancel_task"}
+#: Searching and reading the person's saved chats (master plan, M20): reads,
+#: allowed at every level like Read. Which chats an agent may see is the
+#: daemon's to decide, from the caller the kernel names and its own
+#: `chatSearch`, at every level and whatever a chat grant says -- so the hook
+#: passing them widens nothing, and a Trusted agent, with no hook, is held
+#: the same.
+CREW_CHATS = {"chats_search", "chats_read"}
 
 #: Claude in Chrome (plan 12d). Its tools act in the person's real browser,
 #: signed in as them, so a click can send, buy or post. Those are asked
@@ -489,6 +496,21 @@ def _foreign(path: str) -> bool:
         if root not in p.parents:
             return False
         return p.relative_to(root).parts[0] != me
+    except (OSError, ValueError, RuntimeError):
+        return True
+
+
+def _saved_chat(path: str) -> bool:
+    """True when `path` is the saved-chats folder or inside it (master plan,
+    M20). An agent finds saved chats through chats_search and chats_read,
+    which the daemon holds to its `chatSearch` scope -- its own chats and
+    the ones shared with it, by default. Read straight off the disk they
+    would be every agent's, whatever that scope says, so below Trusted it is
+    asked about, as another agent's folder is. Unsure means yes."""
+    try:
+        p = _resolved(path)
+        root = (DATA_DIR / "chats").resolve()
+        return p == root or root in p.parents
     except (OSError, ValueError, RuntimeError):
         return True
 
@@ -902,7 +924,7 @@ def _search_would_read(tool_input: dict) -> list[str] | None:
             return [str(agents)]
     except (OSError, RuntimeError, ValueError):
         return [root]
-    return [f for f in files if _is_secret(f) or _foreign(f)]
+    return [f for f in files if _is_secret(f) or _foreign(f) or _saved_chat(f)]
 
 
 def _grant_file(session: str) -> Path:
@@ -1063,7 +1085,7 @@ def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, st
                     session=session)
 
     crew = tool_name[len(CREW_PREFIX):] if tool_name.startswith(CREW_PREFIX) else ""
-    if crew in CREW_READ_ONLY or crew in CREW_SELF_ASKED:
+    if crew in CREW_READ_ONLY or crew in CREW_SELF_ASKED or crew in CREW_CHATS:
         return "allow", ""
 
     # Allowed wholesale for this conversation, from the prompt. Like
@@ -1102,6 +1124,11 @@ def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, st
             secrets = [p for p in _paths_in(tool_input) if _foreign(p)]
             note = (f"this reads another agent's folder ({secrets[0]})"
                     if secrets else "")
+        if not secrets:
+            # M20: past the chat tools' scope, every agent's saved chats.
+            secrets = [p for p in _paths_in(tool_input) if _saved_chat(p)]
+            note = (f"this reads saved chats directly ({secrets[0]}), not just the ones "
+                    f"its chat tools may show it" if secrets else "")
 
         # The level is consulted *before* the pre-search, not after. At
         # "trusted" the answer is allow whatever the tree holds, and paying

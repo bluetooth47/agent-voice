@@ -54,7 +54,7 @@ class TestConfigAgents:
                       "agentvoiceSkill": "inherit"},
             "detected": {},
             "skillsOff": [],
-            "notesWrite": "allow", "collaboration": "announce", "acceptsWork": True,
+            "notesWrite": "allow", "collaboration": "announce", "acceptsWork": True, "chatSearch": "own",
             "projectDir": "~/code",
             # Phase M17: how it is launched, at the defaults.
             "resume": True, "idleTimeoutS": 90, "extraArgs": [],

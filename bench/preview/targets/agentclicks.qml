@@ -159,9 +159,9 @@ ShellRoot {
         if (newLayout) clickItem(find(section(main_(), "Tools"), function(i) { return i.text !== undefined && String(i.text).indexOf("Browser") === 0 && i.clicked !== undefined }), "main browser → every agent")
         else chip(main_(), "Browser", "Same as every agent", "main browser → every agent")
       },
-      function() { chip(section(main_(), "Collaboration & notes"), "Notes", "Read only", "main notes read only") },
-      function() { chip(section(main_(), "Collaboration & notes"), "Collaboration", "Quietly", "main collaboration quietly") },
-      function() { chip(section(main_(), "Collaboration & notes"), "Takes work from agents", "Questions only", "main questions only") },
+      function() { chip(section(main_(), "Collaboration, notes & chats"), "Notes", "Read only", "main notes read only") },
+      function() { chip(section(main_(), "Collaboration, notes & chats"), "Collaboration", "Quietly", "main collaboration quietly") },
+      function() { chip(section(main_(), "Collaboration, notes & chats"), "Takes work from agents", "Questions only", "main questions only") },
       function() { type(section(main_(), "Permissions"), "Project folder", "~/Projects/other", "main project folder") },
       function() { unfold(sora(), "sora") },
       function() { type(section(sora(), "Identity"), "Name", "Sora Two", "sora name") },
@@ -175,9 +175,9 @@ ShellRoot {
         if (newLayout) clickItem(find(section(sora(), "Tools"), function(i) { return i.text !== undefined && String(i.text).indexOf("Desktop tools") === 0 && i.clicked !== undefined }), "sora desktop off")
         else chip(sora(), "Desktop tools", "Off", "sora desktop off")
       },
-      function() { chip(section(sora(), "Collaboration & notes"), "Collaboration", "Announce", "sora collaboration announce") },
-      function() { chip(section(sora(), "Collaboration & notes"), "Notes", "May write", "sora notes may write") },
-      function() { chip(section(sora(), "Collaboration & notes"), "Takes work from agents", "Yes", "sora takes work") },
+      function() { chip(section(sora(), "Collaboration, notes & chats"), "Collaboration", "Announce", "sora collaboration announce") },
+      function() { chip(section(sora(), "Collaboration, notes & chats"), "Notes", "May write", "sora notes may write") },
+      function() { chip(section(sora(), "Collaboration, notes & chats"), "Takes work from agents", "Yes", "sora takes work") },
       function() { chip(section(sora(), "Voice"), "Talk while it works", "Brief", "sora narration brief") },
       function() { unfold(agentRoot("nova", "nova"), "nova") },
       function() {

@@ -156,6 +156,19 @@ even if nothing malicious is ever hosted.
   whatever its program can read on disk. A downgrade to a build before M8
   ignores both settings: all-to-all again and no quarantine (master plan
   7.7 says what to do first).
+- **Chat search holds through the chat tools, not over the files (M20).**
+  `chats_search` and `chats_read` are answered by the daemon, which names
+  the caller from the kernel (SO_PEERCRED), ties it to that agent's running
+  turn and judges every chat against the agent's `chatSearch` scope before
+  anything is matched, counted or quoted -- again before the answer goes
+  back. The chat files under `~/.local/share/agentvoice/chats/` hold every
+  agent's chats. Below Trusted a Claude agent's direct read of them (Read,
+  a Grep that would read one) is asked about, as another agent's folder is;
+  a Claude agent at Trusted, and a Codex agent at any level (Codex has no
+  hook, and its read-only sandbox reads files), can read them with their
+  own tools or a shell. What an agent then repeats in a chat that is shared
+  is seen by whoever shares that chat. A way past the scope *through the
+  tools* is a report.
 - **The protected-file list is names and locations.** A content search and a
   direct read now get the same answer for the same bytes, which is what the
   list is for. It will not recognise a `prod-dump.sql` full of passwords, and

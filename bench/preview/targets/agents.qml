@@ -160,7 +160,7 @@ ShellRoot {
           overlay.check(k && k.expanded, "the deep link opened sora")
           overlay.check(overlay.strip("main") && !overlay.strip("main").expanded, "the main agent starts shut")
           overlay.check(k && k.pills.length >= 3, "sora's strip has its pills (" + (k ? k.pills.map(function(p) { return p.text }).join(" | ") : "") + ")")
-          for (var t of ["Identity", "Permissions", "Voice", "Tools", "Collaboration & notes", "Agent"])
+          for (var t of ["Identity", "Permissions", "Voice", "Tools", "Collaboration, notes & chats", "Agent"])
             overlay.check(overlay.cardIn(k, t) !== null, "sora has its " + t + " card")
           overlay.check(overlay.cardIn(k, "Endpoint") === null, "and no Endpoint card")
           overlay.held = k

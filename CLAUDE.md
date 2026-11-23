@@ -326,7 +326,11 @@ is delivered; and the poll (`Runtime.sweep`) refuses queued work and
 cancels running work whose link or quarantine moved. A new way for one
 agent to reach another -- chat search (M20), announcements (M27) -- calls
 `crew_links.refusal` at each of those points, and an unreadable list
-refuses it.
+refuses it. Chat search has no target and no queue, so it calls
+`search_refusal`, the same reading with only the unreadable and quarantine
+halves, at the call and again before its answer is handed back; and it
+judges each chat with `may_replay` (or the `all` scope) *before* the chat
+is matched, counted or quoted, because a count is a disclosure too.
 
 **A switch that says off has to be off where the CLI looks.** `claude -p`
 starts every MCP server in the user's own settings, every project's
