@@ -3,9 +3,15 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 
-// One voice in the library: its name and kind on the left, what can be done
-// with it on the right. Knows nothing about settings; the page wires the
+// One voice in the library: the trash first, then its name and kind, then
+// what can be done with it. Knows nothing about settings; the page wires the
 // signals to the overlay.
+//
+// Every column but the name has a fixed width and the name takes what is
+// left, so the trash cell, the name and the Test / Download cell start at the
+// same x on every row (bug F). The trash cell is reserved whether or not the
+// row can be removed: a voice that is not on disk or is in use shows a quiet
+// dash there, never a gap that moves the name.
 //
 //   test()      play or stop its minute-long sample (only when on disk)
 //   download()  fetch it
@@ -34,7 +40,11 @@ Item {
   signal use(string who)
 
   width: parent ? parent.width : 400
-  implicitHeight: Math.max(info.implicitHeight, actions.implicitHeight) + Style.space(12)
+  readonly property int trashWidth: Style.space(34)
+  readonly property int testWidth: Style.space(124)
+  readonly property int useWidth: Style.space(120)
+
+  implicitHeight: Math.max(info.implicitHeight, Style.space(30)) + Style.space(12)
 
   Rectangle {
     anchors.fill: parent
@@ -47,9 +57,10 @@ Item {
 
   Column {
     id: info
-    anchors.left: parent.left
-    anchors.leftMargin: Style.space(8)
-    anchors.right: actions.left
+    objectName: "voiceName"
+    anchors.left: trashCell.right
+    anchors.leftMargin: Style.space(4)
+    anchors.right: testCell.left
     anchors.rightMargin: Style.space(8)
     anchors.verticalCenter: parent.verticalCenter
     spacing: Style.space(2)
@@ -66,9 +77,21 @@ Item {
     }
     Text {
       width: parent.width
-      text: row.detail + (row.users !== "" ? "  ·  used by " + row.users : "")
+      text: row.detail
       color: row.foreground
       opacity: 0.6
+      font.family: row.fontFamily
+      font.pixelSize: Style.font.bodySmall
+      elide: Text.ElideRight
+      textFormat: Text.PlainText
+    }
+    // Who speaks in it, on a line of its own so a long list is not cut off
+    // by the detail beside it. Names are the agents' own: PlainText.
+    Text {
+      visible: row.users !== ""
+      width: parent.width
+      text: "Used for " + row.users
+      color: row.accent
       font.family: row.fontFamily
       font.pixelSize: Style.font.bodySmall
       elide: Text.ElideRight
@@ -90,14 +113,49 @@ Item {
     }
   }
 
-  Row {
-    id: actions
-    anchors.right: parent.right
-    anchors.rightMargin: Style.space(4)
+  // The trash, first and always there.
+  Item {
+    id: trashCell
+    objectName: "trashCell"
+    anchors.left: parent.left
+    anchors.leftMargin: Style.space(4)
     anchors.verticalCenter: parent.verticalCenter
-    spacing: Style.space(6)
+    width: row.trashWidth
+    height: Style.space(30)
+    Button {
+      anchors.centerIn: parent
+      visible: row.onDisk && row.removable
+      iconText: "\u{f01b4}"
+      tooltipText: "Delete it from this machine"
+      bordered: true
+      foreground: row.foreground
+      fontFamily: row.fontFamily
+      onClicked: row.remove()
+    }
+    // What stands in for it: why this one cannot go, or nothing to remove yet.
+    Text {
+      anchors.centerIn: parent
+      visible: !(row.onDisk && row.removable)
+      text: "–"
+      color: row.foreground
+      opacity: 0.3
+      font.family: row.fontFamily
+      font.pixelSize: Style.font.body
+      textFormat: Text.PlainText
+    }
+  }
+
+  Item {
+    id: testCell
+    objectName: "testCell"
+    anchors.right: useCell.left
+    anchors.rightMargin: Style.space(6)
+    anchors.verticalCenter: parent.verticalCenter
+    width: row.testWidth
+    height: Style.space(30)
 
     Button {
+      width: parent.width
       visible: row.onDisk
       text: row.playing ? "■ Stop" : "▶ Test"
       tooltipText: row.playing ? "Stop the sample" : "Hear about a minute of this voice"
@@ -108,6 +166,7 @@ Item {
       onClicked: row.test()
     }
     Button {
+      width: parent.width
       visible: !row.onDisk
       enabled: !row.downloading && !row.queued
       text: row.downloading ? ("Downloading " + row.percent + "%")
@@ -117,23 +176,24 @@ Item {
       fontFamily: row.fontFamily
       onClicked: row.download()
     }
+  }
+
+  Item {
+    id: useCell
+    objectName: "useCell"
+    anchors.right: parent.right
+    anchors.rightMargin: Style.space(4)
+    anchors.verticalCenter: parent.verticalCenter
+    width: row.useWidth
+    height: Style.space(30)
     Dropdown {
-      width: Style.space(120)
+      width: parent.width
       showLabel: false
       fontFamily: row.fontFamily
       foreground: row.foreground
       options: [{ label: "Use for…", value: "__pick" }].concat(row.agents)
       value: "__pick"
       onChanged: function(v) { if (v !== "__pick") row.use(v) }
-    }
-    Button {
-      visible: row.onDisk && row.removable
-      iconText: "\u{f01b4}"
-      tooltipText: "Delete it from this machine"
-      bordered: true
-      foreground: row.foreground
-      fontFamily: row.fontFamily
-      onClicked: row.remove()
     }
   }
 }

@@ -337,6 +337,12 @@ case "\${1:-}" in
     # reading the scratch shell.json under --config. It only reads, and the
     # page draws none of the agents' wake phrases, so nothing real is shown.
     env XDG_CONFIG_HOME="\${XDG_CONFIG_HOME:-$real_config}" XDG_DATA_HOME='$tmp/data' $tools_env '$repo/bin/agentvoice' "\$@"; exit \$? ;;
+  voice)
+    # Fetching, removing and sampling a voice (M25) change the real library
+    # and play through the real speakers: a preview only logs them. The
+    # end-to-end target voices needs the real command and says so with
+    # PREVIEW_REAL_VOICE=1.
+    if [ "\${PREVIEW_REAL_VOICE:-}" != 1 ]; then printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0; fi ;;
   crew)
     # The Crew map's validator (M9): this checkout's, against the scratch
     # shell.json under --config, so a preview checks what it saves with the

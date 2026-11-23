@@ -1,0 +1,61 @@
+{
+  "bar": {
+    "layout": {
+      "left": [],
+      "center": [],
+      "right": [
+        {
+          "id": "duaneoca.agentvoice",
+          "phrase": "theo",
+          "engine": "vosk",
+          "mainName": "Theo",
+          "agentModels": {
+            "claude": "opus"
+          },
+          "agentEfforts": {
+            "claude": "high"
+          },
+          "permissions": {
+            "claude": "edits"
+          },
+          "projectDir": "~/Projects/demo",
+          "voice": "lessac-medium",
+          "voiceSpeed": 100,
+          "speakReplies": true,
+          "mainTools": {
+            "browser": "off"
+          },
+          "mainCollaboration": "announce",
+          "desktopTools": true,
+          "browserTools": true,
+          "omarchySkill": true,
+          "narration": "brief",
+          "voiceAgents": [
+            {
+              "name": "sora",
+              "label": "Sora",
+              "id": "sora",
+              "agent": "claude",
+              "voice": "amy-medium",
+              "speed": 130
+            },
+            {
+              "name": "jarvis",
+              "label": "Jarvis",
+              "id": "jarvis",
+              "agent": "claude"
+            },
+            {
+              "name": "friday",
+              "label": "Friday",
+              "id": "friday",
+              "agent": "claude",
+              "voice": "en_GB-alba-medium",
+              "speed": 0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1587,10 +1587,10 @@ Item {
     return true
   }
 
-  // Who speaks in `v` now: "main" and the display names of extra agents.
+  // Who speaks in `v` now: the main agent (by its display name) and the extra agents.
   function voiceUsers(v) {
     var out = []
-    if (String(root.setting("voice", "lessac-medium")) === v) out.push("main")
+    if (String(root.setting("voice", "lessac-medium")) === v) out.push(root.mainLabel)
     for (var i = 0; i < root.voiceAgents.length; i++) {
       var a = root.voiceAgents[i] || {}
       var own = String(a.voice || "")

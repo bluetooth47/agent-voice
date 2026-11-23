@@ -1,12 +1,13 @@
 // End to end on the Voice page's library and the main instructions, through
 // real saves and the real `agentvoice voice` command. Run with --live-config:
 //
-//   preview.sh --live-config --wait 90 --out /tmp/v voices
+//   PREVIEW_REAL_VOICE=1 preview.sh --live-config --wait 90 --out /tmp/v voices
 //   grep PREVIEW /tmp/v.log
 //
 // It downloads one voice for real (en_GB-alba-medium, 63MB) and removes it
 // again, and plays a few seconds of a sample through the speakers. It needs
-// the installed engine to have `agentvoice voice` (install.sh first).
+// the installed engine to have `agentvoice voice` (install.sh first), and
+// PREVIEW_REAL_VOICE=1: without it preview.sh's stub only logs the command.
 import QtQuick
 import QtTest
 import Quickshell
@@ -74,8 +75,21 @@ ShellRoot {
       return find(root, function(i) { return i.clicked !== undefined && typeof i.text === "string"
                                               && i.text.indexOf(prefix) === 0 })
     }
-    function chip(text) {
-      return find(content(), function(i) { return i.text === text && i.clicked !== undefined })
+    // The library's one filter (M25): a CompactSelector, whose MenuList is a
+    // Popup in `data`, not in `children`.
+    function chooseFilter(value) {
+      var sel = find(content(), function(i) { return i.objectName === "voiceFilter" })
+      var d = sel ? sel.data : []
+      for (var i = 0; i < d.length; i++) {
+        var m = d[i]
+        if (m && m.entries !== undefined && m.choose !== undefined) {
+          for (var j = 0; j < m.entries.length; j++) {
+            var e = m.entries[j]
+            if (String((e !== null && typeof e === "object") ? e.value : e) === value) { m.choose(j); return }
+          }
+        }
+      }
+      check(false, "filter " + value + " is offered")
     }
 
     property int warm: 0
@@ -92,15 +106,20 @@ ShellRoot {
         overlay.step++
         switch (overlay.step) {
         case 1:
-          overlay.check(overlay.rows().length === overlay.rawVoiceOptions.length,
-                        "the library lists all " + overlay.rawVoiceOptions.length + " voices (" + overlay.rows().length + ")")
-          overlay.click(overlay.chip("British"), "filter British")
+          overlay.check(overlay.rows().length === overlay.voicesOnDisk.length,
+                        "the library opens on Downloaded (" + overlay.rows().length + ")")
+          overlay.chooseFilter("all")
           break
         case 2:
-          overlay.check(overlay.rows().length === 8, "British shows 8 (" + overlay.rows().length + ")")
-          overlay.click(overlay.chip("Downloaded"), "filter Downloaded")
+          overlay.check(overlay.rows().length === overlay.rawVoiceOptions.length,
+                        "All lists all " + overlay.rawVoiceOptions.length + " voices (" + overlay.rows().length + ")")
+          overlay.chooseFilter("GB")
           break
         case 3:
+          overlay.check(overlay.rows().length === 8, "British shows 8 (" + overlay.rows().length + ")")
+          overlay.chooseFilter("here")
+          break
+        case 4:
           overlay.check(overlay.rows().length === overlay.voicesOnDisk.length,
                         "Downloaded shows what is on disk (" + overlay.rows().length + ")")
           overlay.check(overlay.rows().every(function(r) { return r.onDisk }), "and every one says so")
@@ -116,7 +135,7 @@ ShellRoot {
           break
         case 6:
           overlay.check(overlay.samplePlaying === "", "the sample stopped")
-          overlay.click(overlay.chip("All"), "filter All")
+          overlay.chooseFilter("all")
           break
         case 7:
           var a = overlay.rowFor("Alba")
@@ -146,7 +165,7 @@ ShellRoot {
         case 103:
           overlay.check(String(overlay.setting("voice", "")) === overlay.target, "Use for main saved the voice")
           var a3 = overlay.rowFor("Alba")
-          overlay.check(a3 && a3.users === "main" && !a3.removable, "it shows as the main agent's, so not removable")
+          overlay.check(a3 && a3.users === overlay.mainLabel && !a3.removable, "it shows as the main agent's, so not removable")
           overlay.assignVoice("", "lessac-medium")
           break
         case 106:
