@@ -251,8 +251,9 @@ class Gemini(Adapter):
                     "use an API key, or switch to Antigravity")
         return "gemini has no auth configured — run: gemini"
 
-    def send(self, text: str, session_id: str | None = None) -> Iterator[Chunk]:
-        prompt = self.with_preamble(text)
+    def _argv(self, text: str, session_id: str | None) -> list[str]:
+        """The command line, without the prompt (phase M16 split this out of
+        send(), so Agent details shows what send() runs)."""
         # An empty `-p` forces headless mode and the prompt arrives on stdin,
         # which --help describes as "appended to input on stdin (if any)" and
         # a real turn confirms. Out of argv, where /proc exposes it to any
@@ -260,6 +261,11 @@ class Gemini(Adapter):
         argv = ["gemini", "-p", "", "--approval-mode", self.approval_mode]
         if self.model:
             argv += ["-m", self.model]
+        return argv
+
+    def send(self, text: str, session_id: str | None = None) -> Iterator[Chunk]:
+        prompt = self.with_preamble(text)
+        argv = self._argv(text, session_id)
 
         # No trust override. This used to set GEMINI_CLI_TRUST_WORKSPACE=true
         # for whatever folder it was pointed at -- which is the same thing the
@@ -278,6 +284,7 @@ class Gemini(Adapter):
         except OSError as e:
             yield Chunk(error=f"could not start gemini: {e}")
             return
+        self._launched(argv, proc)          # phase M16: Agent details → Advanced
         feed(proc, prompt)
 
         # Drained in the background from here on: stderr is a 64KB pipe

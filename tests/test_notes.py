@@ -823,7 +823,11 @@ AUDIT_SAFE = {"author", "target", "name", "kind", "reason", "locked", "valid_nam
               "parts_bytes",
               # Phase M15 (communal_import._audit): the operation's id, which
               # is a time and four random bytes, and the ids it names.
-              "op", "COMMUNAL"}
+              "op", "COMMUNAL",
+              # Phase M16 (permission_hook._record_decision): the agent's id,
+              # the tool's name (never its input), and three words from
+              # audit's fixed lists: the decision, how it was reached, the level.
+              "who", "tool_name", "decision", "how", "level"}
 
 
 def _names_outside_len(node):

@@ -74,6 +74,7 @@ import agentvoice_skill  # noqa: E402
 import readout  # noqa: E402
 import try_it  # noqa: E402
 import sessions  # noqa: E402
+import runinfo  # noqa: E402
 from runtime import (  # noqa: E402
     REPLY_MAX, RUNTIME_DIR, Config, History, Speaker, StateFile, instructions_text, speed_pct,
 )
@@ -1776,6 +1777,13 @@ class Daemon:
         #: from the state file a previous run of the daemon left, so a restart
         #: (an install) does not wipe the count the Conversation page shows.
         self.limit_hits = _limit_hits_from(state)
+        #: phase M16: each agent's last structural log lines (Agent details
+        #: → Advanced), typed fields only, never anything said; and what was
+        #: last published about what each agent runs (runinfo.json).
+        self.agent_ring = runinfo.Ring()
+        self._runinfo: dict = {}
+        self._runinfo_key = None
+        self._runinfo_at = 0.0
         signal.signal(signal.SIGUSR1, self._on_toggle)
         signal.signal(signal.SIGUSR2, self._on_interrupt)
         if state is not None and hasattr(state, "overlay"):
@@ -2266,7 +2274,11 @@ class Daemon:
                                   model=want_model, effort=want_effort,
                                   instructions=want_instructions)
         # phase M2, bug I: was `self.session_id = None` whatever changed.
-        self.carry_session(self._main, changed, want_name or "")
+        had = bool(self._main.session_id)
+        kept = self.carry_session(self._main, changed, want_name or "")
+        if old is not None:
+            # phase M16: the ring, by kind and the sessions vocabulary only.
+            self.agent_ring.add("main", "rebuilt", changed=changed, kept=kept if had else None)
         self._main_level = want_level
         self.publish_agent()
         where = f" · {want_cwd}" if getattr(self.agent, "has_tools", True) else ""
@@ -3199,6 +3211,7 @@ class Daemon:
             if agent is not None and not p.busy:
                 self.apply_extras(agent, p)
         self.publish_live_tools(agents)
+        self.publish_runinfo(agents)
 
     def _refresh_agentvoice_skill(self) -> None:
         """Build the Agent Voice skill when it is missing or its inputs
@@ -3241,6 +3254,53 @@ class Daemon:
             tooldetect.write_live(live)
         except Exception:
             pass
+
+    #: Seconds between rebuilds of every agent's launch line when nothing
+    #: visible moved (a config.toml or a scan can change underneath).
+    RUNINFO_EVERY_S = 10.0
+
+    def publish_runinfo(self, agents, now: float | None = None) -> bool:
+        """What each agent runs, for Agent details → Advanced (phase M16):
+        its adapter's own next launch line and its last real one (redacted),
+        session, timeouts, the servers it is given, its log ring. Built from
+        the live adapters (runinfo.record_for), so it is what runs. Written
+        when something moved, else every RUNINFO_EVERY_S. True if written."""
+        try:
+            return self._publish_runinfo(agents, time.time() if now is None else now)
+        except Exception:               # noqa: BLE001 -- a page is never worth a turn
+            return False
+
+    def _publish_runinfo(self, agents, now: float) -> bool:
+        def is_main(p):
+            return getattr(p, "main", getattr(p, "spec", None) is None)
+        pairs = [(p, self.agent if is_main(p) else getattr(p, "agent", None)) for p in agents]
+        key = tuple((getattr(p, "id", ""), id(agent), getattr(p, "session_id", None),
+                     getattr(p, "busy", False), getattr(p, "state", ""),
+                     (getattr(agent, "last_launch", None) or {}).get("at"))
+                    for p, agent in pairs) + (self.agent_ring.version,)
+        if key == self._runinfo_key and now - self._runinfo_at < self.RUNINFO_EVERY_S:
+            return False
+        records = {}
+        for p, agent in pairs:
+            aid = "main" if is_main(p) else (getattr(p, "id", "") or "")
+            if not aid:
+                continue
+            sid = getattr(p, "session_id", None)
+            try:
+                rec = runinfo.record_for(
+                    agent, session_id=sid, turns=self.agent_ring.turns(aid, sid),
+                    busy=getattr(p, "busy", False), state=getattr(p, "state", ""),
+                    previous=self._runinfo.get(aid))
+            except Exception:           # noqa: BLE001 -- a page is never worth a turn
+                rec = {"program": getattr(agent, "name", "") or ""}
+            rec["log"] = self.agent_ring.lines(aid)
+            records[aid] = rec
+        self._runinfo_key, self._runinfo_at = key, now
+        if records == self._runinfo:
+            return False
+        self._runinfo = records
+        runinfo.write(records)
+        return True
 
     def _rebuild_skill(self) -> None:
         try:
@@ -4245,6 +4305,7 @@ class Daemon:
         error = None
         kind = ""
         skipped = False
+        tools_seen: list[str] = []
         # Progress talk, when this agent has it on. The stream is then read
         # on a thread of its own so a quiet stretch -- a long command -- still
         # gives this one moments to speak in; with it off nothing changes.
@@ -4280,6 +4341,7 @@ class Daemon:
                     ttft = chunk.ttft_ms
                 if chunk.tool:
                     print(f"  {DIM}[{chunk.tool}]{OFF}", flush=True)
+                    tools_seen.append(chunk.tool)       # phase M16: the ring
                 if chunk.error:
                     error = chunk.error
                 if chunk.thinking:
@@ -4417,6 +4479,7 @@ class Daemon:
                 self.session_id = None
                 print(f"  {YEL}conversation dropped — the next turn starts "
                       f"a new one{OFF}")
+                self.agent_ring.add(persona.id or "main", "dropped", error=kind)
             explained = failure.spoken(kind, getattr(self.agent, "name", ""),
                                        error)
             if not reply_parts:
@@ -4448,6 +4511,20 @@ class Daemon:
             self.collab.hold(persona, " ".join(unsaid))
         print(f"  {DIM}agent {time.time() - t0:.1f}s"
               f"{f', first token {ttft:.0f}ms' if ttft else ''}{OFF}")
+        # phase M16: one structural line in this agent's ring (runinfo.Ring
+        # types every field: no text can reach it), and the turn counted in
+        # its conversation.
+        try:
+            stopped = self._interrupt.is_set()
+            secs = time.time() - t0
+            start = getattr(self.agent, "last_start", "")
+            in_task = persona.task is not None
+            self.agent_ring.add(persona.id or "main", "turn", secs=secs, first_ms=ttft,
+                                start=start, tools=tools_seen, error=kind, stopped=stopped,
+                                task=in_task)
+            self.agent_ring.count_turn(persona.id or "main", self.session_id)
+        except Exception:               # noqa: BLE001 -- a page is never worth a turn
+            pass
         # A stopped turn still counts if it got as far as making a sound --
         # that wait was real. One stopped before it spoke has nothing to say.
         if gaps:
@@ -5389,7 +5466,9 @@ class Daemon:
         # phase M2, bug I: _build_persona drops the session; put it back
         # when this change is one the new adapter can carry it across.
         p.session_id = sid
-        self.carry_session(p, changed, spec.get("agent") or "")
+        kept = self.carry_session(p, changed, spec.get("agent") or "")
+        # phase M16: the ring, by kind and the sessions vocabulary only.
+        self.agent_ring.add(p.id, "rebuilt", changed=changed, kept=kept if sid else None)
 
     def persona_speed(self, p: Persona) -> int:
         """An extra agent's own speed, else the main agent's."""

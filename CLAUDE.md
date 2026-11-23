@@ -248,7 +248,11 @@ any exit from `permission_hook.py` other than 0-with-a-decision or 2 as a
 guard broke", it is "the guard was absent". `main()` catches `BaseException`
 and every path out of it emits a decision. The hook command is also
 `shlex.quote`d, because it is run by a shell and a space in `$HOME` gives
-exit 127, which fails open the same way.
+exit 127, which fails open the same way. Since M16 it also writes an audit
+line per decision, and that line is written *after* the decision is on
+stdout, outside main()'s catch and inside its own: a record that raises,
+hangs on the lock or is interrupted must change nothing, and a test makes
+it do all three.
 
 **A path that does not exist yet still has to be judged.** `Path.exists()`
 follows symlinks, so a *dangling* link counted as "not there" and only its

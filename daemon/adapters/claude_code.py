@@ -449,6 +449,24 @@ class ClaudeCode(Adapter):
     def efforts(self) -> tuple[str, ...]:
         return effort_levels(self.model)
 
+    #: Turns arrive as stream-json lines on stdin, which stays open between them.
+    prompt_channel = "as stream-json lines on stdin, kept open between turns"
+
+    def handed_servers(self) -> list[dict]:
+        """What _argv hands this process (phase M16): the same conditions."""
+        if self.no_tools:
+            return []
+        out = []
+        if self.desktop_tools:
+            out.append({"name": "agentvoice-desktop", "source": "agentvoice", "on": True})
+        if self.crew_tools:
+            out.append({"name": "agentvoice-crew", "source": "agentvoice", "on": True})
+        for key in sorted(self.detected_servers or {}):
+            out.append({"name": key, "source": "found", "on": True})
+        if self.browser_tools:
+            out.append({"name": "claude-in-chrome", "source": "browser", "on": True})
+        return out
+
     # --- the process, kept between turns -----------------------------------
 
     def _ready_for(self, session_id: str | None) -> bool:
@@ -465,7 +483,8 @@ class ClaudeCode(Adapter):
         # user is already trusting to run commands on their behalf. The key
         # that matters is not in the environment on this machine anyway --
         # endpoint_key() prefers the login keyring.
-        proc = subprocess.Popen(self._argv("", session_id), cwd=self.cwd,
+        argv = self._argv("", session_id)
+        proc = subprocess.Popen(argv, cwd=self.cwd,
                                 stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True, bufsize=1,
@@ -476,6 +495,7 @@ class ClaudeCode(Adapter):
         # watchdog then reports as "stopped responding".
         self._errors = Drain(proc.stderr)
         self._proc, self._holds = proc, session_id
+        self._launched(argv, proc)          # phase M16: Agent details → Advanced
         return proc
 
     def _forget(self) -> subprocess.Popen | None:

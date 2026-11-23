@@ -331,6 +331,20 @@ if [ "$scratch" -eq 1 ]; then
   fi
 fi
 
+# What the daemon publishes about what each agent runs (M16): a target's
+# targets/TARGET.run.json becomes the scratch runtime folder's runinfo.json,
+# as if a daemon -- this script, whose pid it names -- had written it, and
+# its "_live" part the init events' tools/live.json. The real daemon's file
+# is never read: `agentvoice agents` runs with XDG_RUNTIME_DIR in $tmp/run.
+if [ -f "$here/targets/$target.run.json" ]; then
+  mkdir -p "$tmp/run/agentvoice/tools"
+  chmod 700 "$tmp/run" "$tmp/run/agentvoice"
+  jq --argjson pid "$$" '{daemon_pid: $pid, at: now, agents: .agents}' \
+    "$here/targets/$target.run.json" > "$tmp/run/agentvoice/runinfo.json"
+  jq '._live // {}' "$here/targets/$target.run.json" > "$tmp/run/agentvoice/tools/live.json"
+  echo "$$" > "$tmp/run/agentvoice/pid"
+fi
+
 # The Crew map's layout file (M9) lives under XDG_STATE_HOME: a preview
 # drags boxes into a scratch one, never the real one. Commons' theme path
 # is built from $HOME (patched above), so this moves nothing else.

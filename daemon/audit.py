@@ -63,7 +63,20 @@ KINDS = frozenset({
     # an import undone, by the person (phase M15): the operation's id and
     # its size; each skill also gets a skill_import line.
     "communal_import", "communal_import_undo",
+    # A permission decision the hook made (phase M16): the agent, the tool's
+    # name, allow or deny, how it was reached and the level. No argument,
+    # no path: the tool's name is all of the call that is kept.
+    "permission",
 })
+#: A permission line's fields, each from a fixed list (phase M16).
+DECISIONS = frozenset({"allow", "deny"})
+#: How a decision was reached: the person was asked (and answered, or did
+#: not), it was refused without asking, the level or an "allow all in this
+#: chat" allowed it, or the hook itself failed (a denial).
+HOWS = frozenset({"asked", "unanswered", "refused", "level", "chat", "failed"})
+LEVELS = frozenset({"ask", "edits", "trusted"})
+#: A tool's name as Claude Code sends it ("Bash", "mcp__server__tool").
+_TOOL = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
 #: How a task ended: collab.DONE, kept here so this file imports nothing.
 STATES = frozenset({"completed", "cancelled", "failed", "refused"})
 #: An agent's external id ("main", "sora", "jarvis-ajc"), "you", or
@@ -106,13 +119,26 @@ def _size(value) -> int | None:
 
 def record(kind: str, *, frm: str, to: str, note: str = "", task: str = "",
            before: int | None = None, after: int | None = None,
-           reason: str = "", state: str = "") -> bool:
+           reason: str = "", state: str = "", tool: str = "", decision: str = "",
+           how: str = "", level: str = "", wait_s: float | None = None) -> bool:
     """Append one line. Returns False when it could not be written; never
     raises, because a log that fails must not fail the write it records
-    (the write has already happened by the time this runs)."""
+    (the write has already happened by the time this runs).
+
+    `wait_s`: give up on the lock after this long rather than wait for it
+    (the permission hook, phase M16, whose whole run is inside Claude Code's
+    hook timeout). None waits, as every other caller always has."""
     line = {"at": round(time.time(), 3),
             "kind": kind if kind in KINDS else "?",
             "from": _id(frm), "to": _id(to)}
+    if tool:
+        line["tool"] = tool if isinstance(tool, str) and _TOOL.fullmatch(tool) else "?"
+    if decision:
+        line["decision"] = decision if decision in DECISIONS else "?"
+    if how:
+        line["how"] = how if how in HOWS else "?"
+    if level:
+        line["level"] = level if level in LEVELS else "?"
     if note:
         line["note"] = _name(note)
     if task:
@@ -138,7 +164,8 @@ def record(kind: str, *, frm: str, to: str, note: str = "", task: str = "",
         try:
             if not stat.S_ISREG(os.fstat(lock).st_mode):
                 return False                # a FIFO there must not stall a save
-            fcntl.flock(lock, fcntl.LOCK_EX)
+            if not _lock(lock, wait_s):
+                return False
             _rotate(path)
             # O_NONBLOCK: a FIFO left at this path must not hang a note
             # write forever; it is then refused as not a regular file.
@@ -155,6 +182,23 @@ def record(kind: str, *, frm: str, to: str, note: str = "", task: str = "",
         return True
     except OSError:
         return False
+
+
+def _lock(fd: int, wait_s: float | None) -> bool:
+    """Take the lock: blocking when `wait_s` is None, else trying until it
+    has gone. False when it was not had in time."""
+    if wait_s is None:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return True
+    deadline = time.monotonic() + max(0.0, wait_s)
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.01)
 
 
 def _rotate(path: Path) -> None:

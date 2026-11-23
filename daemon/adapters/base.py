@@ -381,6 +381,49 @@ class Adapter(ABC):
             out.append(("roster", ROSTER_HEAD + "\n".join(f"- {line}" for line in others)))
         return out
 
+    # --- what is running (phase M16, Agent details → Advanced) ------------------
+
+    #: The last process this adapter started: {"argv", "pid", "at"}, argv
+    #: exactly as handed to Popen. No prompt is ever in it (feed() and the
+    #: stream protocols carry that on stdin). None until a process starts.
+    last_launch: dict | None = None
+
+    #: How the request reaches the process, in words for the page.
+    prompt_channel: str = "on stdin, which is then closed"
+
+    def launch_argv(self, session_id: str | None = None) -> list[str] | None:
+        """The command line the next turn would start, from the very builder
+        send() uses (`_argv`), so what Agent details shows is what runs.
+        None for a backend that starts no process (an endpoint, the echo
+        stand-in). Raises whatever `_argv` raises: Codex refusing to start
+        is a fact about the next turn, and the caller shows it."""
+        build = getattr(self, "_argv", None)
+        if build is None:
+            return None
+        return list(build("", session_id))
+
+    def _launched(self, argv, proc) -> None:
+        """Note the process just started, for launch_argv's twin on the page."""
+        self.last_launch = {"argv": list(argv), "pid": getattr(proc, "pid", None),
+                            "at": round(time.time(), 3)}
+
+    def launch_running(self) -> bool:
+        """Whether the process last_launch names is still running."""
+        proc = getattr(self, "_proc", None)
+        last = self.last_launch or {}
+        try:
+            return proc is not None and proc.poll() is None and proc.pid == last.get("pid")
+        except Exception:               # noqa: BLE001 -- a fake, or gone
+            return False
+
+    def handed_servers(self) -> list[dict]:
+        """The MCP servers this agent's next process is given, as
+        {"name", "source", "on"}: "agentvoice" (Agent Voice's own),
+        "found" (found on this machine, phase M10), "browser" (Claude in
+        Chrome). What it is *given*; what it said it started is the init
+        event (tooldetect.live_servers), kept apart. Default: none."""
+        return []
+
     def with_preamble(self, text: str) -> str:
         """`text` with the preamble in front, for a CLI with no system prompt."""
         head = self.preamble()

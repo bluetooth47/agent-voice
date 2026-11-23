@@ -491,6 +491,8 @@ case "${1:-status}" in
     #   agentvoice agents traits get ID | set ID [--base STAMP] | apply
     #                              the trait chips' line (JSON on stdin)
     #   agentvoice agents templates [--json]   starters for an empty box
+    #   agentvoice agents runinfo ID [--json]  how it runs: command line (redacted),
+    #                              session, servers, log lines, permission decisions
     REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
     PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
     shift

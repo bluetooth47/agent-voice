@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Commons
 import qs.Commons as Commons
+import qs.Ui
 
 // What an agent is told, piece by piece and in order, each piece labelled
 // with where it comes from (merged plan, Phase 12: "the most important
@@ -11,10 +12,27 @@ import qs.Commons as Commons
 // Omarchy commands); since M15 (Communal → Preview) `how`, a line on how the
 // piece stands against the others, and `chars`, its size, both optional.
 // Every text is someone's file, so it is drawn as plain text.
+//
+// `concealed` (M16, Agent details → Advanced): each piece shows its label,
+// source and size, and its text only once its own Show is pressed (or
+// `revealAll` is set), so the whole prompt is never on screen by accident.
 Column {
   id: pv
 
   property var parts: []
+  property bool concealed: false
+  property bool revealAll: false
+  // Indexes whose Show was pressed. Replaced, never changed in place, so the
+  // bindings below notice.
+  property var revealed: ({})
+  onPartsChanged: revealed = ({})
+  function shown(i) { return !concealed || revealAll || revealed[i] === true }
+  function toggle(i) {
+    var next = {}
+    for (var k in revealed) next[k] = revealed[k]
+    next[i] = !(revealed[i] === true)
+    revealed = next
+  }
   property color foreground: Commons.Color.foreground
   property color dim: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.6)
   property string fontFamily: Style.font.family
@@ -52,6 +70,16 @@ Column {
           font.family: pv.fontFamily
           font.pixelSize: Style.font.caption
         }
+        Button {
+          anchors.verticalCenter: partLabel.verticalCenter
+          visible: pv.concealed && !pv.revealAll && String(modelData.text || "") !== ""
+          text: pv.revealed[index] === true ? "Hide" : "Show"
+          focusable: true
+          foreground: pv.foreground
+          fontFamily: pv.fontFamily
+          fontSize: Style.font.caption
+          onClicked: pv.toggle(index)
+        }
       }
       Text {
         width: parent.width
@@ -71,7 +99,8 @@ Column {
         leftPadding: Style.space(10)
         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
         textFormat: Text.PlainText
-        text: String(modelData.text || "") !== "" ? String(modelData.text) : String(modelData.note || "")
+        text: String(modelData.text || "") !== "" ? (pv.shown(index) ? String(modelData.text) : "")
+                                                  : String(modelData.note || "")
         color: String(modelData.text || "") !== "" ? pv.foreground : pv.dim
         opacity: String(modelData.text || "") !== "" ? 0.85 : 1
         font.family: pv.fontFamily

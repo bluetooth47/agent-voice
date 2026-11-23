@@ -101,15 +101,27 @@ class CliAgent(Adapter):
         # here usually means "never actually installed", not "not on PATH".
         return f"{self.binary} is not installed — run it once to install it"
 
-    def send(self, text: str, session_id: str | None = None) -> Iterator[Chunk]:
-        prompt = self.with_preamble(text)
+    #: What launch_argv shows where a template would put the prompt (none
+    #: of the templates offered does: copilot reads it on stdin).
+    PROMPT_SLOT = "<the prompt>"
+
+    def _argv(self, prompt: str, session_id: str | None = None) -> list[str]:
+        """The command line for `prompt` (phase M16 split this out of send(),
+        so Agent details shows what send() runs)."""
         parts = shlex.split(self.template)
         if self.ask_permission:
             # None of these can raise a prompt, so the guard means refusing to
             # hand them a flag that skips one.
             parts = [p for p in parts if p not in self.BYPASS_FLAGS]
-        argv = [prompt if part == "{prompt}" else part.replace("{prompt}", prompt)
+        return [prompt if part == "{prompt}" else part.replace("{prompt}", prompt)
                 for part in parts]
+
+    def launch_argv(self, session_id: str | None = None) -> list[str] | None:
+        return self._argv(self.PROMPT_SLOT, session_id)
+
+    def send(self, text: str, session_id: str | None = None) -> Iterator[Chunk]:
+        prompt = self.with_preamble(text)
+        argv = self._argv(prompt, session_id)
         # A template with no {prompt} means "this CLI reads it on stdin",
         # which keeps spoken text out of argv -- world readable through
         # /proc/<pid>/cmdline on an ordinary Linux box. Opt-in per CLI rather
@@ -126,6 +138,8 @@ class CliAgent(Adapter):
         except OSError as e:
             yield Chunk(error=f"could not start {self.binary}: {e}")
             return
+        # Phase M16: never with a prompt in it -- the slot is shown instead.
+        self._launched(argv if on_stdin else self._argv(self.PROMPT_SLOT), proc)
         if on_stdin:
             feed(proc, prompt)
 

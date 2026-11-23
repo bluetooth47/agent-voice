@@ -739,6 +739,7 @@ Column {
   onTargetChanged: {
     previewParts = []; catalog = null; removeButton.disarm(); loadPreview(); loadCatalog()
     traitsNow = null; traitsNote = ""; traitDelay.restart()
+    resetRun()                          // M16: Advanced's own reads
   }
   Component.onCompleted: { loadPreview(); loadCatalog(); starterReader.running = true }
   Timer { id: previewDelay; interval: 250; onTriggered: page.loadPreview() }
@@ -2079,11 +2080,512 @@ Column {
   function when(at) {
     return at > 0 ? Qt.formatDateTime(new Date(at * 1000), "MMM d, h:mm AP") : ""
   }
+  function clock(at) {
+    return at > 0 ? Qt.formatDateTime(new Date(at * 1000), "h:mm:ss AP") : ""
+  }
+
+  // What is running (phase M16): read only. `agentvoice agents runinfo` puts
+  // together what the daemon published from the live adapter (its own next
+  // command line and its last real one, redacted; session; timeouts; the
+  // servers it is given), what the program said it started, the agent's
+  // structural log ring, and the hook's permission decisions. The prompt is
+  // `agents prompt`, the adapter's own builder (M15). Nothing here writes.
+  property var run: null
+  property string runError: ""
+  property var told: null
+  property string toldError: ""
+  property bool revealPrompt: false
+  // Only while somebody can see it: the overlay open on settings, this page
+  // shown, this tab chosen. Each read starts a Python process (~0.2 s of CPU,
+  // FINDINGS §50), so nothing polls behind a closed overlay.
+  readonly property bool advancedOpen: page.tab === "advanced" && page.visible &&
+                                       s.opened === true && s.mode === "settings"
+  // Called from the page's one onTargetChanged, above.
+  function resetRun() {
+    page.run = null; page.told = null; page.revealPrompt = false
+    page.runError = ""; page.toldError = ""
+    if (page.advancedOpen) { page.loadRun(); page.loadTold() }
+  }
+  onAdvancedOpenChanged: if (page.advancedOpen) { page.loadRun(); page.loadTold() }
+  // The folders and settings an agent is told from: a change re-reads the prompt.
+  readonly property string toldWatch: page.watch + JSON.stringify(s.vAgentFiles) + s.folders.epoch
+  onToldWatchChanged: if (page.advancedOpen) toldDelay.restart()
+  Connections {
+    target: page.s.store
+    function onSaved(key) { if (page.advancedOpen) { toldDelay.restart(); page.loadRun() } }
+  }
+  Timer { id: toldDelay; interval: 300; onTriggered: page.loadTold() }
+  // The daemon republishes when a turn starts or ends; five seconds keeps
+  // the "still running" and the log current while the tab is open.
+  Timer { interval: 5000; repeat: true; running: page.advancedOpen; onTriggered: page.loadRun() }
+  function loadRun() {
+    if (runner.running || page.reserved) return
+    runner.forAgent = page.target
+    runner.command = ["agentvoice", "agents", "runinfo", page.target, "--json"]
+    runner.running = true
+  }
+  function loadTold() {
+    if (teller.running) { toldDelay.restart(); return }
+    if (page.reserved) return
+    teller.forAgent = page.target
+    teller.command = ["agentvoice", "agents", "prompt", page.target, "--json"]
+    teller.running = true
+  }
+  Process {
+    id: runner
+    property string forAgent: ""
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var d
+        try { d = JSON.parse(String(text)) } catch (e) { return }
+        if (!d || runner.forAgent !== page.target) return
+        page.runError = ""
+        page.run = d
+      }
+    }
+    stderr: StdioCollector {
+      onStreamFinished: {
+        var t = String(text).trim()
+        if (t !== "" && runner.forAgent === page.target)
+          page.runError = t.replace(/^agentvoice agents: /, "").split("\n").pop()
+      }
+    }
+  }
+  Process {
+    id: teller
+    property string forAgent: ""
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var d
+        try { d = JSON.parse(String(text)) } catch (e) { return }
+        if (!d || !Array.isArray(d.pieces) || teller.forAgent !== page.target) return
+        page.toldError = ""
+        page.told = d
+      }
+    }
+    stderr: StdioCollector {
+      onStreamFinished: {
+        var t = String(text).trim()
+        if (t !== "" && teller.forAgent === page.target)
+          page.toldError = t.replace(/^agentvoice agents: /, "").split("\n").pop()
+      }
+    }
+  }
+  // The whole journal, in a terminal: a constant command, nothing read from
+  // settings in it. What was said is in there only with speech logging on.
+  Process { id: logOpener }
+  function openLog() {
+    logOpener.command = ["omarchy-launch-floating-terminal-with-presentation",
+                         "journalctl --user -u agentvoice -n 300 -f"]
+    logOpener.running = true
+  }
+  readonly property var runSession: page.run && page.run.session ? page.run.session : null
+  readonly property var runTimeouts: page.run && page.run.timeouts ? page.run.timeouts : null
+  readonly property var runLast: page.run && page.run.last ? page.run.last : null
+  readonly property string runNote: {
+    if (page.runError !== "") return "Could not read it: " + page.runError
+    if (page.run === null) return runner.running ? "Reading…" : ""
+    if (!page.run.daemon)
+      return page.run.service ? "The running service has not said what it launches: it is starting, " +
+                                "or it is an older build than this page."
+                              : "Agent Voice is not running, so nothing is launched."
+    return ""
+  }
+  function serverSource(src) {
+    return src === "agentvoice" ? "Agent Voice's own"
+         : src === "found" ? "found on this machine"
+         : src === "browser" ? "Claude in Chrome"
+         : src === "seen" ? "its program's own" : src
+  }
+  function serverLine(x) {
+    var given = x.given === "on" ? "given"
+              : x.given === "off" ? "switched off: started with it off"
+              : x.given === "not now" ? "not given now"
+              : "given: unknown"
+    var seen = String(x.seen || "") !== "" ? "said it started: " + x.seen
+             : (page.run && page.run.reports_seen && page.runLast) ? "not in its last start" : ""
+    return [String(x.name), page.serverSource(String(x.source || "")), given, seen]
+        .filter(function(t) { return t !== "" }).join("  ·  ")
+  }
 
   Column {
     width: parent.width
     spacing: Style.space(12)
     visible: page.tab === "advanced"
+
+    Text {
+      width: parent.width
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: "How " + page.name + " runs, what it is connected to and what it did lately. " +
+            "Nothing on this tab changes anything."
+      color: page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+    Text {
+      width: parent.width
+      visible: text !== ""
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: page.runNote
+      color: page.runError !== "" ? page.s.urgent : page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    SettingRow {
+      id: commandRow
+      width: parent.width
+      stacked: true
+      visible: page.run !== null && page.run.daemon === true
+      label: "Command line"
+      hint: "What its next turn starts, built by the same code that starts it."
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      Column {
+        width: parent.width
+        spacing: Style.space(6)
+        Text {
+          id: commandLine
+          width: parent.width
+          visible: text !== ""
+          wrapMode: Text.WrapAnywhere
+          textFormat: Text.PlainText
+          text: page.run === null ? "" :
+                String(page.run.error || "") !== "" ? String(page.run.error) :
+                String(page.run.line || "") !== "" ? String(page.run.line) :
+                page.run.endpoint ? "No process: each turn is an HTTPS request to " +
+                                    String(page.run.endpoint.host || "its endpoint") +
+                                    (String(page.run.endpoint.model || "") !== "" ? ", model " + page.run.endpoint.model : "") + "."
+                                  : (page.run.program ? "" : "No program is chosen for it, so nothing starts.")
+          color: page.run && String(page.run.error || "") !== "" ? page.s.urgent : page.s.foreground
+          font.family: String(page.run && page.run.line || "") !== "" ? "monospace" : page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Text {
+          width: parent.width
+          visible: page.run !== null && String(page.run.line || "") !== ""
+          wrapMode: Text.WordWrap
+          textFormat: Text.PlainText
+          text: "The request goes " + String(page.run && page.run.prompt_channel || "on stdin") +
+                ": nothing said is ever in a command line, which every account on this computer " +
+                "can read. Its instructions travel in a private file, named here by its path. " +
+                "Anything that looks like a key is shown as •••."
+          color: page.s.dim
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Text {
+          width: parent.width
+          visible: page.runLast !== null
+          wrapMode: Text.WordWrap
+          textFormat: Text.PlainText
+          text: page.runLast === null ? "" :
+                "Last started " + page.when(Number(page.runLast.at || 0)) +
+                (page.runLast.pid ? ", process " + page.runLast.pid : "") +
+                (page.runLast.running ? ", still running" : ", ended") +
+                (page.run.last_same ? ", with the same line." : ", with this line:")
+          color: page.s.foreground
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Text {
+          width: parent.width
+          visible: page.runLast !== null && page.run.last_same !== true
+          wrapMode: Text.WrapAnywhere
+          textFormat: Text.PlainText
+          text: page.runLast === null ? "" : String(page.runLast.line || "")
+          color: page.s.dim
+          font.family: "monospace"
+          font.pixelSize: Style.font.caption
+        }
+      }
+    }
+
+    SettingRow {
+      width: parent.width
+      stacked: true
+      visible: page.run !== null && String(page.run.cwd || "") !== ""
+      label: "Working directory"
+      hint: "Where its program runs, and what “inside the project” means for Can edit files."
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      Flow {
+        width: parent.width
+        spacing: Style.space(10)
+        Text {
+          width: Math.min(implicitWidth, parent.width)
+          wrapMode: Text.WrapAnywhere
+          textFormat: Text.PlainText
+          text: String(page.run && page.run.cwd || "")
+          color: page.s.foreground
+          font.family: "monospace"
+          font.pixelSize: Style.font.caption
+          height: Math.max(implicitHeight, cwdLink.height)
+          verticalAlignment: Text.AlignVCenter
+        }
+        Button {
+          id: cwdLink
+          text: "Change on Agents page →"
+          focusable: true
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          fontSize: Style.font.caption
+          onClicked: page.s.goTo("agents", page.target)
+        }
+      }
+    }
+
+    SettingRow {
+      width: parent.width
+      stacked: true
+      visible: page.runSession !== null
+      label: "Conversation"
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      Text {
+        width: parent.width
+        wrapMode: Text.WrapAnywhere
+        textFormat: Text.PlainText
+        text: {
+          var x = page.runSession
+          if (!x) return ""
+          if (!x.remembers) return "Starts fresh every turn: its program keeps no conversation here."
+          if (!x.id) return page.run.endpoint ? "Keeps the last " + page.run.endpoint.history_turns +
+                                                " turns and sends them with each request."
+                                              : "No conversation yet: its next turn starts one."
+          return "Session " + x.id + " · its next turn resumes it · " + Number(x.turns || 0) +
+                 (Number(x.turns || 0) === 1 ? " turn" : " turns") + " in it since Agent Voice started"
+        }
+        color: page.s.foreground
+        font.family: page.s.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+    }
+
+    SettingRow {
+      width: parent.width
+      stacked: true
+      visible: page.runTimeouts !== null
+      label: "Timeouts"
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      Flow {
+        width: parent.width
+        spacing: Style.space(10)
+        Text {
+          width: Math.min(implicitWidth, parent.width)
+          wrapMode: Text.WordWrap
+          textFormat: Text.PlainText
+          text: {
+            var t = page.runTimeouts
+            if (!t) return ""
+            var parts = ["Stopped after " + Math.round(Number(t.idle_s || 0)) + " seconds with nothing from it"]
+            if (t.keep_warm_s !== undefined)
+              parts.push("between turns its process waits " + Math.round(Number(t.keep_warm_s) / 60) +
+                         " minutes for the next one, then is let go")
+            return parts.join("; ") + (page.run && page.run.endpoint ? "." : ". Fixed in this version.")
+          }
+          color: page.s.foreground
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+          height: Math.max(implicitHeight, timeoutLink.visible ? timeoutLink.height : 0)
+          verticalAlignment: Text.AlignVCenter
+        }
+        Button {
+          id: timeoutLink
+          visible: page.run !== null && page.run.endpoint !== undefined && page.run.endpoint !== null
+          text: "Change on Agents page →"
+          focusable: true
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          fontSize: Style.font.caption
+          onClicked: page.s.goTo("agents", page.target)
+        }
+      }
+    }
+
+    SettingRow {
+      width: parent.width
+      stacked: true
+      visible: page.run !== null && (page.run.servers || []).length > 0
+      label: "MCP servers"
+      hint: "What it is given comes from Agent Voice. What it said it started comes from the " +
+            "program itself, when its last process began; only Claude Code says."
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      Column {
+        width: parent.width
+        spacing: Style.space(3)
+        Repeater {
+          model: page.run ? (page.run.servers || []) : []
+          Text {
+            required property var modelData
+            width: parent.width
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: page.serverLine(modelData)
+            color: String(modelData.seen || "") === "failed" ? page.s.urgent : page.s.foreground
+            font.family: page.s.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+        Button {
+          text: "Tools & skills →"
+          focusable: true
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          fontSize: Style.font.caption
+          onClicked: page.pickTab("tools")
+        }
+      }
+    }
+
+    SettingRow {
+      width: parent.width
+      stacked: true
+      label: "What it is sent"
+      hint: "Everything ahead of each request, in the order it is sent, built the way its " +
+            "program builds it. Each piece shows its text only when you ask."
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      Column {
+        width: parent.width
+        spacing: Style.space(8)
+        Flow {
+          width: parent.width
+          spacing: Style.space(10)
+          Text {
+            width: Math.min(implicitWidth, parent.width)
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: page.toldError !== "" ? "Could not show it: " + page.toldError :
+                  page.told === null ? (teller.running ? "Reading…" : "") :
+                  page.told.total + " characters in " + page.told.pieces.length +
+                  (page.told.pieces.length === 1 ? " piece" : " pieces") + " (about " +
+                  Math.round(page.told.total / 4) + " tokens)" +
+                  (page.told.runs ? "" : " · Agent Voice cannot run this program, so it is sent nothing")
+            color: page.toldError !== "" ? page.s.urgent : page.s.foreground
+            font.family: page.s.fontFamily
+            font.pixelSize: Style.font.caption
+            height: Math.max(implicitHeight, revealButton.height)
+            verticalAlignment: Text.AlignVCenter
+          }
+          Button {
+            id: revealButton
+            visible: page.told !== null && page.told.pieces.length > 0
+            text: page.revealPrompt ? "Hide all" : "Show all"
+            bordered: true
+            focusable: true
+            foreground: page.s.foreground
+            fontFamily: page.s.fontFamily
+            fontSize: Style.font.caption
+            onClicked: page.revealPrompt = !page.revealPrompt
+          }
+        }
+        PromptPreview {
+          id: advancedPrompt
+          width: parent.width
+          concealed: true
+          revealAll: page.revealPrompt
+          parts: page.told === null ? [] :
+                 page.told.pieces.map(function(x) {
+                   return { label: x.label, from: x.source, text: x.text, how: x.precedence, chars: x.chars }
+                 }).concat((page.told.beside || []).map(function(x) {
+                   return { label: x.label, from: x.source, text: "", note: x.note }
+                 }))
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+        }
+      }
+    }
+
+    SettingRow {
+      width: parent.width
+      stacked: true
+      visible: page.run !== null
+      label: "Recent log"
+      hint: "Structural lines only: how long each turn took, tools by name, failures by kind. " +
+            "Never anything said, even with speech logging on."
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      Column {
+        width: parent.width
+        spacing: Style.space(3)
+        Text {
+          visible: page.run !== null && (page.run.log || []).length === 0
+          text: page.run && page.run.daemon ? "Nothing yet since Agent Voice started." : "Nothing to show."
+          textFormat: Text.PlainText
+          color: page.s.dim
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Repeater {
+          // Newest first, at most twelve: the full ring is in the journal too.
+          model: page.run ? (page.run.log || []).slice(-12).reverse() : []
+          Text {
+            required property var modelData
+            width: parent.width
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: page.clock(Number(modelData.at || 0)) + "   " + String(modelData.text || "")
+            color: String(modelData.error || "") !== "" ? page.s.urgent : page.s.foreground
+            font.family: "monospace"
+            font.pixelSize: Style.font.caption
+          }
+        }
+        Button {
+          text: "Open full log"
+          iconText: "\u{f0219}"
+          bordered: true
+          focusable: true
+          tooltipText: "Agent Voice's whole journal in a terminal, for every agent"
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          onClicked: page.openLog()
+        }
+      }
+    }
+
+    SettingRow {
+      width: parent.width
+      stacked: true
+      visible: page.run !== null
+      label: "Recent permission decisions"
+      hint: "Recorded by the permission hook, which Claude Code agents run: the tool's name and " +
+            "what was decided, never what it was asked to do."
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      Column {
+        width: parent.width
+        spacing: Style.space(3)
+        Text {
+          visible: page.run !== null && (page.run.decisions || []).length === 0
+          text: "None recorded."
+          textFormat: Text.PlainText
+          color: page.s.dim
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Repeater {
+          model: page.run ? (page.run.decisions || []) : []
+          Text {
+            required property var modelData
+            width: parent.width
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: page.when(Number(modelData.at || 0)) + "   " + String(modelData.tool || "?") + "   " +
+                  (modelData.decision === "allow" ? "allowed" : "refused") +
+                  (String(modelData.how_words || "") !== "" ? " · " + modelData.how_words : "") +
+                  (String(modelData.level || "") !== "" ? " · at " + page.s.levelLabel(String(modelData.level)) : "")
+            color: modelData.decision === "allow" ? page.s.foreground : page.s.urgent
+            font.family: page.s.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+      }
+    }
 
     SettingRow {
       width: parent.width

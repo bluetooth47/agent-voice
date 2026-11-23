@@ -2025,3 +2025,52 @@ writes; an undo renames each skill aside and then removes it. `agents prompt`
 itself: 3.1 ms in-process (the page pays a Python start-up on top, as for every
 `agentvoice` call).
 
+
+## 50. M16: what showing "what is running" costs
+
+Measured 2026-11-22 on the i7-1185G7 (8 threads), scratch XDG folders under
+/tmp, the venv's Python. Scripts lived in /tmp and are not kept.
+
+**The hook's audit line.** A recorded decision costs the hook 1.6 ms median
+(1.4–2.0 over 21 fresh processes) when decide() has already read the level,
+as every level, asked and refused path has: 0.6 ms to read the level again
+(the line records the level in force when the decision was written) and
+0.2 ms for the append under the lock, plus the import of `audit`. Measured
+end to end on a call refused without asking (`mcp__found__x`, the shortest
+recorded path that needs no card), a whole hook process went from 142–143 ms
+(M15's hook, in a worktree) to 146–147 ms (median of 15, two rounds each).
+A tool that is simply free (Read without a secret, TodoWrite, the notes
+reads) writes no line and pays nothing. With the lock held by another writer
+the record gives up after 0.5 s and the decision is unchanged (tested).
+
+The first number tried was 43 ms, and it was a real cost: reading the level
+imports `runtime`, which takes about 40 ms even with bytecode cached, and an
+"allow all in this chat" decision reaches the grant without ever importing
+it -- so every call allowed that way would have paid it. The line now reads
+the level only when decide() had already loaded the settings code, or when a
+person was asked (the wait dwarfs it); on the chat path the level is left
+out, being nothing that path depends on. Measured again after the change, a
+recorded decision on a path that had not imported it costs the import of
+`audit` and the append: under 2 ms.
+
+**The daemon's record.** `publish_runinfo` rebuilds every agent's record when
+something visible moved (a turn, a session, a launch, a ring line) and at
+most every 10 s otherwise; it writes only when the record differs. A rebuild
+for a Claude Code agent (1,500-character rules, defaults and instructions,
+eight roster lines) and a Codex agent, with a 40-line ring, written to
+tmpfs: 2.6 ms median, 3.5 ms p95, over 200 runs. Codex's line reads
+config.toml each time, as its turn does.
+
+**The page's read.** `agentvoice agents runinfo ID --json` is a Python
+process: 206 ms median (11 runs) with a published record and bytecode
+cached, 293 ms when nothing is published (it then works out the program
+from the settings, which imports the endpoint code: 94 ms of it). The tab
+reads it every 5 s, and only while the overlay is open on that tab: about
+4% of one core while somebody is looking at it, nothing otherwise. The
+prompt (`agents prompt`) is read when the tab opens and after a change, not
+on the timer.
+
+The first version read the decisions with `audit.read()`, which parses both
+audit files whole: with each at its 1 MB rotation size, 87 ms a read, every
+5 s. It now reads the last 256 KB of each and parses only lines naming a
+permission: 1.2 ms over the same two full files (median of 11).

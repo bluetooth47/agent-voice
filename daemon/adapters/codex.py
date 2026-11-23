@@ -337,6 +337,26 @@ class Codex(Adapter):
         # prompt reads one from stdin -- verified against the real CLI.
         return argv
 
+    def handed_servers(self) -> list[dict]:
+        """What _argv hands this process (phase M16), by the same tests:
+        Agent Voice's own servers, the config.toml servers switched on as
+        approved, and every other config.toml server, started switched off.
+        Read now, as _argv reads it; an unreadable file names none."""
+        out = []
+        if self.desktop_tools:
+            out.append({"name": "agentvoice-desktop", "source": "agentvoice", "on": True})
+        if self.crew_tools:
+            out.append({"name": "agentvoice-crew", "source": "agentvoice", "on": True})
+        try:
+            from tooldetect import spec_digest
+            servers = config_servers() or {}
+            for name, spec in sorted(servers.items()):
+                on = (self.mcp_on or {}).get(name) == spec_digest(spec)
+                out.append({"name": name, "source": "found", "on": on})
+        except Exception:               # noqa: BLE001 -- shown as nothing found
+            pass
+        return out
+
     @classmethod
     def models(cls) -> list[dict]:
         """Model choices for the settings: Codex's own list, best first."""
@@ -387,6 +407,7 @@ class Codex(Adapter):
         except OSError as e:
             yield Chunk(error=f"could not start codex: {e}")
             return
+        self._launched(argv, proc)          # phase M16: Agent details → Advanced
         feed(proc, prompt)
 
         # Drained in the background from here on: stderr is a 64KB pipe

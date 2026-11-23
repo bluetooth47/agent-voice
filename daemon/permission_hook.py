@@ -1008,6 +1008,20 @@ def revoke(session: str) -> bool:
         return False                # unsure: the daemon drops the session
 
 
+#: How the decision being made was reached, for its audit line (phase M16):
+#: "level", "chat", "asked" or "unanswered", set where decide() and _ask()
+#: reach one; "" for a tool that is simply free. Read once, by main(), after
+#: the decision has been written out. Nothing that decides ever reads it.
+_HOW = ""
+
+
+def _by(how: str, result: tuple[str, str]) -> tuple[str, str]:
+    """`result`, unchanged, noting how it was reached (see _HOW)."""
+    global _HOW
+    _HOW = how
+    return result
+
+
 def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, str]:
     """Return (decision, reason). decision is 'allow' or 'deny'."""
     if tool_name in NO_EFFECT:
@@ -1032,8 +1046,10 @@ def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, st
     if desktop in DESKTOP_READ_ONLY or desktop in DESKTOP_SELF_ASKED:
         return "allow", ""
     if desktop in DESKTOP_SENSITIVE_READ:
-        if granted(session) or _settings()[0] == "trusted":
-            return "allow", ""
+        if granted(session):
+            return _by("chat", ("allow", ""))
+        if _settings()[0] == "trusted":
+            return _by("level", ("allow", ""))
         return _ask(tool_name, tool_input, note="this reads the clipboard",
                     session=session)
 
@@ -1047,7 +1063,7 @@ def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, st
     if granted(session):
         if crew in CREW_WRITES and not _may_write_notes():
             return "deny", NOTES_DENIED
-        return "allow", ""
+        return _by("chat", ("allow", ""))
 
     if crew in CREW_WRITES:
         # After the grant, so "allow all in this chat" covers it as it
@@ -1059,7 +1075,7 @@ def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, st
             return "deny", locked
         level, _ = _settings()
         if level in ("edits", "trusted"):
-            return "allow", ""
+            return _by("level", ("allow", ""))
         return _ask(tool_name, clean, note=note, session=session)
 
     if (tool_name == "Skill" and isinstance(tool_input, dict)
@@ -1099,16 +1115,16 @@ def decide(tool_name: str, tool_input: dict, session: str = "") -> tuple[str, st
             return "allow", ""
         level, _ = _settings()
         if level == "trusted":
-            return "allow", ""
+            return _by("level", ("allow", ""))
         return _ask(tool_name, tool_input, note=note, session=session)
 
     level, root = _settings()
     if level == "trusted":
-        return "allow", ""
+        return _by("level", ("allow", ""))
     if level == "edits" and tool_name in PATH_SCOPED:
         target = _edit_target(tool_name, tool_input)
         if target and _inside(target, root) and not _sensitive(_resolved(target)):
-            return "allow", ""
+            return _by("level", ("allow", ""))
 
     return _ask(tool_name, tool_input, session=session)
 
@@ -1173,7 +1189,9 @@ def _ask(tool_name: str, tool_input: dict, note: str = "",
         "announce": bool(announce),
     })
     if answer is None:
-        return "deny", f"Nobody answered within {TIMEOUT:.0f} seconds."
+        return _by("unanswered", ("deny", f"Nobody answered within {TIMEOUT:.0f} seconds."))
+    global _HOW
+    _HOW = "asked"                      # an answer came back: yes or no
     # `is True`, not truthiness: only the literal yes the daemon sends for a
     # checked allow counts. An answer holding anything else is one this
     # cannot read, and that is a denial.
@@ -1256,6 +1274,34 @@ def _emit(decision: str, reason: str = "") -> int:
     return 0
 
 
+def _record_decision(tool_name, decision: str, how: str) -> None:
+    """One audit line for the decision just written (phase M16): the agent,
+    the tool's name, allow or deny, how it was reached, the level. Never the
+    arguments, never a path. Not for a tool that is simply free (`how` "").
+
+    Runs after the decision is on stdout and changes nothing about it:
+    every failure is swallowed -- a full disk, a lock held elsewhere (given
+    up after half a second), an import error, a signal arriving now -- and
+    nothing reads what it returns. A test makes it raise and checks every
+    decision, silence's included, is the same."""
+    if not how:
+        return
+    try:
+        import audit
+        who = _named() or "main"
+        # The level, when reading it is cheap: decide() has loaded the
+        # settings code already (every level and refused path), or a person
+        # was asked and the wait dwarfs it. On an "allow all in this chat"
+        # path importing it would cost the call ~40 ms (FINDINGS §50) for a
+        # field that path does not depend on; it is left out there.
+        level = _settings()[0] if (how in ("asked", "unanswered")
+                                   or "runtime" in sys.modules) else ""
+        audit.record("permission", frm=who, to=who, tool=tool_name, decision=decision,
+                     how=how, level=level, wait_s=0.5)
+    except BaseException:                       # noqa: BLE001 -- see docstring
+        pass
+
+
 def main() -> int:
     """Decide, and whatever happens, say so.
 
@@ -1267,9 +1313,11 @@ def main() -> int:
     it is "the guard was not there". Every path out of here is a denial that
     names itself.
     """
-    global _HOOK_STARTED
+    global _HOOK_STARTED, _HOW
     _HOOK_STARTED = time.monotonic()
+    _HOW = ""
     _die_cleanly()
+    tool_name, decision, how = "unknown", "deny", "failed"
     try:
         try:
             payload = json.load(sys.stdin)
@@ -1285,17 +1333,30 @@ def main() -> int:
             tool_input = {}
 
         session = payload.get("session_id")
-        decision, reason = decide(str(tool), tool_input,
+        tool_name = str(tool)
+        decision, reason = decide(tool_name, tool_input,
                                   session if isinstance(session, str) else "")
-        return _emit(decision, reason)
+        how = _HOW or ("refused" if decision == "deny" else "")
+        code = _emit(decision, reason)
     except BaseException as e:                  # noqa: BLE001 -- see docstring
+        decision, how = "deny", "failed"
         try:
-            return _emit("deny", f"the permission hook failed: "
+            code = _emit("deny", f"the permission hook failed: "
                                  f"{type(e).__name__}. Nothing was run.")
         except BaseException:
             # Even the denial could not be written. Exit 2, which Claude Code
             # reads as a block in its own right.
             return 2
+    # After the decision is out, and outside the catch above, so nothing in
+    # the record can turn into a second, different answer (phase M16).
+    # Flushed first: a hook killed outright while the line is written (a
+    # SIGKILL, which no handler sees) has still handed its decision over.
+    try:
+        sys.stdout.flush()
+    except BaseException:                       # noqa: BLE001 -- exit flushes again
+        pass
+    _record_decision(tool_name, decision, how)
+    return code
 
 
 if __name__ == "__main__":

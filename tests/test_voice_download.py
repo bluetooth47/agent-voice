@@ -107,6 +107,10 @@ def test_every_launcher_argument_is_quoted():
             arg = call.group(1)
             if re.fullmatch(r'\s*"[A-Za-z][A-Za-z0-9_.-]*"\s*', arg):
                 continue        # a bare command name, nothing interpolated
+            if re.fullmatch(r'\s*"[A-Za-z][A-Za-z0-9 _./-]*"\s*', arg):
+                # A constant command line (M16's "Open full log"): nothing
+                # interpolated and no shell metacharacter, so nothing to quote.
+                continue
             if re.fullmatch(r"\s*[A-Za-z_][A-Za-z0-9_]*\s*", arg):
                 # A variable: it has to have been built with shq just above.
                 before = text[max(0, call.start() - 600):call.start()]
@@ -145,8 +149,11 @@ def test_the_installer_is_called_with_a_flag_it_accepts():
     regions += [m.group(1) for m in re.finditer(r"fetchNow\(\[([^\]]*)\]", SETTINGS)]
     for qml in overlay_files() + ["Panel.qml"]:
         text = (ROOT / qml).read_text()
-        regions += [text[m.start():m.start() + 400] for m in re.finditer(
-            r'"omarchy-launch-floating-terminal-with-presentation"', text)]
+        # Those that run install.sh: M16's "Open full log" hands the same
+        # launcher journalctl's flags, which are not the installer's.
+        regions += [r for r in (text[m.start():m.start() + 400] for m in re.finditer(
+            r'"omarchy-launch-floating-terminal-with-presentation"', text))
+            if "install.sh" in r or "agentvoice-train-verifier" in r]
 
     found = set()
     for region in regions:

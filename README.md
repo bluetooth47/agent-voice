@@ -709,6 +709,21 @@ done all at once or not at all, and can be undone while nothing it wrote has
 changed (`agentvoice agents import-history` and `import-undo OP` from a
 terminal).
 
+**What is running.** Agent details → **Advanced** shows, for the agent
+picked, the exact command line its next turn starts (built by the same code
+that starts it) and the last one it did start, with its process number and
+whether it is still running; where it runs; its conversation and how many
+turns are in it; how long it may go quiet before it is stopped; the MCP
+servers it is given, beside the ones its program said it started (only
+Claude Code says); everything it is sent ahead of a request, each piece's
+text shown only when you press Show; its recent log lines; and its recent
+permission decisions. Nothing on the tab changes anything. No command line
+ever holds what was said (requests go on stdin) and anything that looks
+like a key is shown as •••. The log lines are structural (timings, tools by
+name, failures by kind) and never hold speech, even with speech logging on;
+the permission decisions record the tool's name and what was decided, never
+the command or the file. `agentvoice agents runinfo NAME` prints the same.
+
 ### In Omarchy's Agents panel
 
 Each voice agent also gets a section in Omarchy's own Agents panel, the one

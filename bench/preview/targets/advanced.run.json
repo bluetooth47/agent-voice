@@ -1,0 +1,321 @@
+{
+ "agents": {
+  "main": {
+   "program": "claude",
+   "state": "idle",
+   "busy": false,
+   "cwd": "/home/you/projects/garden",
+   "prompt_channel": "as stream-json lines on stdin, kept open between turns",
+   "session": {
+    "id": "7d1f5a2e-0c4b-4e8a-9f61-2b3c4d5e6f70",
+    "remembers": true,
+    "resumes": true,
+    "turns": 4
+   },
+   "timeouts": {
+    "idle_s": 90.0,
+    "keep_warm_s": 300.0
+   },
+   "argv": [
+    "claude",
+    "-p",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--include-partial-messages",
+    "--verbose",
+    "--permission-mode",
+    "auto",
+    "--no-chrome",
+    "--strict-mcp-config",
+    "--append-system-prompt-file",
+    "/run/user/1000/agentvoice/prompts/b05cceeae1d9983b9591.txt",
+    "--settings",
+    "{\"hooks\": {\"PreToolUse\": [{\"matcher\": \".*\", \"hooks\": [{\"type\": \"command\", \"command\": \"/home/you/.local/share/agentvoice/venv/bin/python /home/you/.local/share/agentvoice-plugin/daemon/permission_hook.py claude\", \"onFailure\": \"block\"}]}]}}",
+    "--mcp-config",
+    "/run/user/1000/agentvoice/prompts/mcp-fee71cb9679db0815f17.json",
+    "--plugin-dir",
+    "/home/you/.local/share/agentvoice/agent-plugins/main-3f2a1b",
+    "--resume",
+    "7d1f5a2e-0c4b-4e8a-9f61-2b3c4d5e6f70",
+    "--model",
+    "sonnet",
+    "--effort",
+    "high"
+   ],
+   "error": "",
+   "handed": [
+    {
+     "name": "agentvoice-desktop",
+     "source": "agentvoice",
+     "on": true
+    },
+    {
+     "name": "agentvoice-crew",
+     "source": "agentvoice",
+     "on": true
+    },
+    {
+     "name": "github",
+     "source": "found",
+     "on": true
+    }
+   ],
+   "last": {
+    "argv": [
+     "claude",
+     "-p",
+     "--input-format",
+     "stream-json",
+     "--output-format",
+     "stream-json",
+     "--include-partial-messages",
+     "--verbose",
+     "--permission-mode",
+     "auto",
+     "--no-chrome",
+     "--strict-mcp-config",
+     "--append-system-prompt-file",
+     "/run/user/1000/agentvoice/prompts/b05cceeae1d9983b9591.txt",
+     "--settings",
+     "{\"hooks\": {\"PreToolUse\": [{\"matcher\": \".*\", \"hooks\": [{\"type\": \"command\", \"command\": \"/home/you/.local/share/agentvoice/venv/bin/python /home/you/.local/share/agentvoice-plugin/daemon/permission_hook.py claude\", \"onFailure\": \"block\"}]}]}}",
+     "--mcp-config",
+     "/run/user/1000/agentvoice/prompts/mcp-fee71cb9679db0815f17.json",
+     "--plugin-dir",
+     "/home/you/.local/share/agentvoice/agent-plugins/main-3f2a1b",
+     "--resume",
+     "7d1f5a2e-0c4b-4e8a-9f61-2b3c4d5e6f70",
+     "--model",
+     "sonnet",
+     "--effort",
+     "high"
+    ],
+    "pid": 48211,
+    "at": 1795395500.0,
+    "running": true
+   },
+   "log": [
+    {
+     "at": 1795392000.0,
+     "kind": "turn",
+     "secs": 8.4,
+     "first_ms": 1210,
+     "start": "cold",
+     "tools": [
+      [
+       "Bash",
+       2
+      ],
+      [
+       "Read",
+       1
+      ]
+     ],
+     "text": "turn 8.4s · cold start · first token 1210 ms · tools: Bash ×2, Read"
+    },
+    {
+     "at": 1795392600.0,
+     "kind": "turn",
+     "secs": 3.1,
+     "first_ms": 640,
+     "start": "warm",
+     "text": "turn 3.1s · warm start · first token 640 ms"
+    },
+    {
+     "at": 1795393200.0,
+     "kind": "turn",
+     "secs": 41.0,
+     "first_ms": 900,
+     "start": "warm",
+     "tools": [
+      [
+       "Bash",
+       6
+      ],
+      [
+       "Edit",
+       1
+      ],
+      [
+       "mcp__github__list_issues",
+       1
+      ]
+     ],
+     "text": "turn 41.0s · warm start · first token 900 ms · tools: Bash ×6, Edit, mcp__github__list_issues"
+    },
+    {
+     "at": 1795393800.0,
+     "kind": "turn",
+     "secs": 12.3,
+     "first_ms": 820,
+     "start": "warm",
+     "tools": [
+      [
+       "WebSearch",
+       1
+      ]
+     ],
+     "stopped": true,
+     "text": "turn 12.3s · warm start · first token 820 ms · tools: WebSearch · stopped"
+    },
+    {
+     "at": 1795394400.0,
+     "kind": "rebuilt",
+     "changed": [
+      "level"
+     ],
+     "kept": true,
+     "text": "started again for a new level · conversation kept"
+    },
+    {
+     "at": 1795395000.0,
+     "kind": "turn",
+     "secs": 2.2,
+     "start": "cold",
+     "error": "limit",
+     "text": "turn 2.2s · cold start · failed (limit)"
+    }
+   ]
+  },
+  "hazel": {
+   "program": "codex",
+   "state": "",
+   "busy": false,
+   "cwd": "/home/you/projects/garden",
+   "prompt_channel": "on stdin, which is then closed",
+   "session": {
+    "id": null,
+    "remembers": true,
+    "resumes": false,
+    "turns": 0
+   },
+   "timeouts": {
+    "idle_s": 90.0
+   },
+   "argv": [
+    "codex",
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "-m",
+    "gpt-5.6-luna",
+    "-c",
+    "mcp_servers.filesystem.enabled=false",
+    "-c",
+    "mcp_servers.agentvoice-crew.command=\"/home/you/.local/share/agentvoice/venv/bin/python\"",
+    "-c",
+    "mcp_servers.agentvoice-crew.args=[\"/home/you/.local/share/agentvoice-plugin/daemon/crew_mcp.py\", \"codex\", \"hazel\", \"--guard\"]",
+    "-c",
+    "mcp_servers.agentvoice-crew.env_vars=[\"HYPRLAND_INSTANCE_SIGNATURE\", \"WAYLAND_DISPLAY\", \"XDG_RUNTIME_DIR\", \"DISPLAY\", \"DBUS_SESSION_BUS_ADDRESS\", \"XDG_CURRENT_DESKTOP\", \"XDG_DATA_HOME\", \"XDG_CONFIG_HOME\", \"XDG_STATE_HOME\", \"AGENTVOICE_PERMISSION_TIMEOUT\"]",
+    "-c",
+    "mcp_servers.agentvoice-crew.default_tools_approval_mode=\"approve\"",
+    "-c",
+    "mcp_servers.agentvoice-crew.tool_timeout_sec=210"
+   ],
+   "error": "",
+   "handed": [
+    {
+     "name": "agentvoice-crew",
+     "source": "agentvoice",
+     "on": true
+    },
+    {
+     "name": "filesystem",
+     "source": "found",
+     "on": false
+    }
+   ],
+   "last": {
+    "argv": [
+     "codex",
+     "exec",
+     "--json",
+     "--skip-git-repo-check",
+     "-m",
+     "gpt-5.6-luna",
+     "-c",
+     "mcp_servers.filesystem.enabled=false",
+     "-c",
+     "mcp_servers.agentvoice-crew.command=\"/home/you/.local/share/agentvoice/venv/bin/python\"",
+     "-c",
+     "mcp_servers.agentvoice-crew.args=[\"/home/you/.local/share/agentvoice-plugin/daemon/crew_mcp.py\", \"codex\", \"hazel\", \"--guard\"]",
+     "-c",
+     "mcp_servers.agentvoice-crew.env_vars=[\"HYPRLAND_INSTANCE_SIGNATURE\", \"WAYLAND_DISPLAY\", \"XDG_RUNTIME_DIR\", \"DISPLAY\", \"DBUS_SESSION_BUS_ADDRESS\", \"XDG_CURRENT_DESKTOP\", \"XDG_DATA_HOME\", \"XDG_CONFIG_HOME\", \"XDG_STATE_HOME\", \"AGENTVOICE_PERMISSION_TIMEOUT\"]",
+     "-c",
+     "mcp_servers.agentvoice-crew.default_tools_approval_mode=\"approve\"",
+     "-c",
+     "mcp_servers.agentvoice-crew.tool_timeout_sec=210"
+    ],
+    "pid": 48302,
+    "at": 1795395000.0,
+    "running": false
+   },
+   "log": [
+    {
+     "at": 1795392000.0,
+     "kind": "turn",
+     "secs": 19.5,
+     "tools": [
+      [
+       "command_execution",
+       2
+      ]
+     ],
+     "text": "turn 19.5s · tools: command_execution ×2"
+    },
+    {
+     "at": 1795392900.0,
+     "kind": "turn",
+     "secs": 6.0,
+     "error": "network",
+     "text": "turn 6.0s · failed (network)"
+    }
+   ]
+  },
+  "echo-local": {
+   "program": "endpoint",
+   "state": "",
+   "busy": false,
+   "cwd": "",
+   "prompt_channel": "on stdin, which is then closed",
+   "session": {
+    "id": null,
+    "remembers": true,
+    "resumes": false,
+    "turns": 0
+   },
+   "timeouts": {
+    "idle_s": 90.0
+   },
+   "endpoint": {
+    "host": "localhost:11434",
+    "model": "llama3.2",
+    "history_turns": 8
+   },
+   "argv": null,
+   "error": "",
+   "handed": [],
+   "last": null,
+   "log": []
+  }
+ },
+ "_live": {
+  "main": {
+   "servers": [
+    {
+     "name": "agentvoice-desktop",
+     "status": "connected"
+    },
+    {
+     "name": "agentvoice-crew",
+     "status": "connected"
+    },
+    {
+     "name": "github",
+     "status": "failed"
+    }
+   ]
+  }
+ }
+}

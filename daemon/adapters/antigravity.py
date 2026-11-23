@@ -108,6 +108,9 @@ class Antigravity(Adapter):
                                        "content": [{"type": "text",
                                                     "text": prompt}]}}) + "\n"
 
+    #: One stream-json line on stdin, which is then closed.
+    prompt_channel = "as one stream-json line on stdin, which is then closed"
+
     def _argv(self, text: str, session_id: str | None) -> list[str]:
         # `-p=` with an empty attached value, because `-p` followed by a flag
         # takes that flag as the prompt and says so.
@@ -153,6 +156,7 @@ class Antigravity(Adapter):
         except OSError as e:
             yield Chunk(error=f"could not start agy: {e}")
             return
+        self._launched(argv, proc)          # phase M16: Agent details → Advanced
         feed(proc, self.prompt_line(text))
 
         # Drained in the background from here on: stderr is a 64KB pipe

@@ -2632,6 +2632,10 @@ def main(argv=None) -> int:
                                       "as its adapter builds it")
     p.add_argument("id")
     p.add_argument("--json", action="store_true")
+    p = sub.add_parser("runinfo", help="how an agent runs: its command line, session, "
+                                       "servers, recent log lines and permission decisions")
+    p.add_argument("id")
+    p.add_argument("--json", action="store_true")
     p = sub.add_parser("import", help="rules, defaults and skills from a folder into "
                                       "communal: a dry run unless --confirm")
     p.add_argument("target", help="communal")
@@ -2784,6 +2788,9 @@ def main(argv=None) -> int:
             _print(v, a.json, "\n\n".join(
                 [f"== {x['label']} ({x['source']}, {x['chars']} chars)\n{safe_terminal(x['text'])}"
                  for x in v["pieces"]] + [f"total: {v['total']} characters"]))
+        elif a.cmd == "runinfo":
+            import runinfo
+            return runinfo.cli(a.id, a.json)
         elif a.cmd in ("import", "import-undo", "import-history"):
             import communal_import
             return communal_import.cli(a)
