@@ -147,7 +147,10 @@ DEFAULTS_ONLY = {"agentEfforts", "agentModels", "mainTools", "permissions",
                  "sharedTools",
                  # Phase M11: the main agent's skills switched off, a list
                  # written on Agent details → Tools & skills.
-                 "mainSkillsOff"}
+                 "mainSkillsOff",
+                 # Phase M15: the agents that take nothing from Communal, a
+                 # list written on Communal → Who gets it.
+                 "communalOff"}
 
 # A key or an agent field whose one writer is an overlay function, and the
 # one page that calls it (phase M10). The page is its home: a call from any

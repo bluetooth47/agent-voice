@@ -80,6 +80,7 @@
       "voiceAgents": [],
       "crewLinks": [],
       "crewQuarantine": [],
+      "communalOff": [],
       "endpointUrl": "",
       "endpointModel": "",
       "endpointIsAgent": false,

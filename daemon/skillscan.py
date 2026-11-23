@@ -423,19 +423,22 @@ def native_off(cfg, agent_id: str, program: str, own_names=()) -> list[str]:
 
 
 def agent_view(program: str, off, own: list[dict], communal: list[dict],
-               external: list[dict], delivery: str) -> list[dict]:
+               external: list[dict], delivery: str, communal_on: bool = True) -> list[dict]:
     """One agent's skills, as its Tools & skills tab lists them: its own,
     the communal ones (agentfs.skill_set), then each one its CLI finds by
     itself. Every entry carries `on` (not switched off), `delivered` (it
-    really gets it) and `why` (why not, when it does not). Pure."""
-    entries = agentfs.skill_set(own, communal, off)
+    really gets it) and `why` (why not, when it does not). `communal_on`
+    False: an agent opted out of Communal (phase M15). Pure."""
+    entries = agentfs.skill_set(own, communal, off, communal_on)
     if delivery == "none":
         entries = [{**s, "delivered": False,
                     "why": s.get("why") or "its program is given no skills"} for s in entries]
     family = FAMILY.get(program)
     if family is None:
         return entries
-    ours = {s["name"] for s in entries}
+    # The names Agent Voice gives it: an opted-out agent's CLI is not told
+    # to hide its own copy of a communal skill it is not given (M15).
+    ours = {s["name"] for s in entries if communal_on or s["source"] != agentfs.COMMUNAL}
     first: dict[str, dict] = {}
     for s in external:
         if s["family"] != family:
@@ -488,13 +491,15 @@ def lanes(cfg, texts=None) -> dict:
         delivery = agentfs.delivery_of(program)[0]
         off = cfg.skills_off_for(a["agent_id"])
         own = agentfs.skills(a["id"])
-        view = agent_view(program, off, own, communal, external, delivery)
+        takes = cfg.takes_communal(a["id"])
+        view = agent_view(program, off, own, communal, external, delivery, takes)
         for s in view:
             if s.get("delivered") and a["enabled"]:
                 gets.setdefault(_card_id(s), []).append(a["label"])
         out_lanes.append({"id": a["id"], "label": a["label"], "program": program,
                           "program_label": agentfs.PROGRAM_LABELS.get(program, program or "No program"),
                           "enabled": a["enabled"], "delivery": delivery,
+                          "takes_communal": takes,
                           "skills": [s for s in view if s["source"] == a["id"]
                                      or (s.get("native") and s.get("delivered"))]})
     for lane in out_lanes:

@@ -2468,7 +2468,7 @@ class Daemon:
             reach = crew.reach(fid) if crew is not None else {}
             mine = [a for a in live if a["id"] == fid or a["id"] in reach]
             want = agentfs.parts_from(texts, fid, p.label or p.name, mine,
-                                      self.skills_off_for(p))
+                                      self.skills_off_for(p), self.takes_communal(p))
             if getattr(agent, "parts", None) == want:
                 continue
             try:
@@ -3274,6 +3274,16 @@ class Daemon:
         except Exception:
             return None
 
+    def takes_communal(self, p) -> bool:
+        """Whether persona `p` takes the communal rules, defaults and skills
+        (phase M15, `communalOff`). Read fresh; anything odd is yes, as an
+        unreadable list is (Config.communal_off)."""
+        try:
+            return self.cfg.takes_communal("" if getattr(p, "main", False) or p is None
+                                           else getattr(p, "id", "") or "")
+        except Exception:
+            return True
+
     def plugin_dir_for(self, p, omarchy_root: str | None,
                        agentvoice_root: str | None = None) -> str | None:
         """Persona `p`'s Claude plugin folder (Phase 13): the Omarchy skill
@@ -3304,9 +3314,11 @@ class Daemon:
         # The skills switched off for it are in the key too (phase M11): a
         # switch moved is a different folder, and nothing else would notice.
         off = self.skills_off_for(p)
+        # And whether it takes Communal at all (phase M15).
+        communal_on = self.takes_communal(p)
         key = (omarchy_root, revision, getattr(self, "_agentfs_stamp", None),
                None if off is None else tuple(sorted(off)),
-               agentvoice_root, av_revision)
+               agentvoice_root, av_revision, communal_on)
         cache = self.__dict__.setdefault("_plugin_dirs", {})
         have = cache.get(fid)
         now = time.monotonic()
@@ -3314,7 +3326,8 @@ class Daemon:
                 and (have[2] is None or now < have[2])):
             return have[1]
         try:
-            got, retry = agentfs.plugin_dir(fid, omarchy_root, off, agentvoice_root), None
+            got, retry = agentfs.plugin_dir(fid, omarchy_root, off, agentvoice_root,
+                                            communal_on), None
         except Exception as e:
             self.say_once(f"plugins-{fid}", f"  {YEL}skills for “{fid}”: not given "
                                             f"({type(e).__name__}){OFF}")
@@ -3364,7 +3377,10 @@ class Daemon:
             import skillscan
             fid = "main" if getattr(p, "main", False) or p is None else (getattr(p, "id", "") or "main")
             texts = getattr(self, "_folder_texts", None) or {}
+            # The communal folder's names only when it takes Communal (M15):
+            # its CLI's own copy is hidden for a skill Agent Voice gives it.
             names = {s["name"] for t in (fid, agentfs.COMMUNAL)
+                     if t != agentfs.COMMUNAL or self.takes_communal(p)
                      for s in agentfs.skills_from(texts, t)}
             agent_id = "" if fid == "main" else fid
             return tuple(skillscan.native_off(self.cfg, agent_id, program, names)), ""

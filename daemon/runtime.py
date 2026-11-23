@@ -182,6 +182,30 @@ def skills_off_choice(raw) -> list[str] | None:
     return out
 
 
+#: The ids `communalOff` may hold (phase M15): "main" or an agent's folder
+#: id, the shape crew_links.valid_id checks. More than anyone opts out by
+#: hand; a longer list is unreadable.
+_COMMUNAL_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
+MAX_COMMUNAL_OFF = 64
+
+
+def communal_off_choice(raw) -> frozenset[str] | None:
+    """`communalOff` as written (phase M15): the agents that take nothing
+    from Communal -- no rules, no defaults, no communal skills. A missing key
+    or null is nobody. Anything else that is not a list of agent ids is None:
+    unreadable, which the caller reads as nobody opted out (master plan,
+    Appendix A: the rules may carry safety text, so being told them is the
+    safe side)."""
+    if raw is None:
+        return frozenset()
+    if not isinstance(raw, list) or len(raw) > MAX_COMMUNAL_OFF:
+        return None
+    for a in raw:
+        if not isinstance(a, str) or not _COMMUNAL_ID.fullmatch(a):
+            return None
+    return frozenset(raw)
+
+
 def speed_pct(value, fallback: int = 100) -> int:
     """A speaking speed as a whole percent inside the bounds, or `fallback`.
 
@@ -372,6 +396,15 @@ DEFAULTS = {
     # alias: the fallback config has no page to link agents from.
     "crewLinks": [],
     "crewQuarantine": [],
+    # Phase M15: the agents that take nothing from Communal, by id ("main"
+    # for the main agent): no communal rules or defaults in their prompt and
+    # no communal skills. Communal notes stay reachable through the notes
+    # tools, being data asked for rather than instructions. Empty is
+    # everyone, as before M15; unreadable is everyone too (the rules may
+    # carry safety text). A list, so defaults-only in the manifest; written
+    # on Communal → Who gets it. No TOML alias: the fallback config has no
+    # Communal page.
+    "communalOff": [],
     "conversationMode": True,
     "yieldToRecorders": True,
     "logSpeech": False,
@@ -946,6 +979,22 @@ class Config:
                 return None
             got = spec.get("skillsOff")
         return None if got is None else frozenset(got)
+
+    def communal_off(self) -> frozenset[str]:
+        """The ids in `communalOff` (phase M15). Empty -- everybody takes
+        Communal -- when the list or the settings cannot be read: nobody's
+        decision to leave an agent untold can be read then, and the rules
+        may be what keeps it careful. Read fresh by whoever asks."""
+        if not self.settings_readable():
+            return frozenset()
+        got = communal_off_choice(self._values.get("communalOff"))
+        return got if got is not None else frozenset()
+
+    def takes_communal(self, agent_id: str | None) -> bool:
+        """Whether this agent is told the communal rules and defaults and
+        given the communal skills (phase M15). `agent_id` is "" or "main"
+        for the main agent, else an extra agent's id."""
+        return (agent_id or "main") not in self.communal_off()
 
     def settings_readable(self) -> bool:
         """False when shell.json exists and this widget's entry could not be

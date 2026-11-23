@@ -657,6 +657,45 @@ def history(target: str, file: str) -> list[dict]:
     return out
 
 
+#: Lines of a diff shown at most (phase M15); the rest is counted.
+DIFF_LINES = 400
+
+
+def diff_lines(old: str, new: str, old_name: str = "before", new_name: str = "after") -> list[str]:
+    """A unified diff of two texts, as lines, at most DIFF_LINES of them
+    with a last line counting the rest. The texts are files anyone may
+    edit: the page draws these as plain text."""
+    import difflib
+    out = list(difflib.unified_diff(old.splitlines(), new.splitlines(),
+                                    old_name, new_name, lineterm="", n=2))
+    if len(out) > DIFF_LINES:
+        out = out[:DIFF_LINES] + [f"… and {len(out) - DIFF_LINES} more lines"]
+    return out
+
+
+def version(target: str, file: str, name: str) -> dict:
+    """One saved version of `file` (phase M15, History beside the Rules and
+    Defaults editors): its text, and a diff from it to what the file holds
+    now -- what Restore would change, read backwards. Reads only."""
+    _limit(target, file)
+    if not _VERSION.fullmatch(name or ""):
+        raise AgentFsError(f"not a version: {name!r}")
+    chosen = next((v for v in _versions(target, file) if v.name == name), None)
+    if chosen is None:
+        raise AgentFsError(f"{file} has no version {name}")
+    try:
+        text = _decode(*_read_bytes(chosen))
+    except OSError as e:
+        raise AgentFsError(f"that version cannot be read ({e.strerror})") from None
+    path, _ = _resolve(target, file)
+    now = _raw_text(path)
+    m = _VERSION.fullmatch(name)
+    return {"version": name, "at": int(m.group(1)) / 1e9, "who": m.group(2),
+            "text": text, "chars": len(clean(text)), "current_exists": now is not None,
+            "same": (now or "") == text,
+            "diff": diff_lines(text, now or "", f"{file} ({name[:19]})", f"{file} now")}
+
+
 def revert(target: str, file: str, version: str | None = None,
            base: str | None = None) -> str:
     """Put a saved version back (the newest when none is named): the undo
@@ -1256,14 +1295,22 @@ def skills_from(texts: dict, target: str) -> list[dict]:
     return out
 
 
-def skill_set(own: list[dict], communal: list[dict], off=frozenset()) -> list[dict]:
+#: Why a communal skill is not given to an agent that takes nothing from
+#: Communal (phase M15), as its Tools & skills tab and Communal → Skills say.
+NOT_COMMUNAL = "it takes nothing from Communal (Communal → Who gets it)"
+
+
+def skill_set(own: list[dict], communal: list[dict], off=frozenset(),
+              communal_on: bool = True) -> list[dict]:
     """An agent's own skills and the communal ones, each marked `shadowed`
     (an own skill of the same name wins, even one with a problem: the
     person meant this agent to have its own), `on` (not in `off`, the
     names switched off for it: phase M11), `delivered`, and `why` it is not.
 
     `off` None is a switch list that cannot be read: every communal skill
-    is then off for this agent, and its own are still its own."""
+    is then off for this agent, and its own are still its own.
+    `communal_on` False is an agent opted out of Communal (phase M15): each
+    communal skill is listed, so the page can say why, and none is given."""
     mine = {s["name"] for s in own}
     out = []
     for s in own:
@@ -1273,7 +1320,8 @@ def skill_set(own: list[dict], communal: list[dict], off=frozenset()) -> list[di
     for s in communal:
         hidden = s["name"] in mine
         on = off is not None and s["name"] not in off
-        why = (s["problem"] or ("its switch list cannot be read, so it is off" if off is None
+        why = (s["problem"] or (NOT_COMMUNAL if not communal_on
+                                else "its switch list cannot be read, so it is off" if off is None
                                 else "switched off for this agent" if not on
                                 else "its own of the same name is given instead" if hidden else ""))
         out.append({**s, "shadowed": hidden, "on": on, "delivered": not why, "why": why})
@@ -1565,7 +1613,7 @@ def plugins_dir() -> Path:
 
 
 def plugin_dir(agent_id: str, omarchy_root: str | None, off=frozenset(),
-               agentvoice_root: str | None = None) -> str | None:
+               agentvoice_root: str | None = None, communal_on: bool = True) -> str | None:
     """The folder a Claude agent is given with --plugin-dir: the Omarchy
     skill (from `omarchy_root`, when it is wanted), the Agent Voice skill
     (from `agentvoice_root`, phase M14, when it is wanted) and every skill
@@ -1576,10 +1624,14 @@ def plugin_dir(agent_id: str, omarchy_root: str | None, off=frozenset(),
 
     Each file is copied whole, read without following links, with its
     executable bit kept; a skill that changes between the check and the
-    copy is copied as it is then, and checked again on the next change."""
+    copy is copied as it is then, and checked again on the next change.
+
+    `communal_on` False (phase M15, `communalOff`): no communal skill, and
+    the communal folder is not even read."""
     me = folder_id(agent_id)
     chosen = [s for s in skill_set(skills(me) if _valid_agent(me) else [],
-                                   skills(COMMUNAL), off) if s["delivered"]]
+                                   skills(COMMUNAL) if communal_on else [], off)
+              if s["delivered"]]
     if not chosen and not (omarchy_root and agentvoice_root):
         return omarchy_root or agentvoice_root
     files: list[tuple[str, bytes, int]] = []
@@ -1710,7 +1762,8 @@ def roster_line(label, phrase, role) -> str:
         role = role[:len(role) - (len(line) - ROSTER_LINE)].rstrip()
 
 
-def parts_from(texts: dict, me: str, name: str, live: list[dict], off=frozenset()) -> dict:
+def parts_from(texts: dict, me: str, name: str, live: list[dict], off=frozenset(),
+               communal_on: bool = True) -> dict:
     """The folder pieces of one agent's prompt (merged plan, section 3.6),
     each already within its budget, from folder texts as snapshot() gives
     them. Pure: the daemon calls it with what it last read, the bench and
@@ -1723,8 +1776,12 @@ def parts_from(texts: dict, me: str, name: str, live: list[dict], off=frozenset(
     skill_set's: phase M11), which the adapter tells only a backend
     that cannot load skills itself. Instructions and the Omarchy commands
     are not here; they reach the adapter as before.
-    Keys with nothing in them are empty, so the preamble leaves no header."""
-    comm = texts.get(COMMUNAL, {}) if isinstance(texts, dict) else {}
+    Keys with nothing in them are empty, so the preamble leaves no header.
+
+    `communal_on` False is an agent opted out of Communal (phase M15,
+    `communalOff`): no rules, no defaults and no communal skill in its index
+    -- exactly what it would be told were the communal folder empty."""
+    comm = (texts.get(COMMUNAL, {}) if isinstance(texts, dict) and communal_on else {})
     own = texts.get(me, {}) if isinstance(texts, dict) else {}
     roster = []
     for a in live:
@@ -1736,7 +1793,7 @@ def parts_from(texts: dict, me: str, name: str, live: list[dict], off=frozenset(
             break
     try:
         index = skills_index(skill_set(skills_from(texts, me),
-                                       skills_from(texts, COMMUNAL), off))
+                                       skills_from(texts, COMMUNAL) if communal_on else [], off))
     except AgentFsError:
         index = ""
     return {"rules": comm.get("rules.md", ""),
@@ -1797,7 +1854,8 @@ def roster(cfg, live_ids=None) -> list[dict]:
         tools = [k for k in TOOL_ROWS if switched[k] and not _why_not(k, program)]
         given = [] if program == "endpoint" or not _runnable(program) else [
             s["name"] for s in skill_set(skills_from(texts, a["id"]), comm,
-                                         cfg.skills_off_for("" if a["id"] == MAIN else a["id"]))
+                                         cfg.skills_off_for("" if a["id"] == MAIN else a["id"]),
+                                         cfg.takes_communal(a["id"]))
             if s["delivered"]]
         out.append({**a, "role": " ".join(texts.get(a["id"], {}).get("role.md", "").split()),
                     "program": program, "tools": tools, "skills": given})
@@ -2018,7 +2076,9 @@ def catalog(agent_id: str, cfg) -> dict:
     except Exception as e:      # noqa: BLE001 -- shown on the tab
         found, lanes = {"skills": [], "problems": []}, None
         skills_error = f"the skill scan failed ({type(e).__name__})"
-    entries = skillscan.agent_view(program, off, own, skills(COMMUNAL), found["skills"], delivery)
+    communal_on = cfg.takes_communal(me)
+    entries = skillscan.agent_view(program, off, own, skills(COMMUNAL), found["skills"], delivery,
+                                   communal_on)
     # Phase M10: the tools found on this machine, as this agent has them.
     # A scan that fails lists nothing (and says why): nothing is on then.
     import tooldetect
@@ -2037,6 +2097,7 @@ def catalog(agent_id: str, cfg) -> dict:
     return {"agent": me, "program": program, "program_label": _label(program),
             "level": level, "tools": tools, "notes": notes_row, "collab": collab_row,
             "skills": entries,
+            "takes_communal": communal_on,
             "skills_readable": off is not None,
             "skill_lanes": lanes, "skills_error": skills_error,
             "skills_problems": found.get("problems") or [],
@@ -2058,7 +2119,8 @@ def parts(agent_id: str, cfg, live_ids=None) -> dict:
         spec = cfg.agent_by_id(me)
         name = spec["label"] if spec else me
     return parts_from(snapshot()[1], me, name, live,
-                      cfg.skills_off_for("" if me == MAIN else me))
+                      cfg.skills_off_for("" if me == MAIN else me),
+                      cfg.takes_communal(me))
 
 
 def preview(agent_id: str, cfg, live_ids=None) -> list[dict]:
@@ -2099,7 +2161,8 @@ def preview(agent_id: str, cfg, live_ids=None) -> list[dict]:
         pass                            # it answers nothing, so is told nothing
     elif not endpoint and program in PLUGIN_PROGRAMS:
         names = [s["name"] for s in skill_set(skills(me), skills(COMMUNAL),
-                                              cfg.skills_off_for("" if me == MAIN else me))
+                                              cfg.skills_off_for("" if me == MAIN else me),
+                                              cfg.takes_communal(me))
                  if s["delivered"]]
         if names:
             out.append({"label": "Skills", "source": "skills folders", "text": "",
@@ -2121,6 +2184,139 @@ def preview(agent_id: str, cfg, live_ids=None) -> list[dict]:
         out.append({"label": "Other agents here", "source": "each agent's role.md",
                     "text": "\n".join(p["roster"])})
     return out
+
+
+# --- the whole prompt, as sent (phase M15) -----------------------------------------
+
+#: Each piece of the preamble as Communal → Preview names it: label, where
+#: it comes from, and how it stands against the others. The precedence is
+#: what the piece's own header tells the model (adapters.base), nothing
+#: stronger: every piece is text a model is asked to follow, not a lock.
+PIECES = {
+    "style": ("Spoken style", "built in",
+              "How every spoken reply is written. First, so it is read before anything else."),
+    "rules": ("Rules for every agent", "communal/rules.md",
+              "Told as rules for every agent. Nothing later in the prompt is said to override them."),
+    "defaults": ("Defaults", "communal/defaults.md",
+                 "Told that its own standing instructions win where the two differ."),
+    "personality": ("About it", "personality.md", "Who it is: its name and manner."),
+    "instructions": ("Standing instructions", "instructions.md",
+                     "From you, for every reply. They win over the communal defaults."),
+    "skills": ("Skills", "skills folders",
+               "An index: it reads a skill's file when a request needs it."),
+    "skill_text": ("Omarchy commands and how Agent Voice works", "built in",
+                   "Reference: what it may suggest or look up."),
+    "clis": ("Command-line tools", "Communal → Tools and its own Tools & skills",
+             "Which found tools it may use and which are switched off: told, not enforced."),
+    "roster": ("Other agents here", "each agent's role.md",
+               "Information about the agents its crew links let it reach, never instructions."),
+}
+
+
+class _Told:
+    """Stands in for the agent's adapter so its own preamble builder runs
+    over exactly the attributes the daemon sets (parts, instructions,
+    skill_text, clis_on, clis_off), with the class's own takes_skill_text
+    and has_tools. Nothing is started and nothing checked as available."""
+
+
+def prompt(agent_id: str, cfg, live_ids=None) -> dict:
+    """What `agent_id`'s adapter puts ahead of every request (phase M15,
+    Communal → Preview): each piece with its source and precedence, and the
+    total, built by the adapter's own preamble builder (base.Adapter.
+    preamble_pieces) over what the daemon hands it. Plus what is given
+    beside the prompt (skills a Claude agent loads itself), which is not
+    in the count because it is not sent unless a request needs it.
+
+    The roster names only the agents the crew links let it reach, as the
+    daemon's does (agents preview does not filter it: M15 notes)."""
+    from adapters import REGISTRY, CLI_TEMPLATES
+    from adapters.base import Adapter
+    from adapters.cli_agent import CliAgent
+    from adapters.openai_compat import OpenAICompatible
+    me = folder_id(agent_id)
+    aid = "" if me == MAIN else me
+    spec = None if me == MAIN else next((a for a in cfg.all_agents() if a["id"] == me), None)
+    if me != MAIN and spec is None:
+        raise AgentFsError(f"no agent {agent_id!r} in the settings")
+    program = program_of(me, cfg)
+    endpoint = (cfg.main_endpoint() if me == MAIN
+                else (spec or {}).get("endpoint") if (spec or {}).get("agent") == "endpoint"
+                else None)
+    if program == "endpoint" and not endpoint:
+        cls, has_tools = None, False            # half filled: nothing runs
+    elif endpoint:
+        cls, has_tools = OpenAICompatible, endpoint.get("is_agent") is True
+    else:
+        cls = REGISTRY.get(program) or (CliAgent if program in CLI_TEMPLATES else None)
+        has_tools = bool(getattr(cls, "has_tools", True)) if cls else False
+    communal_on = cfg.takes_communal(me)
+    # The roster the daemon builds: reachable now, then only along a link.
+    live = _configured(cfg, live_ids)
+    try:
+        reach = cfg.crew().reach(me)
+    except Exception:           # noqa: BLE001 -- an unreadable list reaches nobody
+        reach = {}
+    name = next((a["label"] for a in live if a["id"] == me), None)
+    if name is None:
+        name = spec["label"] if spec else me
+    mine = [a for a in live if a["id"] == me or a["id"] in reach]
+    parts_now = parts_from(snapshot()[1], me, name, mine,
+                           cfg.skills_off_for(aid), communal_on)
+    legacy = cfg["agentInstructions"] if me == MAIN else (spec or {}).get("instructions", "")
+    told = type("Told", (_Told, Adapter), {
+        "available": lambda self: True, "send": lambda self, text, session_id=None: iter(()),
+        "takes_skill_text": bool(getattr(cls, "takes_skill_text", True)) if cls else False,
+        "has_tools": has_tools})()
+    told.spoken = True
+    told.parts = parts_now
+    told.instructions = instructions_for(aid, legacy)
+    tools = cfg.tools_for(aid)
+    if told.takes_skill_text and told.has_tools:
+        import agentvoice_skill
+        import omarchy_skill
+        told.skill_text = "\n\n".join(t for t in (
+            omarchy_skill.instructions() if tools["omarchySkill"] else "",
+            agentvoice_skill.instructions() if tools["agentvoiceSkill"] else "") if t)
+    if told.has_tools and cls is not None:
+        try:
+            import tooldetect
+            project = cfg.get_str("projectDir") if me == MAIN else str((spec or {}).get("projectDir") or "")
+            scanned, defs = tooldetect.scan_cached(cfg, with_defs=True)
+            got = tooldetect.delivery(cfg, aid, program, project, scanned, defs)
+            told.clis_on, told.clis_off = list(got["clis_on"]), list(got["clis_off"])
+        except Exception:       # noqa: BLE001 -- as the daemon: nothing given on a guess
+            told.clis_on, told.clis_off = [], []
+    pieces = []
+    for key, text in told.preamble_pieces():
+        label, source, how = PIECES[key]
+        if key == "personality":
+            label, source = f"About you, {name}", f"agents/{me}/personality.md"
+        elif key == "instructions":
+            source = f"agents/{me}/instructions.md"
+        elif key == "skill_text":
+            label = " and ".join(x for x, on in (("Omarchy commands", tools["omarchySkill"]),
+                                                 ("how Agent Voice works", tools["agentvoiceSkill"]))
+                                 if on) or label
+            label = label[0].upper() + label[1:]
+        pieces.append({"key": key, "label": label, "source": source, "precedence": how,
+                       "text": text, "chars": len(text)})
+    head = told.preamble()
+    beside = []
+    if cls is not None and not endpoint and not told.takes_skill_text and told.has_tools:
+        names = [s["name"] for s in skill_set(skills(me) if _valid_agent(me) or me == MAIN else [],
+                                              skills(COMMUNAL) if communal_on else [],
+                                              cfg.skills_off_for(aid)) if s["delivered"]]
+        names += [n for n, on in (("omarchy", tools["omarchySkill"]),
+                                  ("agentvoice", tools["agentvoiceSkill"])) if on]
+        if names:
+            beside.append({"label": "Skills it loads itself", "source": "its plugin folder",
+                           "text": "", "note": "Loaded by " + _label(program) + " when a request "
+                           "needs one, so not counted above: " + ", ".join(names) + "."})
+    return {"agent": me, "label": name, "program": program, "program_label": _label(program),
+            "takes_communal": communal_on, "pieces": pieces, "beside": beside,
+            "total": len(head), "separators": max(0, len(pieces) - 1) * 2,
+            "runs": cls is not None and (endpoint is not None or _runnable(program))}
 
 
 # --- migration (Phase 10) ----------------------------------------------------
@@ -2291,6 +2487,13 @@ def migration_lines(report: dict, changes_only: bool = False) -> list[str]:
 
 # --- CLI ---------------------------------------------------------------------
 
+def safe_terminal(text) -> str:
+    """speech_text.safe_for_terminal, imported when printing: a file's text
+    or a diff of it, printed, carries no escape sequence to the terminal."""
+    from speech_text import safe_for_terminal
+    return safe_for_terminal(text)
+
+
 def _print(obj, as_json: bool, text: str) -> None:
     print(json.dumps(obj, ensure_ascii=False, indent=1) if as_json else text)
 
@@ -2405,6 +2608,11 @@ def main(argv=None) -> int:
     p.add_argument("target")
     p.add_argument("file")
     p.add_argument("--json", action="store_true")
+    p = sub.add_parser("version", help="one saved version's text, and a diff to now")
+    p.add_argument("target")
+    p.add_argument("file")
+    p.add_argument("version")
+    p.add_argument("--json", action="store_true")
     p = sub.add_parser("revert", help="the newest saved version, or VERSION")
     p.add_argument("target")
     p.add_argument("file")
@@ -2419,6 +2627,22 @@ def main(argv=None) -> int:
     p.add_argument("dir", nargs="?")
     p = sub.add_parser("preview", help="what an agent is told, piece by piece")
     p.add_argument("id")
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("prompt", help="everything an agent is sent ahead of a request, "
+                                      "as its adapter builds it")
+    p.add_argument("id")
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("import", help="rules, defaults and skills from a folder into "
+                                      "communal: a dry run unless --confirm")
+    p.add_argument("target", help="communal")
+    p.add_argument("dir")
+    p.add_argument("--confirm", metavar="TOKEN",
+                   help="the token the dry run printed: commits exactly what it listed")
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("import-undo", help="take an import back, if nothing changed since")
+    p.add_argument("op")
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("import-history", help="the imports recorded, newest first")
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("skills", help="a folder's skills, each with its problem if any")
     p.add_argument("target")
@@ -2504,6 +2728,10 @@ def main(argv=None) -> int:
             _print(h, a.json, "\n".join(
                 f"{v['version']}  {v['who']}  {v['chars']} chars" for v in h)
                 or "no saved versions")
+        elif a.cmd == "version":
+            v = version(a.target, a.file, a.version)
+            _print(v, a.json, safe_terminal(v["text"]) + "\n\n" +
+                   "\n".join(safe_terminal(x) for x in v["diff"]))
         elif a.cmd == "revert":
             print(revert(a.target, a.file, a.version, base=a.base))
         elif a.cmd == "ack":
@@ -2550,6 +2778,15 @@ def main(argv=None) -> int:
                                         for k, v in t.items() for x in v))
         elif a.cmd == "ensure-communal":
             print("\n".join(ensure_communal()))
+        elif a.cmd == "prompt":
+            from runtime import Config
+            v = prompt(a.id, Config())
+            _print(v, a.json, "\n\n".join(
+                [f"== {x['label']} ({x['source']}, {x['chars']} chars)\n{safe_terminal(x['text'])}"
+                 for x in v["pieces"]] + [f"total: {v['total']} characters"]))
+        elif a.cmd in ("import", "import-undo", "import-history"):
+            import communal_import
+            return communal_import.cli(a)
         elif a.cmd == "preview":
             from runtime import Config
             v = preview(a.id, Config())

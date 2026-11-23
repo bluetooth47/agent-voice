@@ -6,7 +6,9 @@ import qs.Ui
 import ".."
 import "../ui"
 
-// What agents share: the communal rules and defaults (Phase 12), the tools
+// What agents share: the communal rules and defaults (Phase 12), with their
+// History and an Import (M15); who takes any of it, `communalOff`, and the
+// whole prompt one agent ends up with (M15, Who gets it and Preview); the tools
 // every agent gets (moved here from the Agents page in M5, bug E; the tools
 // found on this machine since M10, `sharedTools`), shared
 // skills (Phase 13), shared notes (Phase 14) and conversations with more
@@ -27,11 +29,13 @@ Column {
   readonly property var folder: s.folders.folders["communal"]
   readonly property string watch: JSON.stringify(s.vAgentFiles["communal"] || {}) +
                                   JSON.stringify(folder || {}) + s.folders.epoch
-  // How many agents are told these: the main one and every switched on one.
+  // How many agents are told these: the main one and every switched on one
+  // that has not opted out of Communal (M15).
   readonly property int told: {
-    var n = 1
-    for (var i = 0; i < s.voiceAgents.length; i++)
-      if ((s.voiceAgents[i] || {}).enabled !== false) n++
+    var n = 0
+    var all = page.agentList()
+    for (var i = 0; i < all.length; i++)
+      if (all[i].enabled && page.takes(all[i].id)) n++
     return n
   }
 
@@ -43,10 +47,12 @@ Column {
     fontFamily: page.s.fontFamily
   }
 
-  readonly property string tab: ["tools", "skills", "notes", "chats"].includes(s.communalTab) ? s.communalTab : "rules"
+  readonly property string tab: ["who", "preview", "tools", "skills", "notes", "chats"].includes(s.communalTab)
+                                ? s.communalTab : "rules"
   TabStrip {
     width: parent.width
-    options: [{ id: "rules", label: "Rules & defaults" }, { id: "tools", label: "Tools" },
+    options: [{ id: "rules", label: "Rules & defaults" }, { id: "who", label: "Who gets it" },
+              { id: "preview", label: "Preview" }, { id: "tools", label: "Tools" },
               { id: "skills", label: "Skills" }, { id: "notes", label: "Notes" }, { id: "chats", label: "Chats" }]
     current: page.tab
     foreground: page.s.foreground
@@ -63,8 +69,11 @@ Column {
     width: parent.width
     wrapMode: Text.WordWrap
     textFormat: Text.PlainText
-    text: "Told to " + (page.told === 1 ? "your one agent" : "all " + page.told + " agents that are switched on") +
-          ", with every request it is sent, before each one's own instructions."
+    text: (page.told === 0 ? "Told to no agent now: every one has opted out (Who gets it)"
+           : "Told to " + (page.told === 1 ? "one agent" : page.told + " agents") +
+             " that " + (page.told === 1 ? "is" : "are") + " switched on and take" + (page.told === 1 ? "s" : "") +
+             " Communal") +
+          ", with every request, before each one's own instructions."
     color: page.s.dim
     font.family: page.s.fontFamily
     font.pixelSize: Style.font.caption
@@ -82,16 +91,33 @@ Column {
           "itself; if anything changes it outside Settings, it shows here with Keep and Revert."
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
-    FileEditor {
-      id: rulesEditor
-      target: "communal"
-      keeper: page.s.folders
-      file: "rules.md"
-      limit: 1500
-      watch: page.watch
-      placeholder: "e.g. Ask before deleting anything."
-      foreground: page.s.foreground
-      fontFamily: page.s.fontFamily
+    // One column: a SettingRow lays out a single child (M15 found the
+    // History drawn over the box in the preview).
+    Column {
+      width: parent.width
+      spacing: Style.space(6)
+      FileEditor {
+        id: rulesEditor
+        target: "communal"
+        keeper: page.s.folders
+        file: "rules.md"
+        limit: 1500
+        watch: page.watch
+        placeholder: "e.g. Ask before deleting anything."
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+      }
+      // M15: every save is a version; view, diff and restore them here.
+      FileHistory {
+        target: "communal"
+        file: "rules.md"
+        stamp: rulesEditor.stamp
+        outside: rulesEditor.changedOutside
+        watch: page.watch
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onRestored: rulesEditor.reload()
+      }
     }
   }
 
@@ -105,16 +131,32 @@ Column {
           "Sam”, which one agent may still be told differently on its own page."
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
-    FileEditor {
-      id: defaultsEditor
-      target: "communal"
-      keeper: page.s.folders
-      file: "defaults.md"
-      limit: 1500
-      watch: page.watch
-      placeholder: "e.g. Use metric units."
-      foreground: page.s.foreground
-      fontFamily: page.s.fontFamily
+    // One column: a SettingRow lays out a single child (M15 found the
+    // History drawn over the box in the preview).
+    Column {
+      width: parent.width
+      spacing: Style.space(6)
+      FileEditor {
+        id: defaultsEditor
+        target: "communal"
+        keeper: page.s.folders
+        file: "defaults.md"
+        limit: 1500
+        watch: page.watch
+        placeholder: "e.g. Use metric units."
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+      }
+      FileHistory {
+        target: "communal"
+        file: "defaults.md"
+        stamp: defaultsEditor.stamp
+        outside: defaultsEditor.changedOutside
+        watch: page.watch
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onRestored: defaultsEditor.reload()
+      }
     }
   }
 
@@ -162,6 +204,24 @@ Column {
           fontFamily: page.s.fontFamily
           onClicked: page.s.folders.exportFolder("communal")
         }
+        Button {
+          text: page.importing ? "Close import" : "Import…"
+          iconText: "\u{f0220}"
+          tooltipText: "Bring rules, defaults and skills in from an exported folder: checked first, asked, and undoable"
+          bordered: true
+          focusable: true
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          onClicked: page.importing = !page.importing
+        }
+      }
+      // M15: a dry run, a confirm, one commit, Undo.
+      CommunalImport {
+        width: parent.width
+        visible: page.importing
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onChanged: { page.s.folders.refresh(); page.loadSkills() }
       }
       Text {
         width: parent.width
@@ -185,6 +245,275 @@ Column {
       }
     }
   }
+  }
+
+  // --- Who gets it (M15) -----------------------------------------------------------------
+  // `communalOff`: the agents that take nothing from Communal. Written here
+  // alone (tests/test_settings_pages.py). An unreadable list reads as nobody
+  // opted out -- the rules may be what keeps an agent careful -- and says so.
+  property bool importing: false
+  readonly property var communalOffRaw: s.setting("communalOff", [])
+  readonly property bool communalOffReadable: {
+    var raw = page.communalOffRaw
+    if (!Array.isArray(raw) || raw.length > 64) return false
+    for (var i = 0; i < raw.length; i++)
+      if (typeof raw[i] !== "string" || !/^[a-z0-9][a-z0-9-]{0,47}$/.test(raw[i])) return false
+    return true
+  }
+  function agentList() {
+    var out = [{ id: "main", label: s.mainLabel, enabled: true }]
+    for (var i = 0; i < s.voiceAgents.length; i++) {
+      var a = s.voiceAgents[i] || {}
+      var id = s.agentId(a)
+      if (id) out.push({ id: id, label: s.agentLabel(a) || id, enabled: a.enabled !== false })
+    }
+    return out
+  }
+  function takes(id) { return !page.communalOffReadable || page.communalOffRaw.indexOf(id) < 0 }
+  // The new list: what is there now (ids of agents that still exist, so a
+  // removed agent's id never opts out a new one that takes its id), with
+  // `id` added or taken out.
+  function setTakes(id, on) {
+    var known = page.agentList().map(function(a) { return a.id })
+    var list = (page.communalOffReadable ? page.communalOffRaw : []).filter(function(x) {
+      return known.indexOf(x) >= 0 && x !== id
+    })
+    if (!on) list.push(id)
+    s.put("communalOff", list)
+  }
+  property string freshNote: ""
+  Process {
+    id: freshStarter
+    property string who: ""
+    property string err: ""
+    property bool started: false
+    onStarted: started = true
+    stderr: StdioCollector { onStreamFinished: freshStarter.err = String(text).trim() }
+    onRunningChanged: if (!running) {
+      page.freshNote = !freshStarter.started ? "Not started: the agentvoice command could not be run."
+                     : freshStarter.err !== "" ? "Not started: " + freshStarter.err.split("\n").pop()
+                     : freshStarter.who + " starts a new conversation on its next request."
+    }
+  }
+  function startFresh(id, label) {
+    if (freshStarter.running) return
+    freshNote = ""
+    freshStarter.who = label
+    freshStarter.err = ""
+    freshStarter.started = false
+    freshStarter.command = ["agentvoice", "chats", "new", id]
+    freshStarter.running = true
+  }
+
+  Column {
+    width: parent.width
+    spacing: Style.space(10)
+    visible: page.tab === "who"
+
+    Text {
+      width: parent.width
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: "An agent switched on here is told the communal rules and defaults with every request " +
+            "and given the communal skills. Switched off, it is told none of them and given none; " +
+            "its own role, personality, instructions, skills and notes are unchanged."
+      color: page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+    Text {
+      width: parent.width
+      visible: !page.communalOffReadable
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: "The list of agents that opted out cannot be read, so every agent takes Communal. " +
+            "Switching one below writes a fresh list."
+      color: page.s.urgent
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+    Repeater {
+      model: page.agentList()
+      Column {
+        required property var modelData
+        width: parent.width
+        spacing: Style.space(4)
+        readonly property bool on: page.takes(modelData.id)
+        ToggleRow {
+          width: parent.width
+          label: modelData.label + (modelData.enabled ? "" : " (switched off)")
+          hint: parent.on ? "Told the communal rules and defaults; given the communal skills."
+                          : "Told nothing from Communal, and given no communal skill."
+          help: "Read on the agent's next request; an idle agent's process is let go so it starts " +
+                "with the change. A conversation already under way keeps what it was told before: " +
+                "text already sent cannot be recalled, which is what Start fresh is for."
+          checked: parent.on
+          changed: !parent.on
+          foreground: page.s.foreground
+          fontFamily: page.s.fontFamily
+          onToggled: page.setTakes(modelData.id, !checked)
+          onReset: page.setTakes(modelData.id, true)
+        }
+        Row {
+          visible: !parent.on
+          spacing: Style.space(8)
+          leftPadding: Style.space(10)
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            width: Math.min(implicitWidth, page.width - freshButton.width - Style.space(40))
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: "Its current conversation may still hold what it was told before."
+            color: page.s.dim
+            font.family: page.s.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+          Button {
+            id: freshButton
+            text: "Start fresh"
+            tooltipText: "Its next request begins a new conversation; this one stays in Chats"
+            bordered: true
+            focusable: true
+            enabled: !freshStarter.running
+            foreground: page.s.foreground
+            fontFamily: page.s.fontFamily
+            onClicked: page.startFresh(modelData.id, modelData.label)
+          }
+        }
+      }
+    }
+    Text {
+      width: parent.width
+      visible: page.freshNote !== ""
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: page.freshNote
+      color: page.freshNote.indexOf("Not ") === 0 ? page.s.urgent : page.s.foreground
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+    Text {
+      width: parent.width
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: "Communal notes stay reachable through the notes tools whatever is switched here: " +
+            "they are information an agent looks up when it needs it, not instructions it is told. " +
+            "Quarantine on the Crew map is what keeps an agent from writing them."
+      color: page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+  }
+
+  // --- Preview (M15) ----------------------------------------------------------------------
+  // One agent's whole prompt, piece by piece, from `agentvoice agents prompt`:
+  // its adapter's own builder over what the daemon hands it, so what is
+  // shown is what is sent.
+  property string previewAgent: "main"
+  property var promptView: null
+  property string promptError: ""
+  readonly property string promptWatch: page.watch + JSON.stringify(s.vAgentFiles) +
+                                        JSON.stringify(page.communalOffRaw) + s.folders.epoch
+  onPromptWatchChanged: if (page.tab === "preview") promptDelay.restart()
+  Timer { id: promptDelay; interval: 300; onTriggered: page.loadPrompt() }
+  function loadPrompt() {
+    if (prompter.running) { promptDelay.restart(); return }
+    prompter.forAgent = page.previewAgent
+    prompter.command = ["agentvoice", "agents", "prompt", page.previewAgent, "--json"]
+    prompter.running = true
+  }
+  Process {
+    id: prompter
+    property string forAgent: ""
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var d
+        try { d = JSON.parse(String(text)) } catch (e) { return }
+        if (!d || !Array.isArray(d.pieces) || prompter.forAgent !== page.previewAgent) return
+        page.promptError = ""
+        page.promptView = d
+      }
+    }
+    stderr: StdioCollector {
+      onStreamFinished: {
+        var t = String(text).trim()
+        if (t !== "" && prompter.forAgent === page.previewAgent)
+          page.promptError = t.replace(/^agentvoice agents: /, "").split("\n").pop()
+      }
+    }
+  }
+  Connections {
+    target: page.s.store
+    function onSaved(key) { if (page.tab === "preview") promptDelay.restart() }
+  }
+
+  Column {
+    width: parent.width
+    spacing: Style.space(10)
+    visible: page.tab === "preview"
+
+    Text {
+      width: parent.width
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: "Everything one agent is sent ahead of each request, in the order it is sent, built " +
+            "the way its program builds it. Pick an agent."
+      color: page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+    AgentTabs {
+      width: parent.width
+      agents: page.agentList().map(function(a) { return { id: a.id, label: a.label, tone: page.takes(a.id) ? "active" : "idle" } })
+      current: page.previewAgent
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onPicked: function(id) { page.previewAgent = id; page.promptView = null; page.loadPrompt() }
+    }
+    Text {
+      width: parent.width
+      visible: page.promptView !== null
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: page.promptView === null ? "" :
+            page.promptView.total + " characters in all (about " + Math.round(page.promptView.total / 4) +
+            " tokens), sent with every request · " + page.promptView.program_label +
+            (page.promptView.takes_communal ? "" : " · takes nothing from Communal") +
+            (page.promptView.runs ? "" : " · Agent Voice cannot run this program, so it is sent nothing")
+      color: page.s.foreground
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.bodySmall
+    }
+    PromptPreview {
+      width: parent.width
+      parts: page.promptView === null ? [] :
+             page.promptView.pieces.map(function(x) {
+               return { label: x.label, from: x.source, text: x.text, how: x.precedence, chars: x.chars }
+             }).concat((page.promptView.beside || []).map(function(x) {
+               return { label: x.label, from: x.source, text: "", note: x.note }
+             }))
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+    }
+    Text {
+      width: parent.width
+      visible: page.promptView === null && page.promptError === ""
+      text: prompter.running ? "Reading…" : ""
+      textFormat: Text.PlainText
+      color: page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+    Text {
+      width: parent.width
+      visible: page.promptError !== ""
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: "Could not show it: " + page.promptError
+      color: page.s.urgent
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
   }
 
   // --- Tools (plan 12a, 12b; moved here in M5) --------------------------------------
@@ -513,8 +842,10 @@ Column {
   readonly property string skillWatch: page.watch + JSON.stringify(s.vAgentFiles) +
                                        JSON.stringify(s.folders.folders)
   onSkillWatchChanged: skillDelay.restart()
-  onTabChanged: { if (tab === "skills") loadSkills(); if (tab === "tools") scanTools(false) }
-  Component.onCompleted: { if (tab === "skills") loadSkills(); if (tab === "tools") scanTools(false) }
+  onTabChanged: { if (tab === "skills") loadSkills(); if (tab === "tools") scanTools(false)
+                 if (tab === "preview") loadPrompt() }
+  Component.onCompleted: { if (tab === "skills") loadSkills(); if (tab === "tools") scanTools(false)
+                           if (tab === "preview") loadPrompt() }
   Timer { id: skillDelay; interval: 250; onTriggered: if (page.tab === "skills") page.loadSkills() }
   function loadSkills() {
     if (skillReader.running) { skillDelay.restart(); return }
@@ -558,6 +889,7 @@ Column {
       if (!l.enabled || (skill.gets || []).indexOf(l.label) >= 0) continue
       var own = (l.skills || []).some(function(x) { return x.source === l.id && x.name === skill.name })
       out.push(l.label + (l.delivery === "none" ? " (takes no skills)"
+                          : l.takes_communal === false ? " (takes nothing from Communal)"
                           : own ? " (has its own)" : " (switched off)"))
     }
     return out

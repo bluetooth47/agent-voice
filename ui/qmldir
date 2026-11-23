@@ -4,6 +4,7 @@ BudgetMeter 1.0 BudgetMeter.qml
 Card 1.0 Card.qml
 CardGrid 1.0 CardGrid.qml
 ChatBubble 1.0 ChatBubble.qml
+CommunalImport 1.0 CommunalImport.qml
 CompactSelector 1.0 CompactSelector.qml
 CrewEdge 1.0 CrewEdge.qml
 DangerButton 1.0 DangerButton.qml
@@ -12,6 +13,7 @@ DropLane 1.0 DropLane.qml
 EndpointEditor 1.0 EndpointEditor.qml
 ExchangeItem 1.0 ExchangeItem.qml
 FileEditor 1.0 FileEditor.qml
+FileHistory 1.0 FileHistory.qml
 HeaderStrip 1.0 HeaderStrip.qml
 Hint 1.0 Hint.qml
 InstructionsBox 1.0 InstructionsBox.qml

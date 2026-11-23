@@ -233,7 +233,9 @@ mkskill "$tmp/home/.agents/skills/crash-notes" crash-notes "Read a core dump and
 real_python="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
 [ -x "$real_python" ] || real_python=python3
 real_config="${XDG_CONFIG_HOME:-$HOME/.config}"
-tools_env="CLAUDE_CONFIG_DIR='$tmp/claude' CODEX_HOME='$tmp/codex' XDG_RUNTIME_DIR='$tmp/run' XDG_STATE_HOME='$tmp/xdgstate' PATH='$tmp/toolpath' HOME='$tmp/home' AGENTVOICE_PYTHON='$real_python'"
+# PYTHONDONTWRITEBYTECODE: this checkout's daemon runs from the clone, and a
+# preview run beside the check must not leave __pycache__ in it (found in M15).
+tools_env="PYTHONDONTWRITEBYTECODE=1 CLAUDE_CONFIG_DIR='$tmp/claude' CODEX_HOME='$tmp/codex' XDG_RUNTIME_DIR='$tmp/run' XDG_STATE_HOME='$tmp/xdgstate' PATH='$tmp/toolpath' HOME='$tmp/home' AGENTVOICE_PYTHON='$real_python'"
 
 # Starting, stopping or toggling the real service, typing to a real agent or
 # answering its permission question is never what a preview means, and since
@@ -241,6 +243,8 @@ tools_env="CLAUDE_CONFIG_DIR='$tmp/claude' CODEX_HOME='$tmp/codex' XDG_RUNTIME_D
 # do nothing, in every mode.
 cat > "$tmp/bin/agentvoice" <<STUB
 #!/usr/bin/env bash
+# Every branch below that runs this checkout's CLI runs it from the clone.
+export PYTHONDONTWRITEBYTECODE=1
 case "\${1:-}" in
   agents)
     # PREVIEW_AGENTS_DELAY: seconds each call takes, to draw "Reading…".
@@ -262,6 +266,9 @@ case "\${1:-}" in
     # The tools found on this machine (M10): the synthetic one above.
     env XDG_CONFIG_HOME="\${XDG_CONFIG_HOME:-$real_config}" XDG_DATA_HOME='$tmp/data' $tools_env '$repo/bin/agentvoice' "\$@"; exit \$? ;;
   chats)
+    # Start fresh (M15) ends a real agent's conversation through the real
+    # daemon's socket, whatever the data folder: a preview only logs it.
+    if [ "\${2:-}" = new ]; then printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0; fi
     # Saved chats: from the scratch data folder under --scratch-data, so
     # sharing a chat in a preview touches no real one; else as before.
     if [ '$scratch' = 1 ]; then XDG_DATA_HOME='$tmp/data' exec '$repo/bin/agentvoice' "\$@"; fi
@@ -320,7 +327,7 @@ data_env=()
 if [ "$scratch" -eq 1 ]; then
   data_env=(XDG_DATA_HOME="$tmp/data")
   if [ -f "$here/targets/$target.seed.py" ]; then
-    PREVIEW_DATA="$tmp/data/agentvoice" python3 "$here/targets/$target.seed.py" "$repo/daemon"
+    PYTHONDONTWRITEBYTECODE=1 PREVIEW_DATA="$tmp/data/agentvoice" python3 "$here/targets/$target.seed.py" "$repo/daemon"
   fi
 fi
 

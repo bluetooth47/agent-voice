@@ -342,7 +342,8 @@ def test_communal_draws_them_on_its_own_tools_tab():
         assert f'page.s.put("{key}", !checked)' in body, key
         assert f'page.s.resetKey("{key}")' in body, key
     assert '{ id: "tools", label: "Tools" }' in s.src
-    assert '["tools", "skills", "notes", "chats"].includes(s.communalTab)' in s.src
+    # M15 added Who gets it and Preview before them.
+    assert '["who", "preview", "tools", "skills", "notes", "chats"].includes(s.communalTab)' in s.src
 
 
 @needs_node

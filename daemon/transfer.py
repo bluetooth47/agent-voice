@@ -1,7 +1,9 @@
 """Moving and copying a skill between agents and Communal, and undoing it
 (master plan, phase M12). Notes reuse the journal since M13: a record whose
 `kind` is "note" is written, settled and undone by notemoves.py, and this
-module only keeps the journal, recovery's loop and the dispatch.
+module only keeps the journal, recovery's loop and the dispatch. Since M15 a
+record whose `kind` is "import" is communal_import.py's: an import into
+Communal, or its undo.
 
 Only the person moves anything: the pages and `agentvoice skills move|copy|
 undo` call this, no agent tool does, and an agent running those commands is
@@ -141,6 +143,10 @@ def _valid(rec) -> bool:
     if rec.get("kind") == "note":
         import notemoves
         return notemoves.valid(rec)
+    if rec.get("kind") == "import":
+        # Phase M15: an import into Communal, or its undo.
+        import communal_import
+        return communal_import.valid(rec)
     action, frm, to = rec.get("action"), rec.get("from"), rec.get("to")
     if action not in ACTIONS or not isinstance(rec.get("op"), str) or not _OP.fullmatch(rec["op"]):
         return False
@@ -618,6 +624,9 @@ def _settle(rec: dict) -> str:
     if rec.get("kind") == "note":
         import notemoves
         return notemoves.settle(rec)
+    if rec.get("kind") == "import":
+        import communal_import
+        return communal_import.settle(rec)
     op, action, frm, to, name = rec["op"], rec["action"], rec["from"], rec["to"], rec["name"]
     stage, hidden = f".t-{op}", f".t-{op}-gone"
     if rec["state"] == "published":

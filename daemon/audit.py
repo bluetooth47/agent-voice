@@ -59,6 +59,10 @@ KINDS = frozenset({
     # and its record entry), several combined into one topic, or a move or
     # copy undone, by the person (phase M13): ids, the name and sizes.
     "note_move", "note_copy", "note_combine", "note_undo",
+    # Rules, defaults and skills imported into Communal from a folder, or
+    # an import undone, by the person (phase M15): the operation's id and
+    # its size; each skill also gets a skill_import line.
+    "communal_import", "communal_import_undo",
 })
 #: How a task ended: collab.DONE, kept here so this file imports nothing.
 STATES = frozenset({"completed", "cancelled", "failed", "refused"})

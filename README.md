@@ -687,6 +687,28 @@ topic: the first you pick is kept and the others are added under it, each with
 its topic as a heading. A note combined away keeps all its past versions, and
 **Earlier notes** puts it back. Agents cannot move or combine notes.
 
+**Who takes Communal.** Communal → **Who gets it** has a switch for each
+agent. Switched off, that agent is told none of the communal rules and
+defaults and given none of the communal skills; its own instructions, skills
+and notes are untouched, and communal notes stay reachable through the notes
+tools, because an agent looks those up rather than being told them. A
+conversation already under way keeps what it was told before, so **Start
+fresh** begins a new one. **Preview** shows one agent's whole prompt in the
+order it is sent, each piece with where it comes from and how it stands
+against the others, and the total in characters: it is built the same way
+that agent's program builds it.
+
+**History and Import.** Under the Rules and Defaults boxes, **History**
+lists every saved version: **View** shows it and how the file differs now,
+**Restore** puts it back, with **Undo** for ten seconds. **Import…** beside
+Export brings rules, defaults and skills in from an exported folder: **Check**
+lists every file it would write, the changes to the rules and defaults, the
+agents it reaches and anything wrong (a link, a file too large, a skill whose
+name Communal already uses), and changes nothing; importing asks first, is
+done all at once or not at all, and can be undone while nothing it wrote has
+changed (`agentvoice agents import-history` and `import-undo OP` from a
+terminal).
+
 ### In Omarchy's Agents panel
 
 Each voice agent also gets a section in Omarchy's own Agents panel, the one

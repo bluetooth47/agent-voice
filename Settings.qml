@@ -962,7 +962,7 @@ Item {
       else if (validTab) detailsTab = tab
       focusAgent = ""
     } else {
-      if (page === "communal" && /^(rules|tools|skills|notes|chats)$/.test(String(tab || ""))) communalTab = tab
+      if (page === "communal" && /^(rules|who|preview|tools|skills|notes|chats)$/.test(String(tab || ""))) communalTab = tab
       focusTools = page === "agents" && tab === "tools"
       focusAgent = ""
       focusAgent = agent || ""

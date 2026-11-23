@@ -73,6 +73,11 @@ DESTRUCTIVE: dict[str, tuple[dict[str, list[str]], list[re.Pattern]]] = {
     # the list (their history stays, and Earlier notes puts one back). Asked
     # through NoteMover's ToolConfirm, never a plain click.
     "notes combine": ({"NoteMover.qml": ["combineNotes"]}, [call("combineNotes")]),
+    # Phase M15: rules, defaults and skills imported into Communal. It widens
+    # what every agent that takes Communal is told and replaces the current
+    # texts (their History keeps them), so it is asked through the import's
+    # ToolConfirm, never a plain click; the dry run before it changes nothing.
+    "agents import": ({"CommunalImport.qml": ["commitImport"]}, [call("commitImport")]),
 }
 
 # How each verb looks where it is built.
@@ -86,6 +91,7 @@ SPELLING = {
     "quarantine": '"quarantine "',
     "crew reset": '"crew reset"',
     "notes combine": '"notes", "combine"',
+    "agents import": '"--confirm", String(planned.token)',
 }
 
 # Functions a call may sit in without a confirmation of its own, because
@@ -169,7 +175,7 @@ def test_the_buttons_that_confirm_are_danger_buttons():
             if el == "ToolConfirm":
                 body = s.src[m.end():m.end() + 400].split("onCancelled")[0]
                 if not re.search(r"\b(setAgentTool|putShared|importSkill|transferSkill|transferNote|"
-                                 r"combineNotes)\(", body) or \
+                                 r"combineNotes|commitImport)\(", body) or \
                         re.search(r"agents\W+trash|chats\W+delete|--uninstall|remove|reset", body):
                     wrong.append(f"{path.relative_to(ROOT)}:{s.lineno(m.start())} ToolConfirm "
                                  f"doing something other than a tool switch")

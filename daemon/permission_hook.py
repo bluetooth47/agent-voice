@@ -352,11 +352,17 @@ NOTE_WORDS = ("agentvoice notes move", "agentvoice notes copy", "agentvoice note
 #: agent running one is asked at every level, as for a raw write into the
 #: folder. Reading (list, show, history, version, folder, export, apply) is
 #: not asked. The same text match, on the words with whitespace folded.
+#: Since M15 also `agents import` and `import-undo` (import-history reads).
 FOLDER_WORDS = re.compile(
     r"(?:agentvoice agents|agentfs\.py) (?:"
     r"(?:write|revert|ack|trash|restore|create|migrate)(?![\w-])(?! --dry-run)"
     r"|traits set(?![\w-])"
-    r"|notes \S+ (?:write|lock|unlock|restore)(?![\w-]))")
+    r"|notes \S+ (?:write|lock|unlock|restore)(?![\w-])"
+    # Phase M15: an import into Communal changes what every agent that takes
+    # it is told, and its undo puts that back; the dry run is asked too,
+    # since only the token it prints separates it from the commit.
+    r"|import(?:-undo)?(?![\w-]))"
+    r"|communal_import\.py")
 
 
 def _spellings(dirs: list[Path]) -> list[str]:

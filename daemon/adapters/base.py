@@ -348,30 +348,38 @@ class Adapter(ABC):
         A piece with nothing in it leaves no header, so with every folder
         empty and no other agent this is byte for byte the old preamble.
         Empty when there is none of these."""
+        return "\n\n".join(text for _, text in self.preamble_pieces())
+
+    def preamble_pieces(self) -> list[tuple[str, str]]:
+        """preamble(), piece by piece, as (key, text): the one builder, so
+        Communal → Preview (phase M15) shows exactly what is sent, and the
+        preamble is these texts joined by blank lines. Keys: style, rules,
+        defaults, personality, instructions, skills, skill_text, clis,
+        roster."""
         p = self.parts or {}
-        out = [SPOKEN_STYLE] if self.spoken else []
+        out = [("style", SPOKEN_STYLE)] if self.spoken else []
         for key, head in (("rules", RULES_HEAD), ("defaults", DEFAULTS_HEAD)):
             text = (p.get(key) or "").strip()
             if text:
-                out.append(head + text)
+                out.append((key, head + text))
         mine = (p.get("personality") or "").strip()
         if mine:
-            out.append(personality_head(p.get("name") or "") + mine)
+            out.append(("personality", personality_head(p.get("name") or "") + mine))
         own = (self.instructions or "").strip()
         if own:
-            out.append(INSTRUCTIONS_HEAD + own)
+            out.append(("instructions", INSTRUCTIONS_HEAD + own))
         index = (p.get("skills") or "").strip()
         if index and self.takes_skill_text and self.has_tools:
-            out.append(SKILLS_HEAD + index)
+            out.append(("skills", SKILLS_HEAD + index))
         if self.skill_text and self.takes_skill_text and self.has_tools:
-            out.append(self.skill_text)
+            out.append(("skill_text", self.skill_text))
         clis = cli_line(self.clis_on, self.clis_off) if self.has_tools else ""
         if clis:
-            out.append(clis)
+            out.append(("clis", clis))
         others = [line for line in (p.get("roster") or []) if line]
         if others:
-            out.append(ROSTER_HEAD + "\n".join(f"- {line}" for line in others))
-        return "\n\n".join(out)
+            out.append(("roster", ROSTER_HEAD + "\n".join(f"- {line}" for line in others)))
+        return out
 
     def with_preamble(self, text: str) -> str:
         """`text` with the preamble in front, for a CLI with no system prompt."""

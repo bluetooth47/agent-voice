@@ -820,7 +820,10 @@ AUDIT_SAFE = {"author", "target", "name", "kind", "reason", "locked", "valid_nam
               # name, its size in bytes, and "outside" for an import.
               "size", "OUTSIDE",
               # Phase M13 (a Combine): the byte count of the notes combined.
-              "parts_bytes"}
+              "parts_bytes",
+              # Phase M15 (communal_import._audit): the operation's id, which
+              # is a time and four random bytes, and the ids it names.
+              "op", "COMMUNAL"}
 
 
 def _names_outside_len(node):

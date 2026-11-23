@@ -1994,3 +1994,34 @@ back to the plugin folder Omarchy loads, and a test lays out `app/` with an
 empty ROOT. "S on `sora`" was not rerun: a Claude turn pays for the skill's
 front matter only, and no Codex turn was run (Codex is bypassed for this
 round).
+
+## 49. M15: what opting out of Communal saves, and what an import costs
+
+Measured 2026-11-22 on the i7-1185G7 (8 threads), in a scratch data folder on
+the home disk (btrfs, so every fsync is real), through `agentfs.prompt()` (the
+adapter's own preamble builder) and `communal_import.plan`/`commit`/`undo` 11
+times each. Synthetic Communal: rules and defaults of 1,500 characters each and
+three skills; the built-in skill lines (Omarchy, Agent Voice) and found CLIs are
+left out, being the same either way. The script lived in /tmp and is not kept.
+
+| main agent's program | takes Communal | opted out | change |
+|---|---|---|---|
+| Claude Code | 3,941 chars | 856 | −3,085 (rules and defaults; its skills load beside the prompt) |
+| Codex | 4,506 | 856 | −3,650 (and the three-skill index) |
+| Gemini | 4,506 | 856 | −3,650 |
+
+Opting out can only shrink the prompt, as the plan said; confirmed. "S on
+`sora`" was not rerun: the real Communal folder on this machine is empty, so
+opting Sora out changes nothing she is sent today (`agents prompt sora`: 1,346
+characters either way).
+
+| an import of | dry run, median (max) | commit | undo |
+|---|---|---|---|
+| 2 texts and 1 skill (2 files) | 1.2 ms (3.9) | 32.7 ms (37.9) | 30.3 ms (35.6) |
+| 2 texts and 20 skills (40 files, about 160 KB) | 5.0 ms (5.6) | 151.3 ms (169.4) | 48.5 ms (51.0) |
+
+A commit is a skill copy per skill (§46: 17 ms for a small one) plus two text
+writes; an undo renames each skill aside and then removes it. `agents prompt`
+itself: 3.1 ms in-process (the page pays a Python start-up on top, as for every
+`agentvoice` call).
+

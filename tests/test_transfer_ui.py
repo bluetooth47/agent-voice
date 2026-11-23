@@ -45,7 +45,9 @@ def test_confirm_is_added_only_in_the_two_confirmed_functions():
             found.append((path.name, s.handler_of(m.start())))
     # Since M13 the note mover's own confirmed function too
     # (tests/test_notemoves_ui.py).
+    # Since M15 the communal import's own (tests/test_communal.py).
     assert sorted(found) == [("AgentDetailsPage.qml", "function importSkill"),
+                             ("CommunalImport.qml", "function commitImport"),
                              ("NoteMover.qml", "function transferNote"),
                              ("SkillMover.qml", "function transferSkill")]
 

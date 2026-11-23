@@ -6,9 +6,11 @@ import qs.Commons as Commons
 // with where it comes from (merged plan, Phase 12: "the most important
 // control against confusion in the plan"). Read only.
 //
-// `parts` is [{ label, from, text, note }]: `from` in words ("From
-// Communal · rules"), `note` for a piece with no text to show (the Omarchy
-// commands). Every text is someone's file, so it is drawn as plain text.
+// `parts` is [{ label, from, text, note, how, chars }]: `from` in words
+// ("From Communal · rules"), `note` for a piece with no text to show (the
+// Omarchy commands); since M15 (Communal → Preview) `how`, a line on how the
+// piece stands against the others, and `chars`, its size, both optional.
+// Every text is someone's file, so it is drawn as plain text.
 Column {
   id: pv
 
@@ -43,12 +45,25 @@ Column {
         }
         Text {
           anchors.baseline: partLabel.baseline
-          text: String(modelData.from || "")
+          text: String(modelData.from || "") +
+                (modelData.chars !== undefined ? " · " + modelData.chars + " characters" : "")
           textFormat: Text.PlainText
           color: pv.dim
           font.family: pv.fontFamily
           font.pixelSize: Style.font.caption
         }
+      }
+      Text {
+        width: parent.width
+        visible: text !== ""
+        leftPadding: Style.space(10)
+        wrapMode: Text.WordWrap
+        textFormat: Text.PlainText
+        text: String(modelData.how || "")
+        color: pv.dim
+        font.family: pv.fontFamily
+        font.pixelSize: Style.font.caption
+        font.italic: true
       }
       Text {
         width: parent.width

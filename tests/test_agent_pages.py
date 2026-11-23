@@ -53,10 +53,13 @@ def test_each_folder_file_has_exactly_one_editor(name):
              if re.search(r'\bfile:\s*"' + re.escape(name) + '"', p.read_text())]
     assert len(where) == 1, (name, where)
     page = (ROOT / where[0]).read_text()
-    # ... and it is a FileEditor, once.
-    assert page.count(f'file: "{name}"') == 1
-    opened = re.findall(r"\b([A-Z]\w*) \{", page[:page.index(f'file: "{name}"')])
-    assert opened[-1] == "FileEditor", (name, opened[-1])
+    # ... and it is a FileEditor, once. Since M15 a FileHistory beside it may
+    # name the file too: it lists versions and restores one through `agents
+    # revert`, never `agents write` (test_only_the_file_editor_runs_agents_write).
+    at = [m.start() for m in re.finditer(re.escape(f'file: "{name}"'), page)]
+    kinds = [re.findall(r"\b([A-Z]\w*) \{", page[:i])[-1] for i in at]
+    assert kinds.count("FileEditor") == 1, (name, kinds)
+    assert set(kinds) <= {"FileEditor", "FileHistory"}, (name, kinds)
 
 
 def test_a_change_noticed_mid_read_is_read_again():
@@ -94,13 +97,14 @@ def test_communal_writes_only_the_tools_for_every_agent():
     """Communal wrote no setting until M5 moved the three switches for every
     agent there (bug E), M10 added the found tools for every agent
     (`sharedTools`, through one function) and M14 the Agent Voice skill's
-    switch. Those, and nothing else: the rules, skills and notes are files,
-    written through the CLI."""
+    switch, and M15 who takes Communal at all (`communalOff`). Those, and
+    nothing else: the rules, skills and notes are files, written through the
+    CLI."""
     page = text("pages/CommunalPage.qml")
     keys = re.findall(r'\b(?:put|putMap)\("(\w+)"', page)
-    assert sorted(keys) == ["agentvoiceSkill", "browserTools", "desktopTools", "omarchySkill",
-                            "sharedTools"]
-    assert len(re.findall(r"\b(?:put|putMap)\(", page)) == 5
+    assert sorted(keys) == ["agentvoiceSkill", "browserTools", "communalOff", "desktopTools",
+                            "omarchySkill", "sharedTools"]
+    assert len(re.findall(r"\b(?:put|putMap)\(", page)) == 6
 
 
 def test_the_folder_operations_write_only_the_agent_list():
@@ -109,7 +113,8 @@ def test_the_folder_operations_write_only_the_agent_list():
 
 
 def test_text_from_files_is_never_rich():
-    for rel in ["ui/PromptPreview.qml", "ui/FileEditor.qml"]:
+    for rel in ["ui/PromptPreview.qml", "ui/FileEditor.qml", "ui/FileHistory.qml",
+                "ui/CommunalImport.qml"]:
         body = text(rel)
         assert body.count("Text {") == body.count("textFormat: Text.PlainText"), rel
 
