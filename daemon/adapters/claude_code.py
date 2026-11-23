@@ -15,12 +15,14 @@ from __future__ import annotations
 import atexit
 import json
 import os
+import queue
 import re
 import shlex
 import signal
 import subprocess
 import sys
 import threading
+import time
 import weakref
 from pathlib import Path
 from typing import Iterator
@@ -28,8 +30,8 @@ from typing import Iterator
 from launch_extras import LaunchRefused
 
 from .base import (
-    Adapter, Chunk, Drain, SPOKEN_STYLE, Watchdog, installed, private_config_file,
-    prompt_file, stop_tree,
+    Adapter, Chunk, Drain, SPOKEN_STYLE, Unprompted, Watchdog, installed,
+    private_config_file, prompt_file, stop_tree,
 )
 
 #: Every tool. The hook's `matcher` is also the limit of what the permission
@@ -42,6 +44,19 @@ GUARDED_TOOLS = ".*"
 #: Long enough to cover a conversation with pauses in it, short enough that
 #: ~230MB is not held all afternoon on a machine that has 4GB.
 KEEP_WARM_S = 300.0
+
+#: Master plan M27: while the process still runs background work it
+#: started (a command, a helper), the idle let-go above waits, up to this
+#: long after its last turn ended. Letting it go kills that work.
+BACKGROUND_KEEP_S = 1800.0
+
+#: After a turn during which a background task finished, how long to wait
+#: for the turn the CLI then takes by itself before deciding the reply
+#: already covered it. Recorded: that turn starts within 0.1 s.
+UNPROMPTED_GRACE_S = 5.0
+
+#: The most of an unprompted turn's own words kept (base.Unprompted).
+UNPROMPTED_TEXT_MAX = 8000
 
 #: Exit statuses that mean we stopped it, not that it failed.
 _STOPPED = (-15, 143, -9, 137)
@@ -194,6 +209,259 @@ def parse_line(msg: dict) -> list[Chunk]:
     return []
 
 
+# --- what a warm claude says between turns (master plan M27) -----------------
+
+_TASK_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def _top(msg: dict) -> bool:
+    """A line of the conversation itself, not of a helper (a subagent's
+    messages carry the id of the tool call that started it)."""
+    return not msg.get("parent_tool_use_id")
+
+
+def is_echo(msg: dict) -> bool:
+    """Our own turn coming back (--replay-user-messages): the user message
+    written on stdin, echoed when the CLI starts the turn for it -- recorded
+    after that turn's init and before its first words. Only what was written
+    to stdin is echoed, so a turn the CLI takes by itself has none."""
+    return msg.get("type") == "user" and msg.get("isReplay") is True and _top(msg)
+
+
+class Between:
+    """The background work one claude process started, and the turns it
+    takes by itself when that work finishes (tests/fixtures/background/).
+
+    `track` sees every line the process writes, in a turn of ours or not:
+    `task_started` with `is_backgrounded` (not a helper's own) starts a task;
+    `background_tasks_changed` says which still run; `task_notification`
+    for one of ours, completed or failed, is a finish. Only those finishes,
+    the CLI's own job tracking, start an announcement: a turn the CLI takes
+    with none before it is read off the stream and dropped -- a model writing
+    "done" is text, not an event.
+
+    `feed` reads a turn that is not ours (`foreign`), collecting its own
+    top-level words; at its `result` it hands back the Unprompted to say.
+    Not thread-safe by itself: one reader at a time (the pump's lock)."""
+
+    def __init__(self) -> None:
+        #: Task id -> True: backgrounded by a turn of this process, not ended.
+        self.started: dict[str, bool] = {}
+        #: What `background_tasks_changed` last said still runs.
+        self.running: set[str] = set()
+        #: [task id, status, when read, whether a turn of ours began since].
+        self.finished: list[list] = []
+        #: A turn that is not ours is under way.
+        self.auto = False
+        self.text: list[str] = []
+        self._size = 0
+
+    @property
+    def outstanding(self) -> bool:
+        return bool(self.started or self.running)
+
+    @property
+    def foreign(self) -> bool:
+        """A turn that is not ours is due (a finish read) or under way."""
+        return bool(self.finished) or self.auto
+
+    def track(self, msg: dict) -> None:
+        if msg.get("type") != "system":
+            return
+        sub, tid = msg.get("subtype"), msg.get("task_id")
+        ours = isinstance(tid, str) and bool(_TASK_ID.fullmatch(tid))
+        if sub == "task_started":
+            if ours and msg.get("is_backgrounded") is True and not msg.get("owned_by_subagent"):
+                self.started[tid] = True
+        elif sub == "task_updated":
+            patch = msg.get("patch") if isinstance(msg.get("patch"), dict) else {}
+            # A command moved to the background after it started.
+            if ours and patch.get("is_backgrounded") is True and not msg.get("owned_by_subagent"):
+                self.started[tid] = True
+        elif sub == "background_tasks_changed":
+            tasks = msg.get("tasks")
+            if isinstance(tasks, list):
+                self.running = {t["task_id"] for t in tasks
+                                if isinstance(t, dict) and isinstance(t.get("task_id"), str)}
+        elif sub == "task_notification" and ours and tid in self.started:
+            # Taken off as it is read: the same finish reported twice -- or
+            # replayed -- is one finish.
+            del self.started[tid]
+            self.running.discard(tid)
+            status = msg.get("status")
+            if status in ("completed", "failed"):
+                self.finished.append([tid, status, time.time(), False])
+            # "killed", "stopped": ended on purpose, by the agent or by us.
+
+    def turn_began(self) -> None:
+        """Our echo arrived: a turn of ours is under way, and may answer for
+        the finishes read so far (the CLI may fold one into it). Each now
+        waits for a turn of its own after ours, or for UNPROMPTED_GRACE_S."""
+        for f in self.finished:
+            f[3] = True
+        self.auto, self.text, self._size = False, [], 0
+
+    def forget_covered(self) -> None:
+        """Before a new turn of ours: a finish a turn of ours already began
+        on, whose own turn never came, was answered there."""
+        self.finished = [f for f in self.finished if not f[3]]
+
+    def feed(self, msg: dict) -> Unprompted | None:
+        """One line of a turn that is not ours. At its end, what to say if a
+        finish came before it, else None."""
+        kind = msg.get("type")
+        if kind == "result":
+            out = None
+            if self.finished:
+                out = Unprompted(
+                    tasks=tuple((f[0], f[1]) for f in self.finished),
+                    text=" ".join(self.text).strip()[:UNPROMPTED_TEXT_MAX],
+                    session=msg.get("session_id") if isinstance(msg.get("session_id"), str) else None,
+                    finished=min(f[2] for f in self.finished),
+                    failed=any(f[1] == "failed" for f in self.finished) or bool(msg.get("is_error")))
+            self.finished, self.auto, self.text, self._size = [], False, [], 0
+            return out
+        if kind == "system" and msg.get("subtype") == "init":
+            self.auto = True
+        elif kind in ("stream_event", "assistant") and _top(msg):
+            self.auto = True
+            if kind == "assistant":
+                for block in (msg.get("message") or {}).get("content") or []:
+                    if (isinstance(block, dict) and block.get("type") == "text"
+                            and isinstance(block.get("text"), str)
+                            and self._size < UNPROMPTED_TEXT_MAX):
+                        self.text.append(block["text"])
+                        self._size += len(block["text"])
+        return None
+
+    def settle(self, now: float) -> Unprompted | None:
+        """With no turn under way, finishes whose own turn never started
+        within the grace: one a turn of ours began on was answered there and
+        is dropped; one read between turns is said with no words of its own."""
+        if self.auto:
+            return None
+        due = [f for f in self.finished if now - f[2] >= UNPROMPTED_GRACE_S]
+        if not due:
+            return None
+        self.finished = [f for f in self.finished if f not in due]
+        said = [f for f in due if not f[3]]
+        if not said:
+            return None
+        return Unprompted(tasks=tuple((f[0], f[1]) for f in said), text="",
+                          finished=min(f[2] for f in said),
+                          failed=any(f[1] == "failed" for f in said))
+
+
+def _parse(raw: str) -> dict | None:
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        msg = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return msg if isinstance(msg, dict) else None
+
+
+class Pump:
+    """Every line one running claude writes, read on one thread for as long
+    as it lives (master plan M27).
+
+    A warm process is not quiet between turns: when a background task it
+    started finishes, the CLI says so and takes a turn by itself, `result`
+    and all (recorded). Before M27 nothing read stdout between turns, so that
+    turn waited in the pipe and the next turn's reading took its `result`
+    for its own: the person heard the background report as the answer to
+    their new question, and the real answer a turn late. Now one thread
+    reads everything. While a turn is registered (`begin`) its lines go to
+    that turn's queue, in order; otherwise they are Between's to read. Started
+    by the first turn, so nothing a turn is owed is read before it asks."""
+
+    def __init__(self, proc, bg: Between, hand) -> None:
+        self.proc, self.bg, self.hand = proc, bg, hand
+        self.lock = threading.Lock()
+        self.turn: queue.Queue | None = None
+        self.ended = False
+        self.thread: threading.Thread | None = None
+
+    def begin(self) -> "queue.Queue":
+        q: queue.Queue = queue.Queue()
+        with self.lock:
+            self.turn = q
+            if self.ended:
+                q.put(None)
+            self.bg.forget_covered()
+            if self.thread is None:
+                self.thread = threading.Thread(target=self._run, name="claude-stdout",
+                                               daemon=True)
+                self.thread.start()
+        return q
+
+    def end(self, q) -> None:
+        """The turn read its `result`: what is already queued behind it is a
+        turn the CLI took by itself, read now, in order, under the lock."""
+        with self.lock:
+            if self.turn is q:
+                self.turn = None
+            while True:
+                try:
+                    raw = q.get_nowait()
+                except queue.Empty:
+                    break
+                if raw is None:
+                    break
+                self._between(raw)
+            waiting = bool(self.bg.finished)
+        if waiting:
+            self._settle_later()
+
+    def _run(self) -> None:
+        try:
+            out = self.proc.stdout
+            while True:
+                raw = out.readline()
+                if not raw:
+                    break
+                with self.lock:
+                    if self.turn is not None:
+                        self.turn.put(raw)
+                        continue
+                    self._between(raw)
+                    waiting = bool(self.bg.finished) and not self.bg.auto
+                if waiting:
+                    self._settle_later()
+        except (OSError, ValueError, AttributeError):
+            pass
+        finally:
+            with self.lock:
+                self.ended = True
+                if self.turn is not None:
+                    self.turn.put(None)
+
+    def _between(self, raw: str) -> None:
+        """Locked."""
+        msg = _parse(raw)
+        if msg is None:
+            return
+        self.bg.track(msg)
+        out = self.bg.feed(msg)
+        if out is not None:
+            self.hand(out)
+
+    def _settle_later(self) -> None:
+        t = threading.Timer(UNPROMPTED_GRACE_S + 0.1, self.settle)
+        t.daemon = True
+        t.start()
+
+    def settle(self, now: float | None = None) -> None:
+        with self.lock:
+            if self.turn is not None:
+                return
+            out = self.bg.settle(time.time() if now is None else now)
+        if out is not None:
+            self.hand(out)
+
+
 class ClaudeCode(Adapter):
     #: It loads the Omarchy skill itself, from --plugin-dir.
     takes_skill_text = False
@@ -286,6 +554,12 @@ class ClaudeCode(Adapter):
         #: when it had to be started for it. Said in the timing line, because
         #: it is the difference between the two numbers at the top of this file.
         self.last_start = ""
+        #: Master plan M27: the running process's background work and the
+        #: thread that reads its stdout, both made anew with each process.
+        self._bg = Between()
+        self._pump: Pump | None = None
+        #: When its last turn ended: how long background work may hold it.
+        self._idle_since = time.time()
         _LIVE.add(self)
 
     @classmethod
@@ -365,6 +639,11 @@ class ClaudeCode(Adapter):
             "--output-format", "stream-json",
             "--include-partial-messages",
             "--verbose",                      # stream-json requires it
+            # Master plan M27: each turn written on stdin is echoed back as
+            # the CLI starts it, which is how a turn of ours is told apart
+            # from one the CLI takes by itself when background work ends
+            # (recorded: tests/fixtures/background/claude-race.json).
+            "--replay-user-messages",
             "--permission-mode", self.permission_mode,
             # Print mode leaves Claude in Chrome off even when it is the
             # default in the user's own settings, so it is asked for or
@@ -506,8 +785,27 @@ class ClaudeCode(Adapter):
         # watchdog then reports as "stopped responding".
         self._errors = Drain(proc.stderr)
         self._proc, self._holds = proc, session_id
+        # Master plan M27: this process's own background work, and the one
+        # thread that will read everything it writes.
+        self._bg = Between()
+        self._pump = Pump(proc, self._bg, self._hand_unprompted)
         self._launched(argv, proc)          # phase M16: Agent details → Advanced
         return proc
+
+    def _hand_unprompted(self, said: Unprompted) -> None:
+        """Pass what the CLI said by itself to the daemon, on a thread of its
+        own: the pump never waits on a listener."""
+        listener = self.on_unprompted
+        if listener is None:
+            return
+        threading.Thread(target=listener, args=(said,), name="claude-unprompted",
+                         daemon=True).start()
+
+    def background_running(self) -> bool:
+        with self._lock:
+            proc = self._proc
+            return (proc is not None and proc.poll() is None and not self._busy
+                    and self._bg.outstanding)
 
     def _forget(self) -> subprocess.Popen | None:
         """Let go of the running process and return it, to be stopped. Locked."""
@@ -533,6 +831,12 @@ class ClaudeCode(Adapter):
     def _expire(self, proc) -> None:
         with self._lock:
             if self._proc is not proc or self._busy:
+                return
+            if (self._bg.outstanding and proc.poll() is None
+                    and time.time() - self._idle_since < BACKGROUND_KEEP_S):
+                # Master plan M27: letting it go would kill the background
+                # work it is still doing; asked again a while later.
+                self._arm_expiry()
                 return
             self._forget()
         stop_tree(proc, signal.SIGTERM)
@@ -591,6 +895,26 @@ class ClaudeCode(Adapter):
             self._busy = True
             return self._proc, self._errors, stale
 
+    def _own(self, msg: dict) -> list[Chunk]:
+        """The chunks of one line of our own turn."""
+        if msg.get("type") == "system" and msg.get("subtype") == "init":
+            # Which servers this process started (phase M10): names and
+            # status only.
+            from tooldetect import live_servers
+            self.live_servers = live_servers(msg.get("mcp_servers"))
+        return parse_line(msg)
+
+    def _pump_for(self, proc) -> Pump:
+        """The pump reading `proc` (master plan M27): the one made with it,
+        or -- for a process this adapter did not spawn itself -- a new one."""
+        with self._lock:
+            pump = self._pump
+            if pump is None or pump.proc is not proc:
+                pump = Pump(proc, Between(), self._hand_unprompted)
+                if self._proc is proc:
+                    self._pump, self._bg = pump, pump.bg
+            return pump
+
     def send(self, text: str, session_id: str | None = None) -> Iterator[Chunk]:
         try:
             proc, errors, stale = self._take(session_id)
@@ -606,10 +930,17 @@ class ClaudeCode(Adapter):
 
         finished = False
         dog = None
+        turn = None
+        pump = self._pump_for(proc)
         try:
+            # Registered before the write, so not one line of this turn is
+            # read as between-turn talk (master plan M27).
+            turn = pump.begin()
             if not _write_turn(proc, text):
                 # Died between the check and the write -- the idle timer, or
                 # the CLI itself. Once more from cold, then give up honestly.
+                pump.end(turn)
+                turn = None
                 try:
                     proc, errors, _ = self._take(session_id, fresh=True)
                 except LaunchRefused as e:
@@ -618,6 +949,8 @@ class ClaudeCode(Adapter):
                 except OSError as e:
                     yield Chunk(error=f"could not start claude: {e}")
                     return
+                pump = self._pump_for(proc)
+                turn = pump.begin()
                 if not _write_turn(proc, text):
                     yield Chunk(error="claude exited before it could be asked")
                     return
@@ -626,32 +959,48 @@ class ClaudeCode(Adapter):
             #: For the daemon to poke while a tool call of this turn waits
             #: on it (a collaboration question, Phase 16).
             self.watchdog = dog
-            # readline, not iteration: the stream does not end at the end of a
-            # turn any more -- the process waits for the next one -- so the
-            # turn ends at `result` and nothing past it may be read here.
+            bg = pump.bg
+            # Master plan M27. Until this turn's own echo arrives, a turn the
+            # CLI takes by itself may still come first: a background task
+            # finished just before this was written, and the CLI answers
+            # that before it answers us (recorded:
+            # tests/fixtures/background/claude-race.json). While one is due
+            # or under way its lines are held and read as its own, and its
+            # `result` ends it, not this turn. The echo settles it: from
+            # there on every line is ours, and anything held was ours too
+            # (the CLI folded the finish into this turn).
+            ours = False
+            held: list[dict] = []
+            # The stream does not end at the end of a turn any more -- the
+            # process waits for the next one -- so the turn ends at its
+            # `result`, and the pump keeps what comes after.
             while True:
-                line = proc.stdout.readline()
-                if not line:
+                raw = turn.get()
+                if raw is None:
                     break                     # the process ended
                 dog.poke()
-                line = line.strip()
-                if not line:
+                msg = _parse(raw)
+                if msg is None:
                     continue
-                try:
-                    msg = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
+                bg.track(msg)
                 kind = msg.get("type")
-
-                if kind == "system" and msg.get("subtype") == "init":
-                    # Which servers this process started (phase M10): names
-                    # and status only.
-                    from tooldetect import live_servers
-                    self.live_servers = live_servers(msg.get("mcp_servers"))
+                if not ours and is_echo(msg):
+                    ours = True
+                    bg.turn_began()
+                    for early in held:
+                        yield from self._own(early)
+                    held = []
+                    continue
+                if not ours and bg.foreign:
+                    held.append(msg)
+                    said = bg.feed(msg)
+                    if kind == "result":
+                        held = []
+                        if said is not None:
+                            self._hand_unprompted(said)
+                    continue
                 if kind != "result":
-                    yield from parse_line(msg)
-
+                    yield from self._own(msg)
                 else:
                     # Marked finished before anything else is yielded: a
                     # consumer that stops reading at the error chunk still
@@ -685,8 +1034,12 @@ class ClaudeCode(Adapter):
         finally:
             if dog is not None:
                 dog.stop()
+            if turn is not None:
+                # What came after the result is the pump's from here.
+                pump.end(turn)
             with self._lock:
                 self._busy = False
+                self._idle_since = time.time()
                 if self._proc is proc:
                     if finished and proc.poll() is None:
                         self._arm_expiry()

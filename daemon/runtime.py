@@ -122,6 +122,15 @@ def chat_search_choice(holder: dict, key: str) -> str:
     return value if value in CHAT_SEARCH_CHOICES else "off"
 
 
+def speak_when_done_choice(holder: dict, key: str) -> bool:
+    """`speakWhenDone` as written (master plan M27): a missing key is on
+    (question 8's default), and a value that is there but is not a bool is
+    off -- an announcement nobody can be sure was wanted stays quiet."""
+    if not isinstance(holder, dict) or key not in holder:
+        return True
+    return holder.get(key) is True
+
+
 def accepts_choice(holder: dict, key: str) -> bool:
     """`acceptsWork` as written: only an explicit false is off, as
     `enabled` is, so entries written before the setting existed accept."""
@@ -472,6 +481,12 @@ DEFAULTS = {
     "mainResume": True,
     "mainIdleTimeoutS": 90,
     "mainExtraArgs": [],
+    # Master plan M27: whether the main agent speaks up -- one short line and
+    # a notification -- when background work it started finishes (a task it
+    # gave another agent with report_back; with Claude Code, its own
+    # background command or helper). Only a bool counts: anything else is
+    # off. Extra agents keep theirs in their entry, as `speakWhenDone`.
+    "mainSpeakWhenDone": True,
     # Phase M15: the agents that take nothing from Communal, by id ("main"
     # for the main agent): no communal rules or defaults in their prompt and
     # no communal skills. Communal notes stay reachable through the notes
@@ -583,6 +598,7 @@ TOML_ALIASES = {
     "mainCollaboration": ("agent", "main_collaboration"),
     "mainAcceptsWork": ("agent", "main_accepts_work"),
     "mainChatSearch": ("agent", "main_chat_search"),
+    "mainSpeakWhenDone": ("agent", "main_speak_when_done"),
     "conversationMode": ("wake", "conversation_mode"),
     "yieldToRecorders": ("wake", "yield_to_recorders"),
     "logSpeech": ("ui", "log_speech"),
@@ -1026,6 +1042,8 @@ class Config:
                 "acceptsWork": accepts_choice(entry, "acceptsWork"),
                 # Which saved chats its chat tools may search (phase M20).
                 "chatSearch": chat_search_choice(entry, "chatSearch"),
+                # Whether it speaks up when background work finishes (M27).
+                "speakWhenDone": speak_when_done_choice(entry, "speakWhenDone"),
                 "projectDir": folder.strip() if isinstance(folder, str) else "",
                 # Phase M17: how it is launched (Agent details → Advanced):
                 # whether its conversation is resumed, its hung-turn limit,
@@ -1228,6 +1246,21 @@ class Config:
             return chat_search_choice(self._values, "mainChatSearch")
         spec = next((a for a in self.all_agents() if a["id"] == agent_id), None)
         return spec["chatSearch"] if spec else "off"
+
+    def speak_when_done_for(self, agent_id: str | None) -> bool:
+        """Whether this agent speaks up when background work it started
+        finishes (master plan M27). `agent_id` is "" or "main" for the main
+        agent, else an extra agent's id. Settings that cannot be read are
+        off (Appendix A: unreadable is quiet), and so is an agent the
+        settings do not have. Read fresh when an event arrives and again
+        before its line is said, so a switch turned off while one waits
+        keeps it quiet."""
+        if not self.settings_readable():
+            return False
+        if not agent_id or agent_id == "main":
+            return speak_when_done_choice(self._values, "mainSpeakWhenDone")
+        spec = next((a for a in self.all_agents() if a["id"] == agent_id), None)
+        return bool(spec) and spec["speakWhenDone"] is True
 
     def accepts_work_for(self, agent_id: str | None) -> bool:
         """Whether other agents may give this agent a task or pass it a

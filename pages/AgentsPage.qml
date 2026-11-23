@@ -242,6 +242,11 @@ Column {
   function putAgentChatSearch(index, value) {
     updateAgent(index, "chatSearch", value === "own" ? undefined : value)
   }
+  // Master plan M27: on is the default, so it is left out; only false is
+  // written (anything else the daemon reads as off).
+  function putAgentSpeakWhenDone(index, value) {
+    updateAgent(index, "speakWhenDone", value === true ? undefined : false)
+  }
   // The quarantine, read for the Chat search row's hint (written on the
   // Crew map only): a list, or "unreadable" when it is not one.
   readonly property var crewQuarantine: s.setting("crewQuarantine", [])
@@ -297,6 +302,7 @@ Column {
       case "collaboration": s.put("mainCollaboration", value); break
       case "acceptsWork": s.put("mainAcceptsWork", value); break
       case "chatSearch": s.put("mainChatSearch", value); break
+      case "speakWhenDone": s.put("mainSpeakWhenDone", value); break
       }
       return
     }
@@ -316,6 +322,7 @@ Column {
     case "collaboration": putAgentCollab(index, value); break
     case "acceptsWork": putAgentAccepts(index, value); break
     case "chatSearch": putAgentChatSearch(index, value); break
+    case "speakWhenDone": putAgentSpeakWhenDone(index, value); break
     }
   }
   // The EndpointEditor's edited(key, value), for the main agent; an extra
@@ -431,6 +438,20 @@ Column {
     // Master plan M20: missing is "own" (runtime.chat_search_choice).
     readonly property string chatSearch: isMain ? String(s.setting("mainChatSearch", "own"))
         : (entry.chatSearch === undefined ? "own" : String(entry.chatSearch))
+    // Master plan M27: missing is on, and only a true is on
+    // (runtime.speak_when_done_choice), so the switch never says more.
+    readonly property bool speakWhenDone: isMain ? s.setting("mainSpeakWhenDone", true) === true
+        : (entry.speakWhenDone === undefined || entry.speakWhenDone === true)
+    // What it can announce at all, by program: tier 1 needs the crew tools
+    // (Claude Code, Codex), tier 2 a process that outlives its turn.
+    readonly property string speakWhenDoneHint: {
+      if (endpoint) return "Nothing to announce: an endpoint does no work in the background."
+      if (program === "claude")
+        return "When its own background command or helper finishes, or a task it gave another agent to report back on, it says one short line without waiting for its name, and a notification appears. Only the notification while the screen is locked, the microphone is muted or notifications are silenced."
+      if (program === "codex")
+        return "When a task it gave another agent to report back on finishes, it says so in one short line and a notification appears. Codex's own background work ends with each turn, so there is none of that to announce."
+      return "Nothing to announce for " + (s.programLabel(program) || "this program") + ": only Claude Code and Codex agents start work Agent Voice can see finish."
+    }
     // Missing means on, so lists from before the switch keep every agent.
     readonly property bool on: isMain || entry.enabled !== false
     readonly property string st: s.agentStatus(isMain ? "" : agentId)
@@ -1000,6 +1021,17 @@ Column {
               if (v !== String(blk.entry.narration || "")) blk.write("narration", v)
             }
           }
+        }
+
+        // Master plan M27: speaking up when background work finishes.
+        ToggleRow {
+          width: parent.width
+          label: "Speak up when work finishes"
+          hint: blk.speakWhenDoneHint
+          checked: blk.speakWhenDone
+          foreground: blk.s.foreground
+          fontFamily: blk.s.fontFamily
+          onToggled: blk.write("speakWhenDone", !blk.speakWhenDone)
         }
       }
 

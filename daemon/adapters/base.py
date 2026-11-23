@@ -238,8 +238,41 @@ class Chunk:
     duration_ms: float | None = None
 
 
+@dataclass
+class Unprompted:
+    """What a backend said by itself after background work of its own
+    finished (master plan M27): the CLI's own job tracking said a task this
+    process started had ended, and the turn it took on its own wrote `text`.
+
+    `tasks` is ((task id, status), ...) from the CLI's notifications, never
+    from anything the model wrote; `text` is model text, untrusted, at most
+    TEXT_MAX; `session` the conversation the process carries; `finished` when
+    the first notification was read; `failed` when a task or that turn
+    failed. Only the stream starts one of these: a turn the CLI takes with no
+    finished task before it is not announced."""
+    tasks: tuple
+    text: str = ""
+    session: str | None = None
+    finished: float = 0.0
+    failed: bool = False
+
+
 class Adapter(ABC):
     """A backend that can hold a conversation."""
+
+    #: Master plan M27: called with an Unprompted when this backend's CLI
+    #: says something by itself after a background task of its own finished.
+    #: Set by the daemon on each agent's own adapter; called on a thread of
+    #: its own, never from inside a turn's reading. None: nobody listens,
+    #: and the text is still read off the stream (so it never lands in the
+    #: next turn's reply) and dropped.
+    on_unprompted = None
+
+    def background_running(self) -> bool:
+        """Whether this backend's process is still running background work
+        it started (a command, a helper) with no turn under way. Only a warm
+        process can (Claude Code); everything else ends with its turn."""
+        return False
 
     #: Name as Omarchy's `default agent` spells it.
     name: str = ""

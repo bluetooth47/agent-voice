@@ -426,6 +426,38 @@ To check it without locking yourself out: `agentvoice lock`, then
 check the real thing, lock the screen and read `journalctl --user -u
 agentvoice -f`.
 
+Since M27 a lock stops every turn under way but not an idle agent's
+background work (a command or helper it was asked for before the lock,
+`Adapter.background_running()`): that keeps going, as a delegated task
+always did, and its finish is a notification only. `silence()` is where
+that is decided, and nothing else may keep a process alive through a lock.
+
+## A warm process talks between turns
+
+Claude Code's warm process is not quiet between turns (M27, recorded in
+`tests/fixtures/background/`): when background work it started finishes,
+it writes `task_notification` and then takes a whole turn by itself, with
+its own `result`. Nothing read stdout between turns before M27, so the next
+turn's reading took that `result` for its own and answered the person's new
+question with the background report. So:
+
+- **One reader per process.** `Pump` reads every line a claude process
+  writes, from its first turn on; a turn registers with `pump.begin()` and
+  gets its lines in order. Nothing else calls `readline()` on it.
+- **A turn starts at its own echo.** Every turn carries
+  `--replay-user-messages`; until the echo arrives, lines that belong to an
+  unprompted turn (one due or under way) are that turn's. The recording
+  shows the CLI answering a finish first when both arrive together.
+- **Only tracked work speaks up.** An announcement comes from a task the
+  daemon started and saw end, or from the CLI's own `task_notification` for
+  a task that process started in the background. An unprompted turn with no
+  finish before it is read and dropped; no CLI verb, crew tool or file can
+  file one (`test_announce.py` holds the callers). Its notification text is
+  fixed, because `notify-send` takes it in argv.
+- **Announcing never stops the agent.** Its process may still be doing other
+  background work; a lock, a stop or the interrupt cuts the line and
+  nothing else.
+
 ## A control with more than one way in needs one guard, not one each
 
 Two bugs of this shape in one afternoon, both reported as "I can't turn it

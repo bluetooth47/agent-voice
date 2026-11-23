@@ -654,6 +654,37 @@ that cannot be read refuses every call an agent starts, and says so on
 screen. The page is only an editor of the list, and says when it was changed
 outside Settings.
 
+### Speaking up when background work finishes
+
+An agent that started something in the background says one short line when
+it finishes, without waiting for its name, and a desktop notification
+appears ("Theo finished a background task"). Two kinds of work count, and
+only because Agent Voice saw them end itself -- an agent writing "done" is
+not one:
+
+- **a task it gave another agent with `report_back`** (Claude Code and Codex
+  agents): the other agent says its result in its own voice as before, and
+  the one that gave it then says "The task I gave Sora is done, and I have
+  the result." The result reaches it at the start of its next turn, which the
+  usual follow-up window makes one sentence away;
+- **a Claude Code agent's own background command or helper**: Claude Code
+  says when one finishes and takes a short turn by itself, and that turn is
+  what the agent says (the first 300 characters; all of it goes into the
+  chat, marked unprompted). Codex, Gemini, Antigravity, Copilot and endpoints
+  end their process with each turn, so there is nothing of theirs to
+  announce.
+
+It never talks over anyone: a line waits while somebody is talking, an
+agent is answering or a follow-up window is open; one agent says at most one
+line every two minutes, and a line that could not be said within five
+minutes is not said. While the screen is locked, the microphone is muted or
+lent to another app, or Omarchy's notifications are silenced, there is only
+the notification, and the line is not said later. A lock no longer stops an
+agent's background work (a turn under way still stops): it keeps running and
+its finish is shown. The switch is **Speak up when work finishes** on each
+agent's Voice card (on by default; `mainSpeakWhenDone`, or `speakWhenDone` in
+an agent's entry). "Stop" drops what waits to be said.
+
 ### Endpoints for any agent
 
 An extra agent can run on an OpenAI-compatible endpoint of its own: choose

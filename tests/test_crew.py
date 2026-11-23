@@ -55,6 +55,8 @@ class TestConfigAgents:
             "detected": {},
             "skillsOff": [],
             "notesWrite": "allow", "collaboration": "announce", "acceptsWork": True, "chatSearch": "own",
+            # Master plan M27: it speaks up when background work finishes.
+            "speakWhenDone": True,
             "projectDir": "~/code",
             # Phase M17: how it is launched, at the defaults.
             "resume": True, "idleTimeoutS": 90, "extraArgs": [],

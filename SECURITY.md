@@ -169,6 +169,18 @@ even if nothing malicious is ever hosted.
   own tools or a shell. What an agent then repeats in a chat that is shared
   is seen by whoever shares that chat. A way past the scope *through the
   tools* is a report.
+- **Background work keeps going behind a lock (M27).** Before M27 a lock
+  stopped every agent's process, idle ones included, and with it anything
+  the agent had started in the background. Now an idle Claude Code process
+  that is still running a background command or helper it was asked for
+  before the lock is left running, as a delegated task always was; a turn
+  under way still stops. When that work finishes, Claude Code takes a short
+  turn by itself: anything it asks about is refused while the screen is
+  locked (a card cannot be answered then), and an agent at Trusted can act
+  in it without asking, as in any of its turns. Nothing is said aloud and
+  nothing of it is on screen until the unlock; the notification shown has
+  fixed words and the agents' names, never anything the model wrote, because
+  `notify-send` takes it in argv.
 - **The protected-file list is names and locations.** A content search and a
   direct read now get the same answer for the same bytes, which is what the
   list is for. It will not recognise a `prod-dump.sql` full of passwords, and

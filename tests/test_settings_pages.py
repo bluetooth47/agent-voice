@@ -110,6 +110,9 @@ FIELD_HOMES: dict[str, tuple[str | None, str | None]] = {
     # Master plan M20: which saved chats its chat tools may search, on the
     # Agents page's Collaboration, notes & chats card.
     "chatSearch": ("AgentsPage.qml", "mainChatSearch"),
+    # Master plan M27: whether it speaks up when background work finishes,
+    # on the Agents page's Voice card.
+    "speakWhenDone": ("AgentsPage.qml", "mainSpeakWhenDone"),
     "endpointUrl": ("AgentsPage.qml", "endpointUrl"),
     "endpointModel": ("AgentsPage.qml", "endpointModel"),
     "endpointIsAgent": ("AgentsPage.qml", "endpointIsAgent"),

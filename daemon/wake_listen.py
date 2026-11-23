@@ -72,6 +72,7 @@ import collab  # noqa: E402
 import narration  # noqa: E402
 import omarchy_skill  # noqa: E402
 import agentvoice_skill  # noqa: E402
+import announce  # noqa: E402
 import readout  # noqa: E402
 import try_it  # noqa: E402
 import chat_names  # noqa: E402
@@ -474,6 +475,9 @@ def _gate_rates(cfg) -> tuple[float, float]:
 
 #: How long the HUD says a name was heard and not confirmed (master plan M22).
 WAKE_NOTE_S = 4.0
+#: How long the HUD's extra line says why an agent is talking unprompted,
+#: from when its line starts (master plan M27).
+ANNOUNCE_NOTE_S = 8.0
 #: A held wake older than this, by the clock, is dropped rather than decided:
 #: frames it was waiting for went elsewhere (a deaf window, a capture).
 HOLD_STALE_S = 3.0
@@ -1990,6 +1994,16 @@ class Daemon:
         #: Tasks between agents: passing a conversation (Phase 15). See
         #: collab.py; the hooks into this file are marked "collab".
         self.collab = collab.Runtime(self)
+        #: Master plan M27: background work that finished, waiting to be said
+        #: (announce.py). The agent saying one now, None otherwise; a stop
+        #: from the signal handler asks for the queue to go, and the run
+        #: loop carries it out; the last answer about notification
+        #: silencing, reused for a few seconds.
+        self.announcer = announce.Announcer()
+        self._announcing: Persona | None = None
+        self._announce_clear = False
+        self._announce_note: tuple[str, float] | None = None
+        self._silenced_seen: tuple[float, bool, str] = (0.0, False, "")
         #: The agent the microphone is open for, without the wake word, and
         #: until when (plan item 11). None when it is not open.
         self.open_mic: Persona | None = None
@@ -2233,6 +2247,14 @@ class Daemon:
             if p.task is not None and p.busy:
                 # collab: a task keeps running behind a lock, saying nothing;
                 # its reply waits for the unlock (Phase 15).
+                continue
+            running = getattr(p.agent, "background_running", None)
+            if p.agent and not p.busy and callable(running) and running():
+                # Master plan M27: no turn under way, only background work
+                # it was asked for before the lock (a command, a helper). It
+                # keeps running, as a task does; its finish is shown as a
+                # notification and not said. A turn under way still stops.
+                p.interrupt.set()
                 continue
             if p.agent:
                 p.agent.cancel()
@@ -2962,6 +2984,17 @@ class Daemon:
         # collab: the global stop clears the task queue, busy or not. From a
         # signal handler, so it publishes nothing here (collab.stop_all).
         self.collab.stop_all(from_signal=True)
+        speaking = self._announcing
+        if speaking is not None:
+            # Master plan M27: a line said unprompted is cut. Its agent has no
+            # turn to stop, and cancelling it would kill background work
+            # its process may still be doing.
+            speaking.interrupt.set()
+            if speaking.speaker:
+                speaking.speaker.cancel()
+            print(f"\n  {YEL}interrupted{OFF}")
+            if not any(p.busy for p in self.personas()):
+                return
         if self.crew_mode:
             busy = [p for p in self.personas() if p.busy]
             if not busy:
@@ -3958,6 +3991,16 @@ class Daemon:
         tools = self.tools_for(p)
         skill_on = tools["omarchySkill"]
         av_on = tools["agentvoiceSkill"]
+        main = getattr(self, "_main", None)
+        if p is not None and main is not None and agent is (main.agent if p is main else p.agent):
+            # Master plan M27: what its CLI says by itself after background
+            # work of its own finishes, for this agent and only while this is
+            # its adapter (background_finished checks both again).
+            if getattr(agent, "on_unprompted", None) is None or \
+                    getattr(agent, "_unprompted_for", None) != p.id:
+                agent._unprompted_for = p.id
+                agent.on_unprompted = (lambda said, pid=p.id, a=agent:
+                                       self.background_finished(pid, a, said))
         if hasattr(agent, "desktop_tools"):
             want = tools["desktop"]
             if agent.desktop_tools != want:
@@ -4257,6 +4300,12 @@ class Daemon:
             if self._in_turn() and self._persona().task is not None:
                 # collab: a task keeps running behind a lock; this sentence
                 # is not said, and waits with the rest of its reply.
+                return
+            if getattr(self._here, "announcing", False):
+                # Master plan M27: an announcement is simply not said; the
+                # agent it speaks for is not stopped (its process may still
+                # be doing other background work), and the run loop's own
+                # lock handling silences everything else.
                 return
             self.silence()
             return
@@ -5631,6 +5680,298 @@ class Daemon:
                     self._here.turn = was
         return said
 
+    # --- speaking up when background work finishes (master plan M27) --------
+    #
+    # announce.py decides what an event is and what is said; this is where
+    # one arrives (any thread), waits, and is said or shown. Never over
+    # anybody: only from the run loop at a quiet moment, through the same
+    # floor every reply takes. Never over a lock screen, a mute, a lent
+    # microphone or silenced notifications: the fixed notification is all,
+    # and the line is not kept for later. Nothing here starts a capture; the
+    # usual follow-up window opens after a line that was said.
+
+    def background_finished(self, agent_id: str, adapter, said) -> None:
+        """From an adapter's own thread: its CLI said a background task of
+        this agent's finished, and what it then said by itself (said, an
+        adapters.base.Unprompted). Taken only from the agent's current
+        adapter and its current conversation."""
+        p = self._persona_by_id(agent_id)
+        who = (getattr(p, "label", "") if p is not None else "") or agent_id or "the main agent"
+        if p is None or (self._main.agent if p is self._main else p.agent) is not adapter:
+            print(f"  {DIM}announce: background work ended for an agent that has "
+                  f"changed since; not said{OFF}", flush=True)
+            return
+        if said.session and p.session_id and said.session != p.session_id:
+            print(f"  {DIM}announce {who}: background work of an earlier "
+                  f"conversation; not said{OFF}", flush=True)
+            return
+        ids = sorted({str(t[0]) for t in said.tasks})
+        self.announce_event(announce.Event(
+            agent=collab.external(p.id), source="background", key=",".join(ids)[:200],
+            status="failed" if said.failed else "completed", text=said.text or "",
+            label=p.label or who, finished=said.finished or time.time(),
+            session=said.session))
+
+    def announce_event(self, ev) -> bool:
+        """One finished piece of background work, from whichever thread saw
+        it. The agent's setting is read fresh (unreadable is off); a quiet one
+        is still queued, to be recorded in its chat unsaid. True when queued."""
+        try:
+            cfg = self.fresh_config()
+            ev.loud = bool(cfg.speak_when_done_for(ev.agent))
+        except Exception:               # noqa: BLE001 -- unreadable is off
+            ev.loud = False
+        why = self.announcer.offer(ev)
+        who = announce.clean_label(ev.label)
+        if why:
+            print(f"  {DIM}announce {who}: {ev.source} not queued ({why}){OFF}", flush=True)
+            return False
+        if ev.loud and self.announcer.may_notify(ev.agent):
+            missing = announce.notify(ev)
+            ev.notified = time.time()
+            if missing:
+                self.say_once("notify", f"  {YEL}announce: no notification shown "
+                                        f"(notify-send {missing}); the line is still said{OFF}")
+            else:
+                self._said.pop("notify", None)
+            print(f"  {DIM}announce {who}: {ev.source} {ev.status}, notification "
+                  f"{'not shown' if missing else 'shown'} "
+                  f"{ev.notified - ev.finished:.2f}s after it finished{OFF}", flush=True)
+        return True
+
+    def drop_announcements(self, p=None, from_signal: bool = False) -> None:
+        """collab's stops: "Sora, stop" drops what waits in Sora's voice, the
+        global stop everything. From a signal handler only the request is
+        recorded (the run loop's next poll carries it out, as collab does)."""
+        if from_signal:
+            self._announce_clear = True
+            return
+        gone = (self.announcer.clear() if p is None
+                else self.announcer.drop(collab.external(p.id)))
+        for ev in gone:
+            self._record_unprompted(self._persona_by_id(collab.internal(ev.agent)), ev,
+                                    announce.what_is_said(ev)[1], "stopped")
+
+    def notifications_silenced(self) -> bool:
+        """Omarchy's do-not-disturb, asked at most every SILENCED_TTL_S and
+        only while something waits (announce.silenced)."""
+        at, on, how = self._silenced_seen
+        if time.time() - at >= announce.SILENCED_TTL_S:
+            on, how = announce.silenced()
+            self._silenced_seen = (time.time(), on, how)
+            if how == "unreadable":
+                self.say_once("silenced", f"  {YEL}announce: notification silencing "
+                                          f"cannot be read, so nothing is said aloud{OFF}")
+        return on
+
+    def announce_silence(self) -> str:
+        """Why nothing may be said aloud now, or "": the screen locked, the
+        microphone lent out or muted, notifications silenced."""
+        if self.locked:
+            return "locked"
+        if self.yielded:
+            return "lent"
+        if not self.enabled:
+            return "muted"
+        if self.notifications_silenced():
+            return "silenced"
+        return ""
+
+    def announce_poll(self) -> None:
+        """Every pass of the run loop, above the listening gate: a stop asked
+        for from a signal, events gone stale, and -- locked, lent, muted or
+        silenced, or switched off for that agent -- everything waiting taken
+        as shown, never kept to be said on the way back."""
+        if self._announce_clear:
+            self._announce_clear = False
+            self.drop_announcements()
+        if not self.announcer.pending():
+            return
+        for ev in self.announcer.expired():
+            self._record_unprompted(self._persona_by_id(collab.internal(ev.agent)), ev,
+                                    announce.what_is_said(ev)[1], "stale")
+        quiet = self.announce_silence()
+        for ev in self.announcer.take_all() if quiet else ():
+            self._record_unprompted(self._persona_by_id(collab.internal(ev.agent)), ev,
+                                    announce.what_is_said(ev)[1], quiet if ev.loud else "off")
+
+    def _announce_ready(self, ev) -> str:
+        """announce.Announcer.next_due's question about `ev`'s agent."""
+        p = self._persona_by_id(collab.internal(ev.agent))
+        if p is None:
+            return "gone"
+        try:
+            on = ev.loud and bool(self.fresh_config().speak_when_done_for(ev.agent))
+        except Exception:               # noqa: BLE001 -- unreadable is off
+            on = False
+        if not on:
+            return "off"
+        if p.busy or p.speaker is None:
+            return "wait" if p.busy else "off"
+        return "go"
+
+    def _room_busy(self) -> bool:
+        """Somebody is talking, about to, or waiting for a reply: an
+        announcement goes behind the person and other agents."""
+        with self._floor:
+            owner = self._floor_owner
+            if self._speaking or self._hold_speech:
+                return True
+            if owner is not None and owner.busy and time.time() < self._floor_until:
+                return True
+        # A turn somebody asked for is still to answer; a task turn working
+        # quietly for another agent is not a reason to wait.
+        return any(q.busy and q.task is None for q in self.personas())
+
+    def deliver_announcements(self) -> dict | None:
+        """From the run loop at a quiet moment: say the next line due. With
+        extra agents it is said beside the loop (None comes back); with one
+        agent here, and the payload the readout then shows comes back."""
+        if self._announcing is not None or not self.announcer.pending():
+            return None
+        if self.announce_silence() or self._room_busy():
+            return None
+        ev = self.announcer.next_due(self._announce_ready)
+        if ev is None:
+            return None
+        p = self._persona_by_id(collab.internal(ev.agent))
+        line, kept = announce.what_is_said(ev)
+        outcome = ev.extra.get("outcome")
+        if outcome or p is None:
+            self._record_unprompted(p, ev, kept, outcome or "gone")
+            return None
+        self._announcing = p
+        if self.crew_mode:
+            threading.Thread(target=self._announce_beside, args=(p, ev, line, kept),
+                             name=f"announce-{p.name or 'main'}", daemon=True).start()
+            return None
+        return self._announce_here(p, ev, line, kept)
+
+    def _announce_payload(self, ev, line: str) -> dict:
+        self._announce_note = (announce.hud_note(ev), time.time() + ANNOUNCE_NOTE_S)
+        return {**_empty_turn(), "reply": line[:REPLY_MAX], "unprompted": True}
+
+    def _announce_say(self, p: Persona, ev, line: str) -> bool:
+        """Say `line` in p's voice; True when it was said to the end. Beside
+        the loop it waits for the floor. A lock or a stop cuts it short and
+        stops nothing else: an announcing thread never cancels the agent,
+        whose process may still be doing other background work."""
+        was = getattr(self._here, "announcing", False)
+        self._here.announcing = True
+        try:
+            p.interrupt.clear()
+            began = time.time()
+            said = self._say_for(p, line, beside=self.crew_mode)
+            heard = getattr(p.speaker, "first_audio_at", None)
+            if said:
+                self.announcer.spoke(ev.agent)
+                start = heard if heard and heard >= began else began
+                print(f"  {DIM}announce {announce.clean_label(ev.label)}: said "
+                      f"({len(line)} chars) {start - ev.finished:.2f}s after it "
+                      f"finished{OFF}", flush=True)
+            return said
+        finally:
+            self._here.announcing = was
+
+    def _announce_done(self, p: Persona, ev, kept: str, said: bool) -> None:
+        if said and self.listening:
+            # The usual window, as after any reply: the next thing said goes
+            # to it without the wake word. Never while locked (listening).
+            p.follow_up = self.arm_follow_up()
+            p.finished_at = time.time()
+        self._record_unprompted(p, ev, kept, "said" if said
+                                else self.announce_silence() or "stopped")
+
+    def _announce_here(self, p: Persona, ev, line: str, kept: str) -> dict:
+        """One agent: said on the run loop, as its replies are."""
+        payload = self._announce_payload(ev, line)
+        said = False
+        try:
+            self.state.publish("speaking", **payload)
+            said = self._announce_say(p, ev, line)
+        finally:
+            self._announcing = None
+        self._announce_done(p, ev, kept, said)
+        return payload
+
+    def _announce_beside(self, p: Persona, ev, line: str, kept: str) -> None:
+        """Extra agents: on a thread of its own, taking the floor."""
+        payload = self._announce_payload(ev, line)
+        said = False
+        try:
+            p.last, p.state = payload, "speaking"
+            self._recompose()
+            said = self._announce_say(p, ev, line)
+        except Exception as e:          # noqa: BLE001 -- never the thread's end unsaid
+            print(f"  {YEL}announce: {type(e).__name__}{OFF}", flush=True)
+        finally:
+            if p.last is payload and not p.busy:
+                p.state = "idle"
+            with self._floor:
+                if self._floor_owner is p:
+                    self._floor_owner, self._floor_until = None, 0.0
+                self._floor.notify_all()
+            self._announcing = None
+            self._recent = p
+            self._recompose()
+        self._announce_done(p, ev, kept, said)
+
+    def announce_note_line(self) -> str:
+        """The readout's extra line while an announcement is on screen."""
+        note = self._announce_note
+        if not note:
+            return ""
+        if time.time() >= note[1]:
+            self._announce_note = None
+            return ""
+        return note[0]
+
+    def expire_announce_note(self) -> bool:
+        note = self._announce_note
+        if note and time.time() >= note[1]:
+            self._announce_note = None
+            return True
+        return False
+
+    def _record_unprompted(self, p: Persona | None, ev, kept: str, outcome: str) -> None:
+        """Every event that leaves the queue, once: a structural journal line
+        (the words only with logSpeech), and -- said or not -- the session's
+        history and the agent's saved chat, marked unprompted. Never starts a
+        chat: with none open it goes to the history only."""
+        who = announce.clean_label(ev.label)
+        print(f"  {DIM}announce {who}: {ev.source} {ev.status}, {outcome} "
+              f"({len(kept)} chars){OFF}", flush=True)
+        if speech_is_logged(self.cfg.get_bool("logSpeech")):
+            print(f"  {CYA}(unprompted) {safe_for_terminal(kept)}{OFF}", flush=True)
+        if p is None or not kept:
+            return
+        if ev.source == "crew" and outcome != "said":
+            # A fixed sentence nobody heard is no record of anything: the
+            # result itself reaches the caller's next turn as before.
+            return
+        try:
+            with self._as(p):
+                agent = self.agent
+                if self.cfg.get_bool("keepHistory"):
+                    self.history.append({
+                        "at": round(time.time(), 1),
+                        "agent": (p.label if self.crew_mode else "") or getattr(agent, "name", "") or "",
+                        "agent_id": p.id if self.crew_mode else "",
+                        "transcript": "", "reply": kept[:REPLY_MAX], "error": "",
+                        "stopped": False, "new": False, "latency_ms": 0,
+                        "unprompted": True, "said": outcome == "said"})
+                if (self.cfg.get_bool("saveChats") and p.chat_id
+                        and self.chats.load(p.chat_id) is not None):
+                    self.chats.record(
+                        chat_id=p.chat_id, agent_id=p.id,
+                        agent_label=p.label or getattr(agent, "name", "") or "Agent",
+                        backend=getattr(agent, "name", "") or "", session_id=None,
+                        project_dir=str(getattr(agent, "cwd", "") or ""),
+                        exchange={"transcript": "", "reply": kept, "kind": "unprompted"},
+                        began=ev.finished or None)
+        except (OSError, ValueError) as e:
+            print(f"  {YEL}announce: not recorded ({type(e).__name__}){OFF}", flush=True)
+
     def fresh_config(self) -> Config:
         """collab: the settings as on disk now, for a collaboration call's
         knobs, read fresh on every call (merged plan 3.4)."""
@@ -6447,7 +6788,7 @@ class Daemon:
             return "locked", {k: v for k, v in extra.items()
                               if k not in ("transcript", "reply", "partial", "thinking",
                                            "who", "who_label", "collab", "tasks",
-                                           "last_reply", "preview")}
+                                           "last_reply", "preview", "unprompted")}
         # phase M2, bug I: why a rebuild ended an agent's conversation, for
         # the HUD's extra line. Here rather than in the sticky fields so that
         # a lock, above, takes it off the screen with everything else.
@@ -6455,6 +6796,10 @@ class Daemon:
         lines = [n[0] for n in notices.values()] if notices else []
         # Master plan M22: "heard, not confirmed", for a few seconds.
         note = self.wake_note_line()
+        if note:
+            lines.append(note)
+        # Master plan M27: why an agent is talking unprompted.
+        note = self.announce_note_line() if hasattr(self, "_announce_note") else ""
         if note:
             lines.append(note)
         if lines:
@@ -6491,11 +6836,17 @@ class Daemon:
         if not self.crew_mode:
             return state, extra
         everyone = self.personas()
+        # Master plan M27: an agent saying a line unprompted is shown as
+        # speaking, though no turn of its own is running.
+        announcing = self._announcing
+
+        def shown_busy(p):
+            return p.busy or p is announcing
         # By id, "" being the main agent: a display name is any text and
         # need not be unique, and the screen looks agents up by id.
-        live = {p.id: (p.state if p.busy else "idle") for p in everyone}
+        live = {p.id: (p.state if shown_busy(p) else "idle") for p in everyone}
         if state in ("listening", "off"):
-            speaking = [p for p in everyone if p.busy and p.state == "speaking"]
+            speaking = [p for p in everyone if shown_busy(p) and p.state == "speaking"]
             thinking = sorted((p for p in everyone
                                if p.busy and p.state == "thinking"),
                               key=lambda p: getattr(p, "started_at", 0.0),
@@ -6906,6 +7257,10 @@ class Daemon:
                     continue
                 if self.apply_chat_command(cmd):
                     continue
+                # Master plan M27: finished background work waiting to be
+                # said. Here, above the listening gate, so a lock, a mute or
+                # silencing takes it as shown at once, never kept for later.
+                self.announce_poll()
                 if phase == "wake":
                     # Only between captures: a message typed while somebody
                     # is talking waits for them to finish.
@@ -6978,8 +7333,8 @@ class Daemon:
                     # (Codex review of M3; it was in refresh(), below).
                     self.expire_readout()
                     # Master plan M22: "heard, not confirmed" ends on time,
-                    # here for the readout's reason.
-                    if self.expire_wake_note():
+                    # here for the readout's reason; and M27's note with it.
+                    if self.expire_wake_note() | self.expire_announce_note():
                         self._recompose()
 
                 if crew:
@@ -7167,6 +7522,42 @@ class Daemon:
                             shown_partial = ""
                             self.state.publish("followup", window=capture_kind, **last)
                         # No `continue`: this frame is the capture's first.
+
+                # Master plan M27: the next line of finished background work,
+                # when nobody is talking -- between captures, or in an open
+                # microphone's window nobody has started speaking into. Not in
+                # a follow-up window: that moment belongs to the reply before.
+                if phase == "wake" or (phase == "capture" and capture_kind == "open"
+                                       and not heard):
+                    shown = self.deliver_announcements()
+                    if shown is not None:
+                        # Said here, with one agent: the window it was in is
+                        # over, and the usual follow-up window opens instead.
+                        last = shown
+                        if utt is not None:
+                            utt.abandon()
+                            utt = None
+                        phase, ptt, ptt_done = "wake", False, False
+                        if self._main.follow_up and self.listening:
+                            self._main.follow_up = False
+                            phase, buf, cap = "capture", b"", self.pipe.new_capture()
+                            utt = self.pipe.new_utterance()
+                            self._interrupt.clear()
+                            self.prime_agent()
+                            woke_at = last_voice = spoke_at = time.time()
+                            heard = False
+                            active_lead_in = self.pipe.follow_up_ms
+                            capture_kind = "followup"
+                            if self.open_mic is self._main:
+                                capture_kind = "open"
+                                active_lead_in = max(active_lead_in, self.open_mic_left_ms())
+                            print(f"  {CYA}● still listening{OFF}  {DIM}"
+                                  f"({active_lead_in / 1000:.0f}s — or say the wake word "
+                                  f"again){OFF}", flush=True)
+                            self.state.publish("followup", window=capture_kind, **last)
+                        else:
+                            self._publish(**last)
+                        continue
 
                 # While the wake test runs, a wake is counted, not answered.
                 if phase == "wake" and self.wake_testing(pcm, level):

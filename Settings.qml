@@ -1097,7 +1097,9 @@ Item {
       failed: String(e.error || ""),
       stopped: e.stopped === true,
       fresh: e["new"] === true,
-      latency: Number(e.latency_ms) || 0
+      latency: Number(e.latency_ms) || 0,
+      // Master plan M27: said by itself when background work finished.
+      unprompted: e.unprompted === true
     }
   }
 

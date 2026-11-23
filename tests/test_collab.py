@@ -3509,3 +3509,138 @@ class TestBrokenLinksOnly:
         links(d, "broken by hand")
         got = act(d, "main", "sora", "ask_agent")
         assert not got["ok"] and "can't be read" in got["text"]
+
+
+# --- master plan M27: a delegated task that finishes speaks up -----------------------
+
+@pytest.fixture
+def m27(agents, monkeypatch):
+    """The crew, everyone linked (the crew fixture), quiet levels, Theo's
+    chat saved; every completion event the daemon is handed kept in order,
+    and notifications recorded instead of shown."""
+    import announce
+    d = agents
+    for ext in ("main", "sora", "hazel"):
+        level(d, ext, "allow")
+    _theo_chat(d)
+    d.announced = []
+    real = d.announce_event
+
+    def keep(ev):
+        d.announced.append(ev)
+        return real(ev)
+    d.announce_event = keep
+    d.shown = []
+    monkeypatch.setattr(announce, "notify",
+                        lambda ev, run=None: d.shown.append(announce.notification_text(ev)) or "")
+    monkeypatch.setattr(announce, "silenced", lambda *a, **k: (False, "test"))
+    return d
+
+
+def _delegate(d, report_back=True, to="sora"):
+    with in_turn(d, "main"):
+        got = call(d, "main", "delegate", {"to": to, "task": f"x {CALL_MARK}",
+                                           "report_back": report_back})
+        assert got["ok"], got
+        _release(d)
+    _idle(d)
+    return last_task(d)
+
+
+class TestM27CrewWork:
+    """Tier 1: work this daemon started and saw end, for every backend that
+    can delegate. The caller speaks up with a fixed line; the target has
+    already said its result in its own voice, and the result itself still
+    waits for the caller's next turn."""
+
+    def test_a_report_back_task_that_finishes_is_one_event_for_the_caller(self, m27):
+        d = m27
+        t = _delegate(d)
+        assert t.state == "completed"
+        assert len(d.announced) == 1
+        ev = d.announced[0]
+        assert (ev.agent, ev.source, ev.key, ev.status) == ("main", "crew", t.id, "completed")
+        assert (ev.label, ev.other, ev.text) == ("Theo", "Sora", "")
+        assert d.shown == ["Sora finished a task for Theo"]
+
+    def test_the_line_is_fixed_and_in_the_callers_voice(self, m27):
+        d = m27
+        _delegate(d)
+        d.announce_poll()
+        d.deliver_announcements()
+        assert _until(lambda: d._announcing is None)
+        lines = [entry for entry in d.log if entry[:2] == ("main", "say")]
+        assert lines[-1][2] == "The task I gave Sora is done, and I have the result."
+        assert CALL_MARK not in lines[-1][2] and "Sora here" not in lines[-1][2]
+
+    def test_the_result_still_reaches_the_callers_next_turn(self, m27):
+        d = m27
+        _delegate(d)
+        d.dispatch(d._main, "and now?", {})
+        _idle(d)
+        assert "The result of the task you gave Sora" in d._main.agent.sent[-1][0]
+
+    def test_without_report_back_the_targets_own_words_are_the_news(self, m27):
+        d = m27
+        t = _delegate(d, report_back=False)
+        assert t.state == "completed" and d.announced == [] and d.shown == []
+
+    def test_a_task_that_is_stopped_is_not_announced(self, m27):
+        d = m27
+        gate = threading.Event()
+        d.crew["sora"].agent.wait = gate
+        with in_turn(d, "main"):
+            assert call(d, "main", "delegate", {"to": "sora", "task": "x",
+                                               "report_back": True})["ok"]
+            _release(d)
+        assert _until(lambda: d.crew["sora"].busy)
+        d.collab.stop_from(d.crew["sora"])
+        d.crew["sora"].stop()
+        gate.set()
+        _idle(d)
+        assert last_task(d).state == "cancelled"
+        assert d.announced == []
+
+    def test_a_task_that_fails_says_so(self, m27, monkeypatch):
+        d = m27
+        real = d.answer
+
+        def boom(*a, **k):
+            if d._persona() is d.crew["sora"]:
+                raise RuntimeError("synthetic")
+            return real(*a, **k)
+        monkeypatch.setattr(d, "answer", boom)
+        t = _delegate(d)
+        assert t.state == "failed"
+        assert [e.status for e in d.announced] == ["failed"]
+        assert d.shown == ["Sora's task for Theo didn't finish"]
+
+    def test_a_link_deleted_before_it_finished_is_not_announced(self, m27):
+        d = m27
+        gate = threading.Event()
+        d.crew["sora"].agent.wait = gate
+        with in_turn(d, "main"):
+            assert call(d, "main", "delegate", {"to": "sora", "task": "x",
+                                               "report_back": True})["ok"]
+            _release(d)
+        assert _until(lambda: d.crew["sora"].busy)
+        # Taken away from under the running task, before the poll sees it.
+        links(d, [])
+        gate.set()
+        _idle(d)
+        assert d.announced == []
+
+    def test_switched_off_for_the_caller_it_is_shown_nowhere(self, m27):
+        d = m27
+        d.cfg._values["mainSpeakWhenDone"] = False
+        _delegate(d)
+        assert len(d.announced) == 1 and d.shown == []
+        d.announce_poll()
+        d.deliver_announcements()
+        assert not [e for e in d.log if e[:2] == ("main", "say") and "task I gave" in e[2]]
+
+    def test_a_crew_event_is_one_per_task(self, m27):
+        d = m27
+        t = _delegate(d)
+        d.collab._announce_finish(t, "completed")     # reported twice
+        assert d.announcer.pending() == 1

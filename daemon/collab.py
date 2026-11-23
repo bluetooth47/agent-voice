@@ -1696,6 +1696,8 @@ class Runtime:
                              state)
         if moved:
             self._audit(task)
+            # Master plan M27, tier 1: work this daemon started and saw end.
+            self._announce_finish(task, state)
         if task.state == "cancelled":
             # A stop after the window was armed must not leave it open: the
             # next thing said in the room would go to it without a name.
@@ -1720,6 +1722,38 @@ class Runtime:
                 self._flash = (f"{task.to_label} finished", time.time() + FLASH_S)
         self.publish()
 
+    def _announce_finish(self, task: Task, state: str) -> None:
+        """Master plan M27, tier 1: a task an agent gave another to report
+        back on has ended, so the agent that gave it speaks up -- one fixed
+        line in its own voice, and the fixed notification (announce.py). The
+        daemon started the job and saw it end; nothing an agent wrote starts
+        this. Only a delegation with report_back (the result waits for the
+        caller; without it the target's own spoken result is the news), only
+        completed or failed (a stop is the person's own doing), and not when
+        the Crew map no longer lets the result come back as it was: the line
+        would point at a result its next turn will be told was withheld."""
+        if not (task.kind == "delegate" and task.entry == "agent" and task.report_back
+                and state in ("completed", "failed")):
+            return
+        hook = getattr(self.d, "announce_event", None)
+        if not callable(hook):
+            return
+        try:
+            if state == "completed":
+                crew = self._crew()
+                moved = ((task.to in crew.quarantined) != bool(task.into_quarantine)
+                         or self._q_epoch.get(task.to, 0) != task.q_epoch)
+                if moved or crew_links.refusal(crew, task.frm, task.to, "delegate", task.to)[0]:
+                    print(f"  delegate {task.id}: not announced (the crew links changed)",
+                          flush=True)
+                    return
+            import announce
+            hook(announce.Event(agent=task.frm, source="crew", key=task.id, status=state,
+                                label=task.frm_label or self.label(task.frm),
+                                other=task.to_label or self.label(task.to)))
+        except Exception as e:          # noqa: BLE001 -- never the task's end
+            print(f"  delegate {task.id}: not announced ({type(e).__name__})", flush=True)
+
     def hold(self, p, text: str) -> None:
         """What a task turn could not say (locked, or the microphone lent
         out), kept to say on the way back."""
@@ -1742,6 +1776,10 @@ class Runtime:
         me = external(p.id)
         with self._lock:
             self.held = [(q, t) for q, t in self.held if q is not p]
+        # Master plan M27: and what waits to be said unprompted in its voice.
+        drop = getattr(self.d, "drop_announcements", None)
+        if callable(drop):
+            drop(p)
         self._stopped(self.board.cancel(
             lambda t: t.frm == me or (t.to == me and t.state == "pending")
             or (t.to == me and t.kind == "ask")))
@@ -1752,11 +1790,16 @@ class Runtime:
         handler it only records the request: the handler has already stopped
         every busy turn itself, and the run loop cancels, audits and
         publishes on its next poll, holding nothing the handler interrupted."""
+        drop = getattr(self.d, "drop_announcements", None)
         if from_signal:
             self._stop_requested = True
+            if callable(drop):
+                drop(from_signal=True)      # master plan M27: only noted here
             return
         with self._lock:
             self.held = []
+        if callable(drop):
+            drop()                          # master plan M27: nothing unprompted
         self._stopped(self.board.cancel(lambda t: True))
 
     def cancel(self, task_id: str) -> bool:

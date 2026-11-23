@@ -6,6 +6,28 @@ Newest first. The version in `manifest.json` has been 0.2.0 throughout the
 redesign round; builds are told apart by commit (About shows both the
 settings' and the service's).
 
+## M27 · Agents speak up when background work finishes (2026-11-23)
+
+- **When background work finishes, the agent that started it says one short
+  line and a notification appears**, without waiting for its name: a Claude
+  Code agent's own background command or helper (what Claude Code then says
+  by itself, at most 300 characters aloud, all of it in the chat marked
+  unprompted), and a task any agent gave another to report back on ("The task
+  I gave Sora is done, and I have the result.").
+- Never over anybody, at most one line per agent every two minutes, five
+  minutes to be said or it is not; while locked, muted, lent out or with
+  notifications silenced, only the notification, and nothing is said later.
+  The notification's words are fixed, never the model's. A stop drops what
+  waits. **Speak up when work finishes** on each agent's Voice card, on by
+  default.
+- **A lock no longer stops an agent's background work**; a turn under way
+  still stops.
+- Fixed: a warm Claude Code process that finished background work took a
+  turn by itself, nothing read it, and the *next* question was answered with
+  that turn's text and the real answer came a turn late. Every Claude turn now
+  carries `--replay-user-messages` and one thread reads the process's output
+  between turns.
+
 ## M26 · Other settings, and About (2026-11-23)
 
 - **Display & privacy is now Other settings**: the readout (with the Agents

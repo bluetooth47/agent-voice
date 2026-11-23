@@ -587,7 +587,9 @@ class ChatStore:
                 if session_id:
                     chat["session_id"] = session_id
             extra = {}
-            if exchange.get("kind") in ("brief", "aside"):
+            # "unprompted" (master plan M27): what an agent said by itself
+            # when background work finished; there is no transcript.
+            if exchange.get("kind") in ("brief", "aside", "unprompted"):
                 extra["kind"] = exchange["kind"]
             if isinstance(exchange.get("for"), str) and _AGENT.fullmatch(exchange["for"]):
                 extra["for"] = exchange["for"]

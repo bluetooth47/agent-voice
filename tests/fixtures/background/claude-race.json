@@ -1,0 +1,1024 @@
+{
+ "recorded": "2026-11-23, claude 2.1.330 (Haiku), master plan M27 spike",
+ "how": "as claude-bash.json with --replay-user-messages, a 15 s background command; the second message is written the moment the background task's task_notification is read (rows with type WROTE mark each write, they are not lines claude wrote)",
+ "scenario": "race",
+ "argv": [
+  "claude",
+  "-p",
+  "--input-format",
+  "stream-json",
+  "--output-format",
+  "stream-json",
+  "--include-partial-messages",
+  "--verbose",
+  "--replay-user-messages",
+  "--permission-mode",
+  "dontAsk",
+  "--no-chrome",
+  "--strict-mcp-config",
+  "--no-session-persistence",
+  "--allowedTools",
+  "Bash(sleep *)",
+  "Bash(echo *)",
+  "--model",
+  "haiku"
+ ],
+ "notes": "phase: turn1 = until the first result; between = stdin open, nothing written; turn2 = after a second user message; WROTE = a message written (race only). Reduced to the fields the adapter reads; the init event's tool, plugin, skill and command lists and local paths dropped.",
+ "lines": [
+  {
+   "t": 0.0,
+   "phase": "WROTE",
+   "line": {
+    "type": "WROTE",
+    "subtype": "turn1"
+   }
+  },
+  {
+   "t": 0.87,
+   "phase": "turn1",
+   "line": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "model": "claude-haiku-5-5",
+    "mcp_servers": []
+   }
+  },
+  {
+   "t": 0.88,
+   "phase": "turn1",
+   "line": {
+    "type": "system",
+    "subtype": "status",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "status": "requesting"
+   }
+  },
+  {
+   "t": 2.02,
+   "phase": "turn1",
+   "line": {
+    "type": "user",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "isReplay": true,
+    "message": {
+     "role": "user",
+     "content": "Use your Bash tool with run_in_background set to true to run exactly this command: sleep 15; echo done-charlie. Do not wait for it and do not check on it. As soon as it has started, end your turn by replying with the single word STARTED."
+    }
+   }
+  },
+  {
+   "t": 2.02,
+   "phase": "turn1",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "ttft_ms": 1044,
+    "event": {
+     "type": "message_start"
+    }
+   }
+  },
+  {
+   "t": 2.02,
+   "phase": "turn1",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_start",
+     "content_block": {
+      "type": "tool_use",
+      "name": "Bash",
+      "id": "toolu_01RLqFD6YuvKv3e2pjFVANwF"
+     }
+    }
+   }
+  },
+  {
+   "t": 2.02,
+   "phase": "turn1",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": ""
+     }
+    }
+   }
+  },
+  {
+   "t": 2.07,
+   "phase": "turn1",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "{\"command\": \"sleep 15;"
+     }
+    }
+   }
+  },
+  {
+   "t": 2.08,
+   "phase": "turn1",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": " echo done-charlie"
+     }
+    }
+   }
+  },
+  {
+   "t": 2.25,
+   "phase": "turn1",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "\", \"run_in_background\": true"
+     }
+    }
+   }
+  },
+  {
+   "t": 2.25,
+   "phase": "turn1",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": ", \"description\": \"Run del"
+     }
+    }
+   }
+  },
+  {
+   "t": 2.25,
+   "phase": "turn1",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "ayed ech"
+     }
+    }
+   }
+  },
+  {
+   "t": 2.25,
+   "phase": "turn1",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "o in background"
+     }
+    }
+   }
+  },
+  {
+   "t": 2.3,
+   "phase": "turn1",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "\"}"
+     }
+    }
+   }
+  },
+  {
+   "t": 2.31,
+   "phase": "turn1",
+   "line": {
+    "type": "assistant",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "message": {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_01RLqFD6YuvKv3e2pjFVANwF",
+       "name": "Bash",
+       "input": {
+        "command": "sleep 15; echo done-charlie",
+        "description": "Run delayed echo in background",
+        "run_in_background": true
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "t": 2.34,
+   "phase": "turn1",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_stop"
+    }
+   }
+  },
+  {
+   "t": 2.36,
+   "phase": "turn1",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "message_delta"
+    }
+   }
+  },
+  {
+   "t": 2.36,
+   "phase": "turn1",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "message_stop"
+    }
+   }
+  },
+  {
+   "t": 2.37,
+   "phase": "turn1",
+   "line": {
+    "type": "rate_limit_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40"
+   }
+  },
+  {
+   "t": 2.43,
+   "phase": "turn1",
+   "line": {
+    "type": "system",
+    "subtype": "background_tasks_changed",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "tasks": [
+     {
+      "task_id": "b3lbhf7e9",
+      "task_type": "local_bash"
+     }
+    ]
+   }
+  },
+  {
+   "t": 2.43,
+   "phase": "turn1",
+   "line": {
+    "type": "system",
+    "subtype": "task_started",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "task_id": "b3lbhf7e9",
+    "tool_use_id": "toolu_01RLqFD6YuvKv3e2pjFVANwF",
+    "is_backgrounded": true,
+    "task_type": "local_bash"
+   }
+  },
+  {
+   "t": 2.44,
+   "phase": "turn1",
+   "line": {
+    "type": "user",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "message": {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01RLqFD6YuvKv3e2pjFVANwF",
+       "content": "Command running in background with ID: b3lbhf7e9. Output is being written to: /tmp/claude-UID/-tmp-m27spike-work-race/a07d15c6-722e-4c91-aebd-004635885b40/tasks",
+       "is_error": false
+      }
+     ]
+    }
+   }
+  },
+  {
+   "t": 2.45,
+   "phase": "turn1",
+   "line": {
+    "type": "system",
+    "subtype": "status",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "status": "requesting"
+   }
+  },
+  {
+   "t": 3.25,
+   "phase": "turn1",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "ttft_ms": 775,
+    "event": {
+     "type": "message_start"
+    }
+   }
+  },
+  {
+   "t": 3.25,
+   "phase": "turn1",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_start",
+     "content_block": {
+      "type": "text"
+     }
+    }
+   }
+  },
+  {
+   "t": 3.25,
+   "phase": "turn1",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "text_delta",
+      "text": "STARTED"
+     }
+    }
+   }
+  },
+  {
+   "t": 3.26,
+   "phase": "turn1",
+   "line": {
+    "type": "assistant",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "message": {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "text",
+       "text": "STARTED"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "t": 3.26,
+   "phase": "turn1",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_stop"
+    }
+   }
+  },
+  {
+   "t": 3.26,
+   "phase": "turn1",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "message_delta"
+    }
+   }
+  },
+  {
+   "t": 3.26,
+   "phase": "turn1",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "message_stop"
+    }
+   }
+  },
+  {
+   "t": 3.29,
+   "phase": "turn1",
+   "line": {
+    "type": "result",
+    "subtype": "success",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "is_error": false,
+    "result": "STARTED",
+    "num_turns": 2,
+    "ttft_ms": 1551
+   }
+  },
+  {
+   "t": 17.44,
+   "phase": "between",
+   "line": {
+    "type": "system",
+    "subtype": "task_updated",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "task_id": "b3lbhf7e9",
+    "patch": {
+     "status": "completed"
+    }
+   }
+  },
+  {
+   "t": 17.44,
+   "phase": "between",
+   "line": {
+    "type": "system",
+    "subtype": "task_notification",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "task_id": "b3lbhf7e9",
+    "tool_use_id": "toolu_01RLqFD6YuvKv3e2pjFVANwF",
+    "status": "completed"
+   }
+  },
+  {
+   "t": 17.44,
+   "phase": "WROTE",
+   "line": {
+    "type": "WROTE",
+    "subtype": "race"
+   }
+  },
+  {
+   "t": 17.44,
+   "phase": "between",
+   "line": {
+    "type": "system",
+    "subtype": "background_tasks_changed",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "tasks": []
+   }
+  },
+  {
+   "t": 17.55,
+   "phase": "between",
+   "line": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "model": "claude-haiku-5-5",
+    "mcp_servers": []
+   }
+  },
+  {
+   "t": 17.55,
+   "phase": "between",
+   "line": {
+    "type": "system",
+    "subtype": "status",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "status": "requesting"
+   }
+  },
+  {
+   "t": 18.32,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "ttft_ms": 756,
+    "event": {
+     "type": "message_start"
+    }
+   }
+  },
+  {
+   "t": 18.32,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_start",
+     "content_block": {
+      "type": "thinking"
+     }
+    }
+   }
+  },
+  {
+   "t": 18.55,
+   "phase": "between",
+   "line": {
+    "type": "system",
+    "subtype": "thinking_tokens",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40"
+   }
+  },
+  {
+   "t": 18.55,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "thinking_delta"
+     }
+    }
+   }
+  },
+  {
+   "t": 18.64,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "thinking_delta"
+     }
+    }
+   }
+  },
+  {
+   "t": 18.64,
+   "phase": "between",
+   "line": {
+    "type": "system",
+    "subtype": "thinking_tokens",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40"
+   }
+  },
+  {
+   "t": 18.64,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "signature_delta"
+     }
+    }
+   }
+  },
+  {
+   "t": 18.64,
+   "phase": "between",
+   "line": {
+    "type": "assistant",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "message": {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": ""
+      }
+     ]
+    }
+   }
+  },
+  {
+   "t": 18.64,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_stop"
+    }
+   }
+  },
+  {
+   "t": 18.64,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_start",
+     "content_block": {
+      "type": "text"
+     }
+    }
+   }
+  },
+  {
+   "t": 18.64,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "text_delta",
+      "text": "The background command"
+     }
+    }
+   }
+  },
+  {
+   "t": 18.72,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "text_delta",
+      "text": " (`sleep 15;"
+     }
+    }
+   }
+  },
+  {
+   "t": 18.72,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "text_delta",
+      "text": " echo done-charlie`"
+     }
+    }
+   }
+  },
+  {
+   "t": 18.72,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "text_delta",
+      "text": ") finished with exit code "
+     }
+    }
+   }
+  },
+  {
+   "t": 18.73,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "text_delta",
+      "text": "0. I didn't read its"
+     }
+    }
+   }
+  },
+  {
+   "t": 18.75,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "text_delta",
+      "text": " output file"
+     }
+    }
+   }
+  },
+  {
+   "t": 18.77,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "text_delta",
+      "text": ", since you"
+     }
+    }
+   }
+  },
+  {
+   "t": 18.79,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "text_delta",
+      "text": " asked me not to check"
+     }
+    }
+   }
+  },
+  {
+   "t": 18.81,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "text_delta",
+      "text": " on it."
+     }
+    }
+   }
+  },
+  {
+   "t": 18.82,
+   "phase": "between",
+   "line": {
+    "type": "assistant",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "message": {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "text",
+       "text": "The background command (`sleep 15; echo done-charlie`) finished with exit code 0. I didn't read its output file, since you asked me not to check on it."
+      }
+     ]
+    }
+   }
+  },
+  {
+   "t": 18.82,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_stop"
+    }
+   }
+  },
+  {
+   "t": 18.83,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "message_delta"
+    }
+   }
+  },
+  {
+   "t": 18.83,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "message_stop"
+    }
+   }
+  },
+  {
+   "t": 18.84,
+   "phase": "between",
+   "line": {
+    "type": "result",
+    "subtype": "success",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "is_error": false,
+    "result": "The background command (`sleep 15; echo done-charlie`) finished with exit code 0. I didn't read its output file, since you asked me not to check on it.",
+    "num_turns": 1,
+    "ttft_ms": 1115
+   }
+  },
+  {
+   "t": 18.86,
+   "phase": "between",
+   "line": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "model": "claude-haiku-5-5",
+    "mcp_servers": []
+   }
+  },
+  {
+   "t": 18.86,
+   "phase": "between",
+   "line": {
+    "type": "system",
+    "subtype": "status",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "status": "requesting"
+   }
+  },
+  {
+   "t": 19.84,
+   "phase": "between",
+   "line": {
+    "type": "user",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "isReplay": true,
+    "message": {
+     "role": "user",
+     "content": "Reply with the single word NEXT."
+    }
+   }
+  },
+  {
+   "t": 19.84,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "ttft_ms": 962,
+    "event": {
+     "type": "message_start"
+    }
+   }
+  },
+  {
+   "t": 19.84,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_start",
+     "content_block": {
+      "type": "text"
+     }
+    }
+   }
+  },
+  {
+   "t": 19.84,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_delta",
+     "delta": {
+      "type": "text_delta",
+      "text": "NEXT"
+     }
+    }
+   }
+  },
+  {
+   "t": 19.84,
+   "phase": "between",
+   "line": {
+    "type": "assistant",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "message": {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "text",
+       "text": "NEXT"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "t": 19.84,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "content_block_stop"
+    }
+   }
+  },
+  {
+   "t": 19.85,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "message_delta"
+    }
+   }
+  },
+  {
+   "t": 19.85,
+   "phase": "between",
+   "line": {
+    "type": "stream_event",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "parent_tool_use_id": null,
+    "event": {
+     "type": "message_stop"
+    }
+   }
+  },
+  {
+   "t": 19.86,
+   "phase": "between",
+   "line": {
+    "type": "result",
+    "subtype": "success",
+    "session_id": "a07d15c6-722e-4c91-aebd-004635885b40",
+    "is_error": false,
+    "result": "NEXT",
+    "num_turns": 1,
+    "ttft_ms": 1000
+   }
+  }
+ ]
+}

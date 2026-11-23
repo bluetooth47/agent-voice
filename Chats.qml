@@ -169,6 +169,8 @@ Item {
       var source = view.currentAgentName(passedFrom) || passedFrom || "another agent"
       return name + " (passed from " + source + ")"
     }
+    // Master plan M27: said by itself when background work finished.
+    if (kind === "unprompted") return name + " (unprompted)"
     return name
   }
 
@@ -747,9 +749,11 @@ Item {
         required property bool stopped
         required property bool fresh
         required property int latency
+        required property bool unprompted
         width: ListView.view ? ListView.view.width - Style.space(10) : 0
         when: view.s.timeOf(at)
-        who: agent
+        // Master plan M27: a line said with nobody asking is marked so.
+        who: agent + (unprompted ? " (unprompted)" : "")
         tint: view.s.agentTint(agentId)
         latencyMs: latency
         heard: transcript

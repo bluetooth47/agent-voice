@@ -104,6 +104,7 @@
       "mainResume": true,
       "mainIdleTimeoutS": 90,
       "mainExtraArgs": [],
+      "mainSpeakWhenDone": true,
       "bargeIn": false,
       "bargeOnHeadset": true,
       "bargeFactor": 150,
@@ -731,6 +732,13 @@
         ],
         "defaultValue": "own",
         "description": "Which saved chats the main agent can search and read with its chat tools: off, its own and the ones shared with it, or every saved chat (the Agents page asks first). A quarantined agent can search none. What it searches is never logged. A Trusted agent with a shell can read the chat files directly whatever this says. Set on the main agent's card, under Collaboration, notes & chats."
+      },
+      {
+        "key": "mainSpeakWhenDone",
+        "type": "bool",
+        "label": "Main agent speaks up when background work finishes",
+        "defaultValue": true,
+        "description": "When work the main agent started in the background finishes (a task it gave another agent to report back on, or with Claude Code its own background command or helper), it says one short line without waiting for the wake word, and a notification appears. While the screen is locked, the microphone is muted or notifications are silenced, only the notification. Set on the main agent's card, under Voice."
       },
       {
         "key": "mainResume",
