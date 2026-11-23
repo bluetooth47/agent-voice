@@ -354,6 +354,11 @@ DEFAULTS = {
     # Off until it has been live-tested; see noise_floor.py.
     "adaptiveGate": False,
     "gateMarginDb": 10,
+    # Master plan M23: how fast the room's floor may move, in tenths of a dB
+    # per second (the bar schema has no float type). 5 and 30 are the rates
+    # noise_floor.py always had. See Config.gate_rates().
+    "gateRiseTenths": 5,
+    "gateFallTenths": 30,
     "echoTailMs": 350,
     "refractoryMs": 2000,
     # The float is what the code reads; the percent is what the bar schema
@@ -536,6 +541,8 @@ TOML_ALIASES = {
     "micThresholdDb": ("audio", "mic_threshold_db"),
     "adaptiveGate": ("audio", "adaptive_gate"),
     "gateMarginDb": ("audio", "gate_margin_db"),
+    "gateRiseTenths": ("audio", "gate_rise_tenths"),
+    "gateFallTenths": ("audio", "gate_fall_tenths"),
     "echoTailMs": ("audio", "echo_tail_ms"),
     # No manifest entry, deliberately: a refractory window is a property of
     # how the detector behaves, not a knob worth a slider. It still needs a
@@ -854,6 +861,40 @@ class Config:
                 "engines": engines if engines in ("both", "whisper", "vosk") else "both",
                 "trailing": clamp("crossCheckTrailingWords", 0, 6),
                 "whisper_hint": self.get_bool("crossCheckWhisperHint")}
+
+    def gate_rates(self) -> tuple[float, float]:
+        """Master plan M23: how fast the adaptive gate's floor may rise and
+        fall, in dB per second, from gateRiseTenths and gateFallTenths.
+
+        Each is a whole number of tenths, clamped to its bounds (1-30 and
+        5-100, noise_floor.RISE_BOUNDS and FALL_BOUNDS). Anything that is
+        not a plain whole number -- a bool, a list, "abc", a float with a
+        fraction -- and settings that cannot be read give the rates the
+        gate always had (0.5 and 3.0), as Appendix A of the plan fixes it.
+        Read on every apply() and handed to the running floor: a number,
+        never a rebuild.
+        """
+        import noise_floor
+
+        def tenths(key, bounds):
+            default = DEFAULTS[key]
+            if not self.settings_readable():
+                return default / 10
+            value = self[key]
+            if isinstance(value, bool):
+                return default / 10
+            if isinstance(value, float) and value.is_integer():
+                value = int(value)
+            # ASCII digits only: str.isdigit() takes "²", which int() refuses.
+            if isinstance(value, str) and re.fullmatch(r"-?[0-9]{1,6}", value.strip()):
+                value = int(value.strip())
+            if not isinstance(value, int):
+                return default / 10
+            lo, hi = round(bounds[0] * 10), round(bounds[1] * 10)
+            return max(lo, min(hi, value)) / 10
+
+        return (tenths("gateRiseTenths", noise_floor.RISE_BOUNDS),
+                tenths("gateFallTenths", noise_floor.FALL_BOUNDS))
 
     def wake_both_agree(self) -> bool:
         """Master plan M22: whether a wake needs both stages to agree.

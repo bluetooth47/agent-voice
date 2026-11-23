@@ -499,7 +499,10 @@ def test_the_advanced_settings_are_drawn_on_the_listening_page():
     for key in ("shortNameBoostPct", "crossCheckMinMs", "crossCheckMaxMs",
                 "wakeAlsoSounds", "sherpaThresholdPct", "wakeCrossCheck"):
         assert f'"{key}"' in text, key
-    assert 'title: "ADVANCED"' in text
+    # Since master plan M23 each stage folds its own fine-tuning: the second
+    # check's window under stage 3's Advanced, "also sounds like" under
+    # sherpa-onnx's block.
+    assert 'objectName: "checkAdvanced"' in text and 'objectName: "alsoSoundsSection"' in text
 
 
 # --- "full stop" as a keyword ----------------------------------------------

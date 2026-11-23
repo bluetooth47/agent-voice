@@ -47,6 +47,12 @@ Column {
   // a few named choices rather than a number. Shown in place of the number,
   // and the number cannot be typed.
   property var labels: []
+  // For a setting stored in whole steps of a smaller unit (master plan M23:
+  // the gate's rates are tenths of a dB/s, because the bar schema has no
+  // float type): the number is shown, and typed, divided by this, to
+  // `decimals` places. 1 is the plain whole number it always was.
+  property real displayDivisor: 1
+  property int decimals: 0
 
   // The Flickable a wheel over the slider scrolls. Found by walking up when
   // not given.
@@ -59,6 +65,8 @@ Column {
   function display(v) {
     if (labels.length > 0)
       return String(labels[Math.max(0, Math.min(labels.length - 1, Math.round(v - minimum)))])
+    if (displayDivisor !== 1)
+      return (v / displayDivisor).toFixed(decimals) + unit
     return Math.round(v) + unit
   }
 
@@ -149,7 +157,8 @@ Column {
           enabled: knob.labels.length === 0 && knob.enabled
           cursorShape: Qt.IBeamCursor
           onClicked: {
-            entry.text = String(Math.round(knob.shown))
+            entry.text = knob.displayDivisor !== 1 ? (knob.shown / knob.displayDivisor).toFixed(knob.decimals)
+                                                   : String(Math.round(knob.shown))
             entry.visible = true
             entry.forceActiveFocus()
             entry.selectAll()
@@ -171,9 +180,15 @@ Column {
         selectedTextColor: Commons.Color.background
         font.family: knob.fontFamily
         font.pixelSize: Style.font.body
-        validator: IntValidator { bottom: -1000000; top: 1000000 }
+        property IntValidator whole: IntValidator { bottom: -1000000; top: 1000000 }
+        property RegularExpressionValidator decimal: RegularExpressionValidator {
+          regularExpression: /-?[0-9]{0,6}([.][0-9]{0,3})?/
+        }
+        validator: knob.displayDivisor !== 1 ? decimal : whole
         onAccepted: {
-          var v = parseInt(text, 10)
+          // Typed in the units shown; saved in the setting's own steps.
+          var v = knob.displayDivisor !== 1 ? Math.round(parseFloat(text) * knob.displayDivisor)
+                                            : parseInt(text, 10)
           visible = false
           if (!isNaN(v)) slider.choose(v)
         }

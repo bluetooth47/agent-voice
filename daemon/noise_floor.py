@@ -17,9 +17,17 @@ So the gate here is the room's noise floor plus a margin:
 - it is only fed frames that cannot be anybody talking to us: the caller
   feeds it in the wake phase only, never during a capture, never while we
   speak and never inside the deaf window after;
-- it moves slowly: up at RISE_DB_PER_S, down at FALL_DB_PER_S. Falling is
-  faster because a gate that is too high cuts words off, which is worse
-  than holding a turn open a little longer;
+- it moves slowly: up at `rise_db_per_s`, down at `fall_db_per_s` (shipped
+  as RISE_DB_PER_S and FALL_DB_PER_S, and settable since master plan M23 as
+  gateRiseTenths and gateFallTenths, within RISE_BOUNDS and FALL_BOUNDS).
+  Falling is faster because a gate that is too high cuts words off, which
+  is worse than holding a turn open a little longer. Plain attributes,
+  changed in place: a new rate never forgets the room;
+- the rates only limit how fast the floor may *follow* the median, and the
+  median of a WINDOW_S window itself moves only when the new level is
+  most of the window: after a step in the room's noise nothing happens for
+  about half the window, whatever the rates (bench/gate_speed.py,
+  FINDINGS §56);
 - the gate is clamped to [GATE_MIN_DB, GATE_MAX_DB] so no room, however
   loud or silent, can make it absurd;
 - until WARMUP_S of frames have been seen, the fixed gate stands.
@@ -39,6 +47,17 @@ WARMUP_S = 3.0
 #: How fast the floor may move, dB per second of fed frames.
 RISE_DB_PER_S = 0.5
 FALL_DB_PER_S = 3.0
+#: The range either rate may be set to, dB per second (master plan M23). A
+#: floor that could jump straight to whatever the median says would follow a
+#: burst of talk the wake phase let through; one that could not move at all
+#: would be the fixed gate with extra steps.
+RISE_BOUNDS = (0.1, 3.0)
+FALL_BOUNDS = (0.5, 10.0)
+#: The page's "adapts slow / normal / fast", in the settings' own units
+#: (tenths of a dB per second): (gateRiseTenths, gateFallTenths). Normal is
+#: the shipped pair. pages/ListeningPage.qml writes the same numbers, and a
+#: test holds the two in step.
+SPEEDS = {"slow": (2, 15), "normal": (5, 30), "fast": (15, 80)}
 #: Hard limits on the gate itself, whatever the room says.
 GATE_MIN_DB = -55.0
 GATE_MAX_DB = -25.0
@@ -57,10 +76,20 @@ class NoiseFloor:
     def __init__(self, frame_ms: int, margin_db: float = MARGIN_DB) -> None:
         self.frame_s = frame_ms / 1000.0
         self.margin_db = float(margin_db)
+        #: dB per second of fed frames; see set_rates().
+        self.rise_db_per_s = RISE_DB_PER_S
+        self.fall_db_per_s = FALL_DB_PER_S
         self._levels: deque[float] = deque(maxlen=max(1, int(WINDOW_S / self.frame_s)))
         self._warm = max(1, int(WARMUP_S / self.frame_s))
         #: The floor as it stands, after the slew; None while warming up.
         self.floor_db: float | None = None
+
+    def set_rates(self, rise_db_per_s: float, fall_db_per_s: float) -> None:
+        """How fast the floor may move, kept inside RISE_BOUNDS and
+        FALL_BOUNDS. In place: the window and the floor so far are kept, so
+        a slider move changes the next step and nothing already learned."""
+        self.rise_db_per_s = _bounded(rise_db_per_s, RISE_BOUNDS, RISE_DB_PER_S)
+        self.fall_db_per_s = _bounded(fall_db_per_s, FALL_BOUNDS, FALL_DB_PER_S)
 
     @property
     def ready(self) -> bool:
@@ -78,7 +107,7 @@ class NoiseFloor:
             self.floor_db = target
             return
         step = target - self.floor_db
-        up, down = RISE_DB_PER_S * self.frame_s, FALL_DB_PER_S * self.frame_s
+        up, down = self.rise_db_per_s * self.frame_s, self.fall_db_per_s * self.frame_s
         self.floor_db += max(-down, min(up, step))
 
     def gate(self, fixed_db: float) -> float:
@@ -100,3 +129,15 @@ class NoiseFloor:
     def _percentile(self) -> float:
         xs = sorted(self._levels)
         return xs[min(len(xs) - 1, int(PERCENTILE * len(xs)))]
+
+
+def _bounded(value, bounds: tuple[float, float], default: float) -> float:
+    """`value` as a float inside `bounds`; anything that is not a finite
+    number is `default`."""
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return default
+    if x != x or x in (float("inf"), float("-inf")):
+        return default
+    return max(bounds[0], min(bounds[1], x))

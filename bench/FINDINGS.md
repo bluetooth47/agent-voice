@@ -2275,3 +2275,56 @@ per spotter hit; nothing is added while nobody speaks.
 So the Listening page offers "Both must agree" with "about 0.8 s later than
 the spotter alone, and only names both stages hear" beside it, and the
 default stays either stage.
+
+## 56. M23: how fast the gate follows the room, at slow, normal and fast
+
+Measured 2026-11-23 on the i7-1185G7 with `bench/gate_speed.py` (seed 23;
+seed 5 gave the same numbers within 0.8 s): the daemon's own `NoiseFloor`,
+fed 200 ms frames the way the frame loop feeds it in the wake phase, over
+synthetic noise. "Settled" is the first moment after a step from which the
+floor stays within 1 dB of the new room's median, counted from the step.
+The three speeds are the page's presets, `noise_floor.SPEEDS`, in dB/s:
+slow rises 0.2 and falls 1.5, normal 0.5 and 3.0 (the rates the gate always
+had), fast 1.5 and 8.0.
+
+| a 10 dB step at -50 dBFS | slow | normal | fast |
+|---|---|---|---|
+| fan (pink noise above 20 Hz), louder | 56.8 s | 31.2 s | 20.2 s |
+| fan, quieter | 20.4 s | 17.6 s | 16.0 s |
+| music (chords, level swinging frame to frame), louder | 48.0 s | 24.0 s | 15.8 s |
+| music, quieter | 24.8 s | 24.8 s | 24.8 s |
+
+**The window, not the rate, sets the floor of those numbers.** The floor
+chases the median of the last 30 s of room (§27), and a median moves only
+once the new level is most of the window: for about 15 s after a step
+nothing happens, at any speed. The rates decide how fast it catches up after
+that, which is why rising (10 dB at 0.2 to 1.5 dB/s) spreads the three
+speeds out and falling (at 1.5 to 8 dB/s) barely does. Music's frame-to-frame
+swing makes its median turn later still, so going quieter took 24.8 s at all
+three. A shorter window would make "fast" faster, and would let more of a TV
+or a conversation into the floor; it was left at 30 s (the plan names only
+the two rates). Open issue in phaseM23notes.md.
+
+**Talk does not teach it, at any speed.** A burst at a speaking level
+(-26 dBFS) in a -50 dBFS room, fed to the floor as if the wake phase had let
+it through (someone else talking, a call across the room). The gate before
+it, and its highest point during and after:
+
+| talk | slow | normal | fast |
+|---|---|---|---|
+| 3 s | -40.0 → -40.0 | -40.0 → -40.0 | -40.0 → -40.0 |
+| 8 s | -40.0 → -39.9 | -40.0 → -39.9 | -40.0 → -39.9 |
+| 14 s | -40.0 → -39.3 | -40.0 → -39.3 | -40.0 → -39.3 |
+
+The same median keeps it there: talk shorter than half the window is the
+upper tail of the window, not its middle, so the rate never comes into it.
+`tests/test_gate_speed.py` holds this at the fastest rates allowed (3.0 and
+10.0 dB/s). The plan's risk, "a fast gate learning speech", is closed by the
+window and by what the loop feeds it (the wake phase only, never a capture,
+never while it speaks or chimes, never while locked), not by the slider's
+bounds.
+
+So the page's hints say "about a minute / 30 s / 20 s to follow a room that
+gets 10 dB louder; quieter in about 20 / 18 / 16 s", and its help says that
+talk shorter than about 15 seconds never moves the line. Synthetic noise,
+not a recorded room.

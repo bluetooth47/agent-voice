@@ -98,11 +98,25 @@ rhymes with it, and put the threshold between the two peaks.
 
 ### Tuning a wake word that misses
 
-Listening → Advanced holds every wake setting that was tuned by hand: each
-engine's threshold, the second check and its burst window (300 to 2600ms),
-the short-name boost for names of three sounds or fewer, and "also sounds
-like" per name word: other readings for sherpa-onnx, written as words it
-knows (`thea`) or as phones (`TH IY1 AH0`). Each has a reset.
+The Listening page is drawn the way a wake word travels, as four numbered
+stages, each holding only its own settings:
+
+1. **Microphone**: the live level with the gate drawn on it; the gate fixed
+   or following the room, and how fast it follows (below).
+2. **First listener**: the engine and its threshold. What belongs to one
+   engine shows only for that engine: openWakeWord's **Your voice** (the
+   verifier, and training a phrase of your own); sherpa-onnx's short-name
+   boost for names of three sounds or fewer, and "also sounds like" per name
+   word, other readings written as words it knows (`thea`) or as phones
+   (`TH IY1 AH0`). The wake phrase is set on the Agents card, linked here.
+3. **Second check**: who votes, and under its Advanced the burst window (300
+   to 2600ms), the words allowed after the name and the Whisper hint. On an
+   engine with no second check it is greyed, with the reason.
+4. **Decision**: when a wake counts (below), Vosk's confidence bar, and
+   today's wakes and turn-downs.
+
+Fine-tuning is folded under each stage's own Advanced, and each setting has
+a reset. **Test my wake word** sits underneath: it runs the whole pipeline.
 
 ### When a wake counts
 
@@ -145,12 +159,21 @@ room** (Listening → Microphone, off by default) makes the gate the room's
 noise floor plus a margin, and shows both live.
 
 It learns only from frames that cannot be you talking to it: the wake phase,
-never a capture, never while it speaks. The floor is the median of the last
-30 seconds of those, so a wake word now and then does not move it, and a TV
-or music counts as the room it is. It rises at 0.5 dB a second and falls at
-3, never goes below -55 or above -25 dBFS, and the fixed gate holds until it
+never a capture, never while it speaks, never while the screen is locked.
+The floor is the median of the last 30 seconds of those, so a wake word now
+and then does not move it, and a TV or music counts as the room it is. It
+never goes below -55 or above -25 dBFS, and the fixed gate holds until it
 has heard three seconds of the room. See FINDINGS §27 for six synthetic rooms
 against the fixed gate.
+
+**Adapts** sets how fast it follows: **slow** (rises 0.2 dB a second, falls
+1.5), **normal** (0.5 and 3, as it always was) or **fast** (1.5 and 8).
+Measured on a fan getting 10 dB louder, that is about a minute, 30 seconds
+and 20 seconds; quieter takes 16 to 20 seconds at any speed, because half of
+the 30-second memory has to hear the new room before the line moves at all.
+For the same reason talk shorter than about 15 seconds never moves it, at
+any speed (FINDINGS §56). The exact rates are under the stage's Advanced,
+beside the margin.
 
 ## Principles
 

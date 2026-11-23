@@ -58,7 +58,8 @@ import wake_test  # noqa: E402
 import failure  # noqa: E402
 from chimes import Chimes  # noqa: E402
 from eager import Utterance, sounds_finished  # noqa: E402
-from noise_floor import MARGIN_MAX, MARGIN_MIN, NoiseFloor  # noqa: E402
+from noise_floor import (FALL_DB_PER_S, MARGIN_MAX, MARGIN_MIN,  # noqa: E402
+                         RISE_DB_PER_S, NoiseFloor)
 import headset  # noqa: E402
 from speech_text import (  # noqa: E402
     UNDO_S, Found, as_prompt, chat_command, command, find_command, heard_back,
@@ -457,6 +458,20 @@ def _both_agree(cfg) -> bool:
         return False
 
 
+def _gate_rates(cfg) -> tuple[float, float]:
+    """gateRiseTenths and gateFallTenths in dB/s, through Config.gate_rates
+    (master plan M23); the shipped rates from a stand-in without it, or when
+    it cannot be read. Never raises: apply() runs inside the frame loop."""
+    read = getattr(cfg, "gate_rates", None)
+    try:
+        if callable(read):
+            rise, fall = read()
+            return float(rise), float(fall)
+    except Exception:           # noqa: BLE001 -- unreadable is today's rates
+        pass
+    return RISE_DB_PER_S, FALL_DB_PER_S
+
+
 #: How long the HUD says a name was heard and not confirmed (master plan M22).
 WAKE_NOTE_S = 4.0
 #: A held wake older than this, by the clock, is dropped rather than decided:
@@ -577,6 +592,11 @@ class Pipeline:
             self._floor = NoiseFloor(CHUNK_MS)
         self._floor.margin_db = float(max(MARGIN_MIN, min(MARGIN_MAX,
                                                           cfg.get_int("gateMarginDb"))))
+        # Master plan M23: how fast the floor follows the room. Plain
+        # attributes on the running floor, set after the spec check like the
+        # margin: a new rate changes the next step and keeps what the floor
+        # has learned. A stand-in config without the reader keeps the rates.
+        self._floor.set_rates(*_gate_rates(cfg))
         if not self.adaptive_gate:
             # Switched off forgets the room, so switching it on again learns
             # the room it is in then, not the one it was in last week.
@@ -3400,7 +3420,8 @@ class Daemon:
         second = (f"detection {p.detection_threshold:.2f}"
                   if p.detection_threshold is not None
                   else f"confidence {p.wake_confidence:.2f}")
-        gate = (f"gate follows the room (+{p._floor.margin_db:.0f} dB)"
+        gate = (f"gate follows the room (+{p._floor.margin_db:.0f} dB, "
+                f"rises {p._floor.rise_db_per_s:.1f} dB/s, falls {p._floor.fall_db_per_s:.1f} dB/s)"
                 if getattr(p, "adaptive_gate", False) else f"gate {p.threshold_db:.0f} dBFS")
         print(f"  {DIM}{gate} · {second} "
               f"· {self.cfg.source}{OFF}")

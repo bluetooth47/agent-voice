@@ -85,7 +85,12 @@ def test_the_not_installed_state_is_visible_somewhere():
 def test_nothing_offers_to_switch_to_an_engine_that_is_not_there():
     """Switching to a missing engine changes nothing a user can see -- the
     daemon falls back again -- so the offer must be to install it."""
-    assert "Install openWakeWord to enable this" in LISTENING
+    # Since master plan M23 the verifier card lives in openWakeWord's own
+    # block, drawn only while openWakeWord is listening, so it never offers
+    # an engine switch at all: the engine choice above it installs.
+    block = LISTENING[LISTENING.index('objectName: "owwBlock"'):]
+    assert block.index("visible: page.s.owwLive") < block.index("StatusCard {")
+    assert "Switch to openWakeWord to enable this" not in LISTENING
     # Choosing the engine now starts the install itself, so the button is the
     # way back from a download that did not finish rather than the way in.
     assert "Try installing openWakeWord again" in LISTENING
