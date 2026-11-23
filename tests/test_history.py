@@ -303,7 +303,8 @@ def test_a_click_on_the_readout_opens_the_conversation():
     assert "onOpenConversation: conversation.running = true" in block
     summon = PANEL[PANEL.index("id: conversation"):]
     summon = summon[:summon.index("}")]
-    assert '\\"mode\\":\\"history\\"' in summon
+    # The Chats page since phase M18 (a "history" mode of the overlay before).
+    assert '\\"page\\":\\"chats\\"' in summon
 
 
 def test_the_conversation_page_reads_the_file_the_daemon_writes():
@@ -342,27 +343,37 @@ def _blocks(src: str, opener: str) -> list[str]:
 
 def test_what_was_said_is_selectable_and_never_rendered_as_markup():
     """One exchange is drawn by ui/ExchangeItem.qml, for this session's view
-    and a saved chat alike, so that is where both halves are checked."""
-    page = SETTINGS[SETTINGS.index("id: historyPage"):]
-    assert "delegate: ExchangeItem {" in page
+    and a saved chat alike (both in Chats.qml, the Chats page since M18), as
+    two ui/ChatBubbles: that is where both halves are checked."""
+    assert "id: historyPage" not in SETTINGS, "one conversation view, not two"
     assert _code(ROOT / "Chats.qml").count("delegate: ExchangeItem {") == 2
-    edits = _blocks(_code(ROOT / "ui/ExchangeItem.qml"), "TextEdit {")
-    assert len(edits) >= 2
+    item = _code(ROOT / "ui/ExchangeItem.qml")
+    bubbles = _blocks(item, "ChatBubble {")
+    assert len(bubbles) == 2
+    assert any("text: turn.heard" in b for b in bubbles)
+    assert any("text: turn.answer" in b for b in bubbles)
+    edits = _blocks(_code(ROOT / "ui/ChatBubble.qml"), "TextEdit {")
+    assert len(edits) == 1
     for block in edits:
-        assert "readOnly: true" in block
+        assert "readOnly: true" in block and "selectByMouse: true" in block
         formats = re.findall(r"textFormat:\s*(\S+)", block)
         assert formats == ["TextEdit.PlainText"], \
             f"neither half of the conversation was written by us: {formats}"
+    # Everything else ExchangeItem shows of it -- the thinking, an aside's
+    # line, who failed -- is plain too.
+    for block in _blocks(item, "Text {"):
+        if re.search(r"text:[^\n]*turn\.(thinking|aside|who)", block):
+            assert "textFormat: Text.PlainText" in block, block[:160]
 
 
 def test_clearing_takes_two_presses():
     """A DangerButton since M1: the first press arms it, and clearing runs
     only from onConfirmed (tests/test_confirms.py holds that for every
     caller of clearSession)."""
-    page = SETTINGS[SETTINGS.index("id: clearButton"):]
-    page = page[:page.index("\n            }\n")]
-    assert "DangerButton {" in SETTINGS[:SETTINGS.index("id: clearButton")].rsplit("\n", 2)[-2]
-    assert "onConfirmed: root.clearSession()" in page
+    # On the Chats page's "This session" since phase M18.
+    chats = _code(ROOT / "Chats.qml")
+    [button] = [b for b in _blocks(chats, "DangerButton {") if 'text: "Clear"' in b]
+    assert "onConfirmed: view.s.clearSession()" in button
     assert '["agentvoice", "history", "clear"]' in SETTINGS
 
 

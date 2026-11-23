@@ -57,7 +57,7 @@ SETTING_NOTE = 90
 PAGE_LABELS = {
     "OverviewPage": "Overview", "AgentsPage": "Agents",
     "AgentDetailsPage": "Agent details", "CommunalPage": "Communal",
-    "CrewMapPage": "Crew map", "ListeningPage": "Listening",
+    "CrewMapPage": "Crew map", "ChatsPage": "Chats", "ListeningPage": "Listening",
     "ConversationPage": "Conversation", "VoicePage": "Voice",
     "DisplayPage": "Display", "AboutPage": "About",
 }

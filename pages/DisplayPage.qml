@@ -16,7 +16,7 @@ Column {
   PageHeader {
     width: parent.width
     title: "Display & privacy"
-    subtitle: "The readout on screen, what is kept and where, and the keys."
+    subtitle: "The readout on screen, privacy, and the keys. Saving chats is on the Chats page."
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
   }
@@ -212,57 +212,21 @@ Column {
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
 
-    ToggleRow {
-      width: parent.width
-      label: "Keep this session's conversation"
-      hint: "For the conversation view. In memory only, readable by you alone, gone at logout."
-      help: "Off deletes what is already kept."
-      checked: page.s.setting("keepHistory", true) === true
-      changed: page.s.changed("keepHistory")
-      foreground: page.s.foreground
-      fontFamily: page.s.fontFamily
-      onToggled: page.s.put("keepHistory", !checked)
-      onReset: page.s.resetKey("keepHistory")
-    }
-
-    ToggleRow {
-      width: parent.width
-      label: "Save conversations"
-      hint: "Keep chats on disk so they can be browsed and continued later. Readable by you alone."
-      help: "Saved in ~/.local/share/agentvoice/chats, one file per chat, owner-only. " +
-            "Off by default, because nothing said is written to disk unless you choose it. " +
-            "Switching it off stops saving; chats already saved stay until you delete them " +
-            "in the conversation view.\n\nWith it on, say “new chat” to start afresh, or " +
-            "“continue the chat about …” to pick one up again."
-      checked: page.s.setting("saveChats", false) === true
-      changed: page.s.changed("saveChats")
-      foreground: page.s.foreground
-      fontFamily: page.s.fontFamily
-      onToggled: page.s.put("saveChats", !checked)
-      onReset: page.s.resetKey("saveChats")
-    }
-
+    // Saving chats, how long they are kept, and this session's conversation
+    // moved to the Chats page in phase M18 (same settings, same values).
     SettingRow {
       width: parent.width
-      stacked: true
-      visible: page.s.setting("saveChats", false) === true
-      label: "Keep saved chats"
-      hint: "Counted from when each was last used. Pinned chats are always kept."
-      changed: page.s.changed("chatRetention")
+      label: "Saved chats"
+      hint: "Whether conversations are saved, for how long, and this session's: on the Chats page."
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      onReset: page.s.resetKey("chatRetention")
-      SegmentedChoice {
-        options: [
-          { value: "forever", label: "Forever" },
-          { value: "90d", label: "90 days" },
-          { value: "30d", label: "30 days" },
-          { value: "last100", label: "Last 100" }
-        ]
-        value: String(page.s.setting("chatRetention", "forever"))
+      Button {
+        text: "Go to Chats →"
+        bordered: true
+        focusable: true
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
-        onCommitted: function(v) { page.s.put("chatRetention", v) }
+        onClicked: page.s.goTo("chats", "")
       }
     }
 

@@ -4600,7 +4600,10 @@ class Daemon:
             self.report_latency(clock, last)
         self.remember(text, reply, last, kind=kind,
                       stopped=self._interrupt.is_set(), new=new_conversation,
-                      thinking="".join(thinking_parts).strip()[:THINKING_MAX])
+                      thinking="".join(thinking_parts).strip()[:THINKING_MAX],
+                      # Phase M18: when it was sent, so a save into chats
+                      # deleted while it ran is refused (chats.record).
+                      began=clock.get("sent"))
         if not getattr(self.agent, "resume", True) and self.session_id:
             # Phase M17: resume off. Nothing of this turn carries to the next
             # (the warm process holding it is let go by the next prepare(),
@@ -4614,7 +4617,8 @@ class Daemon:
                 pass
 
     def remember(self, heard: str, reply: str, last: dict, *, kind: str,
-                 stopped: bool, new: bool, thinking: str = "") -> None:
+                 stopped: bool, new: bool, thinking: str = "",
+                 began: float | None = None) -> None:
         """Add the exchange to the session's conversation -- runtime.History.
 
         What was said aloud, not everything the agent wrote: a reply stopped
@@ -4630,7 +4634,7 @@ class Daemon:
         # and brief that were put ahead of it.
         heard = p.task_heard or heard
         self.save_chat(heard, reply, kind=kind, stopped=stopped, new=new,
-                       thinking=thinking)
+                       thinking=thinking, began=began)
         if not self.cfg.get_bool("keepHistory"):
             return
         who = getattr(self.agent, "name", "") or ""
@@ -4654,7 +4658,7 @@ class Daemon:
     # --- saved chats -----------------------------------------------------------
 
     def save_chat(self, heard: str, reply: str, *, kind: str, stopped: bool,
-                  new: bool, thinking: str = "") -> None:
+                  new: bool, thinking: str = "", began: float | None = None) -> None:
         """Add the exchange to the agent's saved chat, when chats are saved.
 
         A turn that started a new session starts a new chat, unless Continue
@@ -4679,8 +4683,14 @@ class Daemon:
                           **({"thinking": thinking} if thinking else {}),
                           # collab: the first turn of a passed conversation.
                           **({"kind": "brief", "for": p.task.frm}
-                             if p.task is not None else {})})
+                             if p.task is not None else {})},
+                began=began)
             p.chat_continued = False
+            if p.chat_id is None:
+                # Phase M18: deleted while this turn ran. Not saved, and its
+                # asides go with it; the next turn starts a new chat.
+                print(f"  {DIM}chat not saved: deleted while the turn ran{OFF}", flush=True)
+                return
             # collab: a task this turn asked for before its chat existed.
             self.collab.chat_saved(p, p.chat_id)
             # collab: the questions it asked other agents this turn, each a

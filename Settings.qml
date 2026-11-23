@@ -26,17 +26,20 @@ import "pages"
 //   Agent details one agent's folder: role, personality, instructions,
 //                 what it is told, its chats
 //   Communal      the rules and defaults every agent is told
+//   Crew map      who may reach whom, and quarantine
+//   Chats         saved conversations and this session's, and what is kept
 //   Listening     wake word, engine, microphone gate, verifier
 //   Conversation  follow-ups, timings, talking over it
 //   Voice         speech out, transcription
-//   Display       the readout, the conversation log, privacy, keys
+//   Display       the readout, privacy, keys
 //   About         version, engine status, repair and removal
 //
 // This file holds what every page shares: the settings store, the daemon's
 // state, what is on disk, and the functions that launch things. A page gets
-// it all as `s`. It is also, as before, the conversation view and the
-// permission prompt, because the plugin has one overlay entry point and the
-// summon payload picks.
+// it all as `s`. It is also the permission prompt, because the plugin has
+// one overlay entry point and the summon payload picks. The conversation
+// view was a second mode here, behind a "Conversation" button on the top
+// row, until phase M18 made it the Chats page.
 //
 // Every value persists through `omarchy bar set duaneoca.agentvoice <key>`
 // (ui/SettingsStore), which writes the widget's entry in shell.json -- the
@@ -49,7 +52,8 @@ Item {
   property var manifest: null
   property bool opened: false
 
-  // "settings", "history" or "permission". The summon payload picks.
+  // "settings" or "permission". The summon payload picks; an old payload's
+  // "history" opens the Chats page (phase M18).
   property string mode: "settings"
   // Which settings page, and which agent's card to open on the Agents page.
   property string page: "overview"
@@ -98,6 +102,7 @@ Item {
     { id: "agentdetails", label: "Agent details", icon: "\u{f0219}", badge: changedOutside("agents") > 0 ? "!" : "" },
     { id: "communal",     label: "Communal",     icon: "\u{f0849}", badge: changedOutside("communal") > 0 ? "!" : "" },
     { id: "crew",         label: "Crew map",     icon: "\u{f0b58}", badge: crewUnreadable || crewOutsideAt !== "" ? "!" : "" },
+    { id: "chats",        label: "Chats",        icon: "\u{f0822}" },
     { id: "listening",    label: "Listening",    icon: "\u{f036c}" },
     { id: "conversation", label: "Conversation", icon: "\u{f0b79}" },
     { id: "voice",        label: "Voice",        icon: "\u{f057e}" },
@@ -350,8 +355,10 @@ Item {
   // main agent), `chatId` a saved chat or "" for this session.
   // For bench/preview targets, which drive its controls.
   readonly property alias sendSheetView: sendSheet
+  // Over whichever settings page it was asked from (phase M18: the Chats
+  // page, and the browser on Agent details and Communal).
   function openSendSheet(fromId, chatId) {
-    if (root.mode !== "history") root.showPage("history")
+    if (root.mode !== "settings") return
     sendSheet.open(fromId, chatId)
   }
 
@@ -692,6 +699,23 @@ Item {
   }
   readonly property string mainLabel: cleanLabel(setting("mainName", "")) || capitalised(activePhrase)
 
+  // Each agent's own colour (phase M18: chat bubbles), made from the theme's
+  // accent so it follows the theme: the main agent has the accent itself,
+  // every other agent the accent turned round the colour wheel by a step its
+  // id picks -- by the id, not its place in the list, so an agent keeps its
+  // colour when another is added or removed. A grey accent is given enough
+  // colour to tell agents apart.
+  function agentTint(id) {
+    id = String(id || "main")
+    if (id === "main") return accent
+    var h = 0
+    for (var i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) % 9973
+    var hue = accent.hslHue < 0 ? 0 : accent.hslHue
+    return Qt.hsla((hue + (1 + h % 5) / 6) % 1,
+                   Math.max(accent.hslSaturation, 0.45),
+                   Math.min(0.7, Math.max(0.4, accent.hslLightness)), 1)
+  }
+
   // The model dropdown. Known aliases per agent, then whatever custom name is
   // already saved (so it stays selectable), then "Other…" for typing one.
   // "Other…" is a local UI state, never persisted: picking it only reveals
@@ -898,10 +922,12 @@ Item {
     try {
       p = JSON.parse(payloadJson || "{}") || {}
       if (p.mode === "permission") mode = "permission"
-      if (p.mode === "history") mode = "history"
+      // The conversation view is the Chats page since phase M18; a summon
+      // from an older bar or HUD still says "history".
+      if (p.mode === "history") p.page = "chats"
       if (p.id) wanted = String(p.id)
-      // A saved chat to open in the conversation view (Chats.qml).
-      openChat = /^[0-9a-f]{16}$/.test(String(p.chat || "")) ? String(p.chat) : ""
+      // A saved chat to open on the Chats page (Chats.qml).
+      if (/^[0-9a-f]{16}$/.test(String(p.chat || ""))) { openChat = String(p.chat); p.page = "chats" }
     } catch (e) { p = {} }
 
     opened = true
@@ -939,7 +965,9 @@ Item {
     }
   }
 
-  // Which page a Ctrl+key goes to, by index in `pages`, or -1.
+  // Which page a Ctrl+key goes to, by index in `pages`, or -1. Eleven pages
+  // since phase M18: About, the eleventh, is reached by a click and by
+  // Ctrl+PgDn (and, from M28, by search).
   function pageForKey(key) {
     if (key >= Qt.Key_1 && key <= Qt.Key_9) return key - Qt.Key_1
     if (key === Qt.Key_0) return 9
@@ -971,24 +999,18 @@ Item {
     Qt.callLater(function() { if (pageScroll) pageScroll.contentY = 0 })
   }
 
-  // Between the settings and the conversation, from the header as well as
-  // from open(). Not to or from a permission prompt: that card is a question
-  // with a countdown, and wandering off it is not an answer.
+  // Into the settings, from open(). Not from a permission prompt: that card
+  // is a question with a countdown, and wandering off it is not an answer.
   function showPage(m) {
     mode = m
     store.reload()
     stateFile.reload()
-    if (m === "history") {
-      historyFile.reload()
-      historyList.following = true
-      Qt.callLater(historyList.positionViewAtEnd)
-    } else {
-      folders.refresh()
-      scanCustom.running = true
-      scanVoices.running = true
-      scanOww.running = true
-      scanSherpa.running = true
-    }
+    historyFile.reload()
+    folders.refresh()
+    scanCustom.running = true
+    scanVoices.running = true
+    scanOww.running = true
+    scanSherpa.running = true
   }
 
   // --- the conversation -------------------------------------------------------
@@ -997,16 +1019,26 @@ Item {
   // the way the state file is, rather than through the CLI.
 
   ListModel { id: historyModel }
-  // For the saved-chats browser (Chats.qml), which shows this session too.
+  // For the chats browser (Chats.qml), which shows this session first.
   property alias historyRows: historyModel
   function clearSession() { clearHistory.running = true }
   readonly property bool saveChats: setting("saveChats", false) === true
+  // The saved chat open on the Chats page, kept for the session so leaving
+  // the page and coming back finds it open; set to open one from elsewhere.
   property string openChat: ""
-  // Open saved chat `id` in the conversation view.
+  // The Chats page's "Saving and privacy" card, open or folded, once
+  // somebody has opened or folded it; until then the page decides (open
+  // while nothing is saved, so the switch that saves is in plain sight).
+  property var chatsSettingsOpen: undefined
+  readonly property bool chatsShown: opened && mode === "settings" && page === "chats"
+  // Open saved chat `id` on the Chats page; "" opens the page as it was.
   function showChat(id) {
-    openChat = ""
-    openChat = String(id || "")
-    showPage("history")
+    if (String(id || "") !== "") {
+      openChat = ""
+      openChat = String(id)
+    }
+    goTo("chats", "")
+    if (mode !== "settings" || !opened) showPage("settings")
   }
 
   // What has already been turned into rows. A new turn only ever appends to
@@ -1074,7 +1106,7 @@ Item {
   // read again on a timer as well. The same recovery the state file needs.
   Timer {
     interval: 1500
-    running: root.opened && root.mode === "history"
+    running: root.chatsShown
     repeat: true
     onTriggered: historyFile.reload()
   }
@@ -1749,16 +1781,14 @@ Item {
       // Found by name by bench/preview targets that draw it narrow.
       objectName: "settingsCard"
       anchors.centerIn: parent
-      // The settings get a sidebar and room beside it; the conversation is
-      // text to read; the prompt is one question.
-      width: Math.min(Style.space(root.mode === "history" ? (root.saveChats ? 980 : 680)
-                                  : root.mode === "permission" ? 560 : 880),
+      // The settings get a sidebar and room beside it, the Chats page a
+      // little more, for a list and a chat side by side (M18); the prompt is
+      // one question.
+      width: Math.min(Style.space(root.mode === "permission" ? 560 : root.page === "chats" ? 980 : 880),
                       parent.width - Style.gapsOut * 2)
       height: root.mode === "permission"
               ? Math.min(Style.space(300), parent.height - Style.gapsOut * 2)
-              : root.mode === "history"
-                ? Math.min(Style.space(760), parent.height - Style.gapsOut * 2)
-                : Math.min(Style.space(700), parent.height - Style.gapsOut * 2)
+              : Math.min(Style.space(700), parent.height - Style.gapsOut * 2)
       radius: Style.cornerRadius
       color: root.background
       borderSpec: root.borderSpec
@@ -1769,8 +1799,8 @@ Item {
       Keys.onEscapePressed: root.dismiss()
       // Ctrl+1..9 jump to the first nine pages in sidebar order, Ctrl+0 to
       // the tenth (phase M8, the Crew map made ten), and Ctrl+PgUp/PgDn
-      // step to the page above or below, so a page past the tenth is still
-      // reachable from the keyboard.
+      // step to the page above or below, so a page past the tenth -- About,
+      // since Chats made eleven (M18) -- is still reachable from the keyboard.
       Keys.onPressed: function(e) {
         if (root.mode !== "settings" || !(e.modifiers & Qt.ControlModifier)) return
         var n = root.pageForKey(e.key)
@@ -1795,8 +1825,7 @@ Item {
             id: titleText
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            text: root.mode === "permission" ? "Allow this?"
-                  : root.mode === "history" ? "Conversation" : "Agent Voice"
+            text: root.mode === "permission" ? "Allow this?" : "Agent Voice"
             color: root.mode === "permission" ? root.urgent : root.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.title
@@ -1809,18 +1838,9 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(12)
 
-            // The other page. Not on a permission prompt -- see showPage().
-            Button {
-              id: switcher
-              visible: root.mode !== "permission"
-              anchors.verticalCenter: parent.verticalCenter
-              text: root.mode === "history" ? "Settings" : "Conversation"
-              iconText: root.mode === "history" ? "\u{f0493}" : "\u{f0b79}"
-              fontFamily: root.fontFamily
-              foreground: root.foreground
-              bordered: true
-              onClicked: root.showPage(root.mode === "history" ? "settings" : "history")
-            }
+            // No "Conversation" button here since phase M18: the chats
+            // are a page in the sidebar, and the button's name collided
+            // with the Conversation settings page's.
             Text {
               id: hint
               anchors.verticalCenter: parent.verticalCenter
@@ -2103,6 +2123,7 @@ Item {
                              : root.page === "agentdetails" ? agentDetailsPage
                              : root.page === "communal" ? communalPage
                              : root.page === "crew" ? crewPage
+                             : root.page === "chats" ? chatsPage
                              : root.page === "listening" ? listeningPage
                              : root.page === "conversation" ? conversationPage
                              : root.page === "voice" ? voicePage
@@ -2117,6 +2138,7 @@ Item {
           Component { id: agentDetailsPage; AgentDetailsPage { s: root } }
           Component { id: communalPage;     CommunalPage { s: root } }
           Component { id: crewPage;         CrewMapPage { s: root } }
+          Component { id: chatsPage;        ChatsPage { s: root } }
           Component { id: listeningPage;    ListeningPage { s: root } }
           Component { id: conversationPage; ConversationPage { s: root } }
           Component { id: voicePage;        VoicePage { s: root } }
@@ -2124,143 +2146,10 @@ Item {
           Component { id: aboutPage;        AboutPage { s: root } }
         }
 
-        // --- the conversation -----------------------------------------
-        // With saved chats: a list of them beside whichever is open, and
-        // this session's conversation as the first entry.
-        Chats {
-          visible: root.mode === "history" && root.saveChats
-          width: parent.width
-          height: body.height - y - Style.spacing.md
-          s: root
-        }
-
-        Item {
-          id: historyPage
-          visible: root.mode === "history" && !root.saveChats
-          width: parent.width
-          height: visible ? body.height - y - Style.spacing.md : 0
-
-          ListView {
-            id: historyList
-            anchors.top: parent.top
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: historyFooter.top
-            anchors.bottomMargin: Style.spacing.md
-            clip: true
-            spacing: Style.spacing.xxxl
-            model: historyModel
-            boundsBehavior: Flickable.StopAtBounds
-            flickableDirection: Flickable.VerticalFlick
-            QQC.ScrollBar.vertical: QQC.ScrollBar {
-              policy: QQC.ScrollBar.AsNeeded
-            }
-
-            // At the end while you are at the end, so a turn taken with the
-            // page open appears without scrolling; left alone once you have
-            // scrolled back to read.
-            property bool following: true
-            onMovementEnded: following = atYEnd
-            onCountChanged: if (following) Qt.callLater(historyList.positionViewAtEnd)
-
-            delegate: ExchangeItem {
-              required property int index
-              required property real at
-              required property string agent
-              required property string transcript
-              required property string reply
-              required property string thought
-              required property string failed
-              required property bool stopped
-              required property bool fresh
-              required property int latency
-
-              width: ListView.view ? ListView.view.width - Style.space(10) : 0
-              when: root.timeOf(at)
-              who: agent
-              latencyMs: latency
-              heard: transcript
-              answer: reply
-              thinking: thought
-              failure: failed
-              wasStopped: stopped
-              startsNew: fresh && index > 0
-              foreground: root.foreground
-              background: root.background
-              urgent: root.urgent
-              fontFamily: root.fontFamily
-            }
-          }
-
-          Text {
-            anchors.centerIn: historyList
-            width: Math.min(parent.width, Style.space(380))
-            visible: historyModel.count === 0
-            horizontalAlignment: Text.AlignHCenter
-            wrapMode: Text.WordWrap
-            text: root.keepHistory
-                  ? "Nothing yet this session.\n\nEach exchange appears here " +
-                    "as it ends, and is kept in memory until you log out."
-                  : "Keeping the conversation is off.\n\nTurn it on in " +
-                    "Settings, under Display."
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-          }
-
-          Item {
-            id: historyFooter
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: clearButton.implicitHeight
-
-            Text {
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-              width: parent.width - clearButton.width - passButton.width - Style.space(24)
-              elide: Text.ElideRight
-              text: historyModel.count + (historyModel.count === 1 ? " exchange" : " exchanges")
-                    + " · in memory only, gone at logout · drag across text to copy it"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-            // Pass this session's conversation with its last agent on
-            // (Phase 15). Nothing is on disk with saving off: the target is
-            // given what this session holds in memory.
-            Button {
-              id: passButton
-              anchors.right: clearButton.left
-              anchors.rightMargin: Style.space(8)
-              visible: historyModel.count > 0
-              text: "Send to another agent"
-              enabled: root.serviceActive
-              tooltipText: root.serviceActive ? "Pass this conversation on, with a brief you can edit"
-                                              : "The service is not running"
-              fontFamily: root.fontFamily
-              bordered: true
-              onClicked: root.openSendSheet(historyModel.count > 0
-                                            ? historyModel.get(historyModel.count - 1).agentId : "main", "")
-            }
-            DangerButton {
-              id: clearButton
-              anchors.right: parent.right
-              visible: historyModel.count > 0
-              text: "Clear"
-              question: "Clear this session's conversation?"
-              confirmText: "Clear"
-              foreground: root.foreground
-              urgent: root.urgent
-              fontFamily: root.fontFamily
-              onConfirmed: root.clearSession()
-            }
-          }
-        }
       }
 
-      // "Send to another agent" over the conversation (Phase 15). Inside the
-      // card, so Escape and a click outside behave as for the rest of it.
+      // "Send to another agent" over a chat (Phase 15). Inside the card, so
+      // Escape and a click outside behave as for the rest of it.
       SendSheet {
         id: sendSheet
         anchors.fill: parent
@@ -2269,11 +2158,13 @@ Item {
         z: 10
         s: root
       }
-      // Only over the conversation: leaving it, or closing the overlay,
-      // drops an unsent sheet rather than leaving it over a settings page.
+      // Only over the page it was opened from: changing page, or closing
+      // the overlay, drops an unsent sheet rather than leaving it over
+      // another page.
       Connections {
         target: root
-        function onModeChanged() { if (root.mode !== "history") sendSheet.close() }
+        function onModeChanged() { sendSheet.close() }
+        function onPageChanged() { sendSheet.close() }
         function onOpenedChanged() { if (!root.opened) sendSheet.close() }
       }
     }

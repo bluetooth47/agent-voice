@@ -70,7 +70,7 @@ Runtime files (`$RUNDIR` = `$XDG_RUNTIME_DIR/agentvoice/`):
 |---|---|
 | `state` | JSON for the bar: top-level `state` first (the CLI's `vstate` anchors on it), plus `who`, `collab` (one-line collaboration status) and `tasks` (public task board, never a brief). |
 | `pid`, `command`, `typed/` | Daemon pid; atomic command file; typed input. |
-| `history.jsonl` | The conversation view (tmpfs). |
+| `history.jsonl` | This session's conversation, "This session" on the Chats page (tmpfs). |
 | `cards/cards.sock` | Unix socket (0600 in 0700): approval cards (M7). Askers post and wait on it; the overlay's `pending`/`permit` show and answer. The daemon holds every card. |
 | `permissions/` | Before M7, the hook's `<id>.request` / `.response` files. Nothing reads them now; writes there are still asked about (orders guard). |
 | `grants/` | "Allow all in this chat" grants, keyed by session hash; cleared at start. |
@@ -99,13 +99,17 @@ Panel.qml            bar icon + its popup: STOP, level meter, agent chips, 5 qui
 Hud.qml              layer-shell readout beside the bar during a turn (hidden at once on lock);
                      locked (ui/ReadoutLines, one size) or dynamic (sized to fit), top or bottom;
                      shows the collaboration line ("Theo → Sora: passing")
-Settings.qml         the overlay: shared state `s`, SettingsStore, launch functions, conversation view,
-                     permission prompt, send sheet, sidebar frame, Ctrl+1..9 page jumps (1850 lines)
+Settings.qml         the overlay: shared state `s`, SettingsStore, launch functions, permission prompt,
+                     send sheet, sidebar frame, Ctrl+1..9/0/PgUp/PgDn page jumps, agentTint (an agent's
+                     colour from the theme accent); summon {"mode":"history"} opens the Chats page
 AgentFolders.qml     add/remove/restore agent folders for every page (via `agentvoice agents`), so an
                      operation and its Undo outlive the page that started it
-Chats.qml            saved-chats browser: filter by agent / multi-agent, continue, share, send to agent
+Chats.qml            the chats browser (M18: one component, three places): list (search box ->
+                     `chats search` on stdin, agent chips, title / agents / date / turns / last line),
+                     a chat as bubbles (ExchangeItem/ChatBubble), continue, new, share, send, rename
+                     (stdin), pin, export, delete; scope all (Chats page) / agent / multi
 KnobRow.qml, SettingsGroup.qml   shared slider row / group box
-pages/               one file per sidebar page (9), each handed the overlay as `s`
+pages/               one file per sidebar page (11), each handed the overlay as `s`
 ui/                  building blocks with no setting names (see 5.2)
 bin/                 agentvoice (control CLI), agentvoice-check, agentvoice-train-verifier
 install.sh           installer/uninstaller (uv, venv, models pinned by models.lock, systemd unit)
@@ -262,7 +266,7 @@ This file is the entry point (`main()`), and its structure is:
 | `readout.py` | M3, bug B: the readout's kept reply (`last_reply`), when both lines clear and stay cleared (`gone`: lock, agent or chat switch, `KEEP_S` 600 s idle), and the 4 s preview. Pure, on an injectable clock; `Daemon._compose` calls it for every unlocked payload. |
 | `sessions.py` | M2, bug I: the pure rule for whether a conversation survives an adapter rebuild (`carry`, `spec_changes`, `why`). |
 | `crew.py` | Multiple agents: `Persona` (own adapter/session/voice, plus `task`, `saved_conversation`, `turn_id`, `answering` for collaboration), `route()` picks who was addressed by wake name. With extra agents, each turn runs on its own thread. |
-| `chats.py` | Saved conversations (opt-in `saveChats`), 0600, `index.json`. Shared chats (Phase 15): `owner`, `participants`, `shared_with`, per-speaker `sessions`; `may_replay`, `may_continue`. CLI includes `may-continue`. |
+| `chats.py` | Saved conversations (opt-in `saveChats`), 0600, `index.json`. Shared chats (Phase 15): `owner`, `participants`, `shared_with`, per-speaker `sessions`; `may_replay`, `may_continue`. CLI includes `may-continue`. M18: `delete_all` (only `<id>.json` files and their temporaries directly in the folder; a link removed as a link, never followed or counted; the index rewritten with `purged`), `delete` remembers the id an hour in `deleted`, and `record(began=)` refuses a turn that began before either (the daemon passes the time the turn was sent), so a save in flight never restores deleted history; `stats` (lstat, creates nothing); `search` (the `find` scorer, `score()`, with the last word also a prefix; every chat or one agent's). `rename ID` with no title and `search` read stdin. |
 | `eager.py` | Transcribes at pauses while the person is still talking. |
 | `barge.py`, `headset.py` | Barge-in: VAD plus an echo-calibrated gate; only works on a headset. |
 | `crosscheck.py` | Vosk + Whisper must both hear the wake name. |
@@ -439,8 +443,9 @@ Notes and collaboration exist only for Claude Code and Codex
 | `CrewMapPage.qml` | M8–M9: who may do what to whom, drawn (Map) or as a table (Table). **Map** (M9): agent boxes that drag (positions in `$XDG_STATE_HOME/agentvoice/crew-layout.json`, fractions of the map, never read by the daemon; none saved: a ring), a `ui/CrewEdge` line per link with an arrow at the agent it reaches (a two-way pair bows apart), a label chip on each line ("A D M P", "?" for ask first; on a crowded map only the selected agent's), drag from an agent's dot onto another to link (allows ask), a red zone to quarantine by dragging into (a `DangerButton` armed by the drop; Cancel puts the box back) and out of to release, and an inspector: a line's abilities, Ask me first, Also allow the reverse, Delete line; an agent's reach, Link to, Quarantine/Release. Keyboard: Tab to boxes and labels, Enter opens, arrows move a box, Delete on a label arms Delete line. **Table** (M8): the "no links yet" banner with **Link everyone as before** (a `DangerButton`), From / To / Allows (`ToggleChips`, disabled with the reason into or out of quarantine) / Ask me first (advisory for Trusted agents) / Delete, Add link, per agent Quarantine (confirm: what it loses) or Release, can reach / reached by, and the effective line. An unreadable list gets a banner and "Start again with no links". **Every edit goes through `commit()`**: trimmed for quarantine, queued, checked by `agentvoice crew check`, and written only by `applyChecked()` (quarantine first) through `writeQuarantine` / `writeLinks`; a refusal empties the queue and says "Not saved: …". "Changed outside Settings at HH:MM" comes from the overlay (`crewOutsideAt`). Its reading of the lists mirrors `crew_links.py`, checked in node. |
 | `ListeningPage.qml` | Wake engine, thresholds, gate, Advanced wake tab. |
 | `VoicePage.qml` | Voice, speed, voice library. |
+| `ChatsPage.qml` | M18: the Chats page. A foldable "Saving and privacy" card (folded once chats are saved, until opened): `saveChats`, `chatRetention`, `keepHistory` (moved from Display, same names), where the chats are and their size (`chats stats --json`, read on open, when the saved count moves and after a delete), and **Delete all saved chats** (a `DangerButton` stating the count and scope; `deleteAllChats()` starts `chats delete --all` from its `onConfirmed` only). Under it `Chats { followSummon: true }`. |
 | `ConversationPage.qml` | Turn timing, follow-up, open mic, narration, barge-in. |
-| `DisplayPage.qml` | HUD, history, saved chats, Agents panel, logging. |
+| `DisplayPage.qml` | HUD, Agents panel, the "Saved chats → Go to Chats" pointer, logging. |
 | `AboutPage.qml` | Version and links. |
 
 ### 5.2 Building blocks (`ui/`)
@@ -450,7 +455,7 @@ Notes and collaboration exist only for Claude Code and Codex
 | `AdvancedSection.qml` | Collapsed "Advanced (N)" fold for fine-tuning. |
 | `AgentTabs.qml` | One tab per agent with a state dot; one row that scrolls at nine. |
 | `Card.qml`, `CardGrid.qml` | Titled box (optionally foldable); two across from 520 px of page, one when narrower. |
-| `ChatBubble.qml` | One turn as a left or right bubble; plain, selectable text. |
+| `ChatBubble.qml` | One turn as a left or right bubble; plain, selectable text; `stripe` (M18) the speaking agent's colour down its left edge; width from `FontMetrics` (a hidden measuring Text froze the overlay on a 200-exchange session). |
 | `CompactSelector.qml` | "Label: value ▾" mini selector; a disabled one says why. |
 | `CrewEdge.qml` | M9: one Crew map line (QtQuick.Shapes): border to border between two boxes, a quadratic bend for a two-way pair, an arrowhead, dashed when it carries nothing; exposes the chip point (`midX`, `midY` at `chipT`). |
 | `DangerButton.qml` | ⚠ button whose first click arms an inline "Really …? Cancel / Do it" strip; 6 s or Escape disarms; Cancel has focus; the action runs only in `onConfirmed`. |
@@ -464,7 +469,7 @@ Notes and collaboration exist only for Claude Code and Codex
 | `SearchField.qml` | Search box (debounced, Escape clears) with filter chips. |
 | `ToggleChips.qml` | Row of on/off (optionally inherit) chips; a disabled chip says why. |
 | `EndpointEditor.qml` | Endpoint URL/model/key/test editor. |
-| `ExchangeItem.qml` | One exchange in the conversation view; agent-to-agent questions folded to one line. |
+| `ExchangeItem.qml` | One exchange as bubbles (M18): you on the right, the named agent on the left in its `tint`; thinking folded; failed / stopped under it; agent-to-agent questions folded to one line that opens to both agents' bubbles. |
 | `FileEditor.qml` | The one editor for each folder file; Keep/Revert for outside edits, base-stamp conflicts. Since M6: `sentChars` (agentfs.clean's count, checked against it in node), a `BudgetMeter`, `current` (the draft) and `fill(text)` (a starter or the chips' text, saved like typing). |
 | `BudgetMeter.qml` | M6: a thin bar and "used / limit", toned from 85% and past the budget. |
 | `StarterChips.qml` | M6: "Start from:" and one button per template; hands the text up. |
@@ -570,9 +575,10 @@ Current keys, grouped:
   schema list), `mainNotesWrite` (allow/deny, default allow),
   `mainCollaboration` (off/ask/announce/allow, default announce),
   `mainAcceptsWork` (default true).
-- **Display/privacy:** `hud`, `hudLingerMs`, `livePartials`, `keepHistory`,
-  `saveChats`, `chatRetention`, `agentsPanel`, `logSpeech` (off by
-  default).
+- **Display/privacy:** `hud`, `hudLingerMs`, `livePartials`, `agentsPanel`,
+  `logSpeech` (off by default).
+- **Chats (M18, moved from Display, same names):** `keepHistory`,
+  `saveChats`, `chatRetention`.
 - **Removed:** `agentInstructions` (now `agents/main/instructions.md`).
 
 Per-agent maps (`permissions`, `agentModels`, `agentEfforts`) are keyed **by
@@ -601,7 +607,7 @@ an unknown agent id gets deny / off.
 | `calibrate` | Check whether the room supports barge-in. |
 | `monitor` | Live wake-word scores. |
 | `voice fetch\|sample\|remove` | The Voice page's library. |
-| `chats list\|show\|rename\|pin\|unpin\|delete\|export\|continue ID [AGENT]\|share ID AGENT\|unshare ID AGENT\|new [AGENT]`, `history` | Saved chats; the conversation view. |
+| `chats list\|show\|rename\|pin\|unpin\|delete\|export\|continue ID [AGENT]\|share ID AGENT\|unshare ID AGENT\|new [AGENT]`, `history` | Saved chats; this session's conversation. M18: `delete --all` (prints the count), `stats [--json]`, `search [--agent ID] [--json]` (words on stdin), `rename ID` (title on stdin). |
 | `pass TO [--from ID] [--chat ID] < brief` | Pass the conversation to another agent (collab.py). |
 | `tasks [--json]`, `tasks cancel ID` | Collaboration tasks; cancel sends `task-cancel`. |
 | `agents list\|show\|create\|trash\|restore\|trash-list\|write\|history\|revert\|ack\|preview\|export\|skills\|catalog\|migrate …` | Agent folders (agentfs.py); text on stdin. |

@@ -38,8 +38,20 @@ exports, possibly at the same moment, so every read-modify-write holds an
 exclusive lock on `.lock`. Writes go to a temporary file that is renamed
 into place, so a reader never sees half a chat.
 
-    python chats.py list | show ID | rename ID TITLE... | pin ID | unpin ID
-                   | delete ID | export ID [FOLDER] | prune RETENTION
+    python chats.py list | show ID | rename ID [TITLE...] | pin ID | unpin ID
+                   | delete ID | delete --all | export ID [FOLDER]
+                   | prune RETENTION | stats [--json]
+                   | search [--agent ID] [--json]
+
+`rename ID` with no title, and `search`, read their text from stdin (phase
+M18): a title is often the first sentence somebody said, and a search is
+what they are looking for, and argv is readable by every local account.
+
+Deleting (phase M18): `delete --all` removes every chat file in this folder
+and nothing a link points at, and writes `purged` into the index; a single
+delete writes the chat's id into `deleted` for an hour. A turn that began
+before either and ends after it is not saved (`record(began=...)`), so a
+save already in flight never puts back what was just deleted.
 """
 from __future__ import annotations
 
@@ -69,6 +81,16 @@ TITLE_MAX = 60
 EXCHANGES_MAX = 2000
 #: How much of a chat is replayed to a backend that cannot resume it.
 REPLAY_MAX = 8000
+#: How long a deleted chat's id is remembered, so a turn that was already
+#: running into it is not saved into a new chat (phase M18). Longer than the
+#: longest a turn may run (the hung-turn limit is at most 600 s).
+DELETED_KEEP_S = 3600
+#: A search, read from stdin: longer than anyone types into a box.
+QUERY_MAX = 500
+#: The names a chat file, and the temporary file it is written through, have
+#: in the folder. Nothing else there is a chat, and nothing else is deleted.
+_CHAT_FILE = re.compile(r"[0-9a-f]{16}\.json")
+_TEMP_FILE = re.compile(r"\.(?:[0-9a-f]{16}|index)\.json\.\d+\.tmp")
 #: Words that say how to find a chat, not which one.
 _FILLER = frozenset({
     "the", "a", "an", "about", "on", "of", "our", "my", "that", "this", "chat",
@@ -186,6 +208,41 @@ def clean_title(text) -> str:
     return "".join(c for c in text if c.isprintable())[:120].strip()
 
 
+def _when(meta) -> float:
+    """A chat's `updated`, for sorting: a hand-edited index can hold anything
+    there, and one bad value must not stop every save (found in M18)."""
+    at = meta.get("updated") if isinstance(meta, dict) else None
+    return float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) else 0.0
+
+
+def wanted_words(query: str) -> list[str]:
+    """The words of a search that say which chat, filler left out."""
+    return [w for w in _words(query) if w not in _FILLER]
+
+
+def score(chat: dict, want: list[str], prefix_last: bool = False) -> float:
+    """How well `chat` matches the words `want`, from 0 to 1: a word in the
+    title counts twice what a word anywhere in the chat does. With
+    `prefix_last`, the last word also matches the start of a word, for a
+    search box being typed into ("wak" finds "wake")."""
+    if not want:
+        return 0.0
+    title = set(_words(chat.get("title", "")))
+    body = set()
+    for e in chat.get("exchanges") or []:
+        if isinstance(e, dict):
+            body.update(_words(e.get("transcript", "")))
+            body.update(_words(e.get("reply", "")))
+    got = 0
+    for i, w in enumerate(want):
+        if prefix_last and i == len(want) - 1:
+            got += (2 if any(t.startswith(w) for t in title)
+                    else 1 if any(b.startswith(w) for b in body) else 0)
+        else:
+            got += 2 if w in title else 1 if w in body else 0
+    return got / (2 * len(want))
+
+
 class ChatStore:
     def __init__(self, root: Path | None = None) -> None:
         self.root = Path(root) if root else CHATS_DIR
@@ -271,8 +328,27 @@ class ChatStore:
         return {"chats": chats, "current": {}}
 
     def _save_index(self, index: dict) -> None:
-        index["chats"].sort(key=lambda c: c.get("updated", 0), reverse=True)
+        index["chats"].sort(key=_when, reverse=True)
         self._write_json(self.root / INDEX, index)
+
+    def _deleted_at(self, chat_id: str | None) -> float:
+        """When every chat, or `chat_id`, was last deleted; 0 for never.
+        Read under the lock. A damaged value counts as never: it can only
+        keep a turn from being saved, never put a chat back."""
+        try:
+            data = json.loads((self.root / INDEX).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return 0.0
+        if not isinstance(data, dict):
+            return 0.0
+        at = data.get("purged")
+        at = float(at) if isinstance(at, (int, float)) else 0.0
+        gone = data.get("deleted")
+        if valid_id(chat_id) and isinstance(gone, dict):
+            one = gone.get(chat_id)
+            if isinstance(one, (int, float)):
+                at = max(at, float(one))
+        return at
 
     def _upsert(self, index: dict, chat: dict) -> None:
         index["chats"] = [c for c in index["chats"] if c.get("id") != chat["id"]]
@@ -282,7 +358,8 @@ class ChatStore:
 
     def record(self, *, chat_id: str | None, agent_id: str, agent_label: str,
                backend: str, session_id: str | None, project_dir: str,
-               exchange: dict, now: float | None = None) -> str:
+               exchange: dict, now: float | None = None,
+               began: float | None = None) -> str | None:
         """Add one exchange: to `chat_id`, or to a new chat when that is None
         or gone. Returns the chat's id, and makes it the agent's current one.
 
@@ -292,10 +369,17 @@ class ChatStore:
         top-level session stay the owner's (Phase 15: they used to be
         overwritten on every exchange, so a second agent recording into a
         chat would have taken it over). `exchange` may carry `kind` and
-        `for` (the agent a passed conversation came from)."""
+        `for` (the agent a passed conversation came from).
+
+        `began`: when the turn started. A turn that began before every chat
+        was deleted, or before `chat_id` was, is not saved and None comes
+        back (phase M18): its exchange belongs to what was deleted, and
+        saving it would start that history again."""
         now = time.time() if now is None else now
         speaker = external(agent_id)
         with self._locked():
+            if began is not None and began <= self._deleted_at(chat_id):
+                return None
             chat = self.load(chat_id) if valid_id(chat_id) else None
             if chat is None:
                 chat = {"id": secrets.token_hex(8), "started": now, "pinned": False,
@@ -469,7 +553,8 @@ class ChatStore:
         when = round(time.time() if now is None else now)
         return self._change(chat_id, lambda c: c.update(terminal=when))
 
-    def delete(self, chat_id: str) -> bool:
+    def delete(self, chat_id: str, now: float | None = None) -> bool:
+        now = time.time() if now is None else now
         with self._locked():
             path = self._path(chat_id)
             try:
@@ -479,8 +564,110 @@ class ChatStore:
             index = self._read_index()
             index["chats"] = [c for c in index["chats"] if c.get("id") != chat_id]
             index["current"] = {k: v for k, v in index["current"].items() if v != chat_id}
+            # Phase M18: a turn still running into it is not saved into a
+            # new chat (record's `began`). Kept an hour, then forgotten.
+            gone = index.get("deleted") if isinstance(index.get("deleted"), dict) else {}
+            gone = {k: v for k, v in gone.items()
+                    if valid_id(k) and isinstance(v, (int, float)) and v > now - DELETED_KEEP_S}
+            gone[chat_id] = round(now, 3)
+            index["deleted"] = gone
             self._save_index(index)
             return True
+
+    def delete_all(self, now: float | None = None) -> int:
+        """Delete every saved chat (phase M18, "Delete all saved chats").
+        Returns how many chat files went.
+
+        Only what this store writes, directly in its folder: `<id>.json`
+        files and the temporary files they are written through. A link
+        there is removed as a link, never followed, so nothing outside the
+        folder is touched and it is not counted; a folder or any other name
+        is left alone. The index is rewritten empty with `purged`, under the
+        lock the daemon takes, so a save in flight either lands before this
+        (and goes with the rest) or is refused after it (record's `began`).
+        The folder itself stays, and a missing one is not created."""
+        now = time.time() if now is None else now
+        if not self.root.is_dir() or self.root.is_symlink():
+            return 0
+        with self._locked():
+            gone = 0
+            with os.scandir(self.root) as entries:
+                for entry in entries:
+                    name = entry.name
+                    if not (_CHAT_FILE.fullmatch(name) or _TEMP_FILE.fullmatch(name)):
+                        continue
+                    if name == INDEX:
+                        continue
+                    try:
+                        if entry.is_symlink():
+                            os.unlink(entry.path)        # the link, not its target
+                        elif entry.is_file(follow_symlinks=False):
+                            os.unlink(entry.path)
+                            gone += 1 if _CHAT_FILE.fullmatch(name) else 0
+                    except FileNotFoundError:
+                        pass
+            self._write_json(self.root / INDEX, {"chats": [], "current": {},
+                                                 "purged": round(now, 3)})
+            return gone
+
+    def stats(self) -> dict:
+        """Where the chats are and what they take up, for the Chats page.
+        Read without the lock and without creating anything. Only regular
+        files count, by lstat: a link is not followed and not counted, so a
+        link to something large does not make the chats look large."""
+        out = {"dir": str(self.root), "exists": False, "chats": 0, "pinned": 0,
+               "bytes": 0}
+        if not self.root.is_dir() or self.root.is_symlink():
+            return out
+        out["exists"] = True
+        try:
+            with os.scandir(self.root) as entries:
+                for entry in entries:
+                    try:
+                        st = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                    out["bytes"] += st.st_size
+                    if _CHAT_FILE.fullmatch(entry.name):
+                        out["chats"] += 1
+        except OSError:
+            return out
+        try:
+            index = json.loads((self.root / INDEX).read_text(encoding="utf-8"))
+            out["pinned"] = sum(1 for c in index.get("chats", [])
+                                if isinstance(c, dict) and c.get("pinned") is True)
+        except (OSError, ValueError, AttributeError):
+            pass
+        return out
+
+    def search(self, query: str, agent: str | None = None, limit: int = 200) -> list[dict]:
+        """Every saved chat that matches `query`, best first, for the search
+        box on the Chats page (phase M18): the scorer `find` uses, with the
+        last word also matching the start of a word. `agent` (external id)
+        keeps the chats it owns, has spoken in or has been shared; None keeps
+        all of them -- the person sees every chat. [{"id", "score"}]."""
+        want = wanted_words(str(query or "")[:QUERY_MAX])
+        # Nothing saved: nothing to find, and no folder made by looking.
+        if not want or not self.root.is_dir():
+            return []
+        scored = []
+        for meta in self.list():
+            if not valid_id(meta.get("id")):
+                continue
+            if agent is not None:
+                people = set(meta.get("participants") or []) | set(meta.get("agents") or [])
+                if agent != meta.get("owner") and agent not in people:
+                    continue
+            chat = self.load(meta["id"])
+            if chat is None:
+                continue
+            got = score(chat, want, prefix_last=True)
+            if got:
+                scored.append((got, _when(meta), meta["id"]))
+        scored.sort(reverse=True)
+        return [{"id": cid, "score": round(got, 3)} for got, _, cid in scored[:limit]]
 
     def prune(self, retention: str, now: float | None = None) -> int:
         """Delete what the retention setting no longer keeps. Pinned chats
@@ -491,11 +678,11 @@ class ChatStore:
         with self._locked():
             index = self._read_index()
             keep_ids = set(index["current"].values())
-            ordered = sorted(index["chats"], key=lambda c: c.get("updated", 0), reverse=True)
+            ordered = sorted(index["chats"], key=_when, reverse=True)
             doomed = []
             if retention.endswith("d"):
                 cutoff = now - int(retention[:-1]) * 86400
-                doomed = [c for c in ordered if c.get("updated", 0) < cutoff]
+                doomed = [c for c in ordered if _when(c) < cutoff]
             elif retention.startswith("last"):
                 doomed = ordered[int(retention[4:]):]
             gone = 0
@@ -518,7 +705,7 @@ class ChatStore:
         Words in the title count twice what words anywhere in the chat do,
         and filler ("the chat about our...") counts for nothing. An empty
         query is the most recent chat."""
-        want = [w for w in _words(query) if w not in _FILLER]
+        want = wanted_words(query)
         me = external(agent_id)
         # Its own, and those shared with it or passed to it (Phase 15).
         chats = [c for c in self.list()
@@ -532,16 +719,11 @@ class ChatStore:
             chat = self.load(meta["id"])
             if chat is None:
                 continue
-            title = set(_words(chat.get("title", "")))
-            body = set()
-            for e in chat.get("exchanges") or []:
-                body.update(_words(e.get("transcript", "")))
-                body.update(_words(e.get("reply", "")))
-            score = sum(2 if w in title else 1 if w in body else 0 for w in want)
-            if score:
-                scored.append((score / (2 * len(want)), meta))
-        scored.sort(key=lambda s: (s[0], s[1].get("updated", 0)), reverse=True)
-        return [dict(meta, score=round(score, 3)) for score, meta in scored]
+            got = score(chat, want)
+            if got:
+                scored.append((got, meta))
+        scored.sort(key=lambda s: (s[0], _when(s[1])), reverse=True)
+        return [dict(meta, score=round(got, 3)) for got, meta in scored]
 
     def export_markdown(self, chat_id: str) -> str | None:
         chat = self.load(chat_id)
@@ -662,7 +844,7 @@ def main(argv: list[str]) -> int:
         from speech_text import safe_for_terminal
         for c in store.list():
             pin = "*" if c.get("pinned") else " "
-            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(c.get("updated", 0)))
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(_when(c)))
             line = f"{c.get('agent_label', '')}: {c.get('title', '')}"
             print(f"{c['id']} {pin} {when}  {safe_for_terminal(line)}")
         return 0
@@ -677,10 +859,52 @@ def main(argv: list[str]) -> int:
             return 0
         if verb == "rename" and len(rest) >= 2:
             ok = store.rename(rest[0], " ".join(rest[1:]))
+        elif verb == "rename" and len(rest) == 1:
+            # Phase M18: the title on stdin, one line, so what was typed
+            # (often the first sentence somebody said) is not in argv.
+            ok = store.rename(rest[0], sys.stdin.readline())
         elif verb in ("pin", "unpin") and rest:
             ok = store.pin(rest[0], verb == "pin")
-        elif verb == "delete" and rest:
+        elif verb == "delete" and rest == ["--all"]:
+            # Phase M18, from the Chats page's confirm: how many went.
+            print(store.delete_all())
+            return 0
+        elif verb == "delete" and len(rest) == 1:
             ok = store.delete(rest[0])
+        elif verb == "stats" and rest in ([], ["--json"]):
+            st = store.stats()
+            if rest:
+                print(json.dumps(st))
+            else:
+                from speech_text import safe_for_terminal
+                print(safe_for_terminal(f"{st['chats']} chats, {st['bytes']} bytes, "
+                                        f"in {st['dir']}"))
+            return 0
+        elif verb == "search":
+            # The query on stdin (phase M18), never argv.
+            agent, as_json = None, False
+            args = list(rest)
+            while args:
+                a = args.pop(0)
+                if a == "--json":
+                    as_json = True
+                elif a == "--agent" and args and _AGENT.fullmatch(args[0]):
+                    agent = args.pop(0)
+                else:
+                    print("usage: agentvoice chats search [--agent ID] [--json] "
+                          "(the words on stdin)", file=sys.stderr)
+                    return 2
+            # One line: the overlay writes it and keeps the pipe open.
+            hits = store.search(sys.stdin.readline(QUERY_MAX), agent)
+            if as_json:
+                print(json.dumps(hits))
+            else:
+                from speech_text import safe_for_terminal
+                titles = {c.get("id"): c.get("title", "") for c in store.list()}
+                for h in hits:
+                    print(f"{h['id']} {h['score']:.3f}  "
+                          f"{safe_for_terminal(str(titles.get(h['id'], '')))}")
+            return 0
         elif verb in ("share", "unshare") and len(rest) == 2:
             # By external id ("main" for the main agent).
             if verb == "share":
@@ -716,9 +940,10 @@ def main(argv: list[str]) -> int:
             print(store.prune(rest[0]))
             return 0
         else:
-            print("usage: agentvoice chats [list|show ID|rename ID TITLE|pin ID|unpin ID|"
-                  "delete ID|export ID [FOLDER]|share ID AGENT|unshare ID AGENT|"
-                  "continue ID [AGENT]|new [AGENT]]", file=sys.stderr)
+            print("usage: agentvoice chats [list|show ID|rename ID [TITLE]|pin ID|unpin ID|"
+                  "delete ID|delete --all|export ID [FOLDER]|share ID AGENT|unshare ID AGENT|"
+                  "continue ID [AGENT]|new [AGENT]|stats [--json]|search [--agent ID] [--json]]",
+                  file=sys.stderr)
             return 2
         if not ok:
             raise LookupError

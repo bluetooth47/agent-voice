@@ -266,10 +266,13 @@ shows it for four seconds with sample text (`agentvoice hud-preview`).
 The conversation is the session's exchanges, newest at the bottom, with a
 line where each new conversation began, which turns failed or were stopped,
 and how long each took to answer. The text is selectable, so a path or a
-command the agent read out can be copied rather than retyped. Open it from
-the panel's **Conversation** button, from the readout, or from the
-**Conversation** button at the top of the settings; in a terminal,
-`agentvoice history`.
+command the agent read out can be copied rather than retyped. It is
+**This session** at the top of the **Chats** page in the settings sidebar:
+open it from the panel's **Chats** button, from the readout, or with
+Ctrl+6 in the settings; in a terminal, `agentvoice history`. Each exchange
+is drawn as a messaging app draws one: what you said on the right, the
+agent's answer on the left with its name and its own colour (taken from
+the theme), and a question one agent asked another folded to one line.
 
 It is kept beside the state file, in the runtime directory: memory only,
 readable by you alone, gone when you log out, never the journal and never
@@ -278,7 +281,7 @@ off deletes what is already kept. Clear empties it on the spot.
 
 ### Saved conversations
 
-Off by default. Display → **Save conversations** keeps each chat on disk so
+Off by default. Chats → **Save conversations** keeps each chat on disk so
 it can be browsed and picked up again later: in
 `~/.local/share/agentvoice/chats/`, one file per chat, readable by you
 alone. The session view above stays memory-only either way. **Keep saved
@@ -288,11 +291,25 @@ chats are always kept. Uninstalling leaves them and says where they are.
 
 A chat is everything one agent said in one conversation. It starts when the
 agent starts a new session and is titled from the first request. With saving
-on, the conversation view gets a list beside it: this session first, then
-Pinned, Today, This week and Older, with a search box and an agent filter.
-Open a chat for **Continue**, **Rename**, **Pin**, **Export to Markdown**
-(into `~/Documents`) and **Delete**. "In use" marks the chat each agent is
-in right now.
+on, the Chats page lists them under this session: Pinned, Today, This week
+and Older, each with its title, who spoke, when, how many turns and the
+last thing said. The search box looks through every word of every chat
+(the words go to `agentvoice chats search` on stdin, never on a command
+line), and chips keep one agent's chats, or those more than one agent
+spoke in. Open a chat for **Continue**, **New chat**, **Send to another
+agent**, **Share with…**, **Rename**, **Pin**, **Export** (Markdown, into
+`~/Documents`) and **Delete**. "In use" marks the chat each agent is in
+right now. Agent details → Chats shows the same list for one agent, and
+Communal → Chats the conversations between agents.
+
+The card at the top of the page (**Saving and privacy**) holds the three
+settings, says where the chats are and how much room they take, and has
+**Delete all saved chats**, which asks first, says how many will go, and
+cannot be undone. It removes every agent's saved chats, pinned ones too,
+and nothing else: not this session's view, not a file a link in that
+folder points at, and not what each agent's own program keeps of its
+conversations. A turn that was still running when you deleted is not saved
+afterwards, so nothing deleted comes back.
 
 **Continue** makes it that agent's current chat. Claude Code takes the
 session back with `--resume` when it is the same program in the same
@@ -1415,8 +1432,10 @@ agent-voice/              <- also the plugin directory once installed
   Panel.qml               bar icon and its panel: switch, mute, agents,
                           quick switches, last exchange
   Hud.qml                 the readout beside the bar during a turn
-  Settings.qml            the overlay: shared state, the conversation view,
-                          the permission prompt, and the page frame
+  Settings.qml            the overlay: shared state, the permission prompt
+                          and the page frame
+  Chats.qml               the chats browser: the Chats page, and filtered on
+                          Agent details and Communal
   pages/                  one file per settings page, Overview to About
   ui/                     the controls the pages are built from
   KnobRow.qml             shared slider row

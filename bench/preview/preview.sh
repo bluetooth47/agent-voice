@@ -124,6 +124,7 @@ real_omarchy=$(command -v omarchy || true)
 : > "$out.writes"
 # A card left by an earlier run is not this run's question (M7).
 rm -f "$out.card" "$out.permit"
+: > "$out.chats"
 config_env=()
 apply=""
 if [ "$live" -eq 1 ]; then
@@ -273,14 +274,24 @@ case "\${1:-}" in
     # The tools found on this machine (M10): the synthetic one above.
     env XDG_CONFIG_HOME="\${XDG_CONFIG_HOME:-$real_config}" XDG_DATA_HOME='$tmp/data' $tools_env '$repo/bin/agentvoice' "\$@"; exit \$? ;;
   chats)
-    # Start fresh (M15) ends a real agent's conversation through the real
-    # daemon's socket, whatever the data folder: a preview only logs it.
-    if [ "\${2:-}" = new ]; then printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0; fi
+    # Every chats call's argv, for a target to check that what was typed
+    # (a search, a new title) went on stdin and never on the command line
+    # (M18). Only the argv: stdin is not read here.
+    printf '%s\n' "\$*" >> '$out.chats'
+    # Start fresh (M15) and Continue end or change a real agent's
+    # conversation through the real daemon's socket, whatever the data
+    # folder: a preview only logs them.
+    case "\${2:-}" in new|continue) printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0 ;; esac
     # Saved chats: from the scratch data folder under --scratch-data, so
     # sharing a chat in a preview touches no real one; else as before.
     if [ '$scratch' = 1 ]; then XDG_DATA_HOME='$tmp/data' exec '$repo/bin/agentvoice' "\$@"; fi
-    # Without it, a Delete clicked in a preview would delete a real chat.
-    if [ "\${2:-}" = delete ]; then printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0; fi ;;
+    # Without it, anything that writes would write a real chat (a Delete, a
+    # Delete all, a rename, a pin, a share) or a real file (an export): only
+    # logged. Reading (list, show, stats, search) passes through.
+    case "\${2:-}" in
+      delete|rename|pin|unpin|share|unshare|export|prune)
+        printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0 ;;
+    esac ;;
   history)
     # Clearing this session's conversation is real and has no undo; a
     # preview's Clear button only logs it (M1). Reading passes through.
@@ -334,7 +345,11 @@ data_env=()
 if [ "$scratch" -eq 1 ]; then
   data_env=(XDG_DATA_HOME="$tmp/data")
   if [ -f "$here/targets/$target.seed.py" ]; then
-    PYTHONDONTWRITEBYTECODE=1 PREVIEW_DATA="$tmp/data/agentvoice" python3 "$here/targets/$target.seed.py" "$repo/daemon"
+    # PREVIEW_RUN: the scratch runtime folder (with --state), where a seed
+    # may write this session's history.jsonl -- never the real one.
+    PYTHONDONTWRITEBYTECODE=1 PREVIEW_DATA="$tmp/data/agentvoice" PREVIEW_ARG="$arg" \
+      PREVIEW_RUN="$([ -n "$state" ] && echo "$tmp/run/agentvoice")" \
+      python3 "$here/targets/$target.seed.py" "$repo/daemon"
   fi
 fi
 

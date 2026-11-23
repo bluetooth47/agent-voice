@@ -52,6 +52,11 @@ DESTRUCTIVE: dict[str, tuple[dict[str, list[str]], list[re.Pattern]]] = {
     "agents trash": ({"AgentFolders.qml": ["remove", "trashOrphan", "onFailed"]},
                      [call("folders.remove"), call("folders.trashOrphan"), call("removeAgent")]),
     "chats delete": ({"Chats.qml": ["run"]}, [call("run", "delete")]),
+    # Phase M18: every saved chat, from the Chats page -- a Process started
+    # only by deleteAllChats(), which only the DangerButton's onConfirmed
+    # calls.
+    "chats delete --all": ({"ChatsPage.qml": ["Process"]},
+                           [call("deleteAllChats"), start("purger")]),
     "--uninstall": ({"Settings.qml": ["removeEverything"]}, [call("removeEverything"), start("remover")]),
     # The session's conversation, from memory: a Process, started by
     # setting `running`, which only clearSession() does.
@@ -94,6 +99,7 @@ DESTRUCTIVE: dict[str, tuple[dict[str, list[str]], list[re.Pattern]]] = {
 SPELLING = {
     "agents trash": '["trash"',
     "chats delete": '"chats", verb',
+    "chats delete --all": '"delete", "--all"',
     "--uninstall": "--uninstall",
     "history clear": '"history", "clear"',
     "link delete": '"link delete "',
@@ -117,7 +123,8 @@ WRAPPERS = {("AgentFolders.qml", "function remove"), ("AgentFolders.qml", "funct
             ("pages/CrewMapPage.qml", "function removeLink"),
             ("pages/CrewMapPage.qml", "function linkEveryone"),
             ("pages/CrewMapPage.qml", "function quarantineAgent"),
-            ("AgentFolders.qml", "function resetAgent")}
+            ("AgentFolders.qml", "function resetAgent"),
+            ("pages/ChatsPage.qml", "function deleteAllChats")}
 
 
 def _built_in(scanned, spelling):

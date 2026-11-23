@@ -854,4 +854,5 @@ def test_the_preview_tab_draws_the_real_builders_pieces():
 
 def test_the_preview_stub_routes_chats_new_away_from_the_real_daemon():
     stub = (ROOT / "bench" / "preview" / "preview.sh").read_text()
-    assert '"\\${2:-}" = new ]; then printf' in stub
+    # Since M18 with `continue`, which reaches the real daemon the same way.
+    assert 'case "\\${2:-}" in new|continue) printf' in stub

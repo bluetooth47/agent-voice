@@ -1255,8 +1255,10 @@ Panel {
 
         Button {
           width: (parent.width - parent.spacing) / 2
-          text: "Conversation"
-          iconText: "\u{f0b79}"
+          // "Chats" since phase M18: the page it opens, and no longer the
+          // name of the Conversation settings page as well.
+          text: "Chats"
+          iconText: "\u{f0822}"
           bordered: true
           hasCursor: voice.cursorOn("conversation")
           foreground: voice.fg
@@ -1284,11 +1286,12 @@ Panel {
   // The overlay is the same plugin, summoned by id, with a page to open.
   Process { id: summoner }
 
-  // The same overlay, on its conversation page.
+  // The same overlay, on its Chats page (phase M18; before it, the
+  // conversation was a mode of the overlay, and "history" still opens it).
   Process {
     id: conversation
     command: ["omarchy-shell", "shell", "summon", "duaneoca.agentvoice",
-              "{\"mode\":\"history\"}"]
+              "{\"page\":\"chats\"}"]
   }
 
 }

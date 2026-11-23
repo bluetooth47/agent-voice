@@ -255,7 +255,7 @@ Column {
       bordered: true
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      onClicked: page.s.showPage("history")
+      onClicked: page.s.showChat("")
     }
   }
 }

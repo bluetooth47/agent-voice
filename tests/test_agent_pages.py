@@ -134,10 +134,12 @@ def test_text_from_files_is_never_rich():
 
 def test_every_page_has_a_key_with_the_new_ones_after_agents():
     """Ctrl+1..9 for the first nine pages in sidebar order, Ctrl+0 for the
-    tenth (phase M8: the Crew map made ten), Ctrl+PgUp/PgDn to step."""
+    tenth (phase M8: the Crew map made ten), Ctrl+PgUp/PgDn to step. Since
+    phase M18 there are eleven: Chats after the Crew map, and About, the
+    eleventh, reached by a click and Ctrl+PgDn."""
     s = text("Settings.qml")
-    ids = re.findall(r'\{ id: "(\w+)",\s+label:', s[s.index("readonly property var pages:"):])[:10]
-    assert ids == ["overview", "agents", "agentdetails", "communal", "crew", "listening",
+    ids = re.findall(r'\{ id: "(\w+)",\s+label:', s[s.index("readonly property var pages:"):])[:11]
+    assert ids == ["overview", "agents", "agentdetails", "communal", "crew", "chats", "listening",
                    "conversation", "voice", "display", "about"]
     assert "ctrl+1–9, 0 or pgup/pgdn to switch pages" in s
     assert "n >= 0 && n < root.pages.length" in s

@@ -402,7 +402,8 @@ def test_the_settings_are_in_all_three_places():
     assert runtime.DEFAULTS["saveChats"] is False
     assert runtime.TOML_ALIASES["saveChats"] == ("ui", "save_chats")
     assert runtime.TOML_ALIASES["chatRetention"] == ("ui", "chat_retention")
-    page = (ROOT / "pages/DisplayPage.qml").read_text()
+    # On the Chats page since phase M18 (Display before it).
+    page = (ROOT / "pages/ChatsPage.qml").read_text()
     assert 'put("saveChats"' in page and 'put("chatRetention"' in page
 
 

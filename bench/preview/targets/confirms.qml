@@ -79,6 +79,14 @@ ShellRoot {
       input.mouseClick(item, item.width / 2, item.height / 2, Qt.LeftButton, Qt.NoModifier, -1)
     }
     property var current: null
+    function exact(text) {
+      return find(overlay.pageScroll, function(i) { return i.clicked !== undefined && i.text === text })
+    }
+    function armExact(text, label) {
+      var b = exact(text)
+      current = danger(b)
+      click(b, label + ": arm")
+    }
     function arm(prefix, label) {
       var b = button(prefix)
       current = danger(b)
@@ -142,14 +150,30 @@ ShellRoot {
         console.warn("PREVIEW synthetic chat: " + (overlay.chatId || "none") + " of " + overlay.chatCount)
         if (overlay.chatId !== "") overlay.showChat(overlay.chatId)
       },
-      function() { overlay.arm("⚠ Delete", "chat Delete") },
+      // "⚠ Delete" exactly: since M18 the Chats page also has "⚠ Delete
+      // all saved chats", and a prefix would arm that one.
+      function() { overlay.armExact("⚠ Delete", "chat Delete") },
       function() { overlay.click(overlay.button("Cancel"), "chat Delete: Cancel") },
       function() { overlay.report("chat Delete cancelled"); chatIndex.reload() },
       function() { console.warn("PREVIEW saved chats after Cancel: " + overlay.chatCount) },
-      function() { overlay.arm("⚠ Delete", "chat Delete") },
-      function() { overlay.click(overlay.button("Delete"), "chat Delete: Delete (confirm)") },
+      function() { overlay.armExact("⚠ Delete", "chat Delete") },
+      function() { overlay.click(overlay.exact("Delete"), "chat Delete: Delete (confirm)") },
       function() { overlay.report("chat Delete confirmed"); chatIndex.reload() },
       function() { console.warn("PREVIEW saved chats after Delete: " + overlay.chatCount) },
+      // Delete all saved chats (M18), on the Chats page's settings card,
+      // which is folded while chats are saved: opened first.
+      function() {
+        var card = overlay.find(overlay.pageScroll, function(i) { return i.foldable === true && i.title === "Saving and privacy" })
+        if (card && !card.expanded) card.flip()
+      },
+      function() { overlay.arm("⚠ Delete all saved chats", "Delete all") },
+      function() { overlay.click(overlay.button("Cancel"), "Delete all: Cancel") },
+      function() { overlay.report("Delete all cancelled"); chatIndex.reload() },
+      function() { console.warn("PREVIEW saved chats after Cancel: " + overlay.chatCount) },
+      function() { overlay.arm("⚠ Delete all saved chats", "Delete all") },
+      function() { overlay.click(overlay.exact("Delete all"), "Delete all: Delete all (confirm)") },
+      function() { overlay.report("Delete all confirmed"); chatIndex.reload() },
+      function() { console.warn("PREVIEW saved chats after Delete all: " + overlay.chatCount) },
       function() { console.warn("PREVIEW done") }
     ]
     property int step: 0

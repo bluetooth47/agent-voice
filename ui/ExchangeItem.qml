@@ -3,24 +3,31 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 
-// One exchange in a conversation: what was said, what was answered, and
-// how it ended. The session's view and a saved chat draw it the same way.
+// One exchange in a conversation, drawn the way a messaging app draws it
+// (phase M18, feedback item 6): what you said in a bubble on the right, the
+// agent's answer in one on the left with its name and its own colour, how
+// it ended under that. This session's view and a saved chat draw it the
+// same way.
 //
 //   ExchangeItem {
 //     width: parent.width
-//     when: "3:04 PM"; who: "Theo"; latencyMs: 1800
+//     when: "3:04 PM"; who: "Theo"; tint: "#7aa2f7"; latencyMs: 1800
 //     heard: "make the hud wider"; answer: "Done."
 //     failure: ""; wasStopped: false; startsNew: false
 //     aside: ""      // "Theo asked Sora": a question between agents (Phase 16)
+//     askedName: ""; askedTint: "transparent"
 //   }
 //
-// An aside is drawn folded to its one line; a click opens the question
-// (heard) and the answer. Both halves are an agent's words, plain text.
+// An aside is drawn folded to its one line; a click opens the question and
+// the answer, each as the bubble of the agent that wrote it -- both halves
+// are agents' words, neither is yours. Everything shown is plain text.
 Column {
   id: turn
 
   property string when: ""
   property string who: ""
+  // The answering agent's colour, from the theme (Settings.agentTint).
+  property color tint: "transparent"
   property int latencyMs: 0
   property string heard: ""
   property string answer: ""
@@ -33,16 +40,19 @@ Column {
   property bool startsNew: false
   // "Theo asked Sora" for a question one agent asked another; "" otherwise.
   property string aside: ""
+  property string askedName: ""
+  property color askedTint: "transparent"
   property bool asideOpen: false
   readonly property bool folded: aside !== "" && !asideOpen
 
   property color foreground: Commons.Color.foreground
   property color background: Commons.Color.background
+  property color accent: Commons.Color.accent
   property color urgent: Commons.Color.urgent
   property color dim: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.6)
   property string fontFamily: Style.font.family
 
-  spacing: Style.space(4)
+  spacing: Style.space(6)
 
   // Where a conversation began: a turn sent with no session to continue.
   // "What did I ask it earlier" is usually this one.
@@ -72,49 +82,45 @@ Column {
     }
   }
 
+  // A question between agents: one dim line, centred like a note, that
+  // opens to the two bubbles.
   Text {
+    visible: turn.aside !== ""
     width: parent.width
+    horizontalAlignment: Text.AlignHCenter
     elide: Text.ElideRight
-    text: (turn.aside !== "" ? (turn.asideOpen ? "▾ " : "▸ ") : "") + turn.when
-          + (turn.aside !== "" ? " · " + turn.aside
-             : (turn.who !== "" ? " · " + turn.who : ""))
-          + (turn.latencyMs > 0 ? " · answered in " + (turn.latencyMs / 1000).toFixed(1) + "s" : "")
+    text: (turn.asideOpen ? "▾ " : "▸ ") + turn.aside + (turn.when !== "" ? " · " + turn.when : "")
     textFormat: Text.PlainText
     color: turn.dim
     font.family: turn.fontFamily
     font.pixelSize: Style.font.caption
     MouseArea {
       anchors.fill: parent
-      enabled: turn.aside !== ""
-      cursorShape: turn.aside !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
+      cursorShape: Qt.PointingHandCursor
       onClicked: turn.asideOpen = !turn.asideOpen
     }
   }
 
-  // TextEdit, read-only, rather than Text: selectable, so a path or a
-  // command the agent read out can be copied, not retyped. Plain text for
-  // the same reason every other transcript here is -- neither half of this
-  // was written by us.
-  TextEdit {
-    visible: !turn.folded
+  // What you said; or, opened, the question one agent asked another.
+  ChatBubble {
+    visible: !turn.folded && turn.heard !== ""
     width: parent.width
-    readOnly: true
-    selectByMouse: true
-    wrapMode: TextEdit.Wrap
-    textFormat: TextEdit.PlainText
+    mine: turn.aside === ""
+    who: turn.aside === "" ? "You" : turn.who
+    when: turn.aside === "" ? turn.when : ""
+    stripe: turn.aside === "" ? "transparent" : turn.tint
     text: turn.heard
-    color: turn.foreground
-    selectionColor: Qt.rgba(turn.foreground.r, turn.foreground.g, turn.foreground.b, 0.3)
-    selectedTextColor: turn.foreground
-    font.family: turn.fontFamily
-    font.pixelSize: Style.font.body
+    foreground: turn.foreground
+    accent: turn.accent
+    fontFamily: turn.fontFamily
   }
 
   // Folded by default: it is often longer than the answer and was never
   // said out loud. Plain text, like the rest -- a model wrote it.
   Text {
-    visible: turn.thinking !== ""
-    width: parent.width
+    visible: turn.thinking !== "" && !turn.folded
+    width: parent.width * 0.8
+    leftPadding: Style.space(4)
     wrapMode: Text.Wrap
     maximumLineCount: turn.thinkingOpen ? 400 : 1
     elide: Text.ElideRight
@@ -132,38 +138,27 @@ Column {
     }
   }
 
-  Item {
-    visible: turn.answer !== "" && !turn.folded
+  // The answer, on the left, named: the speaker is always said, because a
+  // chat can hold several agents' replies.
+  ChatBubble {
+    visible: !turn.folded && turn.answer !== ""
     width: parent.width
-    height: visible ? replyText.implicitHeight : 0
-
-    // A rule down the left of the answer, rather than an arrow in its text
-    // that would come along with every copy.
-    Rectangle {
-      width: Style.space(2)
-      height: parent.height
-      color: Qt.rgba(turn.foreground.r, turn.foreground.g, turn.foreground.b, 0.35)
-    }
-    TextEdit {
-      id: replyText
-      x: Style.space(10)
-      width: parent.width - x
-      readOnly: true
-      selectByMouse: true
-      wrapMode: TextEdit.Wrap
-      textFormat: TextEdit.PlainText
-      text: turn.answer
-      color: Qt.rgba(turn.foreground.r, turn.foreground.g, turn.foreground.b, 0.8)
-      selectionColor: Qt.rgba(turn.foreground.r, turn.foreground.g, turn.foreground.b, 0.3)
-      selectedTextColor: turn.foreground
-      font.family: turn.fontFamily
-      font.pixelSize: Style.font.body
-    }
+    who: turn.aside === "" ? turn.who : (turn.askedName || "the other agent")
+    when: turn.aside !== "" ? ""
+          : (turn.latencyMs > 0 ? "answered in " + (turn.latencyMs / 1000).toFixed(1) + "s" : "")
+    stripe: turn.aside === "" ? turn.tint : turn.askedTint
+    text: turn.answer
+    foreground: turn.foreground
+    accent: turn.accent
+    fontFamily: turn.fontFamily
   }
 
   Text {
-    visible: turn.failure !== "" || turn.wasStopped
-    text: turn.failure !== "" ? "failed" : "stopped part-way"
+    visible: (turn.failure !== "" || turn.wasStopped) && !turn.folded
+    leftPadding: Style.space(4)
+    text: (turn.who !== "" ? turn.who + " · " : "")
+          + (turn.failure !== "" ? "failed" : "stopped part-way")
+    textFormat: Text.PlainText
     color: turn.failure !== "" ? turn.urgent : turn.dim
     font.family: turn.fontFamily
     font.pixelSize: Style.font.caption

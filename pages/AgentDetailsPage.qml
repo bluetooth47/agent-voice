@@ -1807,58 +1807,9 @@ Column {
   }
 
   // --- Chats ------------------------------------------------------------------------
-  // Chats this agent can continue, from the same index the conversation view reads.
-  property var chatIndex: []
-  FileView {
-    id: chatIndexFile
-    path: page.s.dataHome + "/agentvoice/chats/index.json"
-    watchChanges: true
-    printErrors: false
-    onFileChanged: chatIndexFile.reload()
-    onLoaded: {
-      try {
-        var d = JSON.parse(chatIndexFile.text())
-        page.chatIndex = (d && Array.isArray(d.chats)) ? d.chats : []
-      } catch (e) { page.chatIndex = [] }
-    }
-    onLoadFailed: page.chatIndex = []
-  }
-  readonly property var chats: {
-    var out = []
-    for (var i = 0; i < chatIndex.length; i++) {
-      var c = chatIndex[i] || {}
-      if (!/^[0-9a-f]{16}$/.test(String(c.id || ""))) continue
-      if (chatOwner(c) === target || (Array.isArray(c.agents) && c.agents.indexOf(target) >= 0)) out.push(c)
-    }
-    out.sort(function(a, b) { return (Number(b.updated) || 0) - (Number(a.updated) || 0) })
-    return out
-  }
-  function chatOwner(chat) {
-    return String(chat.owner || chat.agent_id || "main")
-  }
-  // A Repeater's modelData turns a JSON array into a list Array.isArray
-  // does not recognise, so membership is checked by hand.
-  function listHas(list, id) {
-    if (!list || list.length === undefined) return false
-    for (var i = 0; i < list.length; i++) if (list[i] === id) return true
-    return false
-  }
-  function chatCaption(chat) {
-    var preview = String(chat.preview || "")
-    if (chatOwner(chat) === page.target) return preview
-    var relation = ""
-    if (page.listHas(chat.participants, page.target))
-      relation = "passed to it"
-    else if (page.listHas(chat.shared_with, page.target))
-      relation = "shared"
-    return relation && preview ? relation + " · " + preview : relation || preview
-  }
-  function openChat(id) {
-    s.openChat = ""
-    s.openChat = id
-    s.showPage("history")
-  }
-
+  // This agent's saved chats are the Chats page's browser (Chats.qml), shown
+  // for this agent alone (phase M18): the chats it owns, has spoken in or may
+  // carry on. Above it, its work with other agents.
   readonly property var collaborationTasks: {
     var open = [], finished = []
     for (var task of (s.vTasks || [])) {
@@ -1993,81 +1944,29 @@ Column {
       wrapMode: Text.WordWrap
       textFormat: Text.PlainText
       text: "Saving chats is off, so nothing is kept once a conversation ends. It is switched on " +
-            "on the Display page."
+            "on the Chats page."
       color: page.s.dim
       font.family: page.s.fontFamily
       font.pixelSize: Style.font.body
     }
     Button {
       visible: !page.s.saveChats
-      text: "Go to Display →"
+      text: "Go to Chats →"
       focusable: true
       bordered: true
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      onClicked: page.s.goTo("display", "")
+      onClicked: page.s.goTo("chats", "")
     }
-    Text {
+    Chats {
       width: parent.width
-      visible: page.s.saveChats && page.chats.length === 0
-      wrapMode: Text.WordWrap
-      textFormat: Text.PlainText
-      text: "No saved chats with " + page.name + " yet."
-      color: page.s.dim
-      font.family: page.s.fontFamily
-      font.pixelSize: Style.font.body
-    }
-    Repeater {
-      model: page.s.saveChats ? page.chats : []
-      Rectangle {
-        id: chatRow
-        required property var modelData
-        width: parent.width
-        height: chatText.implicitHeight + Style.space(12)
-        radius: Style.cornerRadius
-        color: chatHover.containsMouse || chatRow.activeFocus
-               ? Qt.rgba(page.s.foreground.r, page.s.foreground.g, page.s.foreground.b, 0.08) : "transparent"
-        border.width: chatRow.activeFocus ? 1 : 0
-        border.color: page.s.accent
-        activeFocusOnTab: true
-        Keys.onReturnPressed: page.openChat(String(modelData.id))
-        Keys.onSpacePressed: page.openChat(String(modelData.id))
-        Column {
-          id: chatText
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          anchors.margins: Style.space(8)
-          spacing: Style.space(2)
-          Text {
-            width: parent.width
-            elide: Text.ElideRight
-            textFormat: Text.PlainText
-            text: (String(chatRow.modelData.title || "") || "Untitled") +
-                  (chatRow.modelData.updated ? "  ·  " + Qt.formatDateTime(new Date(Number(chatRow.modelData.updated) * 1000), "MMM d, h:mm AP") : "")
-            color: page.s.foreground
-            font.family: page.s.fontFamily
-            font.pixelSize: Style.font.body
-          }
-          Text {
-            width: parent.width
-            visible: text !== ""
-            elide: Text.ElideRight
-            textFormat: Text.PlainText
-            text: page.chatCaption(chatRow.modelData)
-            color: page.s.dim
-            font.family: page.s.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-        }
-        MouseArea {
-          id: chatHover
-          anchors.fill: parent
-          hoverEnabled: true
-          cursorShape: Qt.PointingHandCursor
-          onClicked: page.openChat(String(chatRow.modelData.id))
-        }
-      }
+      height: Math.max(Style.space(420), (page.s.pageScroll ? page.s.pageScroll.height : Style.space(600))
+                                         - Style.space(80))
+      visible: page.tab === "chats"
+      s: page.s
+      scope: "agent"
+      scopeAgent: page.target
+      showSession: false
     }
   }
 

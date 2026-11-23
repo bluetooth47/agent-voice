@@ -439,7 +439,12 @@ case "${1:-status}" in
     # rest change the files directly, under the same lock the daemon takes.
     #   agentvoice chats [list]          one line per chat
     #   agentvoice chats show ID         as Markdown
-    #   agentvoice chats rename ID TITLE / pin ID / unpin ID / delete ID
+    #   agentvoice chats rename ID [TITLE] / pin ID / unpin ID / delete ID
+    #                                    (no TITLE: one line on stdin, M18)
+    #   agentvoice chats delete --all    every saved chat; prints how many (M18)
+    #   agentvoice chats stats [--json]  where they are, how many, how big
+    #   agentvoice chats search [--agent ID] [--json]   best matches first;
+    #                                    the words on stdin, never argv (M18)
     #   agentvoice chats export ID [DIR] write it as Markdown, print where
     #   agentvoice chats continue ID [AGENT]  its agent's (or AGENT's, when
     #                                    the chat is shared with it) next

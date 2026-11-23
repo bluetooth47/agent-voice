@@ -1168,31 +1168,8 @@ Column {
   }
 
   // --- Chats (Phase 15) -----------------------------------------------------------
-  property var chatIndex: []
-  FileView {
-    id: chatIndexFile
-    path: page.s.dataHome + "/agentvoice/chats/index.json"
-    watchChanges: true
-    printErrors: false
-    onFileChanged: chatIndexFile.reload()
-    onLoaded: {
-      try {
-        var d = JSON.parse(chatIndexFile.text())
-        page.chatIndex = (d && Array.isArray(d.chats)) ? d.chats : []
-      } catch (e) { page.chatIndex = [] }
-    }
-    onLoadFailed: page.chatIndex = []
-  }
-  readonly property var chats: chatIndex.filter(function(c) {
-    return c && Array.isArray(c.participants) && c.participants.length > 1 &&
-           /^[0-9a-f]{16}$/.test(String(c.id || ""))
-  }).sort(function(a, b) { return (Number(b.updated) || 0) - (Number(a.updated) || 0) })
-  function openChat(id) {
-    s.openChat = ""
-    s.openChat = id
-    s.showPage("history")
-  }
-
+  // Conversations more than one agent spoke in: the Chats page's browser
+  // (Chats.qml), shown for those alone (phase M18).
   Column {
     width: parent.width
     spacing: Style.space(6)
@@ -1212,84 +1189,28 @@ Column {
       wrapMode: Text.WordWrap
       textFormat: Text.PlainText
       text: "Saving chats is off, so nothing is kept once a conversation ends. It is switched on " +
-            "on the Display page."
+            "on the Chats page."
       color: page.s.dim
       font.family: page.s.fontFamily
       font.pixelSize: Style.font.body
     }
     Button {
       visible: !page.s.saveChats
-      text: "Go to Display →"
+      text: "Go to Chats →"
       focusable: true
       bordered: true
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      onClicked: page.s.goTo("display", "")
+      onClicked: page.s.goTo("chats", "")
     }
-    Text {
+    Chats {
       width: parent.width
-      visible: page.s.saveChats && page.chats.length === 0
-      wrapMode: Text.WordWrap
-      textFormat: Text.PlainText
-      text: "No conversations with more than one agent yet."
-      color: page.s.dim
-      font.family: page.s.fontFamily
-      font.pixelSize: Style.font.body
-    }
-    Repeater {
-      model: page.s.saveChats && page.tab === "chats" ? page.chats : []
-      Rectangle {
-        id: chatRow
-        required property var modelData
-        width: parent.width
-        height: chatText.implicitHeight + Style.space(12)
-        radius: Style.cornerRadius
-        color: chatHover.containsMouse || chatRow.activeFocus
-               ? Qt.rgba(page.s.foreground.r, page.s.foreground.g, page.s.foreground.b, 0.08) : "transparent"
-        border.width: chatRow.activeFocus ? 1 : 0
-        border.color: page.s.accent
-        activeFocusOnTab: true
-        Keys.onReturnPressed: page.openChat(String(chatRow.modelData.id))
-        Keys.onSpacePressed: page.openChat(String(chatRow.modelData.id))
-        Column {
-          id: chatText
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          anchors.margins: Style.space(8)
-          spacing: Style.space(2)
-          Text {
-            width: parent.width
-            elide: Text.ElideRight
-            textFormat: Text.PlainText
-            text: String(chatRow.modelData.title || "Untitled")
-            color: page.s.foreground
-            font.family: page.s.fontFamily
-            font.pixelSize: Style.font.body
-          }
-          Text {
-            width: parent.width
-            elide: Text.ElideRight
-            textFormat: Text.PlainText
-            text: {
-              var people = chatRow.modelData.participants.map(function(id) { return page.labelOf(id) })
-              var updated = Number(chatRow.modelData.updated) || 0
-              return (updated ? Qt.formatDateTime(new Date(updated * 1000), "MMM d, h:mm AP") + " · " : "") +
-                     people.join(", ")
-            }
-            color: page.s.dim
-            font.family: page.s.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-        }
-        MouseArea {
-          id: chatHover
-          anchors.fill: parent
-          hoverEnabled: true
-          cursorShape: Qt.PointingHandCursor
-          onClicked: page.openChat(String(chatRow.modelData.id))
-        }
-      }
+      height: Math.max(Style.space(420), (page.s.pageScroll ? page.s.pageScroll.height : Style.space(600))
+                                         - Style.space(80))
+      visible: page.tab === "chats"
+      s: page.s
+      scope: "multi"
+      showSession: false
     }
   }
 }
