@@ -52,7 +52,8 @@ How it is laid out since M0:
 ```
 
 Fourteen static checks plus the test suite: two seconds for the checks, about
-two and a half minutes with the tests. The last check is that the run wrote
+six minutes with the tests (5 min 46 s for 4,920 tests at M21, on the
+i7-1185G7; it was two and a half minutes at about 2,800). The last check is that the run wrote
 nothing in the tree (see above). It exists because
 this project shipped a string of bugs that reached the user first: an unbound
 shell variable, a gum box rendered 298 columns wide, a Python method whose

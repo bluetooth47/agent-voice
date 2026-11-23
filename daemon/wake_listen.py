@@ -76,6 +76,7 @@ import try_it  # noqa: E402
 import chat_names  # noqa: E402
 import sessions  # noqa: E402
 import runinfo  # noqa: E402
+import stats  # noqa: E402
 import launch_extras  # noqa: E402
 from runtime import (  # noqa: E402
     REPLY_MAX, RUNTIME_DIR, Config, History, Speaker, StateFile, instructions_text, speed_pct,
@@ -998,6 +999,7 @@ class Pipeline:
                 return False
         elif conf < self.wake_confidence:
             self._near(f"vosk confidence {conf:.2f} < {self.wake_confidence:.2f}")
+            self._rejected("confidence")        # master plan M21
             if speech_is_logged(getattr(self, "_log_speech", False)):
                 print(f"  {DIM}(rejected \"{safe_for_terminal(text)}\" — confidence "
                       f"{conf:.2f} < {self.wake_confidence:.2f}){OFF}")
@@ -1048,6 +1050,24 @@ class Pipeline:
         near, self.near_misses = getattr(self, "near_misses", None) or [], []
         return near
 
+    def _rejected(self, stage: str) -> None:
+        """A wake turned down, by stage (stats.REJECT_STAGES), for the
+        daemon to count (master plan M21). A code, never what was heard."""
+        rejected = getattr(self, "rejections", None)
+        if rejected is None:
+            rejected = self.rejections = collections.deque(maxlen=50)
+        rejected.append(stage)
+
+    def take_rejections(self) -> list[str]:
+        rejected = getattr(self, "rejections", None)
+        out = []
+        while rejected:
+            try:
+                out.append(rejected.popleft())
+            except IndexError:
+                break
+        return out
+
     def _burst_cutter(self) -> crosscheck.Bursts:
         if getattr(self, "_bursts", None) is None:
             self._bursts = crosscheck.Bursts(CHUNK_MS)
@@ -1092,6 +1112,10 @@ class Pipeline:
                   flush=True)
             if why:
                 self._near(f"second check: {why}")
+                # Master plan M21: a name was heard and the rule turned it
+                # down -- what the Overview calls a false wake. A burst in
+                # which nobody heard a name is only talk, and not counted.
+                self._rejected("second-check")
             return False
         print(f"  {DIM}(second check: {name} by {why}{heard}, {ms:.0f}ms){OFF}",
               flush=True)
@@ -1383,6 +1407,11 @@ def _logind_locked() -> bool | None:
         return None
     answer = done.stdout.strip().lower()
     return True if answer == "yes" else (False if answer == "no" else None)
+
+
+#: Master plan M21: how often the daemon's and its agents' memory is read
+#: again for the state file.
+SERVICE_SAMPLE_S = 30.0
 
 
 def _today() -> str:
@@ -1783,6 +1812,10 @@ class Daemon:
         #: → Advanced), typed fields only, never anything said; and what was
         #: last published about what each agent runs (runinfo.json).
         self.agent_ring = runinfo.Ring()
+        #: Master plan M21: when this run of the service began, for the
+        #: Overview's uptime (published in `service`, with the memory).
+        self.started_at = time.time()
+        self._service: tuple[float, dict] | None = None
         self._runinfo: dict = {}
         self._runinfo_key = None
         self._runinfo_at = 0.0
@@ -2122,6 +2155,10 @@ class Daemon:
         take = getattr(self.pipe, "take_near_misses", None)
         for why in (take() if callable(take) else []):
             test.on_near(why)
+        # Master plan M21: a wake test is not the Overview's business.
+        drop = getattr(self.pipe, "take_rejections", None)
+        if callable(drop):
+            drop()
         test.tick()
         if not test.running:
             snap = test.snapshot()
@@ -3174,6 +3211,12 @@ class Daemon:
             self._recompose()
         if self.limit_hits_rolled():
             self.publish_agent()
+        # Master plan M21: the memory figures, every SERVICE_SAMPLE_S.
+        before = getattr(self, "_service", None)
+        if before is None or time.time() - before[0] >= SERVICE_SAMPLE_S:
+            field = self.service_field()
+            if before is None or field != before[1]:
+                self.state.update(service=field)
         if not changed:
             return
         self.pipe.apply(self.cfg)
@@ -4210,6 +4253,7 @@ class Daemon:
                 self.say_once("wake-watch", f"  {YEL}wake word unavailable "
                               f"while working: {type(e).__name__}: {e}{OFF}")
                 return
+            self.note_wake(fired)       # master plan M21
             if fired and self.heard_full_stop():
                 # Stop the turn and open nothing after it.
                 print(f"  {YEL}● full stop{OFF}  {DIM}(heard as a keyword){OFF}",
@@ -4256,10 +4300,79 @@ class Daemon:
         hits["today"] += 1
         hits["last"] = round(time.time())
         self.limit_hits = hits
+        self.keep_stat(stats.record_limit_hit)      # master plan M21
         print(f"  {YEL}cut at the longest-turn limit "
               f"({self.pipe.max_utterance_ms / 1000:.0f}s; "
               f"{hits['today']} today){OFF}", flush=True)
         self.publish_agent()
+
+    # --- the Overview's numbers (master plan M21, stats.py) ------------------
+
+    def keep_stat(self, record, *args, **kw) -> bool:
+        """Hand one count to stats.py -- if keepStats says so, read now, so
+        switching it off stops the next one. Never raises: a statistic is
+        not worth a turn, or the frame loop."""
+        try:
+            if not self.cfg.keep_stats():
+                return False
+            return bool(record(*args, **kw))
+        except Exception:               # noqa: BLE001 -- see the docstring
+            return False
+
+    def note_wake(self, fired: bool) -> None:
+        """After every feed_wake outside the wake test: count the wake
+        accepted, if one was (a "full stop" heard as a keyword is not a
+        wake), and every rejection the engines made on the way."""
+        pipe = self.pipe
+        take = getattr(pipe, "take_rejections", None)
+        for stage in (take() if callable(take) else []):
+            self.keep_stat(stats.record_rejection, stage)
+        if fired and not self.heard_full_stop():
+            how = str(getattr(pipe, "wake_how", "") or "").replace(" ", "-")
+            self.keep_stat(stats.record_wake, how)
+
+    def count_turn(self, persona, clock: dict, typed: bool) -> None:
+        """One finished turn for the Overview: who, how it opened, and the
+        waits, all read off the turn's clock -- the same timestamps its
+        latency line prints, so the two cannot disagree. Typed and task
+        turns are counted by kind and give no voice timings."""
+        try:
+            if getattr(persona, "task", None) is not None:
+                kind = "task"
+            elif typed:
+                kind = "typed"
+            else:
+                opened = clock.get("kind")
+                kind = opened if opened in ("wake", "talk") else "followup"
+            heard = clock.get("first_audio")
+            woke, end = clock.get("woke"), clock.get("voice_end")
+            spoken = kind not in ("typed", "task")
+            self.keep_stat(
+                stats.record_turn, getattr(persona, "id", "") or "main", kind,
+                clock.get("turn") or stats.new_turn_id(),
+                wake_to_reply_ms=(heard - woke) * 1000
+                if kind == "wake" and heard and woke else None,
+                transcribe_ms=clock.get("whisper_ms") if spoken else None,
+                reply_ms=(heard - end) * 1000 if spoken and heard and end else None)
+        except Exception:               # noqa: BLE001 -- never the turn
+            pass
+
+    def service_field(self, now: float | None = None) -> dict:
+        """`service` in the state file: when this run began and how much
+        memory the daemon and, apart, its agents hold. Sampled at most every
+        SERVICE_SAMPLE_S -- reading every process's status is a few ms, and
+        the state file is rewritten on every change."""
+        now = time.time() if now is None else now
+        cached = getattr(self, "_service", None)
+        if cached is not None and now - cached[0] < SERVICE_SAMPLE_S:
+            return cached[1]
+        try:
+            mem = stats.memory()
+        except Exception:               # noqa: BLE001 -- a reading only
+            mem = {"rss_mb": None, "agents_mb": None, "agents_procs": 0}
+        field = {"started_at": round(getattr(self, "started_at", now)), **mem}
+        self._service = (now, field)
+        return field
 
     def chime(self, name: str, why: str = "") -> None:
         """Play one of the short sounds, if they are on and we are listening.
@@ -4414,8 +4527,13 @@ class Daemon:
             spans.append(f"between sentences {clock['gaps']:.1f}s")
         verb = "spoke" if "first_audio" in clock else "showed"
         total = reached - end
+        # Master plan M21: from the wake word, for a turn one opened -- the
+        # Overview's "wake to first word", from the same two timestamps.
+        woke = clock.get("woke")
+        since = (f"  wake → spoke in {clock['first_audio'] - woke:.1f}s"
+                 if woke and "first_audio" in clock else "")
         print(f"  {DIM}heard → {verb} in {total:.1f}s  "
-              f"({' · '.join(spans)}){OFF}")
+              f"({' · '.join(spans)}){since}{OFF}")
         last["latency_ms"] = round(total * 1000)
 
     def answer(self, text: str, last: dict, clock: dict | None = None,
@@ -4735,6 +4853,10 @@ class Daemon:
             self.agent_ring.count_turn(persona.id or "main", self.session_id)
         except Exception:               # noqa: BLE001 -- a page is never worth a turn
             pass
+        # Master plan M21: the turn counted for the Overview, with the same
+        # timestamps report_latency() prints below. Numbers and ids only.
+        self.count_turn(persona, clock, bool(getattr(self._here, "typed", False)
+                                             or last.get("typed")))
         # A stopped turn still counts if it got as far as making a sound --
         # that wait was real. One stopped before it spoke has nothing to say.
         if gaps:
@@ -5803,7 +5925,9 @@ class Daemon:
                 "agent_files": getattr(self, "_agent_files", None) or {},
                 # phase M2, bug C: {"date", "today", "last"}; the
                 # Conversation page says so beside the longest-turn slider.
-                "limit_hits": self.limit_field()}
+                "limit_hits": self.limit_field(),
+                # Master plan M21: uptime and memory, for the Overview.
+                "service": self.service_field()}
 
     def panel_agents(self, payload: dict) -> list[dict]:
         """Every agent as agents_panel.py draws it, from the payload just
@@ -6640,6 +6764,7 @@ class Daemon:
 
                 if phase == "wake":
                     fired = self.pipe.feed_wake(pcm, level)
+                    self.note_wake(fired)       # master plan M21
                     if fired and self.heard_full_stop():
                         # Spotted as a keyword: stop everything now, and
                         # open no capture -- there is nothing to say next.
@@ -6798,7 +6923,14 @@ class Daemon:
                 # has no release time of its own this turn.
                 clock = {"voice_end": released_at if ptt and ptt_done
                          else last_voice,
-                         "endpoint": time.time()}
+                         "endpoint": time.time(),
+                         # Master plan M21: how the capture opened, and for
+                         # one a wake word opened, when -- the start of
+                         # "wake to first word". A turn's own random id.
+                         "kind": capture_kind,
+                         "turn": stats.new_turn_id()}
+                if capture_kind == "wake":
+                    clock["woke"] = woke_at
                 ptt = ptt_done = False
                 if crew:
                     # They have finished talking; a waiting reply may start
@@ -6831,6 +6963,7 @@ class Daemon:
                     text = as_prompt(raw)
                     ms = utt.busy_ms
                     clock["transcribed"] = time.time()
+                    clock["whisper_ms"] = ms     # master plan M21
                     # Gated like every other line carrying speech. It was not,
                     # and the audit that was supposed to find them all used a
                     # grep that matched only the first physical line of a

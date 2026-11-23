@@ -1,4 +1,6 @@
 import QtQuick
+import Quickshell
+import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
@@ -12,6 +14,55 @@ Column {
   required property var s
 
   spacing: Style.space(18)
+
+  // The Overview's numbers (master plan M21): how many days are kept and how
+  // big, read when the page opens and after a clear. Counts only.
+  property var statsInfo: null
+  property string statsNote: ""
+  Process {
+    id: statsInfoReader
+    command: ["agentvoice", "stats", "--days", "1", "--json"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try { page.statsInfo = JSON.parse(text) } catch (e) { page.statsInfo = null }
+      }
+    }
+  }
+  function readStatsInfo() { if (!statsInfoReader.running) statsInfoReader.running = true }
+  Component.onCompleted: readStatsInfo()
+  // `agentvoice stats clear` deletes every day's numbers. Started only by
+  // clearStats(), which only the DangerButton's onConfirmed calls
+  // (tests/test_confirms.py).
+  Process {
+    id: statsClearer
+    property bool launched: false
+    command: ["agentvoice", "stats", "clear"]
+    onStarted: launched = true
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var n = parseInt(text, 10)
+        if (!isNaN(n)) page.statsNote = n === 0 ? "There was nothing to clear."
+                                     : (n === 1 ? "1 day of numbers cleared." : n + " days of numbers cleared.")
+      }
+    }
+    stderr: StdioCollector {
+      onStreamFinished: if (text.trim() !== "") page.statsNote = text.trim()
+    }
+    onRunningChanged: if (!running) {
+      if (!launched) page.statsNote = "Nothing was cleared: agentvoice could not be started."
+      page.readStatsInfo()
+    }
+  }
+  function clearStats() {
+    if (statsClearer.running) return
+    page.statsNote = ""
+    statsClearer.launched = false
+    statsClearer.running = true
+  }
+  function sizeText(bytes) {
+    var b = Number(bytes) || 0
+    return b < 1024 ? b + " bytes" : b < 1048576 ? Math.round(b / 1024) + " KB" : (b / 1048576).toFixed(1) + " MB"
+  }
 
   PageHeader {
     width: parent.width
@@ -259,6 +310,75 @@ Column {
       fontFamily: page.s.fontFamily
       onToggled: page.s.put("logSpeech", !checked)
       onReset: page.s.resetKey("logSpeech")
+    }
+
+    // Master plan M21: the Overview's numbers, and the one way to remove them.
+    ToggleRow {
+      width: parent.width
+      label: "Keep usage numbers for the Overview"
+      hint: "Counts and timings only, never what was said. Kept 90 days."
+      help: "Turns per agent, wakes and the ones turned down, and how long the waits " +
+            "were: one small file a day in ~/.local/share/agentvoice/stats, readable by " +
+            "you alone. Off counts nothing new; what was kept stays until you clear it."
+      checked: page.s.setting("keepStats", true) === true
+      changed: page.s.changed("keepStats")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onToggled: page.s.put("keepStats", !checked)
+      onReset: page.s.resetKey("keepStats")
+    }
+    Item {
+      width: parent.width
+      height: Math.max(statsText.implicitHeight, clearStatsButton.implicitHeight)
+
+      Column {
+        id: statsText
+        anchors.left: parent.left
+        anchors.right: clearStatsButton.left
+        anchors.rightMargin: Style.space(12)
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: Style.space(2)
+        Text {
+          width: parent.width
+          wrapMode: Text.Wrap
+          text: !page.statsInfo ? "Reading what is kept…"
+                : Number(page.statsInfo.files) === 0 ? "No usage numbers kept."
+                : page.statsInfo.files + (Number(page.statsInfo.files) === 1 ? " day" : " days")
+                  + " of usage numbers · " + page.sizeText(page.statsInfo.bytes)
+          textFormat: Text.PlainText
+          color: page.s.foreground
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Text {
+          width: parent.width
+          visible: page.statsNote !== ""
+          wrapMode: Text.Wrap
+          text: page.statsNote
+          textFormat: Text.PlainText
+          color: page.s.dim
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+
+      DangerButton {
+        id: clearStatsButton
+        objectName: "clearStats"
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+        text: "Clear stats"
+        enabled: !!page.statsInfo && Number(page.statsInfo.files) > 0
+        busy: statsClearer.running
+        tooltipText: enabled ? "" : "There are no usage numbers to clear"
+        question: "Clear every day of usage numbers? The Overview starts again from nothing."
+        confirmText: "Clear"
+        maxWidth: Math.max(Style.space(260), parent.width * 0.6)
+        foreground: page.s.foreground
+        urgent: page.s.urgent
+        fontFamily: page.s.fontFamily
+        onConfirmed: page.clearStats()
+      }
     }
 
     Text {

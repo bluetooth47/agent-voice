@@ -292,6 +292,13 @@ case "\${1:-}" in
       delete|rename|pin|unpin|share|unshare|export|prune)
         printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0 ;;
     esac ;;
+  stats)
+    # The Overview's numbers (M21): always the scratch data folder -- seeded
+    # by targets/overview.seed.py under --scratch-data, else empty -- so a
+    # screenshot never shows real usage, and Clear stats (logged too) clears
+    # only the scratch copy.
+    if [ "\${2:-}" = clear ]; then printf 'agentvoice %s\n' "\$*" >> '$out.writes'; fi
+    env XDG_DATA_HOME='$tmp/data' '$repo/bin/agentvoice' "\$@"; exit \$? ;;
   history)
     # Clearing this session's conversation is real and has no undo; a
     # preview's Clear button only logs it (M1). Reading passes through.

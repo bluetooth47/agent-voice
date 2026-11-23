@@ -367,7 +367,9 @@ def build_id(app: Path | None = None) -> str:
 #: Directories holding a recording of somebody's voice or a model fitted to
 #: it. Listed rather than discovered, because a repair pass that walks
 #: whatever it finds under DATA_DIR would also chmod the venv and the models.
-PRIVATE_TREES = ("verifiers", "verifier-training", "wakewords")
+#: "stats" (master plan M21): per-day counts and timings, numbers only, but
+#: when somebody talked to their machine is still theirs.
+PRIVATE_TREES = ("verifiers", "verifier-training", "wakewords", "stats")
 
 
 def private_dir(path: Path) -> Path:

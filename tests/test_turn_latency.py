@@ -123,3 +123,16 @@ def test_a_malformed_number_is_not_a_sample_and_does_not_crash():
         "  heard → spoke in 1.2.3s  (pause 1.0s · claude warm 2.0s)",
     ])
     assert rows == []
+
+
+def test_the_wake_figure_the_daemon_prints_is_taken_as_said():
+    """Master plan M21: a turn a wake word opened ends its latency line with
+    "wake → spoke in Ns", from the daemon's own timestamps. The line still
+    parses, and that figure wins over the estimate from journal times."""
+    rows = run(START + [
+        "  ● wake theo  go ahead (6.5s to start)",
+        "  3.0s audio, whisper 800ms, 0ms waited",
+        heard() + "  wake → spoke in 7.3s",
+    ])
+    assert len(rows) == 1 and rows[0]["end_to_word"] == 4.0
+    assert rows[0]["wake_to_word"] == 7.3

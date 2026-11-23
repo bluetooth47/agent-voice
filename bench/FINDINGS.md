@@ -2178,3 +2178,32 @@ The socket adds about 15 ms. A search answer with ten hits was about 5,000
 characters; a read is capped at 8,000 characters of chat. At the rate limit
 (20 chat calls a minute per agent) the worst an agent can spend is about
 3.5 s of one core a minute on `all`. No index file, as in §52.
+
+## 54. M21: what keeping the Overview's numbers costs
+
+Measured 2026-11-23 on the i7-1185G7 (8 threads), system Python 3, a
+scratch data folder under /tmp on the same btrfs as `~/.local/share`, with
+`bench/stats_cost.py` (three runs; nothing real read or written):
+
+| | median | p95 |
+|---|---|---|
+| `stats.record_turn` at the end of a turn (three waits), 200 into one day | 0.80–0.91 ms | 0.98–1.36 ms |
+| `stats.record_wake` (in the frame loop, on the wake frame) | 0.91–1.10 ms | 1.01–1.65 ms |
+| `stats.record_rejection` | 0.91–1.09 ms | |
+| `stats.summary(7)` over seven days of 200 turns (the Overview's read) | 2.8–3.1 ms | 3.3–5.0 ms |
+
+Each write is a lock, a read, a JSON parse and dump and an atomic rename of
+one small file; no fsync. Under a millisecond at the end of a turn that
+took seconds, and one millisecond on the frame a wake is accepted (a frame
+is 200 ms, and the wake chime follows it).
+
+**Size.** After 200 turns from three agents, 60 wakes and 15 rejections the
+day file is **4,727 bytes**, about half of it the 200 turn ids kept for
+counting each turn once. Kept 90 days: about 425 KB at that rate.
+
+**Memory figure against `ps`.** `stats.memory()` on the running daemon
+(pid from `$RUNDIR/pid`): 1160 MB; `ps -o rss=` 1,187,516 kB = 1159.7 MB.
+Its agents at that moment: two processes, both zombies (0 kB). Reading every
+process's `/proc/PID/stat` and the descendants' `status` (368 processes
+visible) costs **10.1 ms median, 11.7 ms p95**; the daemon does it at most
+every 30 s, on the idle poll only.

@@ -40,7 +40,7 @@ into place, so a reader never sees half a chat.
 
     python chats.py list | show ID | rename ID [TITLE...] | pin ID | unpin ID
                    | delete ID | delete --all | export ID [FOLDER]
-                   | prune RETENTION | stats [--json]
+                   | prune RETENTION | stats [--json] | last --json
                    | search [--agent ID] [--json]
 
 `rename ID` with no title, and `search`, read their text from stdin (phase
@@ -843,6 +843,33 @@ class ChatStore:
             pass
         return out
 
+    def last_by_owner(self) -> dict:
+        """Master plan M21, the Overview's "last chat →": for each agent, by
+        external id, the id of the newest chat it owns -- only one whose
+        file is there, so the link never opens nothing. Ids only: a title is
+        what somebody said. Read without the lock, creating nothing."""
+        out: dict = {}
+        if not self.root.is_dir() or self.root.is_symlink():
+            return out
+        try:
+            index = json.loads((self.root / INDEX).read_text(encoding="utf-8"))
+            metas = index.get("chats") if isinstance(index, dict) else None
+        except (OSError, ValueError):
+            metas = None
+        if not isinstance(metas, list):
+            metas = self._rebuild()["chats"]
+        for meta in sorted((m for m in metas if isinstance(m, dict)), key=_when, reverse=True):
+            cid, own = meta.get("id"), meta.get("owner") or external(meta.get("agent_id", ""))
+            if not (isinstance(cid, str) and valid_id(cid)) or not isinstance(own, str) \
+                    or not _AGENT.fullmatch(own) or own in out:
+                continue
+            try:
+                if (self.root / f"{cid}.json").is_file() and not (self.root / f"{cid}.json").is_symlink():
+                    out[own] = cid
+            except OSError:
+                continue
+        return out
+
     def search(self, query: str, agent: str | None = None, limit: int = 200,
                names: dict | None = None, problems: list | None = None,
                now: float | None = None, may_see=None) -> list[dict]:
@@ -1154,6 +1181,10 @@ def main(argv: list[str]) -> int:
             return 0
         elif verb == "delete" and len(rest) == 1:
             ok = store.delete(rest[0])
+        elif verb == "last" and rest == ["--json"]:
+            # Master plan M21: each agent's newest saved chat, ids only.
+            print(json.dumps(store.last_by_owner()))
+            return 0
         elif verb == "stats" and rest in ([], ["--json"]):
             st = store.stats()
             if rest:
@@ -1231,7 +1262,7 @@ def main(argv: list[str]) -> int:
         else:
             print("usage: agentvoice chats [list|show ID|rename ID [TITLE]|pin ID|unpin ID|"
                   "delete ID|delete --all|export ID [FOLDER]|share ID AGENT|unshare ID AGENT|"
-                  "continue ID [AGENT]|new [AGENT]|stats [--json]|search [--agent ID] [--json]]",
+                  "continue ID [AGENT]|new [AGENT]|stats [--json]|last --json|search [--agent ID] [--json]]",
                   file=sys.stderr)
             return 2
         if not ok:

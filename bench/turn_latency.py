@@ -64,7 +64,10 @@ FOLLOW = re.compile(
     r"\s*● still listening\s{2}\([\d.]+s for (.+?) — or say a name\)\s*$")
 STATUS = re.compile(r"\s*● ")
 AUDIO = re.compile(r"\s*[\d.]+s audio, whisper \d+ms")
-HEARD = re.compile(r"\s*heard → spoke in (\d+(?:\.\d+)?)s\s+\((.*)\)\s*$")
+# Since master plan M21 a turn a wake word opened ends with its own figure,
+# "  wake → spoke in 4.2s", from the daemon's two timestamps.
+HEARD = re.compile(r"\s*heard → spoke in (\d+(?:\.\d+)?)s\s+\((.*)\)"
+                   r"(?:\s+wake → spoke in (\d+(?:\.\d+)?)s)?\s*$")
 SPAN = re.compile(r"(?:^| · )([a-z][a-z ]*?) (\d+(?:\.\d+)?)s")
 ADAPTERS = ("claude", "codex", "gemini", "agy", "copilot", "endpoint")
 
@@ -204,6 +207,8 @@ def turns(lines):
                 word_ts = (audio_ts + total - spans.get("pause", 0.0)
                            - spans.get("whisper", 0.0))
                 wake_to_word = round(word_ts - wake_ts, 2)
+            if m.group(3) is not None:
+                wake_to_word = float(m.group(3))    # said outright (M21)
             pending = {"agent": agent or "?", "build": build,
                        "backend": backend, "end_to_word": total,
                        "wake_to_word": wake_to_word,

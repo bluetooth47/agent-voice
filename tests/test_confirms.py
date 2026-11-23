@@ -93,6 +93,11 @@ DESTRUCTIVE: dict[str, tuple[dict[str, list[str]], list[re.Pattern]]] = {
     # nowhere else (launch_extras), so it cannot be put back but by typing.
     "agents env unset": ({"AgentDetailsPage.qml": ["removeEnv"]}, [call("removeEnv")]),
     "agents env clear": ({"AgentDetailsPage.qml": ["clearEnv"]}, [call("clearEnv")]),
+    # Master plan M21: every day of the Overview's numbers, from Display →
+    # Privacy -- a Process started only by clearStats(), which only the
+    # DangerButton's onConfirmed calls.
+    "stats clear": ({"DisplayPage.qml": ["Process"]},
+                    [call("clearStats"), start("statsClearer")]),
 }
 
 # How each verb looks where it is built.
@@ -111,6 +116,7 @@ SPELLING = {
     "agents reset": '["reset"',
     "agents env unset": '"unset", name]',
     "agents env clear": '"env", page.target, "clear"]',
+    "stats clear": '"stats", "clear"',
 }
 
 # Functions a call may sit in without a confirmation of its own, because
@@ -124,7 +130,8 @@ WRAPPERS = {("AgentFolders.qml", "function remove"), ("AgentFolders.qml", "funct
             ("pages/CrewMapPage.qml", "function linkEveryone"),
             ("pages/CrewMapPage.qml", "function quarantineAgent"),
             ("AgentFolders.qml", "function resetAgent"),
-            ("pages/ChatsPage.qml", "function deleteAllChats")}
+            ("pages/ChatsPage.qml", "function deleteAllChats"),
+            ("pages/DisplayPage.qml", "function clearStats")}
 
 
 def _built_in(scanned, spelling):

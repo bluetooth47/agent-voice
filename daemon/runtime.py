@@ -476,6 +476,10 @@ DEFAULTS = {
     "conversationMode": True,
     "yieldToRecorders": True,
     "logSpeech": False,
+    # Master plan M21: per-day counts and timings for the Overview
+    # (stats.py), numbers only. Anything but a plain true reads as off,
+    # and so do settings that cannot be read (Config.keep_stats).
+    "keepStats": True,
     "followUpMs": 7000,
     "narration": "off",
     "narrationSilenceS": 7,
@@ -571,6 +575,7 @@ TOML_ALIASES = {
     "conversationMode": ("wake", "conversation_mode"),
     "yieldToRecorders": ("wake", "yield_to_recorders"),
     "logSpeech": ("ui", "log_speech"),
+    "keepStats": ("ui", "keep_stats"),
     "followUpMs": ("timing", "follow_up_ms"),
     "narration": ("ui", "narration"),
     "narrationSilenceS": ("timing", "narration_silence_s"),
@@ -1262,6 +1267,22 @@ class Config:
         return mode(self["chatSummaries"], self.get_bool("saveChats"),
                     self.settings_readable())
 
+    def keep_stats(self) -> bool:
+        """Master plan M21: whether the Overview's numbers are being kept.
+        True only for a plain true (or "true"/"yes"/"on"/"1" from a hand
+        edit); anything else -- a number, a list, a typo -- is off, and so
+        are settings that cannot be read: off collects nothing, which is
+        the safe reading of a switch nobody can be sure of. Read on every
+        record, so switching it off stops the next one."""
+        if not self.settings_readable():
+            return False
+        value = self["keepStats"]
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return False
+
     def narration_silence_s(self) -> float:
         """Seconds of quiet before the first progress sentence, 3 to 30."""
         return float(min(30, max(3, self.get_int("narrationSilenceS"))))
@@ -1421,6 +1442,14 @@ class StateFile:
                     self._write(self._last.get("state", "off"),
                                 {k: v for k, v in self._last.items()
                                  if k != "state" and k not in self._context})
+
+    def update(self, **fields) -> None:
+        """Change some sticky fields and keep the rest (master plan M21: the
+        memory figures, which move on their own clock)."""
+        # One hold of the (re-entrant) lock from the read to the write, so a
+        # describe() from a turn thread in between is not undone.
+        with self._lock:
+            self.describe(**{**self._context, **fields})
 
     def publish(self, state: str, **extra) -> None:
         with self._lock:

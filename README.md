@@ -462,6 +462,26 @@ alone. Say no and it prints them for you to paste, because
 
 Super+Space is Omarchy's application launcher and stays that way.
 
+### How it has been going: the Overview
+
+The page the settings open on shows numbers as well as state: turns today
+per agent (or over seven days), the middle wait from the wake word to the
+first word of the reply, the wait after you stop talking, Whisper's own
+time, wakes against the ones turned down, and how long the service has been
+up and how much memory it and, apart, its agents hold. Each wait is shown
+with how many turns it comes from, and "no data yet" when there are none.
+Typed messages, follow-ups and the open microphone have no wake word, so
+they are counted as turns but left out of the wake figure. A "false wake"
+there is exactly a burst in which a name was heard and the second check
+turned it down. Each agent's card has **last chat ›** when it has a saved
+chat.
+
+The numbers are counts and timings only: one small file a day in
+`~/.local/share/agentvoice/stats`, readable by you alone, kept 90 days, and
+never anything that was said. Display & privacy → **Keep usage numbers**
+turns collecting off, and **Clear stats** deletes what was kept. In a
+terminal: `agentvoice stats [--days N] [--json]`.
+
 ### More than one agent
 
 Settings → **Agents** → **Add an agent** adds agents beside the main one,

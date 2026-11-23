@@ -35,6 +35,7 @@
 #   agentvoice notes move|copy FROM NAME TO   a note to another agent or communal,
 #                                  with its past versions (combine, undo, lanes)
 #   agentvoice commands [--json]   every spoken command, and the wake phrases
+#   agentvoice stats [--days N] [--json] | clear   the Overview's numbers (never text)
 #   agentvoice try AGENT < draft   one sentence in AGENT's voice, on a draft
 #                                  personality (Agent details' Try it)
 set -euo pipefail
@@ -443,6 +444,7 @@ case "${1:-status}" in
     #                                    (no TITLE: one line on stdin, M18)
     #   agentvoice chats delete --all    every saved chat; prints how many (M18)
     #   agentvoice chats stats [--json]  where they are, how many, how big
+    #   agentvoice chats last --json     each agent's newest saved chat, ids only (M21)
     #   agentvoice chats search [--agent ID] [--json]   best matches first;
     #                                    the words on stdin, never argv (M18);
     #                                    agent:NAME before:DATE after:DATE
@@ -543,6 +545,17 @@ case "${1:-status}" in
       + (if (.error // "") != "" then "  [failed: " + .error + "]" else "" end)
       + (if .stopped then "  [stopped]" else "" end) + "\n"' "$H"
     ;;
+  stats)
+    # The Overview's numbers (master plan M21): per-day counts and timings,
+    # never anything said. Reads the files; no daemon needed.
+    #   agentvoice stats [--days N] [--json]   today and the last N days (7)
+    #   agentvoice stats clear                 delete every day; prints how many
+    REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+    PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+    [[ -x $PY ]] || PY=python3
+    shift
+    exec "$PY" "$REPO/daemon/stats.py" "$@"
+    ;;
   commands)
     # Every spoken command (phase M4): its phrases, what it does, where in a
     # sentence it counts, what it says when it fires there, and the agents'
@@ -561,7 +574,7 @@ case "${1:-status}" in
     active && echo yes || echo no
     ;;
   *)
-    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|try|interrupt|hud-preview|monitor|calibrate|voice|permit|pending|history|chats|pass|tasks|crew|tools|skills|notes|agents|endpoint|open-mic|commands|wake-test|status|is-active]" >&2
+    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|try|interrupt|hud-preview|monitor|calibrate|voice|permit|pending|history|chats|pass|tasks|crew|tools|skills|notes|agents|endpoint|open-mic|commands|stats|wake-test|status|is-active]" >&2
     exit 2
     ;;
 esac

@@ -350,6 +350,10 @@ Item {
   // Turns cut at the longest-turn limit today: {date, today, last}, from
   // the state file (phase M2, bug C). Empty from a daemon that does not say.
   property var vLimitHits: ({})
+  // When this run of the service began and how much memory it and, apart,
+  // its agents hold: {started_at, rss_mb, agents_mb, agents_procs}, from the
+  // state file (master plan M21). Empty from a daemon that does not say.
+  property var vService: ({})
   // "Send to another agent" (ui/SendSheet.qml), from the conversation view
   // and a chat row. `fromId` is the source's external id ("main" for the
   // main agent), `chatId` a saved chat or "" for this session.
@@ -1746,6 +1750,7 @@ Item {
         root.vTasks = Array.isArray(d.tasks) ? d.tasks : []
         root.vLimitHits = (d.limit_hits && typeof d.limit_hits === "object")
                           ? d.limit_hits : ({})
+        root.vService = (d.service && typeof d.service === "object") ? d.service : ({})
       } catch (e) {}
     }
   }
