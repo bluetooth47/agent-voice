@@ -3064,6 +3064,11 @@ class Daemon:
         # just reconciled, and after the extras, so the size it logs is the
         # whole preamble, Omarchy commands included (Phase 11).
         self.reconcile_parts()
+        # Phase M16: last, so each line is built from what this poll handed
+        # the adapter. Before the parts, the first line after a start lacked
+        # the roster, and a turn starting then kept that line on the page
+        # (a busy agent's line is not rebuilt) -- seen on the installed build.
+        self.publish_runinfo(self.personas())
 
     def catch_up_one(self, p: Persona) -> None:
         """What `p` is told, brought up to date: for an agent whose turn
@@ -3211,7 +3216,6 @@ class Daemon:
             if agent is not None and not p.busy:
                 self.apply_extras(agent, p)
         self.publish_live_tools(agents)
-        self.publish_runinfo(agents)
 
     def _refresh_agentvoice_skill(self) -> None:
         """Build the Agent Voice skill when it is missing or its inputs

@@ -724,3 +724,45 @@ def test_decisions_come_from_the_end_of_the_log_and_its_archive():
                 p.unlink(missing_ok=True)
             else:
                 p.write_bytes(data)
+
+
+def test_the_line_is_published_after_the_prompt_parts_are_handed_over():
+    """Seen on the installed build: the first record after a start was built
+    before reconcile_parts gave the main agent its roster, and a turn that
+    began then kept that line (a busy agent's is not rebuilt). The poll
+    publishes last, from what it has just handed over."""
+    src = (ROOT / "daemon/wake_listen.py").read_text()
+    body = src[src.index("    def catch_up(self) -> None:"):src.index("    def catch_up_one(")]
+    assert body.index("self.reconcile_parts()") < body.index("self.publish_runinfo(")
+    assert "self.publish_runinfo(" not in src[src.index("    def reconcile_extras("):
+                                              src.index("    def _refresh_agentvoice_skill(")]
+
+
+def test_a_fresh_daemon_publishes_the_roster_the_turn_will_send(daemon, monkeypatch):
+    """Driven: catch_up() on a daemon with a Claude main agent and one other
+    agent linked to it; the published next line's prompt file holds the
+    roster, as the turn's own preamble does."""
+    from crew import Persona
+    main = _claude()
+    main.parts = None
+    daemon.agent = main
+    sora = _claude(named="sora")
+    p = Persona("sora", {"id": "sora", "name": "sora", "label": "Sora", "agent": "claude"})
+    p.agent = sora
+    daemon.crew = {"sora": p}
+    monkeypatch.setattr(daemon, "reconcile_agent_files", lambda: None)
+    monkeypatch.setattr(daemon, "reconcile_agent", lambda: None)
+    monkeypatch.setattr(daemon, "reconcile_crew", lambda: None)
+    monkeypatch.setattr(daemon, "reconcile_extras", lambda: None)
+    daemon._folder_texts = {}
+
+    class Links:
+        def reach(self, who):
+            return {"sora": True} if who == "main" else {"main": True}
+    monkeypatch.setattr(daemon.cfg, "crew", lambda: Links(), raising=False)
+    monkeypatch.setattr(daemon.cfg, "agents", lambda: [{"id": "sora", "name": "sora"}], raising=False)
+    daemon.catch_up()
+    rec = json.loads(runinfo.path().read_text())["agents"]["main"]
+    told = Path(rec["argv"][rec["argv"].index("--append-system-prompt-file") + 1]).read_text()
+    assert "Other agents here" in told
+    assert told == main.preamble()
