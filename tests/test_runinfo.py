@@ -683,7 +683,9 @@ def test_a_chat_grant_does_not_pay_for_the_level(tmp_path):
     """FINDINGS §50: on an "allow all in this chat" path decide() never loads
     the settings code, and the record must not load it either (~40 ms a
     call); the level is left out there. A fresh interpreter, as Claude Code
-    starts the hook."""
+    starts the hook. -B as well as the variable: -I ignores PYTHON*, and a
+    hook run from the clone must not leave bytecode in it (found by the
+    bare-runner check in M16)."""
     import subprocess
     env = {**os.environ, "XDG_DATA_HOME": str(tmp_path / "data"),
            "XDG_CONFIG_HOME": str(tmp_path / "cfg"), "XDG_RUNTIME_DIR": str(tmp_path / "run"),
@@ -691,7 +693,7 @@ def test_a_chat_grant_does_not_pay_for_the_level(tmp_path):
     code = ("import sys; sys.path.insert(0, sys.argv[1]); import permission_hook as h; "
             "sys.argv = ['permission_hook.py', 'claude']; "
             "h._record_decision('Bash', 'allow', 'chat'); print('runtime' in sys.modules)")
-    out = subprocess.run([sys.executable, "-I", "-c", code, str(ROOT / "daemon")],
+    out = subprocess.run([sys.executable, "-I", "-B", "-c", code, str(ROOT / "daemon")],
                          env=env, capture_output=True, text=True, timeout=30)
     assert out.stdout.strip() == "False", out.stderr
     line = json.loads((tmp_path / "data/agentvoice/audit.log").read_text().splitlines()[-1])
