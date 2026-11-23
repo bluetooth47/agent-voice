@@ -322,10 +322,17 @@ class Announcer:
 
 # --- the desktop's side ----------------------------------------------------------
 
-def notify(event: Event, run=subprocess.run) -> str:
+#: What runs notify-send and omarchy-shell, looked up at each call: the test
+#: suite replaces it (tests/conftest.py), because both reach the person's
+#: real desktop.
+_run = subprocess.run
+
+
+def notify(event: Event, run=None) -> str:
     """Show the fixed notification for `event`. "" when it was shown, else
     why not ("missing", "failed"). Never raises; never waits more than a few
     seconds. argv holds the fixed text and nothing else."""
+    run = run or _run
     argv = ["notify-send", "--app-name=Agent Voice", "--", notification_text(event)]
     try:
         done = run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -344,12 +351,13 @@ def quiet_file() -> Path:
     return Path(state) / "omarchy" / "notifications" / "quiet.json"
 
 
-def silenced(run=subprocess.run, path: Path | None = None) -> tuple[bool, str]:
+def silenced(run=None, path: Path | None = None) -> tuple[bool, str]:
     """Whether Omarchy's notification silencing is on, and how that was
     known. The running shell is asked first (`omarchy-shell notifications
     isDnd`: "on" or "off"); then the file it saves the switch in. No file is
     off (the shell's own default); a file that cannot be read is on: when in
     doubt, quiet, and the notification is still shown."""
+    run = run or _run
     try:
         done = run(["omarchy-shell", "notifications", "isDnd"], stdin=subprocess.DEVNULL,
                    capture_output=True, text=True, timeout=3, check=False)

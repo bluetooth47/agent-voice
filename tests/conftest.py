@@ -88,6 +88,22 @@ def _no_real_cli_settings(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _no_desktop_notifications(monkeypatch):
+    """Notifications are the person's desktop, not the suite's (master plan
+    M27). Without this every collaboration test whose delegation finished
+    with report_back ran the real notify-send -- four popups on the desktop
+    per suite run until it was noticed in the notification history -- and
+    asked the real shell whether notifications were silenced. Nothing is run
+    now, as on a machine with neither; a test that wants to watch the
+    command passes its own `run`."""
+    import announce
+
+    def nothing(argv, **kw):
+        raise FileNotFoundError(argv[0])
+    monkeypatch.setattr(announce, "_run", nothing)
+
+
+@pytest.fixture(autouse=True)
 def card_desk(monkeypatch):
     """A fresh in-process desk for approval cards (phase M7), as the daemon
     installs one: `permission_hook.ask_card` posts to it instead of a socket.

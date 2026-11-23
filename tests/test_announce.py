@@ -103,6 +103,14 @@ def test_a_missing_or_broken_notification_service_is_reported_not_raised(raises,
     assert announce.notify(bg(), run=run) == want
 
 
+def test_the_suite_never_reaches_the_desktop(tmp_path):
+    """conftest's stand-in: nothing runs, as on a machine without either
+    command, so no test pops a real notification or asks the real shell."""
+    assert announce._run is not subprocess.run
+    assert announce.notify(bg()) == "missing"
+    assert announce.silenced(path=tmp_path / "none") == (False, "no file")
+
+
 def test_a_failing_notify_send_is_reported():
     assert announce.notify(bg(), run=lambda a, **k: subprocess.CompletedProcess(a, 1)) == "failed"
 
