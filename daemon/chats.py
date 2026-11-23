@@ -569,7 +569,9 @@ class ChatStore:
             gone = index.get("deleted") if isinstance(index.get("deleted"), dict) else {}
             gone = {k: v for k, v in gone.items()
                     if valid_id(k) and isinstance(v, (int, float)) and v > now - DELETED_KEEP_S}
-            gone[chat_id] = round(now, 3)
+            # Exact, not rounded: rounded down it could fall below the start
+            # of a turn sent within the same millisecond, and miss it.
+            gone[chat_id] = now
             index["deleted"] = gone
             self._save_index(index)
             return True
@@ -607,7 +609,7 @@ class ChatStore:
                     except FileNotFoundError:
                         pass
             self._write_json(self.root / INDEX, {"chats": [], "current": {},
-                                                 "purged": round(now, 3)})
+                                                 "purged": now})
             return gone
 
     def stats(self) -> dict:

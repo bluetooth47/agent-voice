@@ -140,6 +140,15 @@ class TestInFlight:
         index = json.loads((store.root / "index.json").read_text())
         assert a not in index["deleted"] and b in index["deleted"]
 
+    def test_a_delete_in_the_same_millisecond_still_counts(self, store):
+        """Found flaky in M18's check: the time was stored rounded to the
+        millisecond, which could fall below a turn sent just before."""
+        a = rec(store, now=100)
+        store.delete(a, now=1000.12349)
+        assert rec(store, a, transcript="late", now=1001, began=1000.12345) is None
+        store.delete_all(now=2000.00049)
+        assert rec(store, None, transcript="late", now=2001, began=2000.00041) is None
+
     def test_without_a_start_time_it_saves_as_before(self, store):
         a = rec(store)
         store.delete(a)
