@@ -1087,12 +1087,17 @@ def test_the_count_starts_again_at_midnight(daemon, monkeypatch):
     assert daemon.limit_hits_rolled() is False
 
 
-def test_the_page_draws_it_beside_the_slider():
-    """One line, under "Longest a turn can be", from the state file."""
+def test_the_page_draws_it_under_the_turn_it_cut():
+    """One line, from the state file: since M24 under the drawn turn ("A turn,
+    start to end"), with a link to the longest-turn control, which sits in the
+    timings folded below it (it was beside the slider until then)."""
     page = (ROOT / "pages" / "ConversationPage.qml").read_text()
-    slider = page.index('label: "Longest a turn can be"')
+    turn = page.index("TurnTimeline {")
     hint = page.index("text: page.limitLine")
-    assert slider < hint < page.index("SettingsGroup", slider)
+    timings = page.index('objectName: "timingsAdvanced"')
+    slider = page.index('label: "Longest a turn can be"')
+    assert turn < hint < timings < slider
+    assert 'page.s.focusKey = "maxUtteranceMs"' in page
     assert "s.vLimitHits" in page
     overlay = (ROOT / "Settings.qml").read_text()
     assert "root.vLimitHits = (d.limit_hits" in overlay
@@ -1152,5 +1157,8 @@ def test_the_limit_line_is_worked_out_again_after_midnight():
     a minute tick it reads makes it."""
     page = (ROOT / "pages" / "ConversationPage.qml").read_text()
     assert "interval: 60000" in page and "page.minuteTick = Date.now()" in page
-    line = page[page.index("readonly property string limitLine"):]
-    assert line.index("minuteTick") < line.index("formatDate")
+    # The count carries the date; the line is worked out from the count.
+    for prop in ("readonly property int limitToday", "readonly property string limitLine"):
+        assert "minuteTick" in page[page.index(prop):page.index(prop) + 200]
+    count = page[page.index("readonly property int limitToday"):]
+    assert count.index("minuteTick") < count.index("formatDate")

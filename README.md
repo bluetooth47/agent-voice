@@ -475,7 +475,21 @@ off", not "open mic" or "mic off", which are as often nouns ("camera on,
 mic off"). After "…, stop listening" it listens for three seconds for "no"
 and nothing else. Stop, full stop, take over and moving to a terminal still
 work only said on their own. `agentvoice commands` lists every phrase, where it counts
-and what it says, with each agent's wake phrase (`--json` for scripts).
+and what it says, with each agent's wake phrase (`--json` for scripts). The
+Conversation page lists them from the same table, so what it shows is what is
+heard.
+
+**The Conversation page** has the pace (Patient, Balanced or Snappy; Custom
+when you have set the timings yourself) at the top, then four cards:
+follow-ups, the open mic (whether it is on and how long it has left, with a
+Turn on / Turn off button), talking while it works, and talking over a reply.
+Under them "A turn, start to end" draws one turn from your timings (the wait
+for you to start, you talking up to the longest a turn can be, the pause that
+ends it, the reply, the follow-up window); the timings themselves are folded
+under it. If turns were cut at the longest-turn limit today it says how many,
+with a link that opens that control. "Three different stops" says what turning
+off the open mic, stopping a reply and stopping the service each end, and
+leave running.
 
 **Move this to a terminal.** Say "Theo, move this to a terminal" and the
 conversation opens in a terminal, in the agent's project folder, with

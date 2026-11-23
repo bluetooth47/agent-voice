@@ -332,6 +332,11 @@ case "\${1:-}" in
       echo "agentvoice: refused" >&2; exit 1
     fi
     echo '{"ok": true, "text": "allowed"}'; exit 0 ;;
+  commands)
+    # The command table (M24): this checkout's, never the installed build's,
+    # reading the scratch shell.json under --config. It only reads, and the
+    # page draws none of the agents' wake phrases, so nothing real is shown.
+    env XDG_CONFIG_HOME="\${XDG_CONFIG_HOME:-$real_config}" XDG_DATA_HOME='$tmp/data' $tools_env '$repo/bin/agentvoice' "\$@"; exit \$? ;;
   crew)
     # The Crew map's validator (M9): this checkout's, against the scratch
     # shell.json under --config, so a preview checks what it saves with the

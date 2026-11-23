@@ -60,6 +60,12 @@ Item {
   property string focusAgent: ""
   // With focusAgent: mark that agent's Tools card (Phase 13; a card since M5).
   property bool focusTools: false
+  // A control on the page to bring into view and mark, by its setting's key:
+  // {"page": "conversation", "focus": "maxUtteranceMs"} (phase M24: the
+  // limit note's "Raise it"). Set after goTo(), which clears it, so a page
+  // reached any other way opens at the top. A page that has no such control
+  // ignores it.
+  property string focusKey: ""
   // The agent and tab Agent details shows, kept for the session so leaving
   // the page and coming back finds them where they were.
   property string detailsAgent: "main"
@@ -350,6 +356,11 @@ Item {
   // Turns cut at the longest-turn limit today: {date, today, last}, from
   // the state file (phase M2, bug C). Empty from a daemon that does not say.
   property var vLimitHits: ({})
+  // The open microphone, from the state file: {who, until}, `until` in epoch
+  // seconds; empty when it is closed or the daemon does not say (the popup
+  // reads the same field in Panel.qml). Phase M24: the Conversation page's
+  // Open mic card.
+  property var vOpenMic: ({})
   // When this run of the service began and how much memory it and, apart,
   // its agents hold: {started_at, rss_mb, agents_mb, agents_procs}, from the
   // state file (master plan M21). Empty from a daemon that does not say.
@@ -974,8 +985,12 @@ Item {
       if (probe) probe.running = true
     } else {
       // A deep link: {"page": "agents", "agent": "sarah"} opens that card.
-      if (mode === "settings") goTo(String(p.page || "overview"), String(p.agent || ""),
-                                    /^(prompt|tools|notes|chats|advanced|rules|skills)$/.test(String(p.tab || "")) ? String(p.tab) : "")
+      if (mode === "settings") {
+        goTo(String(p.page || "overview"), String(p.agent || ""),
+             /^(prompt|tools|notes|chats|advanced|rules|skills)$/.test(String(p.tab || "")) ? String(p.tab) : "")
+        // A setting's key and nothing else: it is compared, never run.
+        if (/^[A-Za-z]{1,40}$/.test(String(p.focus || ""))) focusKey = String(p.focus)
+      }
       showPage(mode)
     }
   }
@@ -997,6 +1012,7 @@ Item {
     var known = false
     for (var i = 0; i < pages.length; i++) if (pages[i].id === pageId) known = true
     page = known ? pageId : "overview"
+    focusKey = ""
     // {"page": "agentdetails", "agent": "sora"} opens that agent's details,
     // on its first tab unless "tab" names another.
     if (page === "agentdetails") {
@@ -1761,6 +1777,7 @@ Item {
         root.vTasks = Array.isArray(d.tasks) ? d.tasks : []
         root.vLimitHits = (d.limit_hits && typeof d.limit_hits === "object")
                           ? d.limit_hits : ({})
+        root.vOpenMic = (d.open_mic && typeof d.open_mic === "object") ? d.open_mic : ({})
         root.vService = (d.service && typeof d.service === "object") ? d.service : ({})
         root.vWakeDecision = (d.wake_decision && typeof d.wake_decision === "object")
                              ? d.wake_decision : ({})

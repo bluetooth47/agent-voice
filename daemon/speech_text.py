@@ -1141,6 +1141,11 @@ def table(names_by_agent=None, mode: str = "alone") -> dict:
         "mode": command_mode(mode),
         "modes": list(COMMAND_MODES),
         "positions": list(POSITIONS),
+        # Which positions each mode lets a command fire in, so a page that
+        # says "works at the start or end" reads it here rather than
+        # repeating the rule (phase M24).
+        "mode_positions": {m: [p for p in POSITIONS if p in _MODE_POSITIONS[m]]
+                           for m in COMMAND_MODES},
         "undo": {"seconds": UNDO_S, "phrases": sorted(_UNDO)},
         "commands": [c.as_dict() for c in COMMANDS],
         "wake_phrases": list(names_by_agent or []),
