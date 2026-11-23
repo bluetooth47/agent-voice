@@ -73,6 +73,7 @@ import omarchy_skill  # noqa: E402
 import agentvoice_skill  # noqa: E402
 import readout  # noqa: E402
 import try_it  # noqa: E402
+import chat_names  # noqa: E402
 import sessions  # noqa: E402
 import runinfo  # noqa: E402
 import launch_extras  # noqa: E402
@@ -2930,6 +2931,138 @@ class Daemon:
                           else "the microphone was lent to a call" if self.yielded
                           else "it was stopped before the end")
 
+    # --- chat names and summaries (phase M19) --------------------------------
+    # The rules are in chat_names.py; this is the part that needs the daemon:
+    # who owns a chat now, what program it runs, whether anyone is busy.
+
+    def name_chats(self, now: float | None = None) -> str:
+        """From the idle poll: when a saved chat has gone quiet, start one
+        quiet side turn on its own agent to name and summarise it, in a
+        thread, so a wake word said meanwhile is heard. At most one running.
+        Returns what it did, for tests: "", "started", or the refusal."""
+        now = time.time() if now is None else now
+        if now - getattr(self, "_named_look", 0.0) < chat_names.LOOK_EVERY_S:
+            return ""
+        self._named_look = now
+        running = getattr(self, "_namer", None)
+        if running is not None and running.is_alive():
+            return "running"
+        if self.cfg.chat_summaries() != "owner":
+            return "off"
+        if not self.chats.root.is_dir():
+            return "nothing saved"
+        try:
+            index = self.chats.list()
+        except (OSError, ValueError):
+            return "the index cannot be read"
+        budget = getattr(self, "_named_budget", None)
+        if budget is None:
+            budget = self._named_budget = chat_names.Budget()
+            budget.seed(index, now)
+        if budget.left(now) <= 0:
+            return "ten this hour"
+        # Refused for a reason of the chat's own (its agent is gone, runs on
+        # another program): not looked at again until the chat changes.
+        # Kept only while the chat is still listed unchanged, so it stays as
+        # small as the index.
+        listed = {m.get("id"): m.get("updated") for m in index if isinstance(m, dict)}
+        refused = {cid: at for cid, at in (getattr(self, "_named_refused", None) or {}).items()
+                   if listed.get(cid) == at}
+        self._named_refused = refused
+        meta = chat_names.pick(index, now, set(refused))
+        if meta is None:
+            return ""
+        cid, updated = meta["id"], meta.get("updated")
+        chat = self.chats.load(cid)
+        if chat is None:
+            refused[cid] = updated
+            return "gone"
+        owner = chat_schema.owner_of(chat)
+        p = self._persona_by_id(chat_schema.internal(owner))
+        have = None
+        if p is not None:
+            have = self.agent if p is self._main else p.agent
+        endpoint = None
+        if have is not None and hasattr(have, "base_url"):
+            endpoint = (self.cfg.main_endpoint() if p is self._main
+                        else (p.spec or {}).get("endpoint"))
+            if endpoint:
+                endpoint = {**endpoint, "key": endpoint_key(_host(endpoint["url"]))}
+        locked = True if self.locked else session_locked()
+        why = chat_names.refusal(
+            mode_now="owner", locked=locked, quarantine=self.cfg.quarantined(),
+            owner=owner, known=p is not None,
+            has_program=have is not None and (endpoint is not None
+                                               or not hasattr(have, "base_url")),
+            chat_backend=str(chat.get("backend") or ""),
+            program=(getattr(have, "name", "") or "") if have is not None else "",
+            endpoint=endpoint is not None,
+            endpoint_is_agent=bool(getattr(have, "is_agent", False)),
+            busy=any(q.busy for q in self.personas()) or self._speaking
+                 or self.yielded or getattr(self, "_capture_for", None) is not None)
+        side = None
+        if not why:
+            try:
+                side = chat_names.make_side(load_adapter, have, endpoint)
+            except Exception as e:          # noqa: BLE001
+                print(f"  {YEL}chat name: could not build the agent ({type(e).__name__}){OFF}",
+                      flush=True)
+            if side is None:
+                why = "its program could not be started"
+        if why:
+            if why not in ("the screen is locked", "cannot tell whether the screen is locked",
+                           "an agent is busy", "the crew settings cannot be read"):
+                refused[cid] = updated
+            self.say_once("chat-name", f"  {DIM}(chat not named: {why}){OFF}")
+            return why
+        request = chat_names.prompt(chat)
+        budget.spend(now)
+        self._namer = threading.Thread(target=self._name_one, name="chat-name", daemon=True,
+                                       args=(side, cid, updated, request, now))
+        self._namer.start()
+        return "started"
+
+    def _name_one(self, side, cid: str, updated, request: str, at: float) -> None:
+        """The side turn, in its own thread: send, read, cancel, store. The
+        journal gets seconds and lengths, never the chat or the name."""
+        t0 = time.monotonic()
+        timer = threading.Timer(chat_names.TURN_TIMEOUT_S, side.cancel)
+        timer.daemon = True
+        timer.start()
+        got, crash, stream = "", "", None
+        try:
+            stream = side.send(request, None)
+            got = chat_names.read_reply(stream, t0 + chat_names.TURN_TIMEOUT_S)
+        except Exception as e:              # noqa: BLE001
+            crash = type(e).__name__
+        finally:
+            timer.cancel()
+            try:
+                side.cancel()               # thrown away: no process left behind
+            except Exception:
+                pass
+            try:
+                if stream is not None:
+                    stream.close()
+            except Exception:
+                pass
+        took = time.monotonic() - t0
+        named = chat_names.parse(got)
+        # Switched off, or saving stopped, while it ran: nothing is kept.
+        if self.cfg.chat_summaries() != "owner":
+            print(f"  {DIM}chat name dropped: switched off while it ran{OFF}", flush=True)
+            return
+        try:
+            kept = self.chats.set_name(cid, for_updated=updated, at=at,
+                                       title=named[0] if named else "",
+                                       summary=named[1] if named else "")
+        except (OSError, ValueError) as e:
+            print(f"  {YEL}chat name not saved: {type(e).__name__}{OFF}", flush=True)
+            return
+        sizes = f"{len(named[0])}+{len(named[1])} chars" if named else "no name in it"
+        print(f"  chat named in {took:.1f}s ({sizes}{', ' + crash if crash else ''}"
+              f"{'' if kept else ', the chat is gone'})", flush=True)
+
     def _publish(self, **extra):
         # "locked" is its own state rather than "off": the panel should be
         # able to say why the microphone is closed, because "off" invites
@@ -4791,7 +4924,7 @@ class Daemon:
         if self.continue_chat(p, chat) == "refused":
             return ("That chat isn't shared with me any more, so I can't "
                     "pick it up."), False
-        return f"Continuing {chat.get('title') or 'that chat'}. Go ahead.", True
+        return f"Continuing {chat_schema.display_title(chat) or 'that chat'}. Go ahead.", True
 
     def chat_turn(self, text: str, last: dict, out, tail_ms: int) -> bool:
         """ "new chat" and "continue the chat about ..." said to an agent.
@@ -6383,6 +6516,12 @@ class Daemon:
                 if phase == "wake" and time.time() - last_poll > 2.0:
                     last_poll = time.time()
                     self.refresh()
+                    # Phase M19: a quiet chat named by its own agent, in a
+                    # thread; below the gate, so never while locked or muted.
+                    try:
+                        self.name_chats()
+                    except Exception as e:      # noqa: BLE001 -- never the loop
+                        print(f"  {YEL}chat names: {type(e).__name__}{OFF}", flush=True)
 
                 if phase == "wake" and self.open_mic is not None:
                     # The open microphone: back to listening without the

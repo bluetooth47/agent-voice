@@ -348,6 +348,10 @@ DEFAULTS = {
     # by design and writing it to disk is the user's choice to make.
     "saveChats": False,
     "chatRetention": "forever",
+    # Phase M19: a saved chat's name and one-line summary, written by the
+    # chat's own agent once it has gone quiet (chat_names.py). "off" or
+    # "owner"; unreadable is off (chat_summaries()).
+    "chatSummaries": "owner",
     "livePartials": "auto",
     "bargeIn": False,
     "bargeOnHeadset": True,
@@ -519,6 +523,7 @@ TOML_ALIASES = {
     "keepHistory": ("ui", "keep_history"),
     "saveChats": ("ui", "save_chats"),
     "chatRetention": ("ui", "chat_retention"),
+    "chatSummaries": ("ui", "chat_summaries"),
     "bargeFactor": ("audio", "barge_factor"),
     "permissions": ("agent", "permissions"),
     "agentModels": ("agent", "models"),
@@ -1205,6 +1210,16 @@ class Config:
         if not self.settings_readable():
             return "alone"
         return command_mode(self["commandsInSentences"])
+
+    def chat_summaries(self) -> str:
+        """Phase M19: "owner" when a saved chat's own agent may name and
+        summarise it, else "off" -- for anything but "owner", for settings
+        that cannot be read (a side turn the person never chose must not
+        run), and while chats are not being saved. Read on every look, so
+        switching it off stops the next one."""
+        from chat_names import mode
+        return mode(self["chatSummaries"], self.get_bool("saveChats"),
+                    self.settings_readable())
 
     def narration_silence_s(self) -> float:
         """Seconds of quiet before the first progress sentence, 3 to 30."""

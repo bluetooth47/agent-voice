@@ -10,9 +10,14 @@ through the real ChatStore into PREVIEW_DATA:
 - text that looks like HTML in a title, a request and a reply -- drawn as
   plain text or the preview fails;
 - a failed turn and a stopped one;
-- chats from today, this week and long ago.
+- chats from today, this week and long ago;
+- (M19) a name and a summary written by the garden chat's agent and the
+  forecast chat's, a summary on the pinned chat, which keeps its own
+  (renamed) title.
 
-PREVIEW_ARG=empty writes nothing: the empty page."""
+PREVIEW_ARG=empty writes nothing: the empty page. PREVIEW_ARG=names adds
+two chats that open with the same words and are about different things,
+each with the name its agent wrote."""
 import os
 import sys
 import time
@@ -81,6 +86,31 @@ rec(h, "", "Theo", "One more time, briefly.", "Here is the start of it", now - 4
 # 7. Old.
 rec(None, "", "Theo", "Remind me what the synthetic wifi password hint was.",
     "It was the name of the first synthetic cat.", now - 400 * DAY)
+
+# Phase M19: names and summaries, as chat_names would store them.
+def named(cid, title, summary):
+    m = next(c for c in store.list() if c["id"] == cid)
+    store.set_name(cid, for_updated=m["updated"], at=now - 60, title=title, summary=summary)
+
+
+named(a, "The synthetic garden: shady and sunny beds",
+      "Ferns and hostas for the shade, herbs for the sun; Sora took over the watering plan.")
+store.rename(b, "Release checklist")
+named(b, "Twelve-step synthetic release checklist",
+      "Tag, build, check, sign, upload, verify and announce, in that order.")
+forecast = next(c["id"] for c in store.list() if c["agent_label"] == "Jarvis")
+named(forecast, "Synthetic weekend forecast", "Grey on Saturday, bright on Sunday.")
+
+if os.environ.get("PREVIEW_ARG", "") == "names":
+    same = "Hey, can you help me with something quickly?"
+    t = rec(None, "", "Theo", same, "Of course, what do you need?", now - 1500)
+    rec(t, "", "Theo", "My synthetic tomato plants have yellow lower leaves.",
+        "Probably too much water: let the top inch dry out.", now - 1450)
+    named(t, "Yellowing tomato leaves", "Likely overwatering; let the soil dry between waterings.")
+    u = rec(None, "sora", "Sora", same, "Of course, what do you need?", now - 1300)
+    rec(u, "sora", "Sora", "My synthetic laptop battery drains while suspended.",
+        "It is using s2idle; check the firmware for a deeper sleep state.", now - 1250)
+    named(u, "Laptop battery drain in suspend", "It sleeps in s2idle; look for a deeper state in the firmware.")
 
 # This session's conversation (runtime.History's file), only into a scratch
 # runtime folder (--state): a long one, as a day of talking leaves.

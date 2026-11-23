@@ -52,6 +52,20 @@ and nothing a link points at, and writes `purged` into the index; a single
 delete writes the chat's id into `deleted` for an hour. A turn that began
 before either and ends after it is not saved (`record(began=...)`), so a
 save already in flight never puts back what was just deleted.
+
+Names and summaries (phase M19, chat_names.py) add, all optional:
+
+- `instant_title`: the first-sentence title the chat was made with. `title`
+  starts as the same text and is what a rename writes, so an older build
+  still shows the right one; `renamed` is set by a rename from here on.
+- `auto_title` and `summary`: written by the chat's own agent once the chat
+  has gone quiet. `display_title` decides what is shown: **a rename always
+  wins**, then the written name, then the first sentence.
+- `named_for` / `named_at`: the `updated` the last name was written (or
+  tried) for, and when -- at most one side turn per chat per change.
+
+`search` takes filters (`agent:NAME`, `before:DATE`, `after:DATE`) among the
+words; see parse_query.
 """
 from __future__ import annotations
 
@@ -199,6 +213,45 @@ def title_from(text: str) -> str:
     return (cut or first[:TITLE_MAX]).rstrip(",;:.") + "…"
 
 
+def _first_transcript(chat: dict) -> str:
+    ex = chat.get("exchanges") or []
+    first = ex[0] if ex and isinstance(ex[0], dict) else {}
+    return str(first.get("transcript", ""))
+
+
+def instant_title(chat: dict) -> str:
+    """The first-sentence title the chat was made with: stored since M19,
+    worked out from its first request before that."""
+    have = chat.get("instant_title")
+    if isinstance(have, str) and have:
+        return have
+    return title_from(_first_transcript(chat))
+
+
+def user_renamed(chat: dict) -> bool:
+    """Whether the person has named this chat. `renamed` since M19; and a
+    title that is not the one the chat was made with was typed by somebody
+    -- a rename before M19, or by an older build after it -- so it counts
+    too. Unsure means renamed: the person's words are never hidden behind
+    a written name."""
+    if chat.get("renamed") is True:
+        return True
+    title = chat.get("title")
+    return isinstance(title, str) and bool(title) and title != instant_title(chat)
+
+
+def display_title(chat: dict) -> str:
+    """The title shown and spoken: the person's rename, else the name the
+    chat's agent wrote (phase M19), else the first sentence."""
+    title = str(chat.get("title") or "")
+    if user_renamed(chat):
+        return title
+    auto = chat.get("auto_title")
+    if isinstance(auto, str) and auto.strip():
+        return auto
+    return title or instant_title(chat) or "Untitled chat"
+
+
 def _words(text: str) -> list[str]:
     return re.findall(r"[a-z0-9']+", str(text or "").lower().replace("’", "'"))
 
@@ -227,20 +280,138 @@ def score(chat: dict, want: list[str], prefix_last: bool = False) -> float:
     search box being typed into ("wak" finds "wake")."""
     if not want:
         return 0.0
-    title = set(_words(chat.get("title", "")))
-    body = set()
+    # Every name the chat has had counts as a title (phase M19): what the
+    # person called it, what its agent wrote, and the first sentence.
+    auto = chat.get("auto_title") if isinstance(chat.get("auto_title"), str) else ""
+    summ = chat.get("summary") if isinstance(chat.get("summary"), str) else ""
+    texts = []
     for e in chat.get("exchanges") or []:
         if isinstance(e, dict):
-            body.update(_words(e.get("transcript", "")))
-            body.update(_words(e.get("reply", "")))
-    got = 0
+            texts.append(str(e.get("transcript", "")))
+            texts.append(str(e.get("reply", "")))
+    head = f"{chat.get('title', '')}\n{auto}"
+    # One string, one pass (phase M19, measured over 1000 chats): a word
+    # that is not even a substring of the chat cannot be one of its words,
+    # so most chats are passed over without being split at all.
+    body = "\n".join(texts).lower().replace("’", "'")
+    names = f"{head}\n{summ}".lower().replace("’", "'")
+    if not any(w in body or w in names for w in want):
+        return 0.0
+    title = set(_words(head))
+    summary = set(_words(summ))
+
+    def in_body(w: str, prefix: bool) -> bool:
+        # A search, not a split: no list of every word in the chat is built.
+        edge = r"(?<![a-z0-9'])" + re.escape(w) + ("" if prefix else r"(?![a-z0-9'])")
+        return w in body and re.search(edge, body) is not None
+
+    got = 0.0
     for i, w in enumerate(want):
         if prefix_last and i == len(want) - 1:
             got += (2 if any(t.startswith(w) for t in title)
-                    else 1 if any(b.startswith(w) for b in body) else 0)
+                    else 1.5 if any(t.startswith(w) for t in summary)
+                    else 1 if in_body(w, True) else 0)
         else:
-            got += 2 if w in title else 1 if w in body else 0
+            got += 2 if w in title else 1.5 if w in summary else 1 if in_body(w, False) else 0
     return got / (2 * len(want))
+
+
+# --- search filters (phase M19) -----------------------------------------------
+
+_FILTER = re.compile(r'(?<!\S)(agent|before|after):(?:"([^"]*)"|(\S*))', re.I)
+#: A relative date: 3d, 2w (days or weeks ago).
+_AGO = re.compile(r"(\d{1,4})([dw])")
+
+
+def _day_start(y: int, m: int, d: int) -> float:
+    return time.mktime((y, m, d, 0, 0, 0, 0, 0, -1))
+
+
+def parse_date(value: str, now: float | None = None) -> float | None:
+    """The local midnight a search date names, as a timestamp: 2026-11-01,
+    2026-11 (its first day), today, yesterday, 3d or 2w (days or weeks ago).
+    None when it is none of those."""
+    now = time.time() if now is None else now
+    v = str(value or "").strip().lower()
+    lt = time.localtime(now)
+    try:
+        if v in ("today", "yesterday"):
+            base = _day_start(lt.tm_year, lt.tm_mon, lt.tm_mday)
+            return base if v == "today" else _day_start(lt.tm_year, lt.tm_mon, lt.tm_mday - 1)
+        m = _AGO.fullmatch(v)
+        if m:
+            days = int(m.group(1)) * (7 if m.group(2) == "w" else 1)
+            return _day_start(lt.tm_year, lt.tm_mon, lt.tm_mday - days)
+        m = re.fullmatch(r"(\d{4})-(\d{1,2})(?:-(\d{1,2}))?", v)
+        if m:
+            y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3) or 1)
+            if 1 <= mo <= 12 and 1 <= d <= 31 and 1970 <= y <= 9999:
+                time.strptime(f"{y:04d}-{mo:02d}-{d:02d}", "%Y-%m-%d")   # a real day
+                return _day_start(y, mo, d)
+    except (ValueError, OverflowError):
+        return None
+    return None
+
+
+def parse_query(query: str, now: float | None = None) -> tuple[str, dict, list[str]]:
+    """A search split into (the words, the filters, what could not be read).
+
+    Filters: `agent:NAME` (an id or a name, `agent:"Two words"`; more than
+    one means any of them), `after:DATE` (used on or after that day) and
+    `before:DATE` (started before it); see parse_date. A filter that cannot
+    be read is left out and named in the third part, so the list can say so
+    rather than quietly widen."""
+    filters: dict = {}
+    problems: list[str] = []
+
+    def take(m):
+        kind, value = m.group(1).lower(), (m.group(2) if m.group(2) is not None else m.group(3))
+        value = " ".join(str(value or "").split())
+        if kind == "agent":
+            if value:
+                filters.setdefault("agent", []).append(value)
+            else:
+                problems.append("agent: needs a name")
+        else:
+            at = parse_date(value, now)
+            if at is None:
+                problems.append(f"{kind}: needs a date like 2026-11-01, today or 7d")
+            elif kind == "after":
+                filters["after"] = max(at, filters.get("after", at))
+            else:
+                filters["before"] = min(at, filters.get("before", at))
+        return " "
+
+    words = _FILTER.sub(take, str(query or ""))
+    return " ".join(words.split()), filters, problems
+
+
+def _norm(name) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", str(name or "").lower()).split())
+
+
+def agent_matches(chat_meta: dict, chat: dict | None, wanted: list[str],
+                  names: dict | None = None) -> bool:
+    """Whether a chat is one of `wanted`'s: one of them owns it or has spoken
+    in it, as the Chats page's agent chips have it. Each name is an agent's
+    id, its name now (`names`: normalised name -> id, from the settings) or
+    a name it answered under in this chat."""
+    ids = {str(chat_meta.get("owner") or "")} | set(chat_meta.get("participants") or [])
+    labels = {_norm(chat_meta.get("agent_label"))}
+    for e in (chat or {}).get("exchanges") or []:
+        if isinstance(e, dict) and e.get("kind") != "aside" and e.get("agent_label"):
+            if e.get("agent_id") in ids or not e.get("agent_id"):
+                labels.add(_norm(e.get("agent_label")))
+    labels.discard("")
+    for w in wanted:
+        n = _norm(w)
+        if not n:
+            continue
+        if n.replace(" ", "-") in ids or n in labels:
+            return True
+        if names and names.get(n) in ids:
+            return True
+    return False
 
 
 class ChatStore:
@@ -286,7 +457,15 @@ class ChatStore:
             "agent_id": chat.get("agent_id", ""),
             "agent_label": chat.get("agent_label", ""),
             "backend": chat.get("backend", ""),
-            "title": chat.get("title", ""),
+            # What is shown (phase M19): a rename, else the written name,
+            # else the first sentence. `auto` says the written name is it.
+            "title": display_title(chat),
+            "auto": not user_renamed(chat) and isinstance(chat.get("auto_title"), str)
+                    and bool(chat.get("auto_title", "").strip()),
+            "renamed": user_renamed(chat),
+            "summary": chat.get("summary", "") if isinstance(chat.get("summary"), str) else "",
+            "named_for": chat.get("named_for", 0),
+            "named_at": chat.get("named_at", 0),
             "started": chat.get("started", 0),
             "updated": chat.get("updated", 0),
             "pinned": bool(chat.get("pinned")),
@@ -382,8 +561,9 @@ class ChatStore:
                 return None
             chat = self.load(chat_id) if valid_id(chat_id) else None
             if chat is None:
+                first = title_from(exchange.get("transcript", ""))
                 chat = {"id": secrets.token_hex(8), "started": now, "pinned": False,
-                        "title": title_from(exchange.get("transcript", "")),
+                        "title": first, "instant_title": first,
                         "agent_id": agent_id, "agent_label": agent_label,
                         "backend": backend, "project_dir": project_dir,
                         "exchanges": []}
@@ -543,7 +723,26 @@ class ChatStore:
         title = clean_title(title)
         if not title:
             return False
-        return self._change(chat_id, lambda c: c.update(title=title))
+        # Phase M19: said so, so the name the chat's agent writes never
+        # takes its place, even a rename to the first sentence's words.
+        return self._change(chat_id, lambda c: c.update(title=title, renamed=True))
+
+    def set_name(self, chat_id: str, *, for_updated: float, at: float,
+                 title: str = "", summary: str = "") -> bool:
+        """Phase M19: store what the chat's agent wrote -- `auto_title` and
+        `summary`, when there is a title -- and that the chat was named (or
+        tried) for the version last changed at `for_updated`. Never touches
+        `title`, so a rename stays the person's. False when the chat is gone:
+        a name never brings a deleted chat back."""
+        from chat_names import SUMMARY_MAX, TITLE_MAX, clean
+        title, summary = clean(title, TITLE_MAX), clean(summary, SUMMARY_MAX)
+
+        def put(c):
+            c["named_for"], c["named_at"] = for_updated, at
+            if title:
+                c["auto_title"] = title
+                c["summary"] = summary
+        return self._change(chat_id, put)
 
     def pin(self, chat_id: str, on: bool = True) -> bool:
         return self._change(chat_id, lambda c: c.update(pinned=bool(on)))
@@ -644,16 +843,30 @@ class ChatStore:
             pass
         return out
 
-    def search(self, query: str, agent: str | None = None, limit: int = 200) -> list[dict]:
+    def search(self, query: str, agent: str | None = None, limit: int = 200,
+               names: dict | None = None, problems: list | None = None,
+               now: float | None = None) -> list[dict]:
         """Every saved chat that matches `query`, best first, for the search
         box on the Chats page (phase M18): the scorer `find` uses, with the
         last word also matching the start of a word. `agent` (external id)
         keeps the chats it owns, has spoken in or has been shared; None keeps
-        all of them -- the person sees every chat. [{"id", "score"}]."""
-        want = wanted_words(str(query or "")[:QUERY_MAX])
+        all of them -- the person sees every chat. [{"id", "score"}].
+
+        Phase M19: the query may hold filters (parse_query): `agent:NAME`,
+        `before:DATE`, `after:DATE`. With filters and no words, every chat
+        that passes them, newest first. A filter that cannot be read is
+        described in `problems` and left out. `names` (normalised name ->
+        id) may be a function, called only when an `agent:` filter is there."""
+        text, filters, bad = parse_query(str(query or "")[:QUERY_MAX], now)
+        if problems is not None:
+            problems.extend(bad)
+        want = wanted_words(text)
         # Nothing saved: nothing to find, and no folder made by looking.
-        if not want or not self.root.is_dir():
+        if (not want and not filters) or not self.root.is_dir():
             return []
+        # The settings are read for names only when a name is asked for.
+        if callable(names):
+            names = names() if "agent" in filters else None
         scored = []
         for meta in self.list():
             if not valid_id(meta.get("id")):
@@ -662,10 +875,20 @@ class ChatStore:
                 people = set(meta.get("participants") or []) | set(meta.get("agents") or [])
                 if agent != meta.get("owner") and agent not in people:
                     continue
+            if "after" in filters and _when(meta) < filters["after"]:
+                continue
+            if "before" in filters:
+                began = meta.get("started")
+                began = float(began) if isinstance(began, (int, float)) \
+                    and not isinstance(began, bool) else _when(meta)
+                if began >= filters["before"]:
+                    continue
             chat = self.load(meta["id"])
             if chat is None:
                 continue
-            got = score(chat, want, prefix_last=True)
+            if "agent" in filters and not agent_matches(meta, chat, filters["agent"], names):
+                continue
+            got = score(chat, want, prefix_last=True) if want else 1.0
             if got:
                 scored.append((got, _when(meta), meta["id"]))
         scored.sort(reverse=True)
@@ -732,10 +955,12 @@ class ChatStore:
         if chat is None:
             return None
         who = chat.get("agent_label") or "Agent"
-        lines = [f"# {chat.get('title') or 'Chat'}", "",
+        lines = [f"# {display_title(chat) or 'Chat'}", "",
                  f"{who} · {chat.get('backend') or 'agent'} · "
                  f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(chat.get('started', 0)))}",
                  ""]
+        if isinstance(chat.get("summary"), str) and chat["summary"].strip():
+            lines += [f"_{chat['summary']}_", ""]
         for e in chat.get("exchanges") or []:
             when = time.strftime("%H:%M", time.localtime(e.get("at", 0)))
             if e.get("kind") == "aside":
@@ -764,7 +989,7 @@ class ChatStore:
         if folder is None:
             docs = Path.home() / "Documents"
             folder = docs if docs.is_dir() else Path.home()
-        slug = re.sub(r"[^a-z0-9]+", "-", str(chat.get("title", "")).lower()).strip("-")[:40]
+        slug = re.sub(r"[^a-z0-9]+", "-", display_title(chat).lower()).strip("-")[:40]
         day = time.strftime("%Y-%m-%d", time.localtime(chat.get("started", 0)))
         base = f"agentvoice-{day}-{slug or 'chat'}"
         path = Path(folder) / f"{base}.md"
@@ -838,6 +1063,24 @@ def refusal(chat: dict, agent: str) -> str:
             f"conversation to it.")
 
 
+def _agent_names() -> dict:
+    """Each agent's name now, normalised, to its external id, for
+    `agent:NAME` (phase M19). Empty when the settings cannot be read: the
+    filter then matches ids and the names saved in each chat."""
+    try:
+        from runtime import Config
+        cfg = Config()
+        out = {_norm(cfg.main_label()): "main"}
+        for spec in cfg.all_agents():
+            for n in (spec.get("label"), spec.get("name")):
+                if _norm(n):
+                    out.setdefault(_norm(n), spec["id"])
+        out.pop("", None)
+        return out
+    except Exception:                   # noqa: BLE001 -- a convenience only
+        return {}
+
+
 def main(argv: list[str]) -> int:
     store = ChatStore()
     if not argv or argv[0] == "list":
@@ -897,7 +1140,13 @@ def main(argv: list[str]) -> int:
                           "(the words on stdin)", file=sys.stderr)
                     return 2
             # One line: the overlay writes it and keeps the pipe open.
-            hits = store.search(sys.stdin.readline(QUERY_MAX), agent)
+            problems: list[str] = []
+            hits = store.search(sys.stdin.readline(QUERY_MAX), agent,
+                                names=_agent_names, problems=problems)
+            if problems:
+                # Said, not swallowed: a filter left out widens the list.
+                from speech_text import safe_for_terminal
+                print(safe_for_terminal("left out: " + "; ".join(problems)), file=sys.stderr)
             if as_json:
                 print(json.dumps(hits))
             else:

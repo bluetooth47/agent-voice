@@ -1,0 +1,24 @@
+{
+  "recorded": "2026-11-23",
+  "program": "claude 2.1.330 (Claude Code), default model",
+  "how": "chat_names.make_side over adapters.load, as the daemon builds it; two synthetic chats that open with the same words and are about different things (bench script, not kept)",
+  "argv_has_tools_empty": true,
+  "seconds": [
+    2.4,
+    2.5
+  ],
+  "replies": [
+    "Title: Yellowing Lower Leaves on Tomato Plants\nSummary: Yellow lower tomato leaves traced to overwatering or nitrogen shortage; advised drying soil between waterings, fertilising, and removing yellow leaves.",
+    "Title: Laptop battery drain during Linux suspend\nSummary: Overnight suspend drain traced to s2idle-only sleep; no S3 available, so BIOS sleep-state setting and USB wake sources are next checks."
+  ],
+  "parsed": [
+    [
+      "Yellowing Lower Leaves on Tomato Plants",
+      "Yellow lower tomato leaves traced to overwatering or nitrogen shortage; advised drying soil between waterings, fertilising, and removing yellow leaves."
+    ],
+    [
+      "Laptop battery drain during Linux suspend",
+      "Overnight suspend drain traced to s2idle-only sleep; no S3 available, so BIOS sleep-state setting and USB wake sources are next checks."
+    ]
+  ]
+}

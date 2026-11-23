@@ -292,11 +292,28 @@ chats are always kept. Uninstalling leaves them and says where they are.
 A chat is everything one agent said in one conversation. It starts when the
 agent starts a new session and is titled from the first request. With saving
 on, the Chats page lists them under this session: Pinned, Today, This week
-and Older, each with its title, who spoke, when, how many turns and the
-last thing said. The search box looks through every word of every chat
-(the words go to `agentvoice chats search` on stdin, never on a command
-line), and chips keep one agent's chats, or those more than one agent
-spoke in. Open a chat for **Continue**, **New chat**, **Send to another
+and Older, each with its title, who spoke, when, how many turns, how long
+it ran, and its summary (or, until it has one, the last thing said). The
+search box looks through every word of every chat, and its names and
+summary (the words go to `agentvoice chats search` on stdin, never on a
+command line). It takes filters too: `agent:Sora` (an id or a name; quote
+two words), `after:2026-11-01` and `before:2026-11` (also `today`,
+`yesterday`, `7d`, `2w`); a filter it cannot read is named under the box
+rather than quietly dropped. Chips keep one agent's chats, or those more
+than one agent spoke in.
+
+**Names and summaries** (on by default; Chats → Saving and privacy). Two
+minutes after a saved chat goes quiet, the agent that had the conversation
+reads it in a short side turn, on the same program, and writes a proper
+name (up to 60 characters) and a one-line summary (up to 160). The side
+turn has no tools, keeps nothing and is not saved as a chat; it runs at
+most once per change to a chat and ten times an hour, only for chats used
+in the last day, and never while the screen is locked or an agent is busy.
+Only Claude Code and plain endpoints do it, because only there can a turn
+be started with no tools at all; other chats keep their first sentence.
+**A rename of yours always wins**: the written name is shown only on a chat
+you have never renamed. The name and summary live inside the chat's own
+file and go with it on delete, expiry and Delete all. Open a chat for **Continue**, **New chat**, **Send to another
 agent**, **Share with…**, **Rename**, **Pin**, **Export** (Markdown, into
 `~/Documents`) and **Delete**. "In use" marks the chat each agent is in
 right now. Agent details → Chats shows the same list for one agent, and

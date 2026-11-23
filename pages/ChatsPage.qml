@@ -25,6 +25,9 @@ Column {
   spacing: Style.space(14)
 
   readonly property bool saving: page.s.setting("saveChats", false) === true
+  // What one name-and-summary side turn takes, measured on Claude Code
+  // (bench/FINDINGS.md §52).
+  readonly property string summaryCost: "2 to 3 seconds"
 
   // `agentvoice chats stats --json`: {dir, exists, chats, pinned, bytes}.
   // Read when the page opens, when the number of chats changes and after a
@@ -167,6 +170,40 @@ Column {
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
         onCommitted: function(v) { page.s.put("chatRetention", v) }
+      }
+    }
+
+    // Phase M19: names and one-line summaries, written by each chat's own
+    // agent in a quiet side turn once it has been quiet two minutes
+    // (daemon/chat_names.py). The cost is the measured one (FINDINGS §52).
+    SettingRow {
+      width: parent.width
+      stacked: true
+      visible: page.saving
+      label: "Names and summaries"
+      hint: "Two minutes after a chat goes quiet, its own agent names it and sums it up in a line. " +
+            "About " + page.summaryCost + " of its time per chat, at most ten an hour. A rename of yours always wins."
+      help: "A short side turn on the agent that had the conversation, on the same program, so the words " +
+            "go nowhere they had not already been. It has no tools, keeps nothing, and is not saved as a " +
+            "chat. Once per change to a chat, ten an hour in all, only for chats used in the last day, " +
+            "never while the screen is locked or an agent is busy.\n\nOnly Claude Code and plain " +
+            "endpoints, where a turn can be started with no tools at all; chats with other programs keep " +
+            "their first sentence as the name. Off: every chat keeps its first sentence."
+      changed: page.s.changed("chatSummaries")
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onReset: page.s.resetKey("chatSummaries")
+      SegmentedChoice {
+        options: [
+          { value: "off", label: "Off" },
+          { value: "owner", label: "By the chat's agent" }
+        ]
+        // Anything but "owner" is off to the daemon (chat_names.mode), so
+        // it reads as off here too.
+        value: String(page.s.setting("chatSummaries", "owner")) === "owner" ? "owner" : "off"
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onCommitted: function(v) { page.s.put("chatSummaries", v) }
       }
     }
 

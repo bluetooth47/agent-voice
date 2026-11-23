@@ -17,6 +17,11 @@
 //     path search → open → Continue; a rename on stdin; the filter chips;
 //     Delete all cancelled (nothing goes), then confirmed (every chat goes).
 //     `chats continue` and `chats new` are logged to OUT.writes, never sent.
+//   names (M19): two chats that open alike, named apart by their agents;
+//     summaries in the rows and under the open chat's title; a renamed
+//     chat keeping its own name; `agent:sora after:3d` answered by the
+//     search with the filters on stdin; a filter it cannot read said under
+//     the box; the Names and summaries switch writing off and back.
 //   grep PREVIEW /tmp/c.log; cat /tmp/c.writes /tmp/c.chats
 import QtQuick
 import QtTest
@@ -120,6 +125,65 @@ ShellRoot {
     }
 
     property var steps: {
+      // Phase M19: written names and summaries, the switch, and filters.
+      if (want === "names") return [
+        function() { overlay.put("saveChats", true); overlay.reread() },
+        function() {
+          var b = overlay.browser()
+          overlay.check(b !== null && b.chatRowCount === 9, "nine synthetic chats listed (" + (b ? b.chatRowCount : "") + ")")
+          overlay.check(overlay.textItem("Yellowing tomato leaves") !== null && overlay.textItem("Laptop battery drain in suspend") !== null,
+                        "two chats that open alike show different written names")
+          overlay.check(overlay.textItem("Likely overwatering") !== null, "a row shows its summary instead of the last line")
+          overlay.check(overlay.textItem("Release checklist") !== null && overlay.textItem("Twelve-step") === null,
+                        "a renamed chat keeps its own name over the written one")
+          overlay.check(overlay.textItem("Hey, can you help me") === null, "no row is titled with the shared first words")
+          var g = overlay.chatTitled("synthetic garden")
+          if (g) overlay.showChat(g.id)
+        },
+        function() {
+          overlay.check(overlay.textItem("named by Theo") !== null, "the open chat says its name was written by its agent")
+          overlay.check(overlay.textItem("Sora took over the watering plan") !== null, "and shows the summary under it")
+          var field = overlay.find(overlay.pageRoot(), function(i) { return String(i.placeholderText).indexOf("Search chats") === 0 })
+          overlay.check(field !== null && String(field.placeholderText).indexOf("agent:") >= 0, "the search box hints at its filters")
+          if (field) field.forceActiveFocus()
+          overlay.type("agent:sora after:3d")
+          overlay.key(Qt.Key_Return)
+        },
+        function() { overlay.reread() },
+        function() {
+          var b = overlay.browser()
+          var titles = b ? b.rows.filter(function(r) { return r.chat !== undefined }).map(function(r) { return String(r.chat.title) }) : []
+          overlay.check(b !== null && b.results !== null, "the filters were answered by `chats search`")
+          overlay.check(titles.indexOf("Laptop battery drain in suspend") >= 0 && titles.indexOf("Yellowing tomato leaves") < 0,
+                        "agent:sora keeps Sora's chats and drops Theo's (" + titles.join(" | ") + ")")
+          overlay.check(titles.indexOf("The synthetic garden: shady and sunny beds") >= 0
+                        && titles.indexOf("Translate “good morning” into Japanese and Greek 🌅") < 0,
+                        "after:3d keeps today's and drops Sora's five-day-old chat")
+          overlay.check(overlay.argvLog.indexOf("agent:sora") < 0, "the filters are not in any argv")
+          var field = overlay.find(overlay.pageRoot(), function(i) { return String(i.placeholderText).indexOf("Search chats") === 0 })
+          if (field) { field.forceActiveFocus(); overlay.key(Qt.Key_Escape); overlay.type("garden before:someday"); overlay.key(Qt.Key_Return) }
+        },
+        function() {},
+        function() {
+          overlay.check(overlay.textItem("Left out: before:") !== null, "a filter it cannot read is said, not swallowed")
+          var card = overlay.find(overlay.pageRoot(), function(i) { return i.foldable === true && i.title === "Saving and privacy" })
+          if (card && !card.expanded) card.flip()
+        },
+        function() {
+          var row = overlay.find(overlay.pageRoot(), function(i) { return i.label === "Names and summaries" })
+          overlay.check(row !== null && row.visible, "the switch is on the Chats page, with saving on")
+          overlay.check(overlay.textItem("at most ten an hour") !== null, "beside it, the cost and the limit")
+          overlay.click(overlay.button("Off"), "Names and summaries: Off")
+        },
+        function() {
+          overlay.check(overlay.setting("chatSummaries", "owner") === "off", "Off writes chatSummaries off")
+          overlay.click(overlay.button("By the chat's agent"), "Names and summaries: back on")
+        },
+        function() {
+          overlay.check(overlay.setting("chatSummaries", "off") === "owner", "and back to owner")
+          console.warn("PREVIEW done: " + overlay.passed + " passed, " + overlay.failed + " failed")
+        }
+      ]
       if (want === "drive") return [
         function() { overlay.put("saveChats", true); overlay.reread() },
         function() {
@@ -139,7 +203,7 @@ ShellRoot {
           overlay.check(overlay.textItem("Hazel") !== null, "a renamed agent's chat shows its current name")
           overlay.check(overlay.textItem("Scout") !== null, "a removed agent's chat shows the name it was saved under")
           // The search box, from the keyboard.
-          var field = overlay.find(overlay.pageRoot(), function(i) { return i.placeholderText === "Search chats" })
+          var field = overlay.find(overlay.pageRoot(), function(i) { return String(i.placeholderText).indexOf("Search chats") === 0 })
           if (field) field.forceActiveFocus()
           overlay.check(field !== null && field.activeFocus, "the search box takes the focus")
           overlay.type("WATERING")
@@ -193,7 +257,7 @@ ShellRoot {
           overlay.check(overlay.chatTitled("garden plan") !== null, "the rename landed in the chat")
           overlay.check(overlay.argvLog.toLowerCase().indexOf("garden plan") < 0, "the new title was not in argv")
           // The chips: Hazel's chats only, then all again.
-          var field = overlay.find(overlay.pageRoot(), function(i) { return i.placeholderText === "Search chats" })
+          var field = overlay.find(overlay.pageRoot(), function(i) { return String(i.placeholderText).indexOf("Search chats") === 0 })
           if (field) { field.forceActiveFocus(); overlay.key(Qt.Key_Escape) }
         },
         function() {

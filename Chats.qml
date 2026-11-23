@@ -70,6 +70,36 @@ Item {
 
   function validId(id) { return /^[0-9a-f]{16}$/.test(String(id || "")) }
 
+  // The open chat's entry in the index: its title as shown (phase M19: a
+  // rename, else the name its agent wrote, else the first sentence -- the
+  // daemon decides, chats.display_title) and its summary. The chat file
+  // can arrive ahead of the index; its own title stands in until then.
+  readonly property var openMeta: {
+    var all = Array.isArray(view.index.chats) ? view.index.chats : []
+    for (var i = 0; i < all.length; i++) if (all[i] && all[i].id === view.chat.id) return all[i]
+    return ({})
+  }
+  readonly property string openTitle: String(view.openMeta.title || view.chat.title || "")
+  readonly property string openSummary: String(view.openMeta.summary || view.chat.summary || "")
+
+  // How long a chat ran, first word to last: "12 min", "2 h", "over 3 days".
+  function durationOf(c) {
+    var a = Number(c.started) || 0, b = Number(c.updated) || 0
+    var secs = b - a
+    if (!(a > 0) || !(secs >= 60)) return ""
+    if (secs < 3600) return Math.round(secs / 60) + " min"
+    if (secs < 86400) return Math.round(secs / 3600) + " h"
+    var days = Math.round(secs / 86400)
+    return "over " + days + (days === 1 ? " day" : " days")
+  }
+
+  // The words of a search, filters (agent:, before:, after:) left out, for
+  // matching on what the list already holds before the search answers.
+  function plainWords(q) {
+    return String(q || "").replace(/(^|\s)(agent|before|after):("[^"]*"|\S*)/gi, " ")
+                          .replace(/\s+/g, " ").trim()
+  }
+
   function ownerOf(c) { return String(c.owner || c.agent_id || "main") }
 
   // A Repeater's modelData, or JSON from a FileView, can hand over a list
@@ -166,10 +196,14 @@ Item {
     return view.ownerOf(c) === view.agentFilter || view.has(c.participants, view.agentFilter)
   }
   // Until the search answers (or if it cannot run), the words the list
-  // already holds: title, the last thing said, who.
+  // already holds: title, summary (M19), the last thing said, who. Filters
+  // are left to the search.
   function localMatch(c, q) {
-    var hay = (String(c.title || "") + " " + String(c.preview || "") + " " + view.peopleOf(c)).toLowerCase()
-    return hay.indexOf(q) >= 0
+    var words = view.plainWords(q)
+    if (words === "") return true
+    var hay = (String(c.title || "") + " " + String(c.summary || "") + " " + String(c.preview || "")
+               + " " + view.peopleOf(c)).toLowerCase()
+    return hay.indexOf(words) >= 0
   }
 
   // Header rows and chat rows in one list, so the groups scroll with it.
@@ -301,6 +335,12 @@ Item {
     }
     stdinEnabled: true
     onStarted: { launched = true; write(pending); pending = "" }
+    // A filter it could not read (phase M19): said, since leaving it out
+    // widens the list.
+    stderr: StdioCollector {
+      onStreamFinished: if (searcher.asked === view.query && text.trim() !== "")
+        view.searchNote = text.trim().replace(/^left out: /, "Left out: ")
+    }
     stdout: StdioCollector {
       onStreamFinished: {
         if (searcher.asked !== view.query) return
@@ -460,7 +500,7 @@ Item {
     SearchField {
       id: searchBox
       width: parent.width
-      placeholder: view.scope === "agent" ? "Search these chats" : "Search chats"
+      placeholder: view.scope === "agent" ? "Search these chats" : "Search chats, or agent:Theo after:7d"
       filters: view.filterChips
       active: [view.agentFilter]
       foreground: view.s.foreground
@@ -590,18 +630,21 @@ Item {
               width: parent.width
               elide: Text.ElideRight
               text: view.peopleOf(row.c) + view.relationOf(row.c) + " · " + view.whenOf(row.c.updated)
-                    + " · " + view.turnsOf(row.c) + (view.inUseByAnyone(row.c) ? " · in use" : "")
+                    + " · " + view.turnsOf(row.c)
+                    + (view.durationOf(row.c) !== "" ? " · " + view.durationOf(row.c) : "")
+                    + (view.inUseByAnyone(row.c) ? " · in use" : "")
               textFormat: Text.PlainText
               color: view.inUseByAnyone(row.c) ? view.s.accent : view.s.dim
               font.family: view.s.fontFamily
               font.pixelSize: Style.font.caption
             }
-            // The last thing said, until a chat has a summary of its own.
+            // Its summary (phase M19), written by its own agent once it
+            // went quiet; until then, the last thing said.
             Text {
               width: parent.width
               visible: text !== ""
               elide: Text.ElideRight
-              text: String(row.c.preview || "").replace(/\s+/g, " ")
+              text: String(row.c.summary || row.c.preview || "").replace(/\s+/g, " ")
               textFormat: Text.PlainText
               color: Qt.rgba(view.s.foreground.r, view.s.foreground.g, view.s.foreground.b, 0.45)
               font.family: view.s.fontFamily
@@ -785,12 +828,24 @@ Item {
         visible: !view.renaming
         width: parent.width
         wrapMode: Text.WordWrap
-        text: String(view.chat.title || "")
+        text: view.openTitle
         textFormat: Text.PlainText
         color: view.s.foreground
         font.family: view.s.fontFamily
         font.pixelSize: Style.font.subtitle
         font.bold: true
+      }
+      // Phase M19: the one-line summary its agent wrote, and whose words
+      // the name is -- written by the agent, not typed by you.
+      Text {
+        visible: !view.renaming && text !== ""
+        width: parent.width
+        wrapMode: Text.WordWrap
+        text: view.openSummary
+        textFormat: Text.PlainText
+        color: view.s.foreground
+        font.family: view.s.fontFamily
+        font.pixelSize: Style.font.caption
       }
       TextField {
         id: renameField
@@ -800,7 +855,7 @@ Item {
         font.family: view.s.fontFamily
         onAccepted: {
           var t = text.trim()
-          if (t !== "" && t !== view.chat.title) view.rename(view.chat.id, t)
+          if (t !== "" && t !== view.openTitle) view.rename(view.chat.id, t)
           view.renaming = false
         }
         Keys.onEscapePressed: view.renaming = false
@@ -818,6 +873,8 @@ Item {
         text: view.peopleOf(view.chat) + " · " + (view.chat.backend ? view.s.programLabel(view.chat.backend) : "agent")
               + " · started " + view.whenOf(view.chat.started)
               + " · " + view.turnsOf({ count: (view.chat.exchanges || []).length })
+              + (view.durationOf(view.chat) !== "" ? " · " + view.durationOf(view.chat) : "")
+              + (view.openMeta.auto === true ? " · named by " + view.agentName(view.chat) : "")
               + (view.inUseByAnyone(view.chat) ? " · in use now" : "")
               // What was typed there is in the agent's own session, not here.
               + (Number(view.chat.terminal || 0) > 0
@@ -902,7 +959,7 @@ Item {
           fontFamily: view.s.fontFamily
           onClicked: {
             view.renaming = true
-            renameField.begin(String(view.chat.title || ""))
+            renameField.begin(view.openTitle)
           }
         }
         Button {

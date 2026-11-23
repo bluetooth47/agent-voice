@@ -38,6 +38,7 @@
       "keepHistory": true,
       "saveChats": false,
       "chatRetention": "forever",
+      "chatSummaries": "owner",
       "voice": "lessac-medium",
       "voiceSpeed": 100,
       "micThresholdDb": -38,
@@ -260,6 +261,17 @@
         ],
         "defaultValue": "forever",
         "description": "How long saved chats are kept: forever, 90 days or 30 days since last used, or the 100 most recent. Pinned chats are always kept."
+      },
+      {
+        "key": "chatSummaries",
+        "type": "enum",
+        "label": "Names and summaries",
+        "options": [
+          "off",
+          "owner"
+        ],
+        "defaultValue": "owner",
+        "description": "Owner: two minutes after a saved chat goes quiet, its own agent reads it in a short side turn with no tools and writes a name and a one-line summary. At most once per change and ten an hour; only Claude Code and plain endpoints, where a turn can start with no tools. A rename of yours always wins. Off: chats keep their first sentence as the name."
       },
       {
         "key": "voice",

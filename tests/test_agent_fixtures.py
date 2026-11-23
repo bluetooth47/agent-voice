@@ -141,7 +141,8 @@ def test_saved_chats_are_shaped_as_the_real_writer_writes_them(tmp_path):
     same values, comes back equal apart from its random id and title -- and,
     from Phase 15, the shared-chat fields the writer adds beside the old
     ones (owner, participants, sessions, each exchange's speaker), which an
-    older reader ignores. Every old field keeps its old value."""
+    older reader ignores; from M19, `instant_title`, the same text as the
+    title it was made with. Every old field keeps its old value."""
     fx = load(FIXTURES / "saved-chats.json")
     store = ChatStore(tmp_path / "chats")
     for chat in fx["chats"]:
@@ -156,6 +157,7 @@ def test_saved_chats_are_shaped_as_the_real_writer_writes_them(tmp_path):
                                          "stopped")},
                               now=chat["started"])
         written = store.load(new_id)
+        assert written.pop("instant_title") == written["title"]
         for key in ("id", "title"):
             written.pop(key)
         owner = chat["agent_id"] or "main"

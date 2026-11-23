@@ -2101,3 +2101,48 @@ keystroke) and `agents env ID list --json` (names only): 243 ms median each
 (15 runs, max 292 and 311). The flag check runs only while the tab is open
 and something was typed or saved; the names are read when the tab opens and
 after each change. Nothing polls.
+
+## 52. M19: what naming a chat, and searching 1000, cost
+
+Measured 2026-11-23 on the i7-1185G7 (8 threads), the venv's Python,
+scratch folders under /tmp. Scripts lived in /tmp and are not kept.
+
+**The name-and-summary side turn, Claude Code.** Built by
+`chat_names.make_side` over `adapters.load`, exactly as the daemon builds
+it (level ask, `--tools ""`, `--strict-mcp-config`, no session kept, no
+personality), Claude Code 2.1.330 on its default model, two synthetic
+chats of three exchanges that open with the same sentence: **2.2 to 3.0 s
+a turn, median 2.4 s** (12 turns, from sending to the reply read; a cold
+process every time, since the side adapter is thrown away). Every reply
+was the two lines asked for; the two chats were named "Yellowing Lower
+Leaves on Tomato Plants" and "Laptop battery drain during Linux suspend",
+never by their shared first words. With the first prompt (summary "at most
+25 words") 2 of 6 summaries ran past 160 characters and were cut; with "at
+most 20 words" none of 6 did. One run's replies are replayed in
+`tests/test_chat_names.py`. A heavier model on the agent (the side turn
+uses the agent's own) will be slower; not measured. Codex, Gemini,
+Antigravity and Copilot are refused (no turn with no tools), so they cost
+nothing; a plain endpoint was not measured (none configured here). At the
+cap of ten an hour that is at most about 30 s of an agent's time an hour.
+
+**Search over 1000 chats** of ten exchanges each (8.4 MB on disk, half
+with a written name and summary), 21 runs in process, 15 through
+`agentvoice chats search --json` (what the page runs):
+
+| | in process, median / p95 | CLI, median / p95 |
+|---|---|---|
+| M18's scorer, a query most chats match | 374 / 425 ms | 588 / 625 ms |
+| M19's scorer, the same query | 177 / 183 ms | 283 / 305 ms |
+| M19, a word no chat holds | 141 / 150 ms | 240 / 250 ms |
+| M19, `garden agent:sora after:7d` | 40 / 49 ms | 339 / 380 ms (the settings read for names) |
+
+The time went on splitting every exchange into words (23 regex passes per
+chat building sets of every word). M19 joins a chat's text once, skips a
+chat that does not even contain the word as a substring, and looks for the
+word with one boundary-anchored `re.search` instead of building the set;
+the result is the same scorer (the tests that pinned M18's ranking pass
+unchanged). What is left is reading and parsing 8.4 MB of JSON (about
+90 ms) and starting Python. **No index file**: at 1000 chats a search
+answers in under a third of a second, after the box's 250 ms pause, and
+this machine has 40 saved chats. The settings are imported for agent names
+only when the query holds `agent:`.
