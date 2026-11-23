@@ -169,7 +169,7 @@ ShellRoot {
         case 8:
           overlay.check(overlay.writes.indexOf("floating-terminal journalctl --user -u agentvoice -n 300 -f") >= 0,
                         "Open full log hands the terminal journalctl, and nothing else")
-          if (p) overlay.s_detailsAgent("hazel")
+          overlay.goTo("agentdetails", "hazel", "advanced")
           break
         case 9:
           break                         // the switch reads its record: give it a step
@@ -184,7 +184,7 @@ ShellRoot {
           overlay.check(overlay.drawn("No conversation yet") === 1, "no conversation yet")
           overlay.check(overlay.drawn("Bash   allowed · by its level · at") === 1, "its own decision, not main's")
           overlay.check(overlay.drawn("Write   refused") === 0, "and not main's")
-          overlay.s_detailsAgent("echo-local")
+          overlay.goTo("agentdetails", "echo-local", "advanced")
           break
         case 11:
           break
@@ -207,6 +207,5 @@ ShellRoot {
         }
       }
     }
-    function s_detailsAgent(id) { overlay.detailsAgent = id }
   }
 }
