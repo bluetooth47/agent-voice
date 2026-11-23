@@ -17,7 +17,8 @@
 #     changes nothing real. Everything else passes through to the real one;
 #   - installers: the floating-terminal launcher is a stub that logs what it
 #     was handed to <out>.writes, so Repair, Install and Remove Agent Voice
-#     run nothing from a preview;
+#     run nothing from a preview; so are the editor and pager launchers
+#     (Open bindings file, Changelog, License, README);
 #   - agent folders: `agentvoice agents ...` runs this checkout's agentfs.py
 #     with XDG_DATA_HOME in the scratch directory, so an instructions box
 #     saved in a preview writes nothing any real agent reads. A target finds
@@ -99,6 +100,8 @@ cp -r "$shell_src/Commons" "$shell_src/Ui" "$tmp/"
 mkdir -p "$tmp/plugin" "$tmp/bin"
 cp "$repo"/*.qml "$tmp/plugin/"
 cp "$repo/manifest.json" "$tmp/plugin/"
+# What About reads beside its QML (M26).
+for f in CHANGELOG.md LICENSE README.md; do [ -f "$repo/$f" ] && cp "$repo/$f" "$tmp/plugin/"; done
 [ -d "$repo/ui" ] && cp -r "$repo/ui" "$tmp/plugin/ui"
 [ -d "$repo/pages" ] && cp -r "$repo/pages" "$tmp/plugin/pages"
 # Under qs -p a directory without a qmldir does not see its own siblings as
@@ -182,6 +185,13 @@ printf 'floating-terminal %s\n' "\$*" >> '$out.writes'
 exit 0
 STUB
 chmod +x "$tmp/bin/omarchy-launch-floating-terminal-with-presentation"
+# Other settings' Open bindings file and About's Changelog, License and
+# README (M26) open an editor and a pager: logged, never opened.
+for launcher in omarchy-launch-editor omarchy-launch-tui; do
+  printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" %q "$*" >> %q\nexit 0\n' "$launcher" "$out.writes" \
+    > "$tmp/bin/$launcher"
+  chmod +x "$tmp/bin/$launcher"
+done
 
 # `agentvoice agents ...` writes the agent folders, which hold what every
 # agent is told (merged plan, Phase 10). In a preview it always runs this
@@ -237,6 +247,55 @@ real_config="${XDG_CONFIG_HOME:-$HOME/.config}"
 # PYTHONDONTWRITEBYTECODE: this checkout's daemon runs from the clone, and a
 # preview run beside the check must not leave __pycache__ in it (found in M15).
 tools_env="PYTHONDONTWRITEBYTECODE=1 CLAUDE_CONFIG_DIR='$tmp/claude' CODEX_HOME='$tmp/codex' XDG_RUNTIME_DIR='$tmp/run' XDG_STATE_HOME='$tmp/xdgstate' PATH='$tmp/toolpath' HOME='$tmp/home' AGENTVOICE_PYTHON='$real_python'"
+
+# About and Other settings (M26) read the install, the journal, the keys and
+# what is on PATH. A preview shows none of the machine's own: a synthetic
+# bindings.lua and a fake hyprctl that has loaded all but one of its lines; a
+# synthetic journal (a fake journalctl, holding a transcript line the report
+# must leave out); a stamp from a made-up install; fake claude and codex on a
+# PATH of their own; a day of usage numbers saying claude has answered. Copy,
+# Check for updates and the local-server probe reach the clipboard or the
+# network, so the stub only logs them and answers with fixed text.
+mkdir -p "$tmp/about/hypr" "$tmp/about/bin" "$tmp/data/agentvoice/app" "$tmp/data/agentvoice/stats"
+cat > "$tmp/about/hypr/bindings.lua" <<'LUA'
+-- >>> agentvoice keybinds (added by install.sh, removed by --uninstall)
+o.bind("F8", "Talk to the agent (push-to-talk)", "agentvoice talk")
+o.bind("F8", "End the turn (push-to-talk)", "agentvoice talk-end", { release = true })
+o.bind("SUPER + CTRL + SPACE", "Stop the agent talking", "agentvoice interrupt")
+o.bind("SUPER + ALT + SPACE", "Release or re-engage the mic", "agentvoice mic")
+-- <<< agentvoice keybinds
+LUA
+cat > "$tmp/about/bin/hyprctl" <<'SH'
+#!/bin/sh
+cat <<'JSON'
+[{"modmask": 0, "key": "F8", "description": "Talk to the agent (push-to-talk)", "has_description": true, "dispatcher": "__lua", "arg": "40", "release": false},
+ {"modmask": 0, "key": "F8", "description": "End the turn (push-to-talk)", "has_description": true, "dispatcher": "__lua", "arg": "41", "release": true},
+ {"modmask": 68, "key": "SPACE", "description": "Stop the agent talking", "has_description": true, "dispatcher": "__lua", "arg": "42", "release": false}]
+JSON
+SH
+cat > "$tmp/about/bin/journalctl" <<'SH'
+#!/bin/sh
+t=1795000000000000
+for m in "  knobs: shell.json[duaneoca.agentvoice] · build 0.2.0 (abc1234)" \
+         "  wake: sherpa-onnx @ 0.20 (theo, sora, full stop) + second check" \
+         "  ● wake Theo  go ahead (1.2s to start)" "  4.1s audio, whisper 512ms, 0ms waited" \
+         "  PREVIEW-TRANSCRIPT the launch code is walrus" "  [Read]" "  agent 6.3s, first token 410ms" \
+         "  heard → spoke in 2.4s  (pause 1.3s · whisper 0.5s · claude warm 0.4s · first sentence 0.1s · voice 0.1s)"; do
+  t=$((t + 1000000))
+  printf '{"MESSAGE": "%s", "SYSLOG_IDENTIFIER": "python", "__REALTIME_TIMESTAMP": "%s"}\n' "$m" "$t"
+done
+SH
+printf '#!/bin/sh\necho 4.5.0-3\n' > "$tmp/about/bin/omarchy-version"
+for c in claude codex; do printf '#!/bin/sh\nexit 0\n' > "$tmp/about/bin/$c"; done
+chmod +x "$tmp/about/bin/"*
+for c in bash sh cat dirname readlink python3 git systemctl; do
+  w=$(command -v "$c" || true); [ -n "$w" ] && ln -sf "$w" "$tmp/about/bin/$c"
+done
+printf '0.2.0 (abc1234)\ncommit=abc1234def5678abc1234def5678abc1234def56\nbranch=detached\ninstalled=2026-11-23T09:30:00-07:00\n' \
+  > "$tmp/data/agentvoice/app/VERSION"
+printf '{"v": 1, "day": "%s", "answered": {"claude": 12}, "turns": {"main": {"wake": 12}}}' "$(date +%F)" \
+  > "$tmp/data/agentvoice/stats/$(date +%F).json"
+about_env="PYTHONDONTWRITEBYTECODE=1 XDG_DATA_HOME='$tmp/data' XDG_RUNTIME_DIR='$tmp/run' PATH='$tmp/about/bin' AGENTVOICE_PYTHON='$real_python'"
 
 # Starting, stopping or toggling the real service, typing to a real agent or
 # answering its permission question is never what a preview means, and since
@@ -348,6 +407,31 @@ case "\${1:-}" in
     # shell.json under --config, so a preview checks what it saves with the
     # rules the daemon it ships with uses. It writes nothing.
     exec '$repo/bin/agentvoice' "\$@" ;;
+  keys)
+    # Other settings → Keys (M26): this checkout's reader over the synthetic
+    # bindings.lua and fake hyprctl above. Reads only.
+    env XDG_CONFIG_HOME='$tmp/about' $about_env '$repo/bin/agentvoice' "\$@"; exit \$? ;;
+  about|diagnostics)
+    # About (M26). The update check and Copy reach out (a remote, the
+    # clipboard): logged, with a fixed answer. The rest is this checkout's
+    # code over the synthetic install, journal and PATH above.
+    if [ "\${2:-}" = updates ]; then
+      printf 'agentvoice %s\n' "\$*" >> '$out.writes'
+      echo '{"status": "current", "remote": "origin", "url": "https://github.com/example/agent-voice.git", "ref": "HEAD", "local": "abc1234", "remote_commit": "abc1234", "message": "Up to date with origin."}'
+      exit 0
+    fi
+    if [ "\$1" = diagnostics ] && [ "\${2:-}" = copy ]; then
+      printf 'agentvoice %s\n' "\$*" >> '$out.writes'
+      echo '{"copied": true, "lines": 31, "chars": 1400}'
+      exit 0
+    fi
+    env XDG_CONFIG_HOME="\${XDG_CONFIG_HOME:-$real_config}" $about_env '$repo/bin/agentvoice' "\$@"; exit \$? ;;
+  endpoint)
+    if [ "\${2:-}" = probe-local ]; then
+      printf 'agentvoice %s\n' "\$*" >> '$out.writes'
+      echo '[{"id": "ollama", "label": "Ollama", "port": 11434, "status": "answering", "models": 3}, {"id": "llamacpp", "label": "llama.cpp server", "port": 8080, "status": "nothing", "models": 0}]'
+      exit 0
+    fi ;;
   start|stop|restart|toggle|enable|disable|mic|open-mic|interrupt|lock|unlock|type|talk|talk-end|wake-test|calibrate|pass|tasks|hud-preview)
     printf 'agentvoice %s\n' "\$*" >> '$out.writes'; exit 0 ;;
 esac

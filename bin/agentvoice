@@ -38,6 +38,11 @@
 #   agentvoice stats [--days N] [--json] | clear   the Overview's numbers (never text)
 #   agentvoice try AGENT < draft   one sentence in AGENT's voice, on a draft
 #                                  personality (Agent details' Try it)
+#   agentvoice about [updates|backends] [--json]   this install; ask its remote
+#                                  for a newer commit; who it talks to (About)
+#   agentvoice diagnostics [copy]  a report with no transcript, key or folder text
+#                                  in it; copy puts it on the clipboard (About)
+#   agentvoice keys [--json]       which keys run agentvoice (Other settings)
 set -euo pipefail
 
 UNIT=agentvoice.service
@@ -567,6 +572,37 @@ case "${1:-status}" in
     shift
     exec "$PY" "$REPO/daemon/voice_commands.py" "$@"
     ;;
+  about|diagnostics)
+    # The About page (master plan M26). Reads the install, the settings and
+    # the service's own journal; `about updates` asks the plugin folder's
+    # tracked remote, and only when somebody clicked for it.
+    #   agentvoice about [--plugin DIR] [--json]   this install, both builds
+    #   agentvoice about updates [--plugin DIR] [--json]
+    #   agentvoice about backends [--json]         what runs here, what goes out
+    #   agentvoice diagnostics [--plugin DIR]      print the report
+    #   agentvoice diagnostics copy [--plugin DIR] ... into wl-copy, on stdin
+    REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+    PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+    [[ -x $PY ]] || PY=python3
+    verb=$1
+    shift
+    if [[ $verb == about ]]; then
+      case "${1:-}" in updates|backends) sub=$1; shift ;; *) sub=about ;; esac
+    else
+      if [[ ${1:-} == copy ]]; then sub=copy; shift; else sub=report; fi
+    fi
+    exec "$PY" "$REPO/daemon/diagnostics.py" "$sub" "$@"
+    ;;
+  keys)
+    # Which keys run agentvoice, from bindings.lua and what Hyprland has
+    # loaded (Other settings → Keys). Read only.
+    #   agentvoice keys [--json]
+    REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+    PY="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
+    [[ -x $PY ]] || PY=python3
+    shift
+    exec "$PY" "$REPO/daemon/keybinds.py" "$@"
+    ;;
   status)
     if [[ -r $STATE ]] && active; then cat "$STATE"; else echo '{"state":"off"}'; fi
     ;;
@@ -574,7 +610,7 @@ case "${1:-status}" in
     active && echo yes || echo no
     ;;
   *)
-    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|try|interrupt|hud-preview|monitor|calibrate|voice|permit|pending|history|chats|pass|tasks|crew|tools|skills|notes|agents|endpoint|open-mic|commands|stats|wake-test|status|is-active]" >&2
+    echo "usage: agentvoice [start|stop|toggle|mic|lock|unlock|locked|talk|talk-end|type|try|interrupt|hud-preview|monitor|calibrate|voice|permit|pending|history|chats|pass|tasks|crew|tools|skills|notes|agents|endpoint|open-mic|commands|stats|about|diagnostics|keys|wake-test|status|is-active]" >&2
     exit 2
     ;;
 esac

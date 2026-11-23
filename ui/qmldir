@@ -16,6 +16,7 @@ FileEditor 1.0 FileEditor.qml
 FileHistory 1.0 FileHistory.qml
 HeaderStrip 1.0 HeaderStrip.qml
 Hint 1.0 Hint.qml
+InfoRow 1.0 InfoRow.qml
 InstructionsBox 1.0 InstructionsBox.qml
 LevelMeter 1.0 LevelMeter.qml
 MenuList 1.0 MenuList.qml

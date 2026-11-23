@@ -189,9 +189,11 @@ ShellRoot {
         function() {
           overlay.check(overlay.pages.length === 11, "eleven pages in the sidebar")
           overlay.check(overlay.pages[overlay.pageForKey(Qt.Key_6)].id === "chats", "Ctrl+6 is Chats")
-          overlay.check(overlay.pages[overlay.pageForKey(Qt.Key_0)].id === "display", "Ctrl+0 is the tenth page, Display")
+          overlay.check(overlay.pages[overlay.pageForKey(Qt.Key_0)].id === "other", "Ctrl+0 is the tenth page, Other settings")
+          // The old id, kept as an alias (M26).
           overlay.goTo("display", "")
-          overlay.check(overlay.pages[overlay.pageForKey(Qt.Key_PageDown)].id === "about", "Ctrl+PgDn from Display reaches About")
+          overlay.check(overlay.page === "other", "the old display link opens Other settings")
+          overlay.check(overlay.pages[overlay.pageForKey(Qt.Key_PageDown)].id === "about", "Ctrl+PgDn from Other settings reaches About")
           overlay.check(overlay.button("Conversation") === null, "no Conversation button on the top row")
           overlay.goTo("chats", "")
         },

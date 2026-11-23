@@ -14,6 +14,7 @@ ShellRoot {
 
   Settings {
     id: overlay
+    // The old page id on purpose: it is an alias for Other settings (M26).
     Component.onCompleted: overlay.open('{"page":"display"}')
 
     TestEvent { id: input }
@@ -55,7 +56,7 @@ ShellRoot {
         overlay.step++
         var c = overlay.content()
         if (overlay.step === 2) {
-          // The first switch on Display: the readout.
+          // The first switch on Other settings (Display until M26): the readout.
           overlay.click(overlay.find(c, function(i) { return i.trackWidth !== undefined && i.toggled !== undefined }), "first switch on Display (hud)")
         } else if (overlay.step === 3) {
           overlay.goTo("voice", "")

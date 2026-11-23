@@ -7,13 +7,64 @@ import qs.Ui
 import ".."
 import "../ui"
 
-// What it shows, what it keeps, and the keys.
+// Other settings (master plan M26; "Display & privacy" until then): an honest
+// grab-bag of what belongs to no one page -- the readout on screen, privacy,
+// the keys, and the installation itself (repair and removal, moved here from
+// About, which now only says what is installed). The old page id "display"
+// still opens this one (Settings.qml goTo).
 Column {
   id: page
 
   required property var s
 
   spacing: Style.space(18)
+
+  // --- the keys -------------------------------------------------------------------
+  // Read live (`agentvoice keys --json`: bindings.lua for what each key runs,
+  // `hyprctl binds -j` for what Hyprland has loaded) when the page opens.
+  // Read only: the bindings are the user's, in a file Omarchy owns, and
+  // changing one here is deferred (plan section 9). The page opens the file.
+  property var keysInfo: null
+  property string keysError: ""
+  Process {
+    id: keysReader
+    command: ["agentvoice", "keys", "--json"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try { page.keysInfo = JSON.parse(text); page.keysError = "" }
+        catch (e) {
+          page.keysInfo = null
+          page.keysError = "Could not read them: this needs the service installed from this build " +
+                           "(Maintenance → Repair)."
+        }
+      }
+    }
+  }
+  function readKeys() { if (!keysReader.running) keysReader.running = true }
+  // The file to open, checked against the one shape it may have before it
+  // reaches argv.
+  function bindingsPath() {
+    var f = page.keysInfo ? String(page.keysInfo.file || "") : ""
+    return /^\/[^\0]*\/hypr\/bindings\.lua$/.test(f) && f.indexOf("/../") < 0 ? f : ""
+  }
+  Process { id: bindingsOpener }
+  function openBindings() {
+    var f = page.bindingsPath()
+    if (f === "") return
+    bindingsOpener.command = ["omarchy-launch-editor", f]
+    bindingsOpener.running = true
+  }
+
+  // --- writing what is said to the journal ----------------------------------------
+  // Off is one click. On is asked first, because the journal keeps it for
+  // weeks: the switch only opens the question, and `logSpeech` true is
+  // written by turnOnSpeechLog(), which only the question's onConfirmed
+  // calls (tests/test_confirms.py).
+  property bool confirmingLog: false
+  function turnOnSpeechLog() {
+    page.s.put("logSpeech", true)
+    page.confirmingLog = false
+  }
 
   // The Overview's numbers (master plan M21): how many days are kept and how
   // big, read when the page opens and after a clear. Counts only.
@@ -29,7 +80,7 @@ Column {
     }
   }
   function readStatsInfo() { if (!statsInfoReader.running) statsInfoReader.running = true }
-  Component.onCompleted: readStatsInfo()
+  Component.onCompleted: { readStatsInfo(); readKeys() }
   // `agentvoice stats clear` deletes every day's numbers. Started only by
   // clearStats(), which only the DangerButton's onConfirmed calls
   // (tests/test_confirms.py).
@@ -66,8 +117,9 @@ Column {
 
   PageHeader {
     width: parent.width
-    title: "Display & privacy"
-    subtitle: "The readout on screen, privacy, and the keys. Saving chats is on the Chats page."
+    title: "Other settings"
+    subtitle: "What belongs to no one page: the readout on screen, privacy, the keys, and the " +
+              "installation itself. Saving chats is on the Chats page."
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
   }
@@ -232,17 +284,12 @@ Column {
         fontFamily: page.s.fontFamily
       }
     }
-  }
 
-  SettingsGroup {
-    width: parent.width
-    title: "OMARCHY'S AGENTS PANEL"
-    foreground: page.s.foreground
-    fontFamily: page.s.fontFamily
-
+    // Omarchy's Agents panel: also something on screen, so it sits with the
+    // readout (its own group until M26).
     ToggleRow {
       width: parent.width
-      label: "Show each voice agent there"
+      label: "Show each voice agent in Omarchy's Agents panel"
       hint: "A section per agent, saying what it is doing. Hover its info mark for what it runs on."
       help: "A new agent appears the next time that panel is opened. Their prompts and " +
             "tokens are already counted under the agent's own program, so they add " +
@@ -298,18 +345,45 @@ Column {
 
     ToggleRow {
       width: parent.width
-      label: "Write what is said to the system log"
-      hint: "Off by default. Turn it on to diagnose something, then off again."
+      label: "\u26a0 Write what is said to the system log"
+      hint: page.s.setting("logSpeech", false) === true
+            ? "On: what you say and every reply go to the journal, which keeps them for weeks. Turn it off when you are done."
+            : "Off. The journal keeps it for weeks, so turn it on only to diagnose something, then off again."
       help: "The journal keeps entries for weeks, so logging replies leaves a " +
             "transcript of everything the agent read out — file contents, key names " +
             "— sitting there until it rotates. Timings, wake events and errors are " +
-            "always logged; this is only the words."
+            "always logged; this is only the words. Copy diagnostics (About) leaves " +
+            "them out either way."
       checked: page.s.setting("logSpeech", false) === true
       changed: page.s.changed("logSpeech")
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      onToggled: page.s.put("logSpeech", !checked)
-      onReset: page.s.resetKey("logSpeech")
+      // Off at once; on only through the question below.
+      onToggled: {
+        if (checked) { page.confirmingLog = false; page.s.put("logSpeech", false) }
+        else page.confirmingLog = true
+      }
+      onReset: { page.confirmingLog = false; page.s.resetKey("logSpeech") }
+    }
+    ToolConfirm {
+      objectName: "logSpeechConfirm"
+      width: parent.width
+      visible: page.confirmingLog && page.s.setting("logSpeech", false) !== true
+      title: "Write what is said to the system log?"
+      lines: [
+        { label: "What goes there", value: "Everything you say to an agent, and everything it says back." },
+        { label: "How long", value: "The journal keeps entries for weeks, until it rotates. " +
+                                    "Turning this off later does not remove what was written." },
+        { label: "Who can read it", value: "You, and any account allowed to read the whole system journal (administrators)." }
+      ]
+      warning: "Replies can carry file contents and key names. Turn it on to diagnose something, then off again."
+      confirmText: "Turn logging on"
+      foreground: page.s.foreground
+      accent: page.s.accent
+      urgent: page.s.urgent
+      fontFamily: page.s.fontFamily
+      onConfirmed: page.turnOnSpeechLog()
+      onCancelled: page.confirmingLog = false
     }
 
     // Master plan M21: the Overview's numbers, and the one way to remove them.
@@ -384,7 +458,8 @@ Column {
     Text {
       width: parent.width
       wrapMode: Text.WordWrap
-      text: "\u{f033e}  The microphone closes while the screen is locked. That is not a " +
+      textFormat: Text.PlainText
+      text: "\u{f033e}  The mic always closes while the screen is locked. That is not a " +
             "setting: a locked machine that still answers would let anyone at the desk talk to it."
       color: page.s.dim
       font.family: page.s.fontFamily
@@ -398,16 +473,24 @@ Column {
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
 
+    Text {
+      width: parent.width
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: page.keysError !== "" ? page.keysError
+            : !page.keysInfo ? "Reading the keys…"
+            : page.keysInfo.rows.length === 0
+              ? "No key runs an Agent Voice command. Repair the installation to be offered the usual ones, or add them to the file yourself."
+              : "Read from your bindings file" + (page.keysInfo.hyprland ? " and what Hyprland has loaded." : "; Hyprland could not be asked whether they are loaded.")
+      color: page.keysError !== "" ? page.s.urgent : page.s.dim
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    // A key's row: what it is, what it does, and a mark when Hyprland has not
+    // loaded it (a line it rejected, or one not reloaded yet).
     Repeater {
-      model: [
-        { keys: "Hold F8", what: "Talk without the wake word; release when done." },
-        { keys: "F8", what: "While it replies: stop it." },
-        { keys: "Super+Ctrl+Space", what: "Stop the reply and everything the agent started." },
-        { keys: "Super+Alt+Space", what: "Release the microphone entirely, or take it back." },
-        { keys: "Click the bar icon", what: "Open the panel. Its STOP button stops a turn." },
-        { keys: "Right-click the bar icon", what: "Mute or unmute the microphone." },
-        { keys: "Middle-click the bar icon", what: "Start or stop the service." }
-      ]
+      model: page.keysInfo ? page.keysInfo.rows : []
       Item {
         required property var modelData
         width: parent ? parent.width : 0
@@ -415,7 +498,9 @@ Column {
         Text {
           id: keyText
           width: Style.space(190)
+          wrapMode: Text.Wrap
           text: modelData.keys
+          textFormat: Text.PlainText
           color: page.s.foreground
           font.family: page.s.fontFamily
           font.pixelSize: Style.font.caption
@@ -426,11 +511,146 @@ Column {
           anchors.left: keyText.right
           anchors.right: parent.right
           wrapMode: Text.WordWrap
+          text: modelData.what + (modelData.loaded === false ? "  (in the file, but Hyprland has not loaded it)" : "")
+          textFormat: Text.PlainText
+          color: modelData.loaded === false ? page.s.urgent : page.s.dim
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+    }
+
+    // The bar icon's own clicks: the widget's, not Hyprland's, so fixed.
+    Repeater {
+      model: [
+        { keys: "Click the bar icon", what: "Open the panel. Its STOP button stops a turn." },
+        { keys: "Right-click the bar icon", what: "Mute or unmute the microphone." },
+        { keys: "Middle-click the bar icon", what: "Start or stop the service." }
+      ]
+      Item {
+        required property var modelData
+        width: parent ? parent.width : 0
+        height: Math.max(mouseKey.implicitHeight, mouseWhat.implicitHeight)
+        Text {
+          id: mouseKey
+          width: Style.space(190)
+          text: modelData.keys
+          color: page.s.foreground
+          font.family: page.s.fontFamily
+          font.pixelSize: Style.font.caption
+          font.bold: true
+        }
+        Text {
+          id: mouseWhat
+          anchors.left: mouseKey.right
+          anchors.right: parent.right
+          wrapMode: Text.WordWrap
           text: modelData.what
           color: page.s.dim
           font.family: page.s.fontFamily
           font.pixelSize: Style.font.caption
         }
+      }
+    }
+
+    SettingRow {
+      width: parent.width
+      label: "Change a key"
+      hint: page.bindingsPath() !== ""
+            ? "In " + page.keysInfo.file_shown + ". It is your file: Hyprland reloads it when it is saved."
+            : "In Hyprland's bindings file, once it has been found."
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      Button {
+        objectName: "openBindings"
+        text: "Open bindings file"
+        bordered: true
+        focusable: true
+        enabled: page.bindingsPath() !== ""
+        opacity: enabled ? 1 : 0.45
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onClicked: page.openBindings()
+      }
+    }
+  }
+
+  SettingsGroup {
+    width: parent.width
+    title: "MAINTENANCE"
+    foreground: page.s.foreground
+    fontFamily: page.s.fontFamily
+
+    SettingRow {
+      width: parent.width
+      label: page.s.engineInstalled ? "Repair the installation" : "Install the voice engine"
+      hint: page.s.engineInstalled
+            ? "Runs the installer again: fetches anything missing, keeps your settings, and restarts the service if it is running."
+            : "About 700MB — speech recognition, a voice and the wake word — run as a service you can stop."
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      Button {
+        objectName: "repair"
+        text: page.s.engineInstalled ? "Repair…" : "Install…"
+        bordered: true
+        focusable: true
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onClicked: page.s.fetchNow([])
+      }
+    }
+
+    SettingRow {
+      width: parent.width
+      visible: !page.s.owwAvailable
+      label: "Add openWakeWord"
+      hint: "Better rejection of sound-alikes, and a verifier trained on your voice. About 154MB."
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      Button {
+        text: "Install…"
+        bordered: true
+        focusable: true
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onClicked: page.s.fetchNow(["--oww"])
+      }
+    }
+
+    SettingRow {
+      width: parent.width
+      visible: !page.s.sherpaAvailable
+      label: "Add sherpa-onnx"
+      hint: "Takes any phrase and your agents' names, with far fewer false wakes than Vosk. About 60MB."
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      Button {
+        text: "Install…"
+        bordered: true
+        focusable: true
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onClicked: page.s.fetchNow(["--sherpa"])
+      }
+    }
+
+    // Last, and the only control drawn red before it is clicked.
+    SettingRow {
+      width: parent.width
+      label: "Remove Agent Voice"
+      hint: "The engine, the service, the keys it added and the widget in one go. Your trained " +
+            "verifiers, recordings and API keys are kept, and it says where they are on the way out."
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      DangerButton {
+        objectName: "removeEverything"
+        text: "Remove Agent Voice…"
+        question: "Really remove Agent Voice?"
+        confirmText: "Remove"
+        foreground: page.s.urgent
+        urgent: page.s.urgent
+        fontFamily: page.s.fontFamily
+        onConfirmed: page.s.removeEverything()
       }
     }
   }

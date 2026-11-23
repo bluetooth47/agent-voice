@@ -17,7 +17,7 @@
 //   MODE-shot the same numbers with nothing clicked but `week`'s choice, the
 //             page stepped down a screenful each 2 s from 4 s after it is
 //             ready (--wait 14 --shots 3 --gap 2)
-//   clear     Display → Privacy's Clear stats: the first click only arms
+//   clear     Other settings → Privacy's Clear stats (through the old "display" id): the first click only arms
 //             it, Cancel writes nothing, Clear runs `agentvoice stats clear`
 //             on the scratch copy, and the page then says none are kept
 //

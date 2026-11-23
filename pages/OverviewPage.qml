@@ -257,7 +257,7 @@ Column {
       visible: text !== ""
       text: page.statsProblem !== "" ? page.statsProblem
             : (page.stats && page.stats.keeping === false
-               ? "Usage numbers are off, so nothing new is counted. Turn them on in Display & privacy."
+               ? "Usage numbers are off, so nothing new is counted. Turn them on in Other settings."
                : "")
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily

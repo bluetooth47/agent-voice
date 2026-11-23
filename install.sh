@@ -751,10 +751,29 @@ else
   # build wrote the lines underneath it.
   NEW_BUILD="$(jq -r '.version // empty' "$ROOT/manifest.json" 2>/dev/null || true)"
   NEW_BUILD="${NEW_BUILD:-unversioned}"
-  if GIT_DESC="$(git -C "$ROOT" describe --always --dirty 2>/dev/null)"; then
+  # Only when $ROOT is a checkout of its own: a copy unpacked inside some
+  # other repository would otherwise be stamped with that one's commit.
+  ROOT_IS_GIT=0
+  [[ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null || true)" == "$ROOT" ]] && ROOT_IS_GIT=1
+  if [[ $ROOT_IS_GIT == 1 ]] && GIT_DESC="$(git -C "$ROOT" describe --always --dirty 2>/dev/null)"; then
     NEW_BUILD="$NEW_BUILD ($GIT_DESC)"
   fi
-  printf '%s\n' "$NEW_BUILD" > "$APP/VERSION"
+  # Line one is the build, as every install has written it (build_id and
+  # PREV_BUILD above read only that). From master plan M26 the commit, the
+  # branch ("detached" for a deploy checkout) and the time follow, for the
+  # About page; diagnostics.read_stamp reads an older one-line stamp as
+  # "unknown branch". Each line only when git or date gave an answer.
+  {
+    printf '%s\n' "$NEW_BUILD"
+    if [[ $ROOT_IS_GIT == 1 ]] && STAMP_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)"; then
+      printf 'commit=%s\n' "$STAMP_COMMIT"
+      STAMP_BRANCH="$(git -C "$ROOT" symbolic-ref --short -q HEAD 2>/dev/null || true)"
+      printf 'branch=%s\n' "${STAMP_BRANCH:-detached}"
+    fi
+    if STAMP_WHEN="$(date --iso-8601=seconds 2>/dev/null)"; then
+      printf 'installed=%s\n' "$STAMP_WHEN"
+    fi
+  } > "$APP/VERSION"
 
   ok "Installed the daemon into $APP"
   if [[ -n $PREV_BUILD && $PREV_BUILD != "$NEW_BUILD" ]]; then

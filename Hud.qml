@@ -61,7 +61,7 @@ PanelWindow {
   property string position: "top"
   // 0.85, 1 or 1.25: small, medium (the bar's own size) or large.
   property real textScale: 1.0
-  // The payload is the Display page's preview (readout.py). Its end closes
+  // The payload is Other settings' preview (readout.py). Its end closes
   // the readout at once: the linger is for reading a real answer.
   property bool preview: false
   property bool wasPreview: false

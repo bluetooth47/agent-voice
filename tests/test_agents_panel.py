@@ -237,7 +237,7 @@ def test_the_setting_is_in_all_three_places():
     assert manifest["barWidget"]["defaults"]["agentsPanel"] is True
     assert any(e["key"] == "agentsPanel" for e in manifest["barWidget"]["schema"])
     assert runtime.DEFAULTS["agentsPanel"] is True
-    assert 'put("agentsPanel"' in (ROOT / "pages/DisplayPage.qml").read_text()
+    assert 'put("agentsPanel"' in (ROOT / "pages/OtherSettingsPage.qml").read_text()
 
 
 def test_uninstall_removes_the_records_after_the_service_stops():

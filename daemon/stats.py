@@ -5,7 +5,7 @@ folder): turns per agent and per kind, wakes accepted (by which engine) and
 rejected (by which stage), when in the day they came, how long the waits
 were as fixed-bucket histograms, and turns cut at the longest-turn limit.
 Kept 90 days. `agentvoice stats [--days N] [--json]` reads them; `agentvoice
-stats clear` deletes them (the Clear stats button on Display → Privacy).
+stats clear` deletes them (the Clear stats button on Other settings → Privacy).
 
 **Never text.** What somebody said, what an agent answered, a chat's title,
 a tool's arguments: none of it has a field here. That is held the way the
@@ -85,6 +85,10 @@ WAKE_HOWS = ("spotter", "openwakeword", "vosk", "second-check", "confirmed", "ot
 #: "held" is a name one stage heard and the other did not confirm in time
 #: (wakeBothAgree, master plan M22): held, then dropped.
 REJECT_STAGES = ("second-check", "confidence", "held")
+#: The programs a turn can be answered by (master plan M26: About's "has
+#: answered a turn here"). The adapters' own names; an endpoint is one
+#: entry whatever it points at.
+ANSWER_PROGRAMS = ("claude", "codex", "gemini", "agy", "copilot", "endpoint")
 #: The waits, each a histogram in milliseconds.
 TIMINGS = ("wake_to_reply", "transcribe", "reply")
 #: Bucket edges in ms: bucket 0 is [0, 50), bucket i is [EDGES[i-1],
@@ -129,7 +133,7 @@ def _hour(now: float) -> int:
 def empty_day(day: str) -> dict:
     return {"v": 1, "day": day, "turns": {}, "wakes": {}, "rejected": {},
             "wake_hours": [0] * 24, "reject_hours": [0] * 24,
-            "timings": {}, "limit_hits": 0, "ids": []}
+            "timings": {}, "limit_hits": 0, "answered": {}, "ids": []}
 
 
 def _count(value) -> int:
@@ -217,6 +221,7 @@ def clean_day(raw, day: str) -> dict | None:
                 if h["n"]:
                     out["timings"][name] = h
     out["limit_hits"] = _count(raw.get("limit_hits"))
+    out["answered"] = _clean_counts(raw.get("answered"), ANSWER_PROGRAMS)
     ids = raw.get("ids")
     if isinstance(ids, list):
         out["ids"] = [i for i in ids if isinstance(i, str) and _TURN.fullmatch(i)][-MAX_IDS:]
@@ -357,6 +362,21 @@ def record_turn(agent: str, kind: str, turn_id: str, *, wake_to_reply_ms=None,
     return _update(now, change)
 
 
+def record_answer(program: str, now: float | None = None) -> bool:
+    """A turn that `program` answered with words and no error (master plan
+    M26), so About can say a backend "has answered a turn here" from a
+    record rather than from finding its program on PATH. A name off the
+    fixed list is not counted."""
+    if program not in ANSWER_PROGRAMS:
+        return False
+
+    def change(data, _now):
+        data["answered"][program] = data["answered"].get(program, 0) + 1
+        return True
+
+    return _update(now, change)
+
+
 def record_wake(how: str, now: float | None = None) -> bool:
     """A wake accepted, by the engine that accepted it."""
     how = how if how in WAKE_HOWS else "other"
@@ -469,6 +489,7 @@ def _fold(days: list[dict]) -> dict:
     rejected = {k: 0 for k in REJECT_STAGES}
     wake_hours, reject_hours = [0] * 24, [0] * 24
     limit = 0
+    answered = {k: 0 for k in ANSWER_PROGRAMS}
     for d in days:
         for agent, ks in d["turns"].items():
             turns[agent] = turns.get(agent, 0) + sum(ks.values())
@@ -481,13 +502,15 @@ def _fold(days: list[dict]) -> dict:
         wake_hours = [a + b for a, b in zip(wake_hours, d["wake_hours"])]
         reject_hours = [a + b for a, b in zip(reject_hours, d["reject_hours"])]
         limit += d["limit_hits"]
+        for k, v in d.get("answered", {}).items():
+            answered[k] += v
     return {"turns": turns, "turn_count": sum(turns.values()), "kinds": kinds,
             "wakes": sum(wakes.values()), "wakes_by": wakes,
             "rejected": sum(rejected.values()), "rejected_by": rejected,
             "wake_hours": wake_hours, "reject_hours": reject_hours,
             "timings": {name: timing_summary(merge(d["timings"].get(name) for d in days))
                         for name in TIMINGS},
-            "limit_hits": limit}
+            "limit_hits": limit, "answered": answered}
 
 
 def summary(days: int = 7, now: float | None = None) -> dict:

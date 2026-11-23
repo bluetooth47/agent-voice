@@ -154,6 +154,7 @@ def test_a_sentence_has_nowhere_to_go():
                              transcribe_ms=[CANARY], reply_ms={"x": CANARY})
     assert stats.record_wake(CANARY)
     assert not stats.record_rejection(CANARY)
+    assert not stats.record_answer(CANARY)
     text = day_file().read_text()
     assert "WALRUS" not in text and "launch" not in text
     assert today()["timings"]["reply"]["n"] == 0      # the junk waits were dropped
@@ -180,8 +181,11 @@ def test_every_string_in_a_day_file_is_an_id_a_date_or_a_fixed_word():
     for stage in stats.REJECT_STAGES:
         stats.record_rejection(stage)
     stats.record_limit_hit()
+    for program in stats.ANSWER_PROGRAMS:
+        stats.record_answer(program)
     fixed = (set(stats.TURN_KINDS) | set(stats.WAKE_HOWS) | set(stats.REJECT_STAGES)
-             | set(stats.TIMINGS) | {"v", "day", "turns", "wakes", "rejected", "wake_hours",
+             | set(stats.TIMINGS) | set(stats.ANSWER_PROGRAMS)
+             | {"v", "day", "turns", "wakes", "rejected", "wake_hours", "answered",
                                      "reject_hours", "timings", "limit_hits", "ids", "b", "n",
                                      "sum", "min", "max", "sora"})
     for s in _strings(json.loads(day_file().read_text())):
@@ -442,7 +446,7 @@ def test_the_setting_is_three_things():
     assert manifest["barWidget"]["defaults"]["keepStats"] is True
     assert any(e["key"] == "keepStats" and e["type"] == "bool"
                for e in manifest["barWidget"]["schema"])
-    page = (ROOT / "pages/DisplayPage.qml").read_text()
+    page = (ROOT / "pages/OtherSettingsPage.qml").read_text()
     assert 'page.s.put("keepStats", !checked)' in page
     import runtime
     assert runtime.TOML_ALIASES["keepStats"] == ("ui", "keep_stats")
@@ -721,3 +725,63 @@ def test_work_for_another_agent_is_a_task_turn(daemon):
         daemon._main.task = None
     d = today()
     assert d["kinds"]["task"] == 1 and d["timings"]["transcribe"]["n"] == 0
+
+
+# --- master plan M26: which program has answered a turn here -------------------------------
+
+def test_an_answer_is_counted_by_program_and_only_from_the_fixed_list():
+    assert stats.record_answer("claude") and stats.record_answer("claude")
+    assert stats.record_answer("endpoint")
+    assert not stats.record_answer("claude --bare") and not stats.record_answer("")
+    got = stats.summary(stats.KEEP_DAYS)["range"]["answered"]
+    assert got["claude"] == 2 and got["endpoint"] == 1 and got["codex"] == 0
+    assert set(got) == set(stats.ANSWER_PROGRAMS)
+
+
+def test_a_day_file_from_before_m26_reads_with_no_answers(data_dir):
+    day = stats.day_of()
+    path = stats.stats_dir()
+    path.mkdir(parents=True, exist_ok=True)
+    (path / f"{day}.json").write_text(json.dumps({"v": 1, "day": day, "turns": {"main": {"wake": 2}}}))
+    s = stats.summary(1)["range"]
+    assert s["turn_count"] == 2 and sum(s["answered"].values()) == 0
+    # A damaged field is dropped, never kept as found.
+    (path / f"{day}.json").write_text(json.dumps({"v": 1, "day": day,
+                                                  "answered": {"claude": 3, CANARY: 9, "codex": "x"}}))
+    assert stats.summary(1)["range"]["answered"]["claude"] == 3
+    assert CANARY not in json.dumps(stats.summary(1))
+
+
+def test_a_turn_that_says_something_counts_its_program_and_a_failed_one_does_not(daemon):
+    daemon.agent = Agent("Hello there. ")
+    daemon.agent.name = "claude"
+    _speaker_with_a_clock(daemon)
+    now = time.time()
+    daemon.answer("hi", {"transcript": "x"},
+                  clock={"voice_end": now - 1, "endpoint": now, "kind": "wake", "turn": T()})
+    assert stats.summary(1)["range"]["answered"]["claude"] == 1
+
+
+def test_keep_stats_off_counts_no_answer(daemon, data_dir, cfg_factory):
+    daemon.cfg = cfg_factory(echoTailMs=0, keepStats=False)
+    daemon.agent = Agent("Hello there. ")
+    daemon.agent.name = "claude"
+    daemon.agent.posture = lambda level: level
+    daemon.pipe = type("P", (), {"max_utterance_ms": 30000})()
+    _speaker_with_a_clock(daemon)
+    now = time.time()
+    daemon.answer("hi", {"transcript": "x"},
+                  clock={"voice_end": now - 1, "endpoint": now, "kind": "wake", "turn": T()})
+    assert not data_dir.exists()
+
+
+def test_a_turn_that_fails_counts_no_answer(daemon):
+    class Failing(Agent):
+        name = "claude"
+
+        def send(self, text, session_id=None):
+            raise RuntimeError("exit 1: not signed in")
+    daemon.agent = Failing("")
+    _speaker_with_a_clock(daemon)
+    daemon.answer("hi", {"transcript": "x"}, clock={"kind": "wake", "turn": T()})
+    assert stats.summary(1)["range"]["answered"]["claude"] == 0

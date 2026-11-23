@@ -140,7 +140,7 @@ def test_every_page_has_a_key_with_the_new_ones_after_agents():
     s = text("Settings.qml")
     ids = re.findall(r'\{ id: "(\w+)",\s+label:', s[s.index("readonly property var pages:"):])[:11]
     assert ids == ["overview", "agents", "agentdetails", "communal", "crew", "chats", "listening",
-                   "conversation", "voice", "display", "about"]
+                   "conversation", "voice", "other", "about"]
     assert "ctrl+1–9, 0 or pgup/pgdn to switch pages" in s
     assert "n >= 0 && n < root.pages.length" in s
     keys = s[s.index("function pageForKey("):s.index("function goTo(")]

@@ -32,7 +32,7 @@ daemon so they can be tested on their own:
   While somebody is speaking (`capture`, `transcribing`) a reply is moved to
   `last_reply`.
 
-The preview (the Display page's button) is here too: four seconds of sample
+The preview (Other settings' button; the Display page until M26) is here too: four seconds of sample
 text published as a real `speaking` payload, so the HUD draws it exactly as
 it would draw a turn. Only over an idle readout, never over a lock, and the
 synthetic text never becomes the kept reply.

@@ -519,9 +519,10 @@ def test_the_widget_removal_is_a_flag_not_a_shell_chain():
     assert "--uninstall --with-widget" in command
     assert "omarchy plugin remove" not in command, "back to chaining in QML"
     assert "&&" not in command
-    # And the button on the About page is what calls it.
-    about = page("About")
-    button = about[about.index('text: "Remove Agent Voice'):]
+    # And the button on Other settings → Maintenance (About until M26) is
+    # what calls it.
+    other = page("OtherSettings")
+    button = other[other.index('text: "Remove Agent Voice'):]
     assert "page.s.removeEverything()" in button[:button.index("\n      }")]
 
 

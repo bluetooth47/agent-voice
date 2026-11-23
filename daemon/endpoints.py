@@ -14,6 +14,7 @@ Run as a program it is that CLI:
     endpoints.py key show URL              masked: "sk-…a1b2", or nothing
     endpoints.py key clear URL
     endpoints.py presets                   JSON list of the shipped presets
+    endpoints.py probe-local               JSON: is Ollama or llama.cpp answering here
 """
 from __future__ import annotations
 
@@ -484,6 +485,48 @@ def strip_thinking(text: str) -> str:
 
 # --- the CLI the settings page runs ----------------------------------------
 
+# --- what is answering on this machine (master plan M26) ---------------------
+
+#: The two local servers About asks about (a list of its own: LOCAL_SERVERS
+#: above names ports for error messages), on loopback only and only when
+#: somebody clicks: Ollama's port and llama.cpp's server's default.
+PROBED_SERVERS = (
+    {"id": "ollama", "label": "Ollama", "port": 11434},
+    {"id": "llamacpp", "label": "llama.cpp server", "port": 8080},
+)
+
+
+def probe_local(timeout: float = 1.5, host: str = "127.0.0.1", servers=PROBED_SERVERS) -> list[dict]:
+    """Whether each local server answers `GET /v1/models`, and how many
+    models it lists. "answering" says a server is there; it does not say any
+    agent uses it, and the page never calls it connected."""
+    # No proxy (a loopback probe sent through one would ask the proxy) and
+    # no redirects (one could point anywhere). Never a key: nothing is sent.
+    # Built per call, so a proxy in the environment now is the one refused.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirects)
+    out = []
+    for srv in servers:
+        url = f"http://{host}:{int(srv['port'])}/v1/models"
+        row = {"id": srv["id"], "label": srv["label"], "port": int(srv["port"]),
+               "status": "nothing", "models": 0}
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with opener.open(req, timeout=timeout) as r:
+                body = r.read(256 * 1024)
+            data = json.loads(body.decode("utf-8", "replace"))
+            models = data.get("data") if isinstance(data, dict) else None
+            if isinstance(models, list):
+                row.update(status="answering", models=len(models))
+            else:
+                row["status"] = "other"
+        except urllib.error.HTTPError:
+            row["status"] = "other"
+        except (OSError, ValueError, urllib.error.URLError):
+            pass
+        out.append(row)
+    return out
+
+
 def main(argv: list[str]) -> int:
     if not argv:
         print(__doc__, file=sys.stderr)
@@ -491,6 +534,9 @@ def main(argv: list[str]) -> int:
     cmd, args = argv[0], argv[1:]
     if cmd == "presets":
         print(json.dumps(list(PRESETS)))
+        return 0
+    if cmd == "probe-local" and not args:
+        print(json.dumps(probe_local()))
         return 0
     if cmd == "clean" and len(args) == 1:
         print(clean_url(args[0]))

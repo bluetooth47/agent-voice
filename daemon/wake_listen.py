@@ -2081,7 +2081,7 @@ class Daemon:
         #: then, when). Shown in the readout until its next turn is answered.
         self._notices: dict[str, tuple[str, int, float]] = {}
         #: phase M3: the readout's kept reply, when its lines clear, and the
-        #: Display page's preview. See readout.py.
+        #: Other settings page's preview. See readout.py.
         self.readout = readout.Readout(lock=getattr(state, "_lock", None),
                                        on_clear=self._readout_cleared)
         #: Agents' cached turns (Persona.last) as they were at the last
@@ -2385,7 +2385,7 @@ class Daemon:
             self._recompose()
 
     def apply_readout_command(self, cmd: str | None) -> bool:
-        """`agentvoice hud-preview`, the Display page's Preview button: four
+        """`agentvoice hud-preview`, the Other settings page's Preview button: four
         seconds of sample text through the state file. True if it was one.
 
         Refused, and said so, while the screen is locked; over a turn under
@@ -5228,6 +5228,12 @@ class Daemon:
         # timestamps report_latency() prints below. Numbers and ids only.
         self.count_turn(persona, clock, bool(getattr(self._here, "typed", False)
                                              or last.get("typed")))
+        # Master plan M26: which program answered, for About's "has answered
+        # a turn here" -- a record, where finding a program on PATH is not
+        # one. Only a turn that said something and did not fail; the name is
+        # checked against a fixed list in stats.
+        if reply_parts and not error:
+            self.keep_stat(stats.record_answer, getattr(self.agent, "name", ""))
         # A stopped turn still counts if it got as far as making a sound --
         # that wait was real. One stopped before it spoke has nothing to say.
         if gaps:
@@ -5409,8 +5415,9 @@ class Daemon:
         """Find `p`'s saved chat about `about` and make it the current one.
         (what to say, whether it was continued)."""
         if not self.cfg.get_bool("saveChats"):
-            return ("Saved chats are off. Turn on Save conversations in the "
-                    "Display settings."), False
+            # On the Chats page since phase M18 (this said "Display" until M26).
+            return ("Saved chats are off. Turn on Save conversations on the "
+                    "Chats page in Settings."), False
         try:
             found = self.chats.find(about, p.id)
         except (OSError, ValueError):

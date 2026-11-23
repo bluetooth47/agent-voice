@@ -93,10 +93,10 @@ DESTRUCTIVE: dict[str, tuple[dict[str, list[str]], list[re.Pattern]]] = {
     # nowhere else (launch_extras), so it cannot be put back but by typing.
     "agents env unset": ({"AgentDetailsPage.qml": ["removeEnv"]}, [call("removeEnv")]),
     "agents env clear": ({"AgentDetailsPage.qml": ["clearEnv"]}, [call("clearEnv")]),
-    # Master plan M21: every day of the Overview's numbers, from Display →
-    # Privacy -- a Process started only by clearStats(), which only the
+    # Master plan M21: every day of the Overview's numbers, from Other
+    # settings → Privacy (Display until M26) -- a Process started only by clearStats(), which only the
     # DangerButton's onConfirmed calls.
-    "stats clear": ({"DisplayPage.qml": ["Process"]},
+    "stats clear": ({"OtherSettingsPage.qml": ["Process"]},
                     [call("clearStats"), start("statsClearer")]),
 }
 
@@ -131,7 +131,7 @@ WRAPPERS = {("AgentFolders.qml", "function remove"), ("AgentFolders.qml", "funct
             ("pages/CrewMapPage.qml", "function quarantineAgent"),
             ("AgentFolders.qml", "function resetAgent"),
             ("pages/ChatsPage.qml", "function deleteAllChats"),
-            ("pages/DisplayPage.qml", "function clearStats")}
+            ("pages/OtherSettingsPage.qml", "function clearStats")}
 
 
 def _built_in(scanned, spelling):
@@ -195,8 +195,9 @@ def test_the_buttons_that_confirm_are_danger_buttons():
     move or copy a note that widens who reads it (transferNote) or combine
     notes (combineNotes, in the table above), or, since M20, let an agent
     search every saved chat (chatSearchPicked("all"), held further in
-    test_chat_search.py) -- never one of the other destructive commands
-    above."""
+    test_chat_search.py), or, since M26, write what is said to the journal
+    (turnOnSpeechLog, held below) -- never one of the other destructive
+    commands above."""
     wrong = []
     for path in overlay_qml():
         s = scan(path)
@@ -205,7 +206,7 @@ def test_the_buttons_that_confirm_are_danger_buttons():
             if el == "ToolConfirm":
                 body = s.src[m.end():m.end() + 400].split("onCancelled")[0]
                 if not re.search(r"\b(setAgentTool|putShared|importSkill|transferSkill|transferNote|"
-                                 r"combineNotes|commitImport|chatSearchPicked)\(", body) or \
+                                 r"combineNotes|commitImport|chatSearchPicked|turnOnSpeechLog)\(", body) or \
                         re.search(r"agents\W+trash|chats\W+delete|--uninstall|remove|reset", body):
                     wrong.append(f"{path.relative_to(ROOT)}:{s.lineno(m.start())} ToolConfirm "
                                  f"doing something other than a tool switch")
@@ -245,7 +246,7 @@ def test_the_scanner_sees_a_confirmation_go_missing():
     """The test above has to be able to fail: an onConfirmed turned into an
     onClicked is caught, on a copy."""
     from qml_scan import Scanned, blank
-    src = (ROOT / "pages" / "AboutPage.qml").read_text()
+    src = (ROOT / "pages" / "OtherSettingsPage.qml").read_text()
     mutated = src.replace("onConfirmed: page.s.removeEverything()",
                           "onClicked: page.s.removeEverything()")
     assert mutated != src
@@ -299,3 +300,57 @@ def test_no_building_block_writes_a_setting_by_name():
             if s.clean[m.start()] == s.src[m.start()]:
                 wrong.append(f"ui/{path.name}:{s.lineno(m.start())}")
     assert wrong == [], wrong
+
+
+# --- master plan M26: Other settings -------------------------------------------------------
+
+def test_writing_speech_to_the_journal_is_turned_on_only_from_its_question():
+    """`logSpeech` on puts everything said into a journal kept for weeks, so
+    turning it on is asked first: `true` is written in turnOnSpeechLog()
+    alone, which only the ToolConfirm's onConfirmed calls. Off stays one
+    click (and Reset, to the default, which is off)."""
+    s = scan(ROOT / "pages" / "OtherSettingsPage.qml")
+    on = [m.start() for m in re.finditer(r'put\(\s*"logSpeech"\s*,\s*true\s*\)', s.nocomment)]
+    assert on and {s.handler_of(p) for p in on} == {"function turnOnSpeechLog"}
+    calls = list(s.calls(call("turnOnSpeechLog")))
+    assert calls and {s.handler_of(p) for p in calls} == {"onConfirmed"}
+    assert {s.element_of(p) for p in calls} == {"ToolConfirm"}
+    # Anything else that writes the key writes false (or resets it).
+    for m in re.finditer(r'put\(\s*"logSpeech"\s*,\s*([^)]*)\)', s.nocomment):
+        assert m.group(1).strip() in ("true", "false"), m.group(0)
+    # No other overlay file writes it at all.
+    for path in overlay_qml():
+        if path.name != "OtherSettingsPage.qml":
+            assert not re.search(r'"logSpeech"\s*,', scan(path).nocomment), path.name
+    # The question says how long, and the switch says it is risky.
+    src = (ROOT / "pages" / "OtherSettingsPage.qml").read_text()
+    assert "\\u26a0 Write what is said to the system log" in src
+    assert "keeps entries for weeks" in src
+
+
+def test_the_journal_question_can_be_seen_to_go_missing():
+    """The test above fails on a copy whose switch writes true itself."""
+    src = (ROOT / "pages" / "OtherSettingsPage.qml").read_text()
+    mutated = src.replace("else page.confirmingLog = true", 'else page.s.put("logSpeech", true)')
+    assert mutated != src
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "OtherSettingsPage.qml"
+        f.write_text(mutated)
+        s = scan(f)
+        on = [m.start() for m in re.finditer(r'put\(\s*"logSpeech"\s*,\s*true\s*\)', s.nocomment)]
+        assert {s.handler_of(p) for p in on} != {"function turnOnSpeechLog"}
+
+
+def test_remove_and_repair_live_on_other_settings_and_about_changes_nothing():
+    """Repair and Remove moved from About to Other settings → Maintenance
+    (M26). Remove is still the DangerButton whose onConfirmed is the one
+    call of removeEverything() (the --uninstall row of the table above);
+    About runs nothing that changes the installation."""
+    other = (ROOT / "pages" / "OtherSettingsPage.qml").read_text()
+    about = (ROOT / "pages" / "AboutPage.qml").read_text()
+    assert "onConfirmed: page.s.removeEverything()" in other
+    assert "page.s.fetchNow([])" in other
+    for verb in ("removeEverything", "fetchNow", "put(", "resetKey(", "setAgentField("):
+        assert verb not in about, verb

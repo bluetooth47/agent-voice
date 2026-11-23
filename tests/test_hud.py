@@ -196,10 +196,11 @@ def test_the_switch_opens_the_first_group_on_its_page():
     """It began at the end of TALKING TO IT, a section otherwise about keys,
     where the person who asked for it could not find it. Then its own section.
     Then, asked for again, first on the page. The settings are pages now, and
-    it opens the first group of Display, the page named for it.
+    it opens the first group of Display, the page named for it -- Other
+    settings since M26, where it still opens the first group.
     """
     from qml_sources import page
-    display = _code(ROOT / "pages" / "DisplayPage.qml")
+    display = _code(ROOT / "pages" / "OtherSettingsPage.qml")
     toggle = display.index('label: "Show what it heard and what it answered"')
     # Group titles are capitals; the page's own title is not one of them.
     titles = [m.start() for m in re.finditer(r'\n\s+title: "[A-Z][A-Z &-]+"', display)]
@@ -220,7 +221,7 @@ def test_the_switch_opens_the_first_group_on_its_page():
     knob = box[box.index("KnobRow {"):]
     assert 'enabled: page.s.setting("hud", true) === true' in knob
     assert "visible:" not in box[:box.index("KnobRow {")]
-    assert page("Display")
+    assert page("OtherSettings")
 
 
 def test_no_dead_flag_is_left_behind():
@@ -263,12 +264,12 @@ M3_KEYS = ("hudSize", "hudKeepReply", "hudPosition", "hudTextSize")
 
 def test_the_four_readout_settings_exist_in_all_three_places():
     """Manifest schema and defaults, the daemon's DEFAULTS, and a control
-    that writes it on the Display page (test_settings_pages holds that it is
+    that writes it on Other settings (Display until M26) (test_settings_pages holds that it is
     the only page)."""
     import runtime
     manifest = json.loads((ROOT / "manifest.json").read_text())["barWidget"]
     schema = {k["key"]: k for k in manifest["schema"]}
-    display = _code(ROOT / "pages" / "DisplayPage.qml")
+    display = _code(ROOT / "pages" / "OtherSettingsPage.qml")
     expected = {"hudSize": "locked", "hudKeepReply": True, "hudPosition": "top",
                 "hudTextSize": "medium"}
     for key in M3_KEYS:

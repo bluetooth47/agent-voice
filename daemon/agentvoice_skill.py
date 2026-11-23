@@ -59,7 +59,7 @@ PAGE_LABELS = {
     "AgentDetailsPage": "Agent details", "CommunalPage": "Communal",
     "CrewMapPage": "Crew map", "ChatsPage": "Chats", "ListeningPage": "Listening",
     "ConversationPage": "Conversation", "VoicePage": "Voice",
-    "DisplayPage": "Display", "AboutPage": "About",
+    "OtherSettingsPage": "Other settings", "AboutPage": "About",
 }
 
 #: `agentvoice` commands that are fine to *suggest to the person*, each a verb

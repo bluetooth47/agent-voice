@@ -293,8 +293,8 @@ instruction says once.
 
 ### Reading it back
 
-The readout that appears while it works has two sizes (Display & privacy →
-**Readout size**). **Locked**, the default, keeps it one size from turn to
+The readout that appears while it works has two sizes (Other settings →
+**Size**). **Locked**, the default, keeps it one size from turn to
 turn: two fixed lines, the agent's last answer (dim, with an accent bar) and
 what is being said now (bright), each cut short with an ellipsis when it is
 long. Nothing appears or disappears, so neither the readout nor the popup's
@@ -543,7 +543,7 @@ saved chat.
 
 The numbers are counts and timings only: one small file a day in
 `~/.local/share/agentvoice/stats`, readable by you alone, kept 90 days, and
-never anything that was said. Display & privacy → **Keep usage numbers**
+never anything that was said. Other settings → **Keep usage numbers**
 turns collecting off, and **Clear stats** deletes what was kept. In a
 terminal: `agentvoice stats [--days N] [--json]`.
 
@@ -922,7 +922,8 @@ uninstaller removes them all.
 They add nothing to the panel's token and prompt totals. A voice turn runs the
 agent's own CLI, and that CLI's usage is already counted under its own
 section; counting it again here would show every spoken prompt twice. Turn the
-sections off under Settings → **Display** → **Show each voice agent there**,
+sections off under Settings → **Other settings** → **Show each voice agent in
+Omarchy's Agents panel**,
 or hide one with Omarchy's own per-agent switch.
 
 ### Mute, not stop
@@ -1501,7 +1502,10 @@ knobs: shell.json[duaneoca.agentvoice] · build 0.2.0 (3f9a1c2)
 ```
 
 Worth checking before anything else, because the daemon and the bar widget
-are installed separately and can therefore disagree. The widget arrives with
+are installed separately and can therefore disagree. Settings → **About**
+shows both builds side by side (commit, branch, install time) and says
+whether the daemon's files differ between them; `agentvoice about` prints the
+same. The widget arrives with
 `omarchy plugin add` and updates with `omarchy plugin update`; the daemon is
 whatever `install.sh` last copied, and the panel's install offer runs the one
 in the plugin directory. So installing from a checkout and then clicking that
@@ -1524,7 +1528,7 @@ because the journal keeps entries for weeks and a reply is whatever the agent
 read out. Three ways to turn it on when you need it:
 
 ```bash
-# the switch, in Agent Voice settings: "Write what is said to the system log"
+# the switch, in Other settings: "Write what is said to the system log" (it asks first)
 omarchy bar set duaneoca.agentvoice logSpeech true --json   # or from a shell
 ```
 
@@ -1550,6 +1554,23 @@ agentvoice stop && ~/.local/share/agentvoice/venv/bin/python \
 
 For the wake word specifically, `agentvoice monitor --ab` scores each
 utterance with and without your verifier and needs none of the above.
+
+### Asking for help
+
+Settings → **About** → **Copy diagnostics** puts a short report on the
+clipboard: both builds, Omarchy's version, the settings you changed and the
+service's last 50 log lines. It is built from allowlists, so what was said
+or answered, keys, URL paths and folder contents are never in it, even with
+`logSpeech` on: a setting is shown only by its kind (a number, a switch, a
+word from a short list; a URL as its host; other text as "set"), and a log
+line only when it has the shape of one of the daemon's own structural lines.
+**Show** prints the same report on the page, so you can read it before you
+send it anywhere. In a terminal: `agentvoice diagnostics` (print) or
+`agentvoice diagnostics copy`.
+
+**Check for updates** asks the remote the plugin folder tracks for its newest
+commit, only when clicked, and says which remote it asked. A copy put there
+by `bin/agentvoice-deploy` tracks none, on purpose, and says so.
 
 ## Layout
 

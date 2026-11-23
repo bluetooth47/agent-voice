@@ -31,8 +31,10 @@ import "pages"
 //   Listening     wake word, engine, microphone gate, verifier
 //   Conversation  follow-ups, timings, talking over it
 //   Voice         speech out, transcription
-//   Display       the readout, privacy, keys
-//   About         version, engine status, repair and removal
+//   Other settings the readout, privacy, keys, repair and removal
+//                 (was "Display" until M26; "display" still opens it)
+//   About         this install, diagnostics, updates, who it talks to,
+//                 the voice commands
 //
 // This file holds what every page shares: the settings store, the daemon's
 // state, what is on disk, and the functions that launch things. A page gets
@@ -112,7 +114,7 @@ Item {
     { id: "listening",    label: "Listening",    icon: "\u{f036c}" },
     { id: "conversation", label: "Conversation", icon: "\u{f0b79}" },
     { id: "voice",        label: "Voice",        icon: "\u{f057e}" },
-    { id: "display",      label: "Display",      icon: "\u{f0379}" },
+    { id: "other",        label: "Other settings", icon: "\u{f0493}" },
     { id: "about",        label: "About",        icon: "\u{f02fd}" }
   ]
 
@@ -495,7 +497,7 @@ Item {
   }
   Process { id: interrupt; command: ["agentvoice", "interrupt"] }
 
-  // The Display page's Preview (phase M3): four seconds of sample text on
+  // Other settings' Preview (phase M3; the Display page until M26): four seconds of sample text on
   // the readout, published through the daemon's state file so the HUD draws
   // it exactly as it draws a turn. A button that cannot work says why, here,
   // where the page can show it.
@@ -840,7 +842,7 @@ Item {
   readonly property var problems: {
     var out = []
     if (!engineInstalled)
-      out.push({ text: "The voice engine is not installed yet.", page: "about" })
+      out.push({ text: "The voice engine is not installed yet.", page: "other" })
     if (usingOww && !owwAvailable)
       out.push({ text: "openWakeWord is chosen but not installed, so Vosk is listening instead.",
                  page: "listening" })
@@ -1009,6 +1011,9 @@ Item {
   }
 
   function goTo(pageId, agent, tab) {
+    // Master plan M26: Display became Other settings. Its old id is kept as
+    // an alias, so a deep link or a bookmark written before still lands.
+    if (pageId === "display") pageId = "other"
     var known = false
     for (var i = 0; i < pages.length; i++) if (pages[i].id === pageId) known = true
     page = known ? pageId : "overview"
@@ -1664,7 +1669,7 @@ Item {
   }
   Process { id: trainer }
 
-  // Last on the About page, and the only red control in the overlay. Removal
+  // Last on Other settings (About until M26), and the only red control in the overlay. Removal
   // lives inside the settings it removes because nothing runs on the way
   // out: `omarchy plugin remove` is an rm -rf with no hook, so the only
   // moment this can clean up after itself is while it exists.
@@ -2162,7 +2167,7 @@ Item {
                              : root.page === "listening" ? listeningPage
                              : root.page === "conversation" ? conversationPage
                              : root.page === "voice" ? voicePage
-                             : root.page === "display" ? displayPage
+                             : root.page === "other" ? otherPage
                              : root.page === "about" ? aboutPage
                              : overviewPage
             }
@@ -2177,7 +2182,7 @@ Item {
           Component { id: listeningPage;    ListeningPage { s: root } }
           Component { id: conversationPage; ConversationPage { s: root } }
           Component { id: voicePage;        VoicePage { s: root } }
-          Component { id: displayPage;      DisplayPage { s: root } }
+          Component { id: otherPage;        OtherSettingsPage { s: root } }
           Component { id: aboutPage;        AboutPage { s: root } }
         }
 

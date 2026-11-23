@@ -605,8 +605,8 @@ class TestInTheTurn:
         d.agent.send = lambda text, session_id=None: sent.append(text) or iter(())
         d.answer(found.rest, {"transcript": found.rest}, command=found)
         assert sent == []
-        assert d.speaker.said == ["Saved chats are off. Turn on Save conversations in "
-                                  "the Display settings."]
+        assert d.speaker.said == ["Saved chats are off. Turn on Save conversations on "
+                                  "the Chats page in Settings."]
 
     def test_the_rest_is_not_read_for_a_command_again(self, quiet_publish, monkeypatch):
         """What was left is the request. An exact chat command in it would be

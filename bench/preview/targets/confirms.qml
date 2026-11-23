@@ -21,7 +21,7 @@ ShellRoot {
 
   Settings {
     id: overlay
-    Component.onCompleted: overlay.open('{"page":"about"}')
+    Component.onCompleted: overlay.open('{"page":"other"}')
 
     TestEvent { id: input }
 
@@ -117,7 +117,7 @@ ShellRoot {
     // One step a tick; each confirms after a cancel, so both paths are seen.
     property var steps: [
       function() { overlay.report("start") },
-      // Remove Agent Voice (About)
+      // Remove Agent Voice (Other settings → Maintenance since M26; About before)
       function() { overlay.arm("⚠ Remove Agent Voice", "Remove Agent Voice") },
       function() { overlay.report("Remove Agent Voice armed") },
       function() { overlay.click(overlay.button("Cancel"), "Remove Agent Voice: Cancel") },

@@ -360,14 +360,14 @@ def test_every_way_in_reaches_the_page():
     assert '\\"page\\":\\"chats\\"' in panel
     assert 'text: "Chats"' in panel
     assert 'showChat("")' in (ROOT / "pages" / "OverviewPage.qml").read_text()
-    for page in ("DisplayPage", "AgentDetailsPage", "CommunalPage"):
+    for page in ("OtherSettingsPage", "AgentDetailsPage", "CommunalPage"):
         src = (ROOT / "pages" / f"{page}.qml").read_text()
         assert 'goTo("chats", "")' in src, page
         assert 'showPage("history")' not in src and 'goTo("display"' not in src, page
 
 
 def test_the_three_privacy_settings_moved_with_their_names():
-    display = (ROOT / "pages" / "DisplayPage.qml").read_text()
+    display = (ROOT / "pages" / "OtherSettingsPage.qml").read_text()
     for key in ("saveChats", "chatRetention", "keepHistory"):
         assert f'page.s.put("{key}"' in PAGE, key
         assert f'"{key}"' not in display, key
