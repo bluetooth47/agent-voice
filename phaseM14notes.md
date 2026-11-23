@@ -36,10 +36,8 @@ A copy of `shell.json` was taken before the first deploy
 (`~/agentvoice-notes/shell.json.before-M14`, 0600); after the installs and the
 live checks it was byte-identical. No live check wrote a setting.
 
-`./bin/agentvoice-check`: green on the code tree of 6a3cd2b (the second full
-run; ed12962 changed one line and its test, and its deploy ran the strict
-check on it, green).
-- **4246 tests** at 6a3cd2b (was 4161; +85), 14 of 14 static checks, "the
+`./bin/agentvoice-check`: green on the final tree (the notes commit), run last.
+- **4247 tests** (was 4161; +86), 14 of 14 static checks, "the
   check wrote nothing in the tree: ok".
 - Bare-runner variant (`AGENTVOICE_STRICT=1`, a venv with only
   requirements-dev): **not run** this phase. `test_agentvoice_skill.py` uses no
@@ -331,7 +329,7 @@ was said into the microphone.
   0.2.0 (051ecc3)"; the skill built within seconds; 10,252 characters (the bug
   above). `preamble_size.py`: the line is 299 characters.
 - `bin/agentvoice-deploy --install 6a3cd2b`: the skill 19,501 characters, the
-  Settings section present (68 setting lines); the stamp written.
+  Settings section present; the stamp written.
 - The catalog row (`on`, `can`), the preview piece, the typed turn to Theo (above).
 - `bin/agentvoice-deploy --install ed12962`: the row's `asks` empty.
 - At the end: the service active; `shell.json` byte-identical to the copy. No
