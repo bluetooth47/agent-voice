@@ -2328,3 +2328,58 @@ So the page's hints say "about a minute / 30 s / 20 s to follow a room that
 gets 10 dB louder; quieter in about 20 / 18 / 16 s", and its help says that
 talk shorter than about 15 seconds never moves the line. Synthetic noise,
 not a recorded room.
+
+## 57. M27: what a warm Claude process says between turns, and how fast a finish is announced
+
+Measured 2026-11-23 on the i7-1185G7 (8 threads), Claude Code 2.1.330, the
+installed build (3bec4a3 for the five timed runs, ca3a9a4 for the lock run),
+the main agent Theo (Claude Code, Opus, Trusted), the machine's own speakers
+and Piper voice, Omarchy's notifications not silenced.
+
+**The spike** (Haiku, scratch folders, recorded in
+`tests/fixtures/background/`). After a turn that started background work had
+ended, with nothing written to stdin:
+
+| | started | turn's result | finish read | its own turn's init | first words | its result |
+|---|---|---|---|---|---|---|
+| `sleep 20; echo …` | 2.31 s | 3.12 s | 22.32 s | 22.37 s | 23.24 s | 23.41 s |
+| background sub-agent | 2.37 s | 3.41 s | 24.77 s | 24.79 s | 25.69 s | 25.90 s |
+| race (written at the finish) | 2.43 s | 3.29 s | 17.44 s | 17.55 s | 18.55 s | 18.84 s, then ours |
+
+Every finish was followed within 0.1 s by a whole turn the CLI took by itself.
+Before M27 nothing read those lines, and the next turn took that `result` for
+its own.
+
+**Finish to notification and finish to speech, five typed runs** (`sleep 20;
+echo m27-live-N` in the background through `agentvoice type main`, two
+minutes apart). "Finish" is when Agent Voice read the CLI's
+`task_notification`; the notification is shown when the CLI's own turn about
+it has ended (its words are what is said), and speech is the speaker's first
+sound:
+
+| run | to notification | to first sound | said |
+|---|---|---|---|
+| 1 | 3.37 s | 4.33 s | 140 chars |
+| 2 | 2.39 s | 3.27 s | 81 |
+| 3 | 3.44 s | 4.39 s | 140 |
+| 4 | 2.63 s | 3.36 s | 80 |
+| 5 | 5.87 s | 6.85 s | 78 |
+| **median** | **3.37 s** | **4.33 s** | |
+
+Almost all of it is the CLI's own turn (its first token ~1–3 s on Opus); the
+notification itself returns in tens of milliseconds (a crew event, which needs
+no model, was shown 0.06 s after its task ended), and the first sound follows
+the notification by 0.7–1.0 s (Piper). Also seen: 2.49/3.90 s (the first run,
+on ce50b5f), 2.51/3.33 s (after `agentvoice lock` had lapsed), and 2.30 s to
+the notification with the lock held, when nothing was said.
+
+**A delegated task** (Theo → Sora, `report_back`): notification 0.06 s after
+Sora's task ended; Theo's fixed line 8.92 s after, because Sora's own reply
+opened its follow-up window first, which an announcement waits out.
+
+**What it costs**: no process and no model call of its own. The pump is one
+thread per warm Claude process, blocked in `readline`; the queue and the
+checks are in memory; `omarchy-shell notifications isDnd` (measured 17 ms) and
+`notify-send` run only when there is something to announce. A warm process
+holding background work is kept past the five idle minutes, up to 30, which
+holds its ~230 MB (the figure in claude_code.py's own header) for that long.
