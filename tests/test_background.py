@@ -566,3 +566,39 @@ def test_a_turn_the_cli_takes_right_behind_ours_is_handed_on(make):
     assert _until(lambda: a.handed)
     assert a.handed[0].text == "The job is done."
     assert turn(a, "next", sid)[0] == "NEXT"
+
+
+# --- found live: the seconds between a finish and what the CLI then says --------
+
+def test_a_finish_still_to_be_said_counts_as_background_work(make):
+    """Found by the live lock check: after the finish was read nothing was
+    "outstanding", so a lock in the two seconds the CLI took to say it
+    stopped the process and the finish was never announced, not even as a
+    notification. Until that turn's result, the process is still busy."""
+    turn1, between, turn2 = phases("bash")
+    proc = Proc({1: turn1, 2: turn2})
+    a = make(proc)
+    _, sid, _ = turn(a, "start it")
+    note = next(i for i, l in enumerate(between) if l.get("subtype") == "task_notification")
+    result = next(i for i, l in enumerate(between) if l["type"] == "result")
+    proc.stdout.push(between[:note + 3])            # the finish and the turn's init
+    assert _until(lambda: a._bg.finished and a._bg.auto)
+    assert not a._bg.outstanding
+    assert a.background_running(), "a lock now would lose what it is about to say"
+    proc.stdout.push(between[note + 3:result + 1])
+    assert _until(lambda: a.handed)
+    assert not a.background_running()
+
+
+def test_the_let_go_waits_for_a_finish_still_to_be_said(make, monkeypatch):
+    turn1, between, _ = phases("bash")
+    proc = Proc({1: turn1})
+    a = make(proc, keep_warm_s=300)
+    turn(a, "start it")
+    note = next(i for i, l in enumerate(between) if l.get("subtype") == "task_notification")
+    proc.stdout.push(between[:note + 3])
+    assert _until(lambda: a._bg.auto)
+    stopped = []
+    monkeypatch.setattr(cc, "stop_tree", lambda p, sig=None: stopped.append(p))
+    a._expire(proc)
+    assert a._proc is proc and not stopped

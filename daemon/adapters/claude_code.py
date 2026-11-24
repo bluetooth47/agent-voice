@@ -261,6 +261,14 @@ class Between:
         return bool(self.started or self.running)
 
     @property
+    def pending(self) -> bool:
+        """Work still running, or a finish whose turn has not ended yet:
+        letting the process go now would lose what it is about to say (found
+        live in M27: a lock in those two seconds killed it, and the finish
+        was never announced)."""
+        return self.outstanding or bool(self.finished) or self.auto
+
+    @property
     def foreign(self) -> bool:
         """A turn that is not ours is due (a finish read) or under way."""
         return bool(self.finished) or self.auto
@@ -805,7 +813,7 @@ class ClaudeCode(Adapter):
         with self._lock:
             proc = self._proc
             return (proc is not None and proc.poll() is None and not self._busy
-                    and self._bg.outstanding)
+                    and self._bg.pending)
 
     def _forget(self) -> subprocess.Popen | None:
         """Let go of the running process and return it, to be stopped. Locked."""
@@ -832,7 +840,7 @@ class ClaudeCode(Adapter):
         with self._lock:
             if self._proc is not proc or self._busy:
                 return
-            if (self._bg.outstanding and proc.poll() is None
+            if (self._bg.pending and proc.poll() is None
                     and time.time() - self._idle_since < BACKGROUND_KEEP_S):
                 # Master plan M27: letting it go would kill the background
                 # work it is still doing; asked again a while later.

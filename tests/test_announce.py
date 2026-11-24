@@ -694,6 +694,18 @@ def test_a_lock_spares_an_idle_agents_background_work(room):
     assert d.crew["sora"].agent.cancelled == 1
 
 
+def test_repeated_locks_spare_it_until_its_finish_is_said(room):
+    """`agentvoice lock` calls silence() every time: the agent is spared as
+    long as its adapter says its background work, or a finish of it still to
+    be said, is pending (the adapter's side: test_background.py)."""
+    d = room
+    d._main.agent = Agent(background=True)
+    for _ in range(3):
+        d.apply_lock_command("lock")
+    assert d._main.agent.cancelled == 0
+    d.apply_lock_command("unlock")
+
+
 def test_a_lock_stops_a_turn_under_way_even_with_background_work(room):
     d = room
     gate = threading.Event()
