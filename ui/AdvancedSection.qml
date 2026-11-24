@@ -11,7 +11,7 @@ import qs.Commons as Commons
 // section still says there is something in it. It defaults to the number
 // of children; a caller whose children are wrappers sets it.
 //
-//   AdvancedSection { width: parent.width; SettingRow { ... } KnobRow { ... } }
+//   AdvancedSection { width: parent.width; SettingRow { ... } SliderRow { ... } }
 //
 // Keyboard: one Tab stop on the header; Enter or Space opens it.
 Column {
@@ -47,6 +47,11 @@ Column {
     height: headRow.implicitHeight + Style.space(8)
     radius: Style.cornerRadius
     activeFocusOnTab: true
+    Accessible.role: Accessible.Button
+    Accessible.name: section.title + (section.expanded ? ", open" : ", folded")
+    Accessible.description: section.summary
+    Accessible.focusable: true
+    Accessible.onPressAction: section.flip()
     color: headArea.containsMouse || activeFocus ? Style.hoverFillFor(section.foreground, section.accent) : "transparent"
     border.width: activeFocus ? 1 : 0
     border.color: section.accent

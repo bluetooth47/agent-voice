@@ -248,7 +248,8 @@ def test_the_page_takes_the_focus_so_asking_again_is_a_change():
 
 def test_the_limit_note_links_to_the_longest_turn():
     s = src()
-    assert s.count('page.s.focusKey = "maxUtteranceMs"') == 4  # click, Return, Enter, Space
+    # click, Return, Enter, Space, and a screen reader's press (M29)
+    assert s.count('page.s.focusKey = "maxUtteranceMs"') == 5
     assert 'text: "Raise it →"' in s
     assert 'hit the limit' in s
 

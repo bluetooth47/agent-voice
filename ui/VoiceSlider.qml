@@ -50,8 +50,15 @@ Item {
   readonly property bool dragging: mouse.pressed && _dragging
   readonly property bool holding: _holding
 
+  // What a screen reader calls it, and how it reads the value (M29).
+  property string accessibleName: ""
+  property string valueText: ""
+
   // While dragging, every notch crossed.
   signal moved(real value)
+  // Enter on a focused slider: the row beside it offers to type the number
+  // (ui/SliderRow), which the pointer reaches by clicking the number.
+  signal typeWanted()
   // Once per choice: on release, on a key (after a short pause), on reset.
   signal committed(real value)
 
@@ -63,6 +70,13 @@ Item {
   implicitHeight: Math.max(Style.space(24), knobSize + Style.space(8))
   activeFocusOnTab: enabled
   opacity: enabled ? 1 : 0.4
+
+  Accessible.role: Accessible.Slider
+  Accessible.name: accessibleName
+  Accessible.description: valueText
+  Accessible.focusable: true
+  Accessible.onIncreaseAction: nudge(1)
+  Accessible.onDecreaseAction: nudge(-1)
 
   readonly property real knobSize: Math.max(14, Math.round(Style.spacing.controlHeight * 0.38))
   readonly property real trackHeight: Math.max(4, Math.round(Style.spacing.controlHeight * 0.11))
@@ -259,5 +273,6 @@ Item {
     else if (e.key === Qt.Key_PageDown) { nudge(-Math.max(1, Math.round(notches / 10))); e.accepted = true }
     else if (e.key === Qt.Key_Home) { nudge(-notches); e.accepted = true }
     else if (e.key === Qt.Key_End) { nudge(notches); e.accepted = true }
+    else if (e.key === Qt.Key_Return || e.key === Qt.Key_Enter) { slider.typeWanted(); e.accepted = true }
   }
 }

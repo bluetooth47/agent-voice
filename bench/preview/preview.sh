@@ -110,7 +110,7 @@ for f in CHANGELOG.md LICENSE README.md; do [ -f "$repo/$f" ] && cp "$repo/$f" "
 [ -d "$repo/ui" ] && cp -r "$repo/ui" "$tmp/plugin/ui"
 [ -d "$repo/pages" ] && cp -r "$repo/pages" "$tmp/plugin/pages"
 # Under qs -p a directory without a qmldir does not see its own siblings as
-# types ("KnobRow is not a type" from inside Settings.qml), so give it one.
+# types ("Setup is not a type" from inside Settings.qml), so give it one.
 for f in "$tmp"/plugin/*.qml; do
   n=$(basename "$f" .qml); echo "$n 1.0 $n.qml"
 done > "$tmp/plugin/qmldir"
@@ -307,8 +307,13 @@ for c in bash sh cat dirname readlink python3 git systemctl; do
 done
 printf '0.2.0 (abc1234)\ncommit=abc1234def5678abc1234def5678abc1234def56\nbranch=detached\ninstalled=2026-11-23T09:30:00-07:00\n' \
   > "$tmp/data/agentvoice/app/VERSION"
-printf '{"v": 1, "day": "%s", "answered": {"claude": 12}, "turns": {"main": {"wake": 12}}}' "$(date +%F)" \
-  > "$tmp/data/agentvoice/stats/$(date +%F).json"
+# Not for a target that seeds its own numbers (overview.seed.py): its 9
+# turns landed in the same day's file as these 12, and the Overview target
+# read 21 (found in M29; failing since M26 added this).
+if [ ! -f "$here/targets/$target.seed.py" ]; then
+  printf '{"v": 1, "day": "%s", "answered": {"claude": 12}, "turns": {"main": {"wake": 12}}}' "$(date +%F)" \
+    > "$tmp/data/agentvoice/stats/$(date +%F).json"
+fi
 about_env="PYTHONDONTWRITEBYTECODE=1 XDG_DATA_HOME='$tmp/data' XDG_RUNTIME_DIR='$tmp/run' PATH='$tmp/about/bin' AGENTVOICE_PYTHON='$real_python'"
 
 # Starting, stopping or toggling the real service, typing to a real agent or

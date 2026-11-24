@@ -94,6 +94,16 @@ Column {
     color: turn.dim
     font.family: turn.fontFamily
     font.pixelSize: Style.font.caption
+    font.underline: activeFocus
+    // Opened from the keyboard too (master plan M29).
+    activeFocusOnTab: visible
+    Keys.onReturnPressed: turn.asideOpen = !turn.asideOpen
+    Keys.onEnterPressed: turn.asideOpen = !turn.asideOpen
+    Keys.onSpacePressed: turn.asideOpen = !turn.asideOpen
+    Accessible.role: Accessible.Button
+    Accessible.name: (turn.asideOpen ? "Hide " : "Show ") + "the question between agents"
+    Accessible.focusable: true
+    Accessible.onPressAction: turn.asideOpen = !turn.asideOpen
     MouseArea {
       anchors.fill: parent
       cursorShape: Qt.PointingHandCursor
@@ -131,6 +141,15 @@ Column {
     font.family: turn.fontFamily
     font.pixelSize: Style.font.caption
     font.italic: true
+    font.underline: activeFocus
+    activeFocusOnTab: visible
+    Keys.onReturnPressed: turn.thinkingOpen = !turn.thinkingOpen
+    Keys.onEnterPressed: turn.thinkingOpen = !turn.thinkingOpen
+    Keys.onSpacePressed: turn.thinkingOpen = !turn.thinkingOpen
+    Accessible.role: Accessible.Button
+    Accessible.name: (turn.thinkingOpen ? "Fold " : "Unfold ") + "what it thought"
+    Accessible.focusable: true
+    Accessible.onPressAction: turn.thinkingOpen = !turn.thinkingOpen
     MouseArea {
       anchors.fill: parent
       cursorShape: Qt.PointingHandCursor

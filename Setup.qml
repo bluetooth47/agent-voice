@@ -212,7 +212,7 @@ Item {
           Row {
             visible: !setup.s.serviceActive
             spacing: Style.space(10)
-            Button {
+            ActionButton {
               objectName: "setupStart"
               text: setup.s.serviceBusy ? "Starting…" : "Start Agent Voice"
               bordered: true
@@ -278,14 +278,14 @@ Item {
               }
             }
           }
-          KnobRow {
+          SliderRow {
             objectName: "setupGateKnob"
             width: parent.width
             foreground: setup.s.foreground; fontFamily: setup.s.fontFamily
             label: setup.s.setting("adaptiveGate", false) === true ? "Fixed gate (until it has heard the room)"
                                                                   : "Microphone gate"
             unit: " dBFS"
-            description: "Put the line under your voice: lower if it cuts you off, higher if the room holds it open."
+            hint: "Put the line under your voice: lower if it cuts you off, higher if the room holds it open."
             value: Number(setup.s.setting("micThresholdDb", -38))
             defaultValue: setup.s.defaults.micThresholdDb !== undefined ? setup.s.defaults.micThresholdDb : NaN
             minimum: -60; maximum: -20; stepSize: 1
@@ -356,7 +356,7 @@ Item {
               font.family: setup.s.fontFamily
               font.pixelSize: Style.font.caption
             }
-            Button {
+            ActionButton {
               text: "Install it…"
               tooltipText: "Opens the installer in a terminal and closes setup; finish setting up from the Overview afterwards."
               bordered: true
@@ -396,7 +396,7 @@ Item {
                 spacing: Style.space(6)
                 Repeater {
                   model: setup.s.phraseOptions
-                  Button {
+                  ActionButton {
                     required property var modelData
                     text: modelData
                     selected: String(setup.s.setting("phrase", "hey computer")) === modelData
@@ -443,7 +443,7 @@ Item {
 
             Row {
               spacing: Style.space(10)
-              Button {
+              ActionButton {
                 objectName: "setupTestButton"
                 text: setup.testing ? "Stop" : setup.testDone ? "Try again" : "Start"
                 bordered: true
@@ -582,7 +582,7 @@ Item {
               font.family: setup.s.fontFamily
               font.pixelSize: Style.font.body
             }
-            Button {
+            ActionButton {
               text: "Change"
               bordered: true
               focusable: true
@@ -668,7 +668,7 @@ Item {
       width: parent.width
       height: Math.max(skip.implicitHeight, primary.implicitHeight)
 
-      Button {
+      ActionButton {
         id: skip
         objectName: "setupSkip"
         anchors.left: parent.left
@@ -686,7 +686,7 @@ Item {
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
         spacing: Style.space(10)
-        Button {
+        ActionButton {
           objectName: "setupBack"
           visible: setup.stepIndex > 0
           text: "Back"
@@ -696,7 +696,7 @@ Item {
           fontFamily: setup.s.fontFamily
           onClicked: setup.back()
         }
-        Button {
+        ActionButton {
           id: primary
           objectName: "setupNext"
           text: setup.step === "done" ? "Open the settings" : "Next"

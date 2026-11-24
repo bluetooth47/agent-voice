@@ -96,9 +96,9 @@ Column {
     fontFamily: page.s.fontFamily
   }
 
-  SettingsGroup {
+  Card {
     width: parent.width
-    title: "QUICK SETTINGS"
+    title: "Quick settings"
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
 
@@ -131,9 +131,9 @@ Column {
     }
   }
 
-  SettingsGroup {
+  Card {
     width: parent.width
-    title: "EACH AGENT"
+    title: "Each agent"
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
 
@@ -178,10 +178,10 @@ Column {
     }
   }
 
-  SettingsGroup {
+  Card {
     objectName: "voiceLibrary"
     width: parent.width
-    title: "VOICES"
+    title: "Voices"
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
 

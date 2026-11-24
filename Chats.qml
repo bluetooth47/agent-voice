@@ -478,7 +478,7 @@ Item {
                   "conversation, so the chat's words go with that request, which costs tokens."
   }
 
-  component SendButton: Button {
+  component SendButton: ActionButton {
     text: "Send to another agent"
     bordered: true
     focusable: true
@@ -532,6 +532,10 @@ Item {
       border.width: activeFocus ? 1 : 0
       border.color: view.s.accent
       activeFocusOnTab: true
+      Accessible.role: Accessible.Button
+      Accessible.name: "This session, " + view.s.historyRows.count + " exchanges"
+      Accessible.focusable: true
+      Accessible.onPressAction: view.open("session")
       Keys.onReturnPressed: view.open("session")
       Keys.onSpacePressed: view.open("session")
       Column {
@@ -601,6 +605,10 @@ Item {
           border.width: chatCell.activeFocus ? 1 : 0
           border.color: view.s.accent
           activeFocusOnTab: !row.isHeader
+          Accessible.role: row.isHeader ? Accessible.Heading : Accessible.ListItem
+          Accessible.name: row.isHeader ? "" : String(row.c.title || "untitled chat")
+          Accessible.focusable: !row.isHeader
+          Accessible.onPressAction: if (!row.isHeader) view.open(row.c.id)
           Keys.onReturnPressed: view.open(row.c.id)
           Keys.onSpacePressed: view.open(row.c.id)
           // The owner's colour, down the left edge, as in the chat itself.
@@ -692,7 +700,7 @@ Item {
     anchors.right: parent.right
     height: parent.height
 
-    Button {
+    ActionButton {
       id: back
       visible: view.narrow
       text: "← All chats"
@@ -893,7 +901,7 @@ Item {
       Flow {
         width: parent.width
         spacing: Style.space(6)
-        Button {
+        ActionButton {
           text: "Continue"
           iconText: "\u{f040a}"
           bordered: true
@@ -906,7 +914,7 @@ Item {
         }
         Repeater {
           model: view.continueAgents
-          Button {
+          ActionButton {
             required property string modelData
             readonly property string agentName: view.currentAgentName(modelData) || modelData
             text: "Continue with " + agentName
@@ -921,7 +929,7 @@ Item {
             onClicked: view.run("continue", [view.chat.id, modelData])
           }
         }
-        Button {
+        ActionButton {
           text: "New chat"
           bordered: true
           focusable: true
@@ -956,7 +964,7 @@ Item {
       Flow {
         width: parent.width
         spacing: Style.space(6)
-        Button {
+        ActionButton {
           text: "Rename"
           bordered: true
           focusable: true
@@ -966,14 +974,14 @@ Item {
             renameField.begin(view.openTitle)
           }
         }
-        Button {
+        ActionButton {
           text: view.chat.pinned === true ? "Unpin" : "Pin"
           bordered: true
           focusable: true
           fontFamily: view.s.fontFamily
           onClicked: view.run(view.chat.pinned === true ? "unpin" : "pin", [view.chat.id])
         }
-        Button {
+        ActionButton {
           text: "Export"
           tooltipText: "Write it as Markdown into Documents"
           bordered: true

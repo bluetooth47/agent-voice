@@ -442,9 +442,9 @@ ShellRoot {
             onToggled: store.set("hud", !checked)
             onReset: store.reset("hud")
           }
-          KnobRow {
+          SliderRow {
             width: parent.width
-            label: "Time to start speaking (KnobRow)"
+            label: "Time to start speaking (SliderRow)"
             minimum: 1000; maximum: 15000; stepSize: 500
             defaultValue: 5000
             value: store.get("leadInMs", 5000)

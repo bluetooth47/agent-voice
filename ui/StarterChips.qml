@@ -34,7 +34,7 @@ Flow {
   }
   Repeater {
     model: row.starters
-    Button {
+    ActionButton {
       required property var modelData
       text: String(modelData.label || modelData.id)
       tooltipText: String(modelData.text || "")

@@ -20,6 +20,8 @@ FocusScope {
   property var values: []
   property var labels: []
   property string unit: ""
+  // What a screen reader calls it (master plan M29).
+  property string accessibleName: ""
   property int highlight: -1
   property string emptyText: "Nothing yet."
   property real barsHeight: Style.space(48)
@@ -46,6 +48,10 @@ FocusScope {
   }
 
   activeFocusOnTab: values.length > 0
+  Accessible.role: Accessible.Chart
+  Accessible.name: accessibleName
+  Accessible.description: cursor >= 0 ? readout(cursor) : emptyText
+  Accessible.focusable: values.length > 0
   implicitHeight: column.implicitHeight
   width: parent ? parent.width : 300
 

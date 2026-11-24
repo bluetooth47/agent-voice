@@ -26,6 +26,8 @@ Column {
 
   property string label: ""
   property string description: ""
+  // What a screen reader calls it (master plan M29).
+  property string accessibleName: ""
   property var options: []
   property string value: ""
   property int holdMs: 5000
@@ -39,6 +41,11 @@ Column {
   property string fontFamily: Style.font.family
 
   readonly property string shown: holding ? held : value
+  readonly property string shownLabel: {
+    for (var i = 0; i < options.length; i++)
+      if (group.optionValue(options[i]) === shown) return group.optionLabel(options[i])
+    return shown
+  }
   property bool holding: false
   property string held: ""
 
@@ -92,6 +99,9 @@ Column {
     ButtonGroup {
       id: group
       visible: !choice.wraps
+      Accessible.role: Accessible.Grouping
+      Accessible.name: choice.accessibleName !== "" ? choice.accessibleName : choice.label
+      Accessible.description: "Chosen: " + choice.shownLabel
       options: choice.options
       value: choice.shown
       foreground: choice.foreground
@@ -109,6 +119,10 @@ Column {
       width: choice.width
       spacing: Style.spacing.md
       activeFocusOnTab: visible
+      Accessible.role: Accessible.Grouping
+      Accessible.name: choice.accessibleName !== "" ? choice.accessibleName : choice.label
+      Accessible.description: "Chosen: " + choice.shownLabel
+      Accessible.focusable: true
       property int cursor: -1
       onActiveFocusChanged: {
         cursor = -1

@@ -79,6 +79,10 @@ Rectangle {
   border.color: activeFocus ? accent : Qt.rgba(foreground.r, foreground.g, foreground.b, 0.25)
   opacity: dragging && !copying ? 0.4 : 1
   activeFocusOnTab: true
+  Accessible.role: Accessible.ListItem
+  Accessible.name: card.title
+  Accessible.description: "Enter opens Move to"
+  Accessible.focusable: true
 
   Keys.onReturnPressed: openMenu()
   Keys.onEnterPressed: openMenu()
@@ -132,7 +136,7 @@ Rectangle {
         font.pixelSize: Style.font.caption
       }
     }
-    Button {
+    ActionButton {
       id: moveButton
       text: "Move to…"
       bordered: true

@@ -695,7 +695,7 @@ Column {
   Flow {
     width: parent.width
     spacing: Style.space(8)
-    Button {
+    ActionButton {
       text: "New note"
       bordered: true
       focusable: true
@@ -703,7 +703,7 @@ Column {
       fontFamily: np.fontFamily
       onClicked: np.startNew()
     }
-    Button {
+    ActionButton {
       text: "Open folder"
       bordered: true
       focusable: true
@@ -711,7 +711,7 @@ Column {
       fontFamily: np.fontFamily
       onClicked: np.openFolder()
     }
-    Button {
+    ActionButton {
       visible: np.notesList.length >= 2 && !np.lockedAll
       text: np.combining ? "Stop combining" : "Combine…"
       focusable: true
@@ -733,7 +733,7 @@ Column {
     font.family: np.fontFamily
     font.pixelSize: Style.font.caption
   }
-  Button {
+  ActionButton {
     visible: np.combining
     text: "Combine " + np.picked.length + " notes…"
     bordered: true
@@ -802,7 +802,7 @@ Column {
                         : Qt.rgba(np.foreground.r, np.foreground.g, np.foreground.b, 0.22)
           foreground: np.foreground
           fontFamily: np.fontFamily
-          Button {
+          ActionButton {
             text: modelData.name === np.openName ? "Open ✓" : "Open"
             focusable: true
             fontSize: Style.font.caption
@@ -810,7 +810,7 @@ Column {
             fontFamily: np.fontFamily
             onClicked: np.open(modelData.name)
           }
-          Button {
+          ActionButton {
             text: modelData.locked ? "Unlock" : "Lock"
             enabled: !np.lockedAll
             focusable: true
@@ -820,7 +820,7 @@ Column {
             tooltipText: "A locked note is read-only for every agent, wherever it is moved"
             onClicked: np.setLock(modelData.name, !modelData.locked)
           }
-          Button {
+          ActionButton {
             visible: np.combining
             text: np.picked.indexOf(modelData.name) === 0 ? "Kept ✓"
                   : np.picked.indexOf(modelData.name) > 0 ? "Picked ✓" : "Pick"
@@ -874,7 +874,7 @@ Column {
             details: np.noteDetails(modelData)
             foreground: np.foreground
             fontFamily: np.fontFamily
-            Button {
+            ActionButton {
               text: "Open →"
               focusable: true
               fontSize: Style.font.caption
@@ -944,7 +944,7 @@ Column {
   }
   Repeater {
     model: np.otherFiles
-    Button {
+    ActionButton {
       required property var modelData
       text: modelData.name + (modelData.kind !== "file" ? "  (" + modelData.kind + ")" : "")
       focusable: true
@@ -957,7 +957,7 @@ Column {
   // --- Earlier notes (M13) ---------------------------------------------------------
   // Names with saved versions and no note now: combined away, or deleted by
   // hand. Put back restores the newest version, as the person.
-  Button {
+  ActionButton {
     visible: np.goneList.length > 0
     text: (np.showGone ? "▾ " : "▸ ") + "Earlier notes (" + np.goneList.length + ")"
     focusable: true
@@ -979,7 +979,7 @@ Column {
         font.family: np.fontFamily
         font.pixelSize: Style.font.bodySmall
       }
-      Button {
+      ActionButton {
         text: "Put back"
         focusable: true
         enabled: !goneRestorer.running
@@ -1078,7 +1078,7 @@ Column {
     Flow {
       width: parent.width
       spacing: Style.space(8)
-      Button {
+      ActionButton {
         text: "Save"
         bordered: true
         focusable: true
@@ -1089,7 +1089,7 @@ Column {
         // anything to save; a second one would be the same text again.
         onClicked: if (!writer.running) np.save(box.text.trim())
       }
-      Button {
+      ActionButton {
         visible: np.conflictRev >= 0
         text: "Keep mine"
         bordered: true
@@ -1098,7 +1098,7 @@ Column {
         fontFamily: np.fontFamily
         onClicked: np.keepMine()
       }
-      Button {
+      ActionButton {
         visible: np.conflictRev >= 0
         text: "Reload"
         bordered: true
@@ -1107,7 +1107,7 @@ Column {
         fontFamily: np.fontFamily
         onClicked: np.reloadTheirs()
       }
-      Button {
+      ActionButton {
         visible: !np.creating
         text: np.showHistory ? "Hide history" : "History"
         bordered: true
@@ -1116,7 +1116,7 @@ Column {
         fontFamily: np.fontFamily
         onClicked: { np.showHistory = !np.showHistory; if (np.showHistory) np.loadHistory() }
       }
-      Button {
+      ActionButton {
         // What it does to unsaved text, said on the button.
         text: np.holding ? "Discard and close" : "Close"
         bordered: true
@@ -1153,14 +1153,14 @@ Column {
             font.family: np.fontFamily
             font.pixelSize: Style.font.bodySmall
           }
-          Button {
+          ActionButton {
             text: np.viewing === modelData.version ? "Viewing" : "View"
             focusable: true
             foreground: np.foreground
             fontFamily: np.fontFamily
             onClicked: np.view(modelData.version)
           }
-          Button {
+          ActionButton {
             text: "Restore"
             focusable: true
             enabled: !restorer.running

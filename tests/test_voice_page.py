@@ -173,7 +173,7 @@ def test_one_search_box_and_one_filter_replace_the_row_of_buttons():
     page = src()
     assert page.count("SearchField {") == 1 and page.count("CompactSelector {") == 1
     assert "SegmentedChoice" in page            # still used for the Advanced controls
-    lib = page[page.index('title: "VOICES"'):page.index("Advanced: hearing you")]
+    lib = page[page.index('title: "Voices"'):page.index("Advanced: hearing you")]
     assert "SegmentedChoice" not in lib
     opts = re.findall(r'value: "([A-Za-z]+)", label: "([^"]+)"', page[:page.index("function matches")])
     assert [v for v, _ in opts] == ["here", "all", "female", "male", "US", "GB"]

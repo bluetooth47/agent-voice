@@ -109,7 +109,7 @@ FocusScope {
     if (danger._armed) { danger.disarm(); e.accepted = true } else e.accepted = false
   }
 
-  Button {
+  ActionButton {
     id: idle
     visible: !danger._armed
     // The warning sign says "this destroys something" before it is clicked;
@@ -157,7 +157,7 @@ FocusScope {
       }
       Tip { tipText: question.truncated ? danger.question : ""; shown: questionArea.containsMouse; fontFamily: danger.fontFamily }
     }
-    Button {
+    ActionButton {
       id: cancelButton
       text: danger.cancelText
       bordered: true
@@ -167,7 +167,7 @@ FocusScope {
       onClicked: danger.disarm()
       KeyNavigation.right: confirmButton
     }
-    Button {
+    ActionButton {
       id: confirmButton
       text: danger.confirmText
       iconText: danger.iconText

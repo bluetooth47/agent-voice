@@ -598,6 +598,7 @@ Column {
               textFormat: Text.PlainText
               color: blk.s.foreground
               font.family: blk.s.fontFamily
+              font.pixelSize: Style.font.body
             }
           }
         }
@@ -810,7 +811,7 @@ Column {
                 font.family: blk.s.fontFamily
                 font.pixelSize: Style.font.caption
               }
-              Button {
+              ActionButton {
                 text: "Trust it"
                 bordered: true
                 foreground: blk.s.urgent
@@ -818,7 +819,7 @@ Column {
                 fontFamily: blk.s.fontFamily
                 onClicked: { blk.pg.trustPending = ""; blk.write("level", "trusted") }
               }
-              Button {
+              ActionButton {
                 text: "Cancel"
                 bordered: true
                 foreground: blk.s.foreground
@@ -890,7 +891,7 @@ Column {
               onChanged: function(v) { if (v !== blk.voice) blk.write("voice", v) }
             }
             // About a minute of the voice it would speak in, at its own pace.
-            Button {
+            ActionButton {
               id: testButton
               readonly property bool playing: blk.s.samplePlaying === blk.voiceHeard && blk.s.samplePace === blk.testPace
               anchors.verticalCenter: parent.verticalCenter
@@ -927,7 +928,7 @@ Column {
             font.family: blk.s.fontFamily
             font.pixelSize: Style.font.caption
           }
-          Button {
+          ActionButton {
             // Names the voice, as the dropdown does. Passing no name left it
             // to install.sh to read the setting, which is a race the flag
             // exists to avoid.
@@ -939,13 +940,13 @@ Column {
           }
         }
 
-        KnobRow {
+        SliderRow {
           objectName: blk.isMain ? "agent-speed" : ""
           width: parent.width
           visible: blk.isMain
           foreground: blk.s.foreground; fontFamily: blk.s.fontFamily
           label: "Speaking speed"
-          description: "Agents set to \"same as the main agent\" follow this one."
+          hint: "Agents set to \"same as the main agent\" follow this one."
           help: "A percent of the voice's natural pace: 100 is as recorded, 150 is half " +
                 "again as fast. Piper stretches or squeezes each sound, so it stays the " +
                 "same voice rather than going higher. Takes effect from the next reply " +
@@ -990,7 +991,7 @@ Column {
                 else if (v === "main" && blk.speed > 0) blk.write("speed", 0)
               }
             }
-            KnobRow {
+            SliderRow {
               width: parent.width
               visible: blk.speed > 0
               foreground: blk.s.foreground; fontFamily: blk.s.fontFamily
@@ -1166,7 +1167,7 @@ Column {
           hint: blk.pg.folderSummary(blk.agentId, blk.isMain ? blk.s.setting("agentInstructions", "") : blk.entry.instructions)
           foreground: blk.s.foreground
           fontFamily: blk.s.fontFamily
-          Button {
+          ActionButton {
             text: "Edit in Agent details →"
             bordered: true
             focusable: true
@@ -1211,7 +1212,7 @@ Column {
 
   Row {
     spacing: Style.space(12)
-    Button {
+    ActionButton {
       objectName: "addAgent"
       text: page.s.voiceAgents.length >= page.s.maxAgents
             ? "That is the most there can be (" + page.s.maxAgents + ")"
@@ -1251,8 +1252,9 @@ Column {
       textFormat: Text.PlainText
       color: page.s.foreground
       font.family: page.s.fontFamily
+      font.pixelSize: Style.font.body
     }
-    Button {
+    ActionButton {
       text: "Undo"
       iconText: "\u{f054c}"
       bordered: true
@@ -1270,10 +1272,11 @@ Column {
     text: page.s.folders.note
     color: page.s.urgent
     font.family: page.s.fontFamily
+    font.pixelSize: Style.font.body
   }
 
   // Where the switches for every agent went (bug E).
-  Button {
+  ActionButton {
     text: "Tools for every agent: Communal → Tools ›"
     focusable: true
     foreground: page.s.foreground

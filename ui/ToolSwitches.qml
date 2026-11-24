@@ -273,7 +273,7 @@ Column {
     width: parent.width
     visible: sw.part === "tools"
     spacing: Style.space(8)
-    Button {
+    ActionButton {
       text: "Change on Agent details › Tools & skills"
       focusable: true
       foreground: sw.foreground
@@ -283,7 +283,7 @@ Column {
                    "found on this machine. A change applies from its next turn, in the same conversation."
       onClicked: sw.detailsAsked()
     }
-    Button {
+    ActionButton {
       text: "For every agent: Communal → Tools ›"
       focusable: true
       foreground: sw.foreground

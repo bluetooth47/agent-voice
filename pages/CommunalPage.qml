@@ -183,7 +183,7 @@ Column {
       }
       Row {
         spacing: Style.space(8)
-        Button {
+        ActionButton {
           text: "Open folder"
           iconText: "\u{f0770}"
           bordered: true
@@ -193,7 +193,7 @@ Column {
           fontFamily: page.s.fontFamily
           onClicked: { opener.command = ["xdg-open", page.folderPath]; opener.running = true }
         }
-        Button {
+        ActionButton {
           text: "Export"
           iconText: "\u{f0207}"
           tooltipText: "Copy the rules, defaults and shared skills to a new folder in Downloads"
@@ -204,7 +204,7 @@ Column {
           fontFamily: page.s.fontFamily
           onClicked: page.s.folders.exportFolder("communal")
         }
-        Button {
+        ActionButton {
           text: page.importing ? "Close import" : "Import…"
           iconText: "\u{f0220}"
           tooltipText: "Bring rules, defaults and skills in from an exported folder: checked first, asked, and undoable"
@@ -369,7 +369,7 @@ Column {
             font.family: page.s.fontFamily
             font.pixelSize: Style.font.caption
           }
-          Button {
+          ActionButton {
             id: freshButton
             text: "Start fresh"
             tooltipText: "Its next request begins a new conversation; this one stays in Chats"
@@ -632,7 +632,7 @@ Column {
         font.pixelSize: Style.font.body
         font.bold: true
       }
-      Button {
+      ActionButton {
         text: toolScan.running ? "Scanning…" : "Rescan"
         focusable: true
         enabled: !toolScan.running
@@ -760,7 +760,7 @@ Column {
           font.family: page.s.fontFamily
           onAccepted: page.addCli(text)
         }
-        Button {
+        ActionButton {
           text: "Add"
           bordered: true
           focusable: true
@@ -1014,14 +1014,9 @@ Column {
       font.family: page.s.fontFamily
       font.pixelSize: Style.font.caption
     }
-    Text {
-      width: parent.width
-      visible: page.skillList !== null && page.skillList.length === 0
-      wrapMode: Text.WordWrap
-      text: "No shared skills yet."
-      color: page.s.foreground
-      font.family: page.s.fontFamily
-    }
+    // "No shared skills yet." stood here in Qt's default size, larger than
+    // anything else on any page, saying what the Communal lane's own empty
+    // line says (M29).
     Flow {
       id: communalLanes
       width: parent.width
@@ -1063,7 +1058,7 @@ Column {
             fontFamily: page.s.fontFamily
             // Made or edited by hand (a skill always is): Keep saves this
             // version, so the outside-change notice goes (Phase 13).
-            Button {
+            ActionButton {
               visible: modelData.changed_outside === true
               text: "Keep"
               focusable: true
@@ -1150,7 +1145,7 @@ Column {
       font.family: page.s.fontFamily
       font.pixelSize: Style.font.caption
     }
-    Button {
+    ActionButton {
       text: "Open the skills folder"
       iconText: "\u{f0770}"
       bordered: true
@@ -1200,7 +1195,7 @@ Column {
       font.family: page.s.fontFamily
       font.pixelSize: Style.font.body
     }
-    Button {
+    ActionButton {
       visible: !page.s.saveChats
       text: "Go to Chats →"
       focusable: true

@@ -122,7 +122,7 @@ Item {
     anchors.verticalCenter: parent.verticalCenter
     width: row.trashWidth
     height: Style.space(30)
-    Button {
+    ActionButton {
       anchors.centerIn: parent
       visible: row.onDisk && row.removable
       iconText: "\u{f01b4}"
@@ -154,7 +154,7 @@ Item {
     width: row.testWidth
     height: Style.space(30)
 
-    Button {
+    ActionButton {
       width: parent.width
       visible: row.onDisk
       text: row.playing ? "■ Stop" : "▶ Test"
@@ -165,7 +165,7 @@ Item {
       fontFamily: row.fontFamily
       onClicked: row.test()
     }
-    Button {
+    ActionButton {
       width: parent.width
       visible: !row.onDisk
       enabled: !row.downloading && !row.queued

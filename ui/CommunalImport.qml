@@ -147,7 +147,7 @@ Column {
       font.family: imp.fontFamily
       onAccepted: imp.check(text)
     }
-    Button {
+    ActionButton {
       text: checker.running ? "Reading…" : "Check"
       tooltipText: "List what importing this folder would change; nothing changes yet"
       bordered: true
@@ -270,7 +270,7 @@ Column {
       font.family: imp.fontFamily
       font.pixelSize: Style.font.caption
     }
-    Button {
+    ActionButton {
       text: "Import…"
       bordered: true
       focusable: true

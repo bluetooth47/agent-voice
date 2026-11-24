@@ -29,6 +29,10 @@ FocusScope {
   implicitWidth: Style.space(150)
   implicitHeight: list.implicitHeight
   activeFocusOnTab: true
+  Accessible.role: Accessible.PageTabList
+  Accessible.name: "Settings pages"
+  Accessible.description: { var i = indexOf(current); return i >= 0 ? "Open: " + pages[i].label : "" }
+  Accessible.focusable: true
 
   function indexOf(id) {
     for (var i = 0; i < pages.length; i++) if (pages[i].id === id) return i

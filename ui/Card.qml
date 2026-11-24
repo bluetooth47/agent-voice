@@ -54,6 +54,12 @@ Rectangle {
       visible: card.title !== "" || card.subtitle !== ""
       height: titles.implicitHeight
       activeFocusOnTab: card.foldable
+      Accessible.role: Accessible.Button
+      Accessible.name: card.title + (card.expanded ? ", open" : ", folded")
+      Accessible.description: card.subtitle
+      Accessible.focusable: card.foldable
+      Accessible.ignored: !card.foldable
+      Accessible.onPressAction: card.flip()
       Keys.onReturnPressed: card.flip()
       Keys.onEnterPressed: card.flip()
       Keys.onSpacePressed: card.flip()

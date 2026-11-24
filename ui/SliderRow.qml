@@ -1,38 +1,54 @@
 import QtQuick
 import qs.Commons
-// Namespaced as well: on Qt 6.12 a bare `Color` resolves to QtQuick's own
-// value-type helper, not to the theme, and every colour read through it was
-// undefined. Omarchy's own QML writes Commons.Color for the same reason.
 import qs.Commons as Commons
 import qs.Ui
-import "ui"
 
-// A labelled slider that reports its value with a unit and only commits on
+// One numeric setting: the label, "?" and "reset" on the left and the
+// number on the right, the slider underneath, and one short line saying
+// what it does -- a SettingRow with a slider in it. It commits only on
 // release, so dragging does not fire `omarchy bar set` on every frame.
+//
+// Master plan M29: this was the root-level KnobRow, the last setting row
+// not built from ui/. It drew its own header beside SettingRow's, so the two
+// drifted (a label that rendered markup, a "?" and a "reset" the keyboard
+// could not reach, no way to say why a slider did not apply). It now has
+// SettingRow's shape and words: `hint` under the slider, `disabledReason`
+// in place of it with the row dimmed, the explanation folded behind "?".
 //
 // The slider is ui/VoiceSlider rather than Omarchy's PanelSlider, which
 // snapped back to the old value on release, let the handle and the number
 // disagree mid-drag, and could be left stuck mid-drag by the scrolling page
-// (see VoiceSlider for the measurements). The number beside the label can be
-// clicked and typed into.
+// (see VoiceSlider for the measurements). The number can be typed: click it,
+// or press Enter on the slider.
+//
+//   SliderRow {
+//     width: parent.width
+//     label: "Follow-up window"
+//     hint: "How long it keeps listening after speaking."
+//     value: s.setting("followUpMs", 7000); minimum: 0; maximum: 30000; stepSize: 500
+//     changed: s.changed("followUpMs")
+//     onCommitted: function(v) { s.put("followUpMs", Math.round(v)) }
+//     onReset: s.resetKey("followUpMs")
+//   }
 Column {
   id: knob
 
-  // Kept so existing callers that pass it still load. Unused: VoiceSlider
-  // reads the theme itself.
-  property QtObject bar: null
   property color foreground: Commons.Color.foreground
+  property color accent: Commons.Color.accent
   // Translucent rather than Qt.darker: darker is dimmer only on a dark
   // theme, and on a light one made every hint as black as the label.
   property color dim: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.6)
   property string fontFamily: Style.font.family
 
   property string label: ""
-  property string description: ""
-  // The long explanation, folded behind a "?" beside the label (as
-  // ui/SettingRow does), so the page is not a wall of paragraphs.
+  property string hint: ""
+  // The long explanation, folded behind a "?" beside the label.
   property string help: ""
   property bool helpOpen: false
+  // Why the slider does not apply right now. Shown in place of the hint,
+  // with the row dimmed and the slider disabled, as SettingRow does.
+  property string disabledReason: ""
+  readonly property bool applies: disabledReason === ""
   // Shows a "reset" link beside the label; clicking it emits reset().
   property bool changed: false
   signal reset()
@@ -70,11 +86,22 @@ Column {
     return Math.round(v) + unit
   }
 
+  // Open the box for typing an exact number.
+  function startTyping() {
+    if (labels.length > 0 || !enabled || !applies) return
+    entry.text = displayDivisor !== 1 ? (shown / displayDivisor).toFixed(decimals)
+                                      : String(Math.round(shown))
+    entry.visible = true
+    entry.forceActiveFocus()
+    entry.selectAll()
+  }
+
   spacing: Style.space(2)
 
   Item {
     width: parent.width
     height: Math.max(labelText.implicitHeight, valueText.implicitHeight, entry.implicitHeight)
+    opacity: knob.applies ? 1 : 0.5
 
     Row {
       anchors.left: parent.left
@@ -87,9 +114,13 @@ Column {
         id: labelText
         width: Math.min(implicitWidth, parent.width - extras.width - parent.spacing)
         text: knob.label
+        textFormat: Text.PlainText
         color: knob.foreground
         font.family: knob.fontFamily
         font.pixelSize: Style.font.body
+        // Two lines before it is cut, as SettingRow's label.
+        wrapMode: Text.Wrap
+        maximumLineCount: 2
         elide: Text.ElideRight
       }
 
@@ -98,36 +129,26 @@ Column {
         anchors.verticalCenter: labelText.verticalCenter
         spacing: Style.space(8)
 
-        Text {
+        TextLink {
           visible: knob.help !== ""
           text: knob.helpOpen ? "×" : "?"
-          color: helpHover.containsMouse || knob.helpOpen ? knob.foreground : knob.dim
+          lit: knob.helpOpen
+          foreground: knob.foreground
+          accent: knob.accent
+          dim: knob.dim
           font.family: knob.fontFamily
-          font.pixelSize: Style.font.caption
-          MouseArea {
-            id: helpHover
-            anchors.fill: parent
-            anchors.margins: -Style.space(5)
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: knob.helpOpen = !knob.helpOpen
-          }
+          accessibleName: (knob.helpOpen ? "Hide what " : "Explain ") + knob.label
+          onActivated: knob.helpOpen = !knob.helpOpen
         }
-        Text {
-          visible: knob.changed && knob.enabled
+        TextLink {
+          visible: knob.changed && knob.enabled && knob.applies
           text: "reset"
-          color: resetHover.containsMouse ? knob.foreground : knob.dim
+          foreground: knob.foreground
+          accent: knob.accent
+          dim: knob.dim
           font.family: knob.fontFamily
-          font.pixelSize: Style.font.caption
-          font.underline: resetHover.containsMouse
-          MouseArea {
-            id: resetHover
-            anchors.fill: parent
-            anchors.margins: -Style.space(5)
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: knob.reset()
-          }
+          accessibleName: "Reset " + knob.label
+          onActivated: knob.reset()
         }
       }
     }
@@ -145,6 +166,7 @@ Column {
         anchors.verticalCenter: parent.verticalCenter
         visible: !entry.visible
         text: knob.display(knob.shown)
+        textFormat: Text.PlainText
         color: valueHover.containsMouse ? knob.foreground : knob.dim
         font.family: knob.fontFamily
         font.pixelSize: Style.font.body
@@ -154,20 +176,15 @@ Column {
           anchors.fill: parent
           anchors.margins: -Style.space(4)
           hoverEnabled: true
-          enabled: knob.labels.length === 0 && knob.enabled
+          enabled: knob.labels.length === 0 && knob.enabled && knob.applies
           cursorShape: Qt.IBeamCursor
-          onClicked: {
-            entry.text = knob.displayDivisor !== 1 ? (knob.shown / knob.displayDivisor).toFixed(knob.decimals)
-                                                   : String(Math.round(knob.shown))
-            entry.visible = true
-            entry.forceActiveFocus()
-            entry.selectAll()
-          }
+          onClicked: knob.startTyping()
         }
       }
 
       // Type an exact number. Enter saves (snapped to the step and clamped),
-      // Escape or clicking away leaves it as it was.
+      // Escape or clicking away leaves it as it was; either way the keyboard
+      // goes back to the slider.
       TextInput {
         id: entry
         visible: false
@@ -180,6 +197,8 @@ Column {
         selectedTextColor: Commons.Color.background
         font.family: knob.fontFamily
         font.pixelSize: Style.font.body
+        Accessible.role: Accessible.EditableText
+        Accessible.name: knob.label + (knob.unit !== "" ? ", in " + knob.unit.trim() : "")
         property IntValidator whole: IntValidator { bottom: -1000000; top: 1000000 }
         property RegularExpressionValidator decimal: RegularExpressionValidator {
           regularExpression: /-?[0-9]{0,6}([.][0-9]{0,3})?/
@@ -190,9 +209,10 @@ Column {
           var v = knob.displayDivisor !== 1 ? Math.round(parseFloat(text) * knob.displayDivisor)
                                             : parseInt(text, 10)
           visible = false
+          slider.forceActiveFocus()
           if (!isNaN(v)) slider.choose(v)
         }
-        Keys.onEscapePressed: visible = false
+        Keys.onEscapePressed: function(e) { visible = false; slider.forceActiveFocus(); e.accepted = true }
         onActiveFocusChanged: if (!activeFocus) visible = false
       }
     }
@@ -201,7 +221,7 @@ Column {
   VoiceSlider {
     id: slider
     width: parent.width
-    enabled: knob.enabled
+    enabled: knob.enabled && knob.applies
     value: knob.value
     minimum: knob.minimum
     maximum: knob.maximum
@@ -209,14 +229,18 @@ Column {
     defaultValue: knob.defaultValue
     foreground: knob.foreground
     scrollTarget: knob.scrollTarget
+    accessibleName: knob.label
+    valueText: knob.display(knob.shown)
     onCommitted: function(v) { knob.committed(v) }
+    onTypeWanted: knob.startTyping()
   }
 
   Text {
     width: parent.width
-    visible: knob.description !== ""
+    visible: text !== ""
     wrapMode: Text.WordWrap
-    text: knob.description
+    text: knob.applies ? knob.hint : knob.disabledReason
+    textFormat: Text.PlainText
     color: knob.dim
     font.family: knob.fontFamily
     font.pixelSize: Style.font.caption

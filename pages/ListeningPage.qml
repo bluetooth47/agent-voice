@@ -425,13 +425,13 @@ Column {
       // The fixed level stays beside the meter, not under Advanced: with the
       // gate fixed (the default) it is the stage's only control, and the meter
       // is there to set it by eye.
-      KnobRow {
+      SliderRow {
         objectName: "set-micThresholdDb"
         width: parent.width
         foreground: page.s.foreground; fontFamily: page.s.fontFamily
         label: page.adaptive ? "Fixed gate (until it has heard the room)" : "Microphone gate"
         unit: " dBFS"
-        description: "The red line above. Talk normally and put it under your voice."
+        hint: "The red line above. Talk normally and put it under your voice."
         // It has one job on both engines -- deciding which frames count as you
         // talking, which is what ends your turn -- and one extra on Vosk.
         help: "Where your voice stops and the room starts. Anything above the line " +
@@ -460,13 +460,13 @@ Column {
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
 
-        KnobRow {
+        SliderRow {
           objectName: "set-gateMarginDb"
           width: parent.width
           foreground: page.s.foreground; fontFamily: page.s.fontFamily
           label: "Margin above the room"
           unit: " dB"
-          description: "How far above the room's noise you have to be to count as talking."
+          hint: "How far above the room's noise you have to be to count as talking."
           help: "Lower hears softer speech, and more of the room. Higher needs you to speak up, " +
                 "and ignores more of the room. 10 dB suits a desk microphone."
           value: page.s.setting("gateMarginDb", 10)
@@ -477,14 +477,14 @@ Column {
           onReset: page.s.resetKey("gateMarginDb")
         }
 
-        KnobRow {
+        SliderRow {
           objectName: "gateRiseKnob"
           width: parent.width
           foreground: page.s.foreground; fontFamily: page.s.fontFamily
           label: "Rises at most"
           unit: " dB/s"
           displayDivisor: 10; decimals: 1
-          description: "How fast the line may climb when the room gets louder."
+          hint: "How fast the line may climb when the room gets louder."
           help: "Faster follows a fan coming on sooner. It cannot learn your voice: it hears only " +
                 "the room between requests, and talk shorter than about 15 seconds never moves " +
                 "it at any speed."
@@ -496,14 +496,14 @@ Column {
           onReset: page.s.resetKey("gateRiseTenths")
         }
 
-        KnobRow {
+        SliderRow {
           objectName: "gateFallKnob"
           width: parent.width
           foreground: page.s.foreground; fontFamily: page.s.fontFamily
           label: "Falls at most"
           unit: " dB/s"
           displayDivisor: 10; decimals: 1
-          description: "How fast the line may drop when the room gets quieter."
+          hint: "How fast the line may drop when the room gets quieter."
           help: "Falling is faster than rising by default, because a line left too high cuts " +
                 "words off, which is worse than holding a turn open a little longer."
           value: page.fallTenths
@@ -588,7 +588,7 @@ Column {
           font.family: page.s.fontFamily
           font.pixelSize: Style.font.caption
         }
-        Button {
+        ActionButton {
           text: "Try installing openWakeWord again…"
           bordered: true
           foreground: page.s.foreground
@@ -612,7 +612,7 @@ Column {
           font.family: page.s.fontFamily
           font.pixelSize: Style.font.caption
         }
-        Button {
+        ActionButton {
           text: "Try installing sherpa-onnx again…"
           bordered: true
           foreground: page.s.foreground
@@ -623,14 +623,14 @@ Column {
 
       // Each engine's sensitivity. Vosk has none of its own here: its grammar
       // confidence is a decision, so it is in stage 4.
-      KnobRow {
+      SliderRow {
         objectName: "set-owwThresholdPct"
         width: parent.width
         visible: page.s.owwLive
         foreground: page.s.foreground; fontFamily: page.s.fontFamily
         label: "Detection threshold"
         unit: "%"
-        description: "Higher rejects more near misses; lower wakes more easily."
+        hint: "Higher rejects more near misses; lower wakes more easily."
         help: "Measured on a 2014 MacBook Pro: the real phrase peaks near 99 and a " +
               "phonetically similar phrase near 90, so 90 rejects the near miss and " +
               "still fires reliably."
@@ -644,14 +644,14 @@ Column {
 
       // sherpa-onnx shares Vosk's phrase -- both take it as text -- but not its
       // confidence bar: it has a keyword threshold of its own.
-      KnobRow {
+      SliderRow {
         objectName: "set-sherpaThresholdPct"
         width: parent.width
         visible: page.s.sherpaLive
         foreground: page.s.foreground; fontFamily: page.s.fontFamily
         label: "Detection threshold"
         unit: "%"
-        description: "Higher rejects more sound-alikes; lower wakes more easily."
+        hint: "Higher rejects more sound-alikes; lower wakes more easily."
         help: "Measured on synthesized speech: anywhere from 15 to 35 caught the same " +
               "wakes, and higher mostly cut sound-alikes such as \"Sarong\" for \"Sarah\". " +
               "At 50 it missed about half the real ones."
@@ -669,7 +669,7 @@ Column {
         hint: "“" + page.s.activePhrase + "” wakes the main agent. It is set on its card, beside each other agent's name."
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
-        Button {
+        ActionButton {
           text: "Agents ›"
           bordered: true
           foreground: page.s.foreground
@@ -685,13 +685,13 @@ Column {
         spacing: Style.space(8)
         visible: page.s.sherpaLive
 
-        KnobRow {
+        SliderRow {
           objectName: "set-shortNameBoostPct"
           width: parent.width
           foreground: page.s.foreground; fontFamily: page.s.fontFamily
           label: "Short-name boost"
           unit: "%"
-          description: "How hard sherpa-onnx listens for names of three sounds or fewer, such as Theo."
+          hint: "How hard sherpa-onnx listens for names of three sounds or fewer, such as Theo."
           help: "Measured for \"theo\" on synthesized clips: 50 caught 5/30, 150 caught 8/30 " +
                 "with no false wakes, and 300 caught 4/30 while \"Thank you\" and \"Rodeo\" woke it."
           value: page.s.setting("shortNameBoostPct", 150)
@@ -761,9 +761,9 @@ Column {
         spacing: Style.space(10)
         visible: page.s.owwLive
 
-        SettingsGroup {
+        Card {
           width: parent.width
-          title: "YOUR VOICE"
+          title: "Your voice"
           foreground: page.s.foreground
           fontFamily: page.s.fontFamily
 
@@ -783,7 +783,7 @@ Column {
             foreground: page.s.foreground
             fontFamily: page.s.fontFamily
 
-            Button {
+            ActionButton {
               text: "Train a verifier from your voice…"
               bordered: true
               enabled: page.s.owwLive
@@ -816,11 +816,11 @@ Column {
         }
 
         // Folded: a few hours in a notebook is not a setting.
-        SettingsGroup {
+        Card {
           id: ownPhrase
           width: parent.width
           visible: page.s.owwLive
-          title: "A PHRASE OF YOUR OWN"
+          title: "A phrase of your own"
           foreground: page.s.foreground
           fontFamily: page.s.fontFamily
           property bool open: false
@@ -831,7 +831,7 @@ Column {
             hint: "About 2.5 hours in a free Colab notebook. You edit two lines: the phrase and the output name."
             foreground: page.s.foreground
             fontFamily: page.s.fontFamily
-            Button {
+            ActionButton {
               text: ownPhrase.open ? "Hide" : "How…"
               bordered: true
               foreground: page.s.foreground
@@ -858,7 +858,7 @@ Column {
               font.family: page.s.fontFamily
               font.pixelSize: Style.font.caption
             }
-            Button {
+            ActionButton {
               text: "Open the training notebook…"
               bordered: true
               foreground: page.s.foreground
@@ -930,13 +930,13 @@ Column {
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
 
-        KnobRow {
+        SliderRow {
           objectName: "set-crossCheckMinMs"
           width: parent.width
           foreground: page.s.foreground; fontFamily: page.s.fontFamily
           label: "Shortest burst"
           unit: " ms"
-          description: "Shorter bursts are clicks or breaths, and the second check skips them."
+          hint: "Shorter bursts are clicks or breaths, and the second check skips them."
           value: page.s.setting("crossCheckMinMs", 300)
           defaultValue: page.s.defaults.crossCheckMinMs !== undefined ? page.s.defaults.crossCheckMinMs : NaN
           changed: page.s.changed("crossCheckMinMs")
@@ -945,13 +945,13 @@ Column {
           onReset: page.s.resetKey("crossCheckMinMs")
         }
 
-        KnobRow {
+        SliderRow {
           objectName: "set-crossCheckMaxMs"
           width: parent.width
           foreground: page.s.foreground; fontFamily: page.s.fontFamily
           label: "Longest burst"
           unit: " ms"
-          description: "Longer is a sentence: a name inside one is someone talking about the agent, not to it."
+          hint: "Longer is a sentence: a name inside one is someone talking about the agent, not to it."
           help: "Each check costs about a second of Whisper, so a wider window means more of them."
           value: page.s.setting("crossCheckMaxMs", 2600)
           defaultValue: page.s.defaults.crossCheckMaxMs !== undefined ? page.s.defaults.crossCheckMaxMs : NaN
@@ -961,14 +961,14 @@ Column {
           onReset: page.s.resetKey("crossCheckMaxMs")
         }
 
-        KnobRow {
+        SliderRow {
           objectName: "set-crossCheckTrailingWords"
           width: parent.width
           visible: page.ccEngines !== "vosk"
           foreground: page.s.foreground; fontFamily: page.s.fontFamily
           label: "Words after the name"
           unit: ""
-          description: "How many words may follow the name. 0 takes only the bare name."
+          hint: "How many words may follow the name. 0 takes only the bare name."
           help: "\"Theo, you there?\" is two. Past this it is someone talking about the agent, " +
                 "not to it, so it does not wake."
           value: page.s.setting("crossCheckTrailingWords", 3)
@@ -1065,14 +1065,14 @@ Column {
 
       // Vosk's own bar: with no second check, its grammar's confidence is
       // the decision.
-      KnobRow {
+      SliderRow {
         objectName: "set-wakeConfidencePct"
         width: parent.width
         visible: !page.s.owwLive && !page.s.sherpaLive
         foreground: page.s.foreground; fontFamily: page.s.fontFamily
         label: "Grammar confidence"
         unit: "%"
-        description: "How sure Vosk must be that it heard the phrase."
+        hint: "How sure Vosk must be that it heard the phrase."
         help: "Weak against phonetic neighbours by nature: a grammar must pick between " +
               "the phrase and anything-else, so \"hey cloud\" scores as high as \"hey " +
               "claude\". Switch engines if a phone keeps waking it."
@@ -1101,10 +1101,10 @@ Column {
 
   // --- testing it ------------------------------------------------------------------
   // Not a stage: it runs the whole pipeline, as set above.
-  SettingsGroup {
+  Card {
     objectName: "wakeTestGroup"
     width: parent.width
-    title: "TEST MY WAKE WORD"
+    title: "Test my wake word"
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
 
@@ -1112,7 +1112,8 @@ Column {
     SettingRow {
       width: parent.width
       stacked: true
-      label: "Test my wake word"
+      // The card is titled "Test my wake word"; the row names its choice.
+      label: "How it is tested"
       hint: page.testMode === "manual"
             ? "You say the name ten times. Each wake is counted instead of answered, for up to 90 seconds."
             : "Every installed voice says each name, \"full stop\" and words that must not wake it, straight into the engines. About a minute and a half; the microphone is not used."
@@ -1145,7 +1146,7 @@ Column {
         font.family: page.s.fontFamily
         font.pixelSize: Style.font.caption
       }
-      Button {
+      ActionButton {
         text: page.s.wakeTestRunning ? "Stop" : "Start manual test"
         bordered: true
         enabled: page.s.serviceActive
@@ -1220,7 +1221,7 @@ Column {
       readonly property var a: page.s.vWakeAuto
       readonly property string st: String(a.status || "")
 
-      Button {
+      ActionButton {
         text: page.s.wakeAutoRunning ? "Stop" : "Start automatic test"
         bordered: true
         enabled: page.s.engineInstalled

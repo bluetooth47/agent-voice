@@ -173,6 +173,9 @@ Column {
     textFormat: Text.PlainText
     color: headArea.containsMouse || head.activeFocus ? fh.foreground : fh.dim
     activeFocusOnTab: true
+    Accessible.role: Accessible.Button
+    Accessible.name: "History" + (fh.expanded ? ", open" : ", folded")
+    Accessible.focusable: true
     font.family: fh.fontFamily
     font.pixelSize: Style.font.caption
     Keys.onReturnPressed: fh.expanded = !fh.expanded
@@ -235,7 +238,7 @@ Column {
             font.family: fh.fontFamily
             font.pixelSize: Style.font.caption
           }
-          Button {
+          ActionButton {
             id: viewButton
             text: fh.viewing === modelData.version ? "Hide" : "View"
             bordered: true
@@ -244,7 +247,7 @@ Column {
             fontFamily: fh.fontFamily
             onClicked: fh.view(String(modelData.version))
           }
-          Button {
+          ActionButton {
             id: restoreButton
             text: "Restore"
             bordered: true

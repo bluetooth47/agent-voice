@@ -126,9 +126,9 @@ Column {
 
   // The switch and its duration together, because the two are one setting
   // described twice: how long it stays governs nothing when it is not shown.
-  SettingsGroup {
+  Card {
     width: parent.width
-    title: "ON-SCREEN READOUT"
+    title: "On-screen readout"
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
 
@@ -147,18 +147,16 @@ Column {
       onReset: page.s.resetKey("hud")
     }
 
-    KnobRow {
+    SliderRow {
       objectName: "set-hudLingerMs"
       width: parent.width
       // Dimmed, not hidden: hiding made the page jump, and left nothing to
       // say where the setting had gone.
-      enabled: page.s.setting("hud", true) === true
-      opacity: enabled ? 1 : 0.45
+      disabledReason: page.s.setting("hud", true) === true ? "" : "Only while the readout is shown."
       foreground: page.s.foreground; fontFamily: page.s.fontFamily
       label: "How long it stays afterwards"
       unit: "ms"
-      description: enabled ? "From the end of the exchange, including the follow-up window. 0 closes it at once."
-                           : "Only while the readout is shown."
+      hint: "From the end of the exchange, including the follow-up window. 0 closes it at once."
       value: page.s.setting("hudLingerMs", 2000)
       defaultValue: page.s.defaults.hudLingerMs !== undefined ? page.s.defaults.hudLingerMs : NaN
       changed: page.s.changed("hudLingerMs")
@@ -268,7 +266,7 @@ Column {
     Row {
       width: parent.width
       spacing: Style.space(10)
-      Button {
+      ActionButton {
         objectName: "hudPreview"
         id: previewButton
         text: "Preview"
@@ -312,9 +310,9 @@ Column {
     }
   }
 
-  SettingsGroup {
+  Card {
     width: parent.width
-    title: "PRIVACY"
+    title: "Privacy"
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
 
@@ -326,7 +324,7 @@ Column {
       hint: "Whether conversations are saved, for how long, and this session's: on the Chats page."
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      Button {
+      ActionButton {
         text: "Go to Chats →"
         bordered: true
         focusable: true
@@ -478,10 +476,10 @@ Column {
     }
   }
 
-  SettingsGroup {
+  Card {
     objectName: "keysGroup"
     width: parent.width
-    title: "KEYS"
+    title: "Keys"
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
 
@@ -573,7 +571,7 @@ Column {
             : "In Hyprland's bindings file, once it has been found."
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      Button {
+      ActionButton {
         objectName: "openBindings"
         text: "Open bindings file"
         bordered: true
@@ -587,9 +585,9 @@ Column {
     }
   }
 
-  SettingsGroup {
+  Card {
     width: parent.width
-    title: "MAINTENANCE"
+    title: "Maintenance"
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
 
@@ -601,7 +599,7 @@ Column {
             : "About 700MB — speech recognition, a voice and the wake word — run as a service you can stop."
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      Button {
+      ActionButton {
         objectName: "repair"
         text: page.s.engineInstalled ? "Repair…" : "Install…"
         bordered: true
@@ -619,7 +617,7 @@ Column {
       hint: "Better rejection of sound-alikes, and a verifier trained on your voice. About 154MB."
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      Button {
+      ActionButton {
         text: "Install…"
         bordered: true
         focusable: true
@@ -636,7 +634,7 @@ Column {
       hint: "Takes any phrase and your agents' names, with far fewer false wakes than Vosk. About 60MB."
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      Button {
+      ActionButton {
         text: "Install…"
         bordered: true
         focusable: true

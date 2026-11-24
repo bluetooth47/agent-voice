@@ -84,6 +84,10 @@ Item {
             color: row.foreground
             font.family: row.fontFamily
             font.pixelSize: Style.font.body
+            // Two lines before it is cut (M29): in the narrow layout a
+            // label beside its switch read "Show what it heard and what it …".
+            wrapMode: Text.Wrap
+            maximumLineCount: 2
             elide: Text.ElideRight
           }
 
@@ -92,37 +96,30 @@ Item {
             spacing: Style.space(8)
             anchors.verticalCenter: title.verticalCenter
 
-            Text {
+            // Reached by Tab too since M29 (ui/TextLink): they were
+            // pointer-only, so a setting could not be reset or explained
+            // from the keyboard.
+            TextLink {
               visible: row.help !== ""
               text: row.helpOpen ? "×" : "?"
-              color: helpHover.containsMouse || row.helpOpen ? row.foreground : row.dim
+              lit: row.helpOpen
+              foreground: row.foreground
+              accent: row.accent
+              dim: row.dim
               font.family: row.fontFamily
-              font.pixelSize: Style.font.caption
-              MouseArea {
-                id: helpHover
-                anchors.fill: parent
-                anchors.margins: -Style.space(5)
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: row.helpOpen = !row.helpOpen
-              }
+              accessibleName: (row.helpOpen ? "Hide what " : "Explain ") + row.label
+              onActivated: row.helpOpen = !row.helpOpen
             }
 
-            Text {
+            TextLink {
               visible: row.changed && row.applies
               text: "reset"
-              color: resetHover.containsMouse ? row.foreground : row.dim
+              foreground: row.foreground
+              accent: row.accent
+              dim: row.dim
               font.family: row.fontFamily
-              font.pixelSize: Style.font.caption
-              font.underline: resetHover.containsMouse
-              MouseArea {
-                id: resetHover
-                anchors.fill: parent
-                anchors.margins: -Style.space(5)
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: row.reset()
-              }
+              accessibleName: "Reset " + row.label
+              onActivated: row.reset()
             }
           }
         }
@@ -194,5 +191,39 @@ Item {
     }
   }
   onStackedChanged: place()
-  Component.onCompleted: if (stacked) place()
+  Component.onCompleted: {
+    if (stacked) place()
+    lendName()
+  }
+
+  // A control with no name of its own (a row of chips, a selector with no
+  // label, Omarchy's Dropdown) is called what the row is called, so a
+  // screen reader says "Size, chosen: Locked" rather than nothing (master
+  // plan M29). Only a control that takes Tab focus, a few levels down, and
+  // only while it has no name: a button's own text is never replaced.
+  function lendName() {
+    walkName(slot, 0)
+    walkName(stackedSlot, 0)
+  }
+  function walkName(item, depth) {
+    var kids = item.children || []
+    for (var i = 0; i < kids.length; i++) {
+      var c = kids[i]
+      if (c.accessibleName !== undefined) {
+        // One of ours: it says how to name itself.
+        if (c.accessibleName === "" && !(c.text !== undefined && String(c.text) !== "")
+            && !(c.label !== undefined && String(c.label) !== ""))
+          c.accessibleName = Qt.binding(function() { return row.label })
+        continue
+      }
+      if (c.activeFocusOnTab === true) {
+        var named = ""
+        try { named = String(c.Accessible.name || "") } catch (e) { named = "" }
+        if (named === "" && !(c.text !== undefined && String(c.text) !== ""))
+          c.Accessible.name = Qt.binding(function() { return row.label })
+        continue
+      }
+      if (depth < 3) walkName(c, depth + 1)
+    }
+  }
 }

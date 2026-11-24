@@ -86,7 +86,7 @@ Item {
     anchors.verticalCenter: parent.verticalCenter
     width: row.cell
     height: testButton.implicitHeight
-    Button {
+    ActionButton {
       id: testButton
       width: parent.width
       text: row.playing ? "■ Stop" : "▶ Test"
@@ -108,7 +108,7 @@ Item {
     anchors.verticalCenter: parent.verticalCenter
     width: row.linkCell
     height: changeButton.implicitHeight
-    Button {
+    ActionButton {
       id: changeButton
       width: parent.width
       text: "Change on Agents →"

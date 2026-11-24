@@ -2233,7 +2233,10 @@ Item {
           Row {
             width: parent.width
             spacing: Style.spacing.md
-            Button {
+            // Deny is reached by Tab (master plan M29); the two allows stay
+            // pointer-only, so no keypress meant for something else can
+            // approve a card (phaseM29notes.md, open issues).
+            ActionButton {
               text: "Deny"
               fontFamily: root.fontFamily
               bordered: true
@@ -2407,6 +2410,29 @@ Item {
             // qmllint cannot tell, and neither can a reader.
             QQC.ScrollBar.vertical: QQC.ScrollBar { policy: QQC.ScrollBar.AsNeeded }
             Component.onCompleted: root.pageScroll = formScroll
+
+            // Master plan M29's keyboard pass: the page follows the focus.
+            // Tab moved the focus down a long page and left the page where
+            // it was, so the control being worked was off screen. It scrolls
+            // only when the focused thing's middle is out of view -- a click
+            // is always on something in view, so a drag is never moved under
+            // the pointer -- and then just far enough to show all of it.
+            readonly property Item focusNow: Window.activeFocusItem
+            onFocusNowChanged: Qt.callLater(followFocus)
+            function followFocus() {
+              var it = focusNow
+              if (!it || !interactive) return
+              var a = it
+              while (a && a !== contentItem) a = a.parent
+              if (!a) return
+              var y = it.mapToItem(contentItem, 0, 0).y
+              var mid = y + it.height / 2
+              if (mid >= contentY && mid <= contentY + height) return
+              var margin = Style.space(24)
+              var top = it.height + margin * 2 > height ? y - margin
+                        : (mid < contentY ? y - margin : y + it.height + margin - height)
+              contentY = Math.max(0, Math.min(top, contentHeight - height))
+            }
 
             // Master plan M28: the outline round a control search found,
             // in the scroller's content so it scrolls with the page. Placed

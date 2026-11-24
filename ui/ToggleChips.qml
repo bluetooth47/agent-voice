@@ -26,6 +26,8 @@ FocusScope {
   property var chipStates: ({})
   property var inherited: ({})
   property bool allowInherit: false
+  // What a screen reader calls it (master plan M29).
+  property string accessibleName: ""
   property string inheritLabel: "inherited"
 
   property color foreground: Commons.Color.foreground
@@ -79,6 +81,11 @@ FocusScope {
   onOptionsChanged: cursor = Math.max(0, Math.min(cursor, options.length - 1))
 
   activeFocusOnTab: true
+  Accessible.role: Accessible.Grouping
+  Accessible.name: accessibleName
+  Accessible.description: cursor >= 0 && cursor < options.length
+    ? String(options[cursor].label || options[cursor].value) + ": " + stateOf(String(options[cursor].value)) : ""
+  Accessible.focusable: true
   implicitHeight: column.implicitHeight
   width: parent ? parent.width : 300
 

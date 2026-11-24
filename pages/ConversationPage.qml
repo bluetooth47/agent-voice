@@ -372,15 +372,15 @@ Column {
         font.pixelSize: Style.font.caption
       }
 
-      KnobRow {
+      SliderRow {
         objectName: "set-followUpMs"
         width: parent.width
-        enabled: page.s.setting("conversationMode", true) === true
-        opacity: enabled ? 1 : 0.45
+        // Dimmed with the reason, not hidden (as SettingRow does).
+        disabledReason: page.s.setting("conversationMode", true) === true ? ""
+                        : "Only while it keeps listening after a reply."
         foreground: page.s.foreground; fontFamily: page.s.fontFamily
         label: "Follow-up window"
-        description: enabled ? "How long it keeps listening after speaking before it needs the wake word again."
-                             : "Only while it keeps listening after a reply."
+        hint: "How long it keeps listening after speaking before it needs the wake word again."
         value: page.num("followUpMs", 7000)
         defaultValue: page.dflt("followUpMs")
         changed: page.s.changed("followUpMs")
@@ -431,7 +431,7 @@ Column {
             font.pixelSize: Style.font.body
           }
         }
-        Button {
+        ActionButton {
           id: micButton
           objectName: "openMicButton"
           anchors.right: parent.right
@@ -472,12 +472,12 @@ Column {
         font.pixelSize: Style.font.caption
       }
 
-      KnobRow {
+      SliderRow {
         objectName: "set-openMicIdleMin"
         width: parent.width
         foreground: page.s.foreground; fontFamily: page.s.fontFamily
         label: "Closes after"
-        description: "Minutes with nothing said before it needs the wake word again."
+        hint: "Minutes with nothing said before it needs the wake word again."
         value: page.num("openMicIdleMin", 10)
         defaultValue: page.dflt("openMicIdleMin")
         changed: page.s.changed("openMicIdleMin")
@@ -562,14 +562,13 @@ Column {
         }
       }
 
-      KnobRow {
+      SliderRow {
         objectName: "set-narrationSilenceS"
         width: parent.width
-        enabled: page.s.setting("narration", "off") !== "off"
-        opacity: enabled ? 1 : 0.45
+        disabledReason: page.s.setting("narration", "off") !== "off" ? "" : "Only while it talks while it works."
         foreground: page.s.foreground; fontFamily: page.s.fontFamily
         label: "Quiet before it says anything"
-        description: "How long a turn has been silent before the first sentence. Later ones come at least 10, then 15, then 25 seconds apart."
+        hint: "How long a turn has been silent before the first sentence. Later ones come at least 10, then 15, then 25 seconds apart."
         value: page.num("narrationSilenceS", 7)
         defaultValue: page.dflt("narrationSilenceS")
         changed: page.s.changed("narrationSilenceS")
@@ -644,17 +643,16 @@ Column {
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
 
-        KnobRow {
+        SliderRow {
           objectName: "set-bargeFactor"
           width: parent.width
-          enabled: page.s.setting("bargeIn", false) === true
-                   || page.s.setting("bargeOnHeadset", true) === true
-          opacity: enabled ? 1 : 0.45
+          disabledReason: page.s.setting("bargeIn", false) === true
+                          || page.s.setting("bargeOnHeadset", true) === true
+                          ? "" : "Only when talking can interrupt it."
           foreground: page.s.foreground; fontFamily: page.s.fontFamily
           label: "How much louder you must be"
           unit: "%"
-          description: enabled ? "Than its own voice, before it stops. Higher is harder to trigger, by accident and on purpose."
-                               : "Only when talking can interrupt it."
+          hint: "Than its own voice, before it stops. Higher is harder to trigger, by accident and on purpose."
           value: page.num("bargeFactor", 150)
           defaultValue: page.dflt("bargeFactor")
           changed: page.s.changed("bargeFactor")
@@ -770,6 +768,10 @@ Column {
         font.pixelSize: Style.font.caption
         font.underline: raiseArea.containsMouse || activeFocus
         activeFocusOnTab: true
+        Accessible.role: Accessible.Link
+        Accessible.name: "Raise the longest a turn may be"
+        Accessible.focusable: true
+        Accessible.onPressAction: page.s.focusKey = "maxUtteranceMs"
         Keys.onReturnPressed: page.s.focusKey = "maxUtteranceMs"
         Keys.onEnterPressed: page.s.focusKey = "maxUtteranceMs"
         Keys.onSpacePressed: page.s.focusKey = "maxUtteranceMs"
@@ -796,13 +798,13 @@ Column {
       Marked {
         flashed: page.flash === "leadInMs"
         outline: page.s.accent
-        KnobRow {
+        SliderRow {
           id: leadInKnob
           objectName: "leadInKnob"
           width: parent.width
           foreground: page.s.foreground; fontFamily: page.s.fontFamily
           label: "Time to start speaking"
-          description: "After the wake word, how long it waits for you to make a sound."
+          hint: "After the wake word, how long it waits for you to make a sound."
           help: "If you do not, it gives up quietly and goes back to listening for the " +
                 "wake word. Once you start talking this no longer applies — the pause " +
                 "below ends the turn instead. Err generous: being cut off before you have " +
@@ -819,13 +821,13 @@ Column {
       Marked {
         flashed: page.flash === "trailingSilenceMs"
         outline: page.s.accent
-        KnobRow {
+        SliderRow {
           id: pauseKnob
           objectName: "pauseKnob"
           width: parent.width
           foreground: page.s.foreground; fontFamily: page.s.fontFamily
           label: "Pause that ends a turn"
-          description: "This much quiet, under the microphone gate, and it stops listening."
+          hint: "This much quiet, under the microphone gate, and it stops listening."
           value: page.num("trailingSilenceMs", 1200)
           defaultValue: page.dflt("trailingSilenceMs")
           changed: page.s.changed("trailingSilenceMs")
@@ -838,13 +840,13 @@ Column {
       Marked {
         flashed: page.flash === "quickEndMs"
         outline: page.s.accent
-        KnobRow {
+        SliderRow {
           id: quickKnob
           objectName: "quickKnob"
           width: parent.width
           foreground: page.s.foreground; fontFamily: page.s.fontFamily
           label: "Shorter pause when you sound finished"
-          description: "Used instead when what you said reads as a finished sentence. 0 turns it off."
+          hint: "Used instead when what you said reads as a finished sentence. 0 turns it off."
           help: "Whisper works through what you said at each pause, so by the time you " +
                 "stop it usually has the words already. When they read as a finished " +
                 "sentence, this much quiet ends the turn instead of the full pause. " +
@@ -862,13 +864,13 @@ Column {
       Marked {
         flashed: page.flash === "minUtteranceMs"
         outline: page.s.accent
-        KnobRow {
+        SliderRow {
           id: minKnob
           objectName: "minKnob"
           width: parent.width
           foreground: page.s.foreground; fontFamily: page.s.fontFamily
           label: "Ignore a turn shorter than"
-          description: "Throws away a turn too short to hold anything — usually a wake word fired by a noise."
+          hint: "Throws away a turn too short to hold anything — usually a wake word fired by a noise."
           help: "Measured on the whole recording — the wake word to the end of the pause " +
                 "— not on the speech inside it. With the pause at its default this rarely " +
                 "triggers, since any finished turn already contains that much silence; it " +
@@ -885,13 +887,13 @@ Column {
       Marked {
         flashed: page.flash === "maxUtteranceMs"
         outline: page.s.accent
-        KnobRow {
+        SliderRow {
           id: maxKnob
           objectName: "maxKnob"
           width: parent.width
           foreground: page.s.foreground; fontFamily: page.s.fontFamily
           label: "Longest a turn can be"
-          description: "Counted from your first word. A microphone stuck open stops here rather than recording forever."
+          hint: "Counted from your first word. A microphone stuck open stops here rather than recording forever."
           value: page.num("maxUtteranceMs", 30000)
           defaultValue: page.dflt("maxUtteranceMs")
           changed: page.s.changed("maxUtteranceMs")
@@ -904,13 +906,13 @@ Column {
       Marked {
         flashed: page.flash === "echoTailMs"
         outline: page.s.accent
-        KnobRow {
+        SliderRow {
           id: echoKnob
           objectName: "echoKnob"
           width: parent.width
           foreground: page.s.foreground; fontFamily: page.s.fontFamily
           label: "Deaf period after speaking"
-          description: "The microphone is ignored while it talks, and for this long after."
+          hint: "The microphone is ignored while it talks, and for this long after."
           help: "One microphone beside the speakers cannot win against its own output, " +
                 "so the mic goes deaf while the voice talks and for this long after. Too " +
                 "short and it hears the end of its own sentence as you."

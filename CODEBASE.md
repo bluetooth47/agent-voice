@@ -113,7 +113,6 @@ Chats.qml            the chats browser (M18: one component, three places): list 
                      date / turns / duration / summary (M19) or last line),
                      a chat as bubbles (ExchangeItem/ChatBubble), continue, new, share, send, rename
                      (stdin), pin, export, delete; scope all (Chats page) / agent / multi
-KnobRow.qml, SettingsGroup.qml   shared slider row / group box
 pages/               one file per sidebar page (11), each handed the overlay as `s`
 ui/                  building blocks with no setting names (see 5.2)
 bin/                 agentvoice (control CLI), agentvoice-check, agentvoice-train-verifier
@@ -450,8 +449,17 @@ Notes and collaboration exist only for Claude Code and Codex
   file or an agent name needs `textFormat: Text.PlainText`.
 - **QML changes need a shell restart to be seen** (`omarchy-restart-shell`).
   Tell the user first. Verify with a screenshot.
+- `bench/preview/sheet.sh` (M29) runs the settings target over every page
+  and tab, wide and narrow, dark and `flexoki-light`, a fresh install and
+  eight agents, and tiles each variant into one contact sheet; a run that
+  writes anything is reported.
 - `bench/preview/preview.sh` renders any surface beside the live shell
-  without touching it. Targets: settings, popup, knob, clicks, agents,
+  without touching it. Targets: settings (M29: `"narrow": true` in the
+  payload draws the card 500 px), keys (M29: every page and tab walked with
+  Tab alone, then again with every fold opened: each focusable control
+  reached, each stop named, the page scrolled to the focus, the order logged,
+  nothing written; `--arg PAGE` or `PAGE/TAB` for one, `shot` for a focused
+  control), popup, knob, clicks, agents,
   search (M28: Ctrl+F, "pause" to the folded pause knob, an agent's model,
   a details tab, a Communal tab, a hidden control's note, old deep links,
   nothing written; `--arg results|landed`, `,narrow`), setup (M28: `--arg
@@ -562,12 +570,16 @@ Notes and collaboration exist only for Claude Code and Codex
 | `ReadoutLines.qml` | M3: the locked readout, two fixed-height slots (last answer, dim with an accent bar; what is being said now, bright), each showing the end of its text, PlainText. Used by the HUD and the popup. |
 | `SegmentedChoice.qml` | Segmented enum control; `wrap: true` (with a width set) lets the chips wrap in a half-width card. |
 | `SendSheet.qml` | "Send to another agent": target, editable brief, what goes with it; sends via `agentvoice pass`. |
-| `SettingRow.qml` | One setting on one line. |
+| `SettingRow.qml` | One setting on one line. "?" and "reset" are `TextLink`s (M29); a control inside with no name of its own (chips, Omarchy's Dropdown) is given the row's label for a screen reader (`lendName`). |
+| `SliderRow.qml` | M29: a numeric setting -- SettingRow's header (label, "?", "reset", `hint`, `disabledReason` dimming the row) over a `VoiceSlider`, committing on release; the number is typed by clicking it or Enter on the slider. Replaced the root-level `KnobRow.qml`. |
+| `ActionButton.qml` | M29: Omarchy's Button with `focusable: true` and an accessible name (text, else tooltip). Every button on a page or in a ui/ piece is one; only the chips inside SegmentedChoice/TabStrip/ToggleChips/AgentTabs (one Tab stop per control) and the permission card's two allows (pointer-only, fail-closed) stay plain Buttons (`tests/test_keyboard.py`). |
+| `FocusSwitch.qml` | M29: Omarchy's ToggleSwitch taking Tab focus (accent outline, Space/Enter flip, a named check box). Every switch is one; `ToggleRow` names it after its label. |
+| `TextLink.qml` | M29: a small word that does something ("?", "reset", "Listening settings ›", "last chat ›", the toast's ×): Tab, Enter/Space, an accent outline while focused, an accessible name. |
 | `SettingsStore.qml` | The single copy of the widget's settings; `put()` writes through `omarchy bar set`. |
 | `SidebarNav.qml` | The page list down the side. |
 | `StatusCard.qml` | Boxed status line with a state chip. |
 | `TabStrip.qml` | Tabs across the top of a page. |
-| `ToggleRow.qml` | A SettingRow with a switch. |
+| `ToggleRow.qml` | A SettingRow with a `FocusSwitch`. |
 | `ToolSwitches.qml` | One agent's tools and collaboration, as two cards (`part: "tools"` or `"collab"`): since M10 the tools part is **read only** -- desktop/browser/Omarchy with where each value comes from or why a program cannot use one, how many found tools are switched on, and links to Agent details (`detailsAsked`) and Communal; collaboration, takes work, notes, and (M20) chat search: Off / Its own and shared / Every chat, where "Every chat" only opens a `ToolConfirm` (`pickChatSearch`) and `chatSearchPicked("all")` is emitted from its `onConfirmed` alone; the hint says what the scope does not hold, per program. Holds the program tables test_tools_skills checks against agentfs. |
 | `ToolConfirm.qml` | M10: the inline question before a found tool is switched on (title, plain-text lines, a warning, Cancel focused, Escape cancels, no timer). The only element besides `DangerButton` allowed an `onConfirmed` (test_confirms), and only for a tool switch or (M11) giving a copy of a skill found on this machine. |
 | `SkillCard.qml` | M11: one skill as a card: name, a line of what it is for, a source pill, an optional switch (emits `toggled(on)`; the page writes), a status line, a details drop-down (description, source path, size, problems, shadowing, who gets it) and room for buttons. Plain text throughout. Since M12 draggable between `DropLane`s (a drag on its header moves, Ctrl copies; `canMove` false offers copying alone) with a Move to… menu (Menu or Ctrl+M from the keyboard); it only emits `moveRequested`. |

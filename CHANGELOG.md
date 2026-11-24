@@ -6,6 +6,27 @@ Newest first. The version in `manifest.json` has been 0.2.0 throughout the
 redesign round; builds are told apart by commit (About shows both the
 settings' and the service's).
 
+## M29 · Consistency audit, keyboard and light theme (2026-11-23)
+
+- **Every page is built the same way.** The Overview, Voice, Other settings
+  and About pages, and the wake-word test on Listening, had their groups as a
+  capitalised heading over a box; they are titled cards now, like the rest.
+  Every slider is the same row as every other setting: the label, "?" and
+  "reset" on the left, the number on the right, one line underneath, and a
+  slider that does not apply right now dimmed with the reason.
+- **Everything works from the keyboard.** Tab reaches every button (29 could
+  only be clicked), every switch (none could be reached), the "?" and
+  "reset" beside each setting, the Overview's agent cards and links, and the
+  folds in a conversation; Space or Enter presses them; Enter on a slider
+  lets you type its number. The page scrolls to keep what has the keyboard
+  on screen, and each control has an outline while it has it. Every control
+  has a name a screen reader can say. One exception, on purpose: Allow on a
+  permission card is still pointer-only, so no stray keypress approves
+  anything (Deny is reachable).
+- Checked in both a dark theme and `flexoki-light`, wide and narrow, on a
+  fresh install and with eight agents; no setting was added, moved, renamed
+  or removed.
+
 ## M28 · Settings search, and first-run setup (2026-11-23)
 
 - **Settings search**: a box at the top of the settings sidebar (Ctrl+F).

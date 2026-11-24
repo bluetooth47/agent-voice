@@ -62,8 +62,8 @@ def test_the_install_problem_links_to_where_install_now_is():
 
 
 def test_the_readout_group_holds_the_four_m3_keys_preview_and_the_agents_panel():
-    start = OTHER.index('title: "ON-SCREEN READOUT"')
-    group = OTHER[start:OTHER.index("SettingsGroup {", start)]
+    start = OTHER.index('title: "On-screen readout"')
+    group = OTHER[start:OTHER.index("Card {", start)]
     for key in ("hud", "hudLingerMs", "hudSize", "hudKeepReply", "hudPosition", "hudTextSize",
                 "agentsPanel"):
         assert f'put("{key}"' in group, key
@@ -71,8 +71,8 @@ def test_the_readout_group_holds_the_four_m3_keys_preview_and_the_agents_panel()
 
 
 def test_privacy_holds_its_keys_the_chats_pointer_and_the_lock_line():
-    start = OTHER.index('title: "PRIVACY"')
-    group = OTHER[start:OTHER.index("SettingsGroup {", start)]
+    start = OTHER.index('title: "Privacy"')
+    group = OTHER[start:OTHER.index("Card {", start)]
     for key in ("yieldToRecorders", "logSpeech", "keepStats"):
         assert f'put("{key}"' in group, key
     assert 'goTo("chats", "")' in group and "clearStats()" in group
@@ -81,8 +81,8 @@ def test_privacy_holds_its_keys_the_chats_pointer_and_the_lock_line():
 
 def test_the_keys_are_read_live_and_never_written():
     assert 'command: ["agentvoice", "keys", "--json"]' in OTHER
-    start = OTHER.index('title: "KEYS"')
-    group = OTHER[start:OTHER.index("SettingsGroup {", start)]
+    start = OTHER.index('title: "Keys"')
+    group = OTHER[start:OTHER.index("Card {", start)]
     assert "page.keysInfo.rows" in group
     # No fixed list of Hyprland keys left on the page: only the bar icon's
     # own clicks, which are the widget's.
@@ -98,12 +98,12 @@ def test_the_keys_are_read_live_and_never_written():
 
 
 def test_maintenance_is_on_other_settings():
-    start = OTHER.index('title: "MAINTENANCE"')
+    start = OTHER.index('title: "Maintenance"')
     group = OTHER[start:]
     assert "fetchNow([])" in group and 'fetchNow(["--oww"])' in group and 'fetchNow(["--sherpa"])' in group
     assert "DangerButton {" in group and "onConfirmed: page.s.removeEverything()" in group
     assert group.index("fetchNow([])") < group.index("removeEverything"), "Remove stays last"
-    assert 'title: "MAINTENANCE"' not in ABOUT and 'title: "REMOVE"' not in ABOUT
+    assert 'title: "Maintenance"' not in ABOUT and 'title: "REMOVE"' not in ABOUT
 
 
 def test_about_reaches_out_only_from_a_click():

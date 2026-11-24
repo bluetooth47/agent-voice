@@ -376,7 +376,7 @@ else say "every daemon state is drawn by the widget" "ok"; fi
 
 # 11. the QML references properties that exist. Nothing here runs the overlay,
 # so this is the only automated check the interface gets -- and the interface
-# is where this project's bugs have landed: a KnobRow given `suffix` when it
+# is where this project's bugs have landed: a slider row given `suffix` when it
 # takes `unit`, a `voiceOptions` renamed without its callers, a Timer nested
 # in a FileView. Each was found by reading the shell log after a user noticed.
 # qmllint's other categories are noisy against Quickshell's singletons

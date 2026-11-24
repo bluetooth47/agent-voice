@@ -13,6 +13,7 @@ Writes nothing.
 """
 from __future__ import annotations
 
+import ast
 import json
 import re
 import sys
@@ -32,7 +33,22 @@ def control_at(s, pos) -> str:
     return f"{el} ({h})" if h else el
 
 
+def overlay_homes() -> dict[str, tuple[str, str]]:
+    """OVERLAY_HOMES from tests/test_settings_pages.py, read with ast rather
+    than imported: a key whose one writer is an overlay function (M10's
+    setAgentTool, M11's setAgentSkill, M17's setAgentField) and the page that
+    calls it. Without it those keys printed as having no home (M29)."""
+    tree = ast.parse((ROOT / "tests" / "test_settings_pages.py").read_text())
+    for node in tree.body:
+        target = node.target if isinstance(node, ast.AnnAssign) else (
+            node.targets[0] if isinstance(node, ast.Assign) else None)
+        if isinstance(target, ast.Name) and target.id == "OVERLAY_HOMES":
+            return ast.literal_eval(node.value)
+    return {}
+
+
 def main() -> int:
+    homes = overlay_homes()
     manifest = json.loads((ROOT / "manifest.json").read_text())["barWidget"]
     schema = [k["key"] for k in manifest["schema"]]
     extra = sorted(set(manifest["defaults"]) - set(schema))
@@ -49,6 +65,9 @@ def main() -> int:
             for m in pat.finditer(s.nocomment):
                 if s.clean[m.start()] == s.src[m.start()]:
                     rows.append((s.path.stem, control_at(s, m.start())))
+        if not rows and key in homes:
+            fn, page = homes[key]
+            rows.append((page.removesuffix(".qml"), f"overlay function {fn}"))
         if not rows:
             print(f"| `{key}` | {kind} | **none** | |")
         for page, ctl in sorted(set(rows)):
@@ -61,13 +80,16 @@ def main() -> int:
     fields: dict[str, set[str]] = {}
     for m in re.finditer(r'\bupdateAgent\([^"\n]*?"(\w+)"', agents.nocomment):
         if agents.clean[m.start()] == agents.src[m.start()]:
-            fields.setdefault(m.group(1), set()).add(control_at(agents, m.start()))
+            fields.setdefault(m.group(1), set()).add(("AgentsPage", control_at(agents, m.start())))
     endpoint = scan(ROOT / "ui" / "EndpointEditor.qml")
     for m in re.finditer(r'\bedited\("(\w+)"', endpoint.nocomment):
-        fields.setdefault(m.group(1), set()).add("EndpointEditor → " + control_at(endpoint, m.start()))
+        fields.setdefault(m.group(1), set()).add(("AgentsPage", "EndpointEditor → " + control_at(endpoint, m.start())))
+    for key, (fn, page) in homes.items():
+        if key.startswith("field:"):
+            fields.setdefault(key[len("field:"):], set()).add((page.removesuffix(".qml"), f"overlay function {fn}"))
     for field in sorted(fields):
-        for ctl in sorted(fields[field]):
-            print(f"| `{field}` | AgentsPage | {ctl} |")
+        for page, ctl in sorted(fields[field]):
+            print(f"| `{field}` | {page} | {ctl} |")
     return 0
 
 

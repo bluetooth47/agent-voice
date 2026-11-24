@@ -82,6 +82,11 @@ FocusScope {
       height: Math.max(nameText.implicitHeight, pillRow.implicitHeight) + Style.space(12)
       radius: Style.cornerRadius
       activeFocusOnTab: strip.foldable
+      Accessible.role: Accessible.Button
+      Accessible.name: strip.name + (strip.foldable ? (strip.expanded ? ", open" : ", folded") : "")
+      Accessible.description: strip.problem !== "" ? strip.problem : strip.status
+      Accessible.focusable: true
+      Accessible.onPressAction: strip.flip()
       focus: true
       color: barArea.containsMouse || activeFocus
              ? Style.hoverFillFor(strip.foreground, strip.accent) : "transparent"

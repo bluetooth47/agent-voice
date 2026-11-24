@@ -100,7 +100,7 @@ Rectangle {
       font.family: toast.fontFamily
       font.pixelSize: Style.font.body
     }
-    Button {
+    ActionButton {
       id: undoButton
       anchors.verticalCenter: parent.verticalCenter
       text: toast.undoText + (toast.shown ? " (" + toast.remainingS + ")" : "")
@@ -115,21 +115,16 @@ Rectangle {
         toast.undo()
       }
     }
-    Text {
+    TextLink {
       id: closeText
       anchors.verticalCenter: parent.verticalCenter
       text: "×"
-      color: closeArea.containsMouse ? toast.foreground : toast.dim
+      accessibleName: "Close"
+      foreground: toast.foreground
+      dim: toast.dim
       font.family: toast.fontFamily
       font.pixelSize: Style.font.body
-      MouseArea {
-        id: closeArea
-        anchors.fill: parent
-        anchors.margins: -Style.space(5)
-        hoverEnabled: true
-        cursorShape: Qt.PointingHandCursor
-        onClicked: toast.dismiss()
-      }
+      onActivated: toast.dismiss()
     }
   }
 }

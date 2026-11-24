@@ -448,7 +448,7 @@ Column {
       }
       Row {
         spacing: Style.space(8)
-        Button {
+        ActionButton {
           text: "Keep"
           bordered: true
           enabled: !fe.busy
@@ -457,7 +457,7 @@ Column {
           fontFamily: fe.fontFamily
           onClicked: fe.fix("ack")
         }
-        Button {
+        ActionButton {
           text: "Revert"
           bordered: true
           enabled: !fe.busy
@@ -539,7 +539,7 @@ Column {
   Row {
     visible: fe.conflictStamp !== ""
     spacing: Style.space(8)
-    Button {
+    ActionButton {
       text: "Keep mine"
       bordered: true
       focusable: true
@@ -547,7 +547,7 @@ Column {
       fontFamily: fe.fontFamily
       onClicked: fe.keepMine()
     }
-    Button {
+    ActionButton {
       text: "Reload"
       bordered: true
       focusable: true

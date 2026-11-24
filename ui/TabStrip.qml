@@ -14,12 +14,21 @@ FocusScope {
 
   property var options: []
   property string current: ""
+  // What a screen reader calls it (master plan M29).
+  property string accessibleName: ""
   property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
 
   signal picked(string id)
 
   activeFocusOnTab: true
+  Accessible.role: Accessible.PageTabList
+  Accessible.name: accessibleName !== "" ? accessibleName : "Tabs"
+  Accessible.description: {
+    for (var i = 0; i < options.length; i++) if (options[i].id === current) return "Open: " + options[i].label
+    return ""
+  }
+  Accessible.focusable: true
   implicitHeight: flow.implicitHeight
   width: parent ? parent.width : 300
 

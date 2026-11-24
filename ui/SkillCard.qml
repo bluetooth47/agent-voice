@@ -94,6 +94,10 @@ Rectangle {
   border.width: 1
   border.color: activeFocus ? accent : Qt.rgba(foreground.r, foreground.g, foreground.b, 0.22)
   activeFocusOnTab: true
+  Accessible.role: Accessible.ListItem
+  Accessible.name: card.title
+  Accessible.description: "Ctrl+M opens Move to"
+  Accessible.focusable: true
   opacity: dragging && !copying ? 0.4 : 1
   Keys.onMenuPressed: card.openMenu()
   Keys.onPressed: function(ev) {
@@ -207,8 +211,9 @@ Rectangle {
           font.pixelSize: Style.font.caption
         }
       }
-      ToggleSwitch {
+      FocusSwitch {
         id: toggle
+        accessibleName: card.title
         visible: card.switchable
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
@@ -251,7 +256,7 @@ Rectangle {
       width: parent.width
       visible: children.length > 0
       spacing: Style.space(6)
-      Button {
+      ActionButton {
         id: moveButton
         visible: card.draggable
         text: card.canMove ? "Move to…" : "Copy to…"

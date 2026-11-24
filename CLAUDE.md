@@ -166,6 +166,18 @@ lists each destructive command, where it is built, and fails if anything
 reaches it from outside a confirmation. A new destructive command joins that
 table.
 
+Everything on a page is reachable without a pointer and named for a screen
+reader (M29). A button is a `ui/ActionButton` (Omarchy's Button is
+unfocusable unless told), a switch a `ui/FocusSwitch`, a numeric setting a
+`ui/SliderRow`, a clickable word a `ui/TextLink`, a group a `ui/Card`; the
+old root-level `KnobRow` and `SettingsGroup` are gone. Anything else that
+takes Tab sets `Accessible.name`, and a `MouseArea` that does something sits
+in something the keyboard reaches or is listed in `KEYBOARD_ELSEWHERE` with
+the key that does it (`tests/test_keyboard.py`). The permission card's two
+allows are the one deliberate exception: pointer-only, so no stray keypress
+approves a card. `preview.sh keys` walks every page with Tab to prove it
+from the other side.
+
 Omarchy's Agents panel shows each voice agent from a record the daemon
 writes (`daemon/agents_panel.py`). That panel is Omarchy's and is never
 edited: what a section can show is a name, the plan text on its right and a

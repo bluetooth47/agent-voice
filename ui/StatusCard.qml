@@ -39,11 +39,24 @@ Rectangle {
   implicitHeight: content.implicitHeight + Style.space(16)
   height: implicitHeight
   radius: Style.cornerRadius
-  color: hover.containsMouse && clickable
+  color: (hover.containsMouse || activeFocus) && clickable
          ? Qt.rgba(foreground.r, foreground.g, foreground.b, 0.06) : "transparent"
   border.width: 1
-  border.color: tone === "alert" ? Qt.rgba(urgent.r, urgent.g, urgent.b, 0.6)
+  border.color: activeFocus ? accent
+                : tone === "alert" ? Qt.rgba(urgent.r, urgent.g, urgent.b, 0.6)
                 : Qt.rgba(foreground.r, foreground.g, foreground.b, 0.18)
+
+  // A card that opens something is reached by Tab too (master plan M29):
+  // the Overview's agent cards were pointer-only.
+  activeFocusOnTab: clickable && visible
+  Keys.onReturnPressed: if (card.clickable) card.clicked()
+  Keys.onEnterPressed: if (card.clickable) card.clicked()
+  Keys.onSpacePressed: if (card.clickable) card.clicked()
+  Accessible.role: clickable ? Accessible.Button : Accessible.Grouping
+  Accessible.name: title
+  Accessible.description: subtitle + (status !== "" ? ", " + status : "")
+  Accessible.focusable: clickable
+  Accessible.onPressAction: if (card.clickable) card.clicked()
 
   MouseArea {
     id: hover

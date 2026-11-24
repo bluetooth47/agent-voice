@@ -127,7 +127,7 @@ def test_the_training_section_is_openwakeword_only():
     # One condition on the box, rather than one per child. The box is what is
     # on screen, so hiding it hides the section -- and a child that forgets the
     # condition can no longer leak out of a hidden section.
-    box = LISTENING.rindex("SettingsGroup {", 0, start)
+    box = LISTENING.rindex("Card {", 0, start)
     head = LISTENING[box:LISTENING.index("\n\n", box)]
     assert "visible: page.s.owwLive" in head, head
 

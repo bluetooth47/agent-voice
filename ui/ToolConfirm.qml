@@ -117,7 +117,7 @@ FocusScope {
       Flow {
         width: parent.width
         spacing: Style.space(8)
-        Button {
+        ActionButton {
           id: cancelButton
           text: box.cancelText
           bordered: true
@@ -126,7 +126,7 @@ FocusScope {
           fontFamily: box.fontFamily
           onClicked: box.cancelled()
         }
-        Button {
+        ActionButton {
           text: box.confirmText
           bordered: true
           focusable: true

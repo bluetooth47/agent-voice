@@ -155,7 +155,7 @@ Column {
       height: changeLink.height
       verticalAlignment: Text.AlignVCenter
     }
-    Button {
+    ActionButton {
       id: changeLink
       text: "Change on Agents page →"
       focusable: true
@@ -217,7 +217,7 @@ Column {
       font.family: page.s.fontFamily
       font.pixelSize: Style.font.body
     }
-    Button {
+    ActionButton {
       text: "Make its folder"
       bordered: true
       focusable: true
@@ -329,6 +329,7 @@ Column {
           }
           ToggleChips {
             width: Math.max(implicitWidth, Style.space(200))
+            accessibleName: modelData.label
             options: modelData.values.map(function(v) {
               return { value: v, label: v.charAt(0).toUpperCase() + v.slice(1),
                        disabledReason: page.traitsWhyNot }
@@ -377,7 +378,7 @@ Column {
       Flow {
         width: parent.width
         spacing: Style.space(10)
-        Button {
+        ActionButton {
           id: tryButton
           text: tryer.running ? "Trying…" : "▶ Try it"
           bordered: true
@@ -479,7 +480,7 @@ Column {
           font.pixelSize: Style.font.body
           font.bold: true
         }
-        Button {
+        ActionButton {
           id: refreshLink
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
@@ -1154,7 +1155,7 @@ Column {
               font.family: page.s.fontFamily
               font.pixelSize: Style.font.caption
             }
-            Button {
+            ActionButton {
               text: "Turn on for " + page.name
               focusable: true
               foreground: page.s.foreground
@@ -1165,7 +1166,7 @@ Column {
             }
           }
         }
-        Button {
+        ActionButton {
           text: "Dismiss"
           focusable: true
           enabled: !dismisser.running
@@ -1241,7 +1242,7 @@ Column {
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
     }
-    Button {
+    ActionButton {
       text: "Collaboration and notes: " + page.name + "'s Agents card →"
       focusable: true
       foreground: page.s.foreground
@@ -1263,7 +1264,7 @@ Column {
         font.pixelSize: Style.font.body
         font.bold: true
       }
-      Button {
+      ActionButton {
         text: rescanner.running ? "Scanning…" : "Rescan"
         focusable: true
         enabled: !rescanner.running
@@ -1518,7 +1519,7 @@ Column {
             foreground: page.s.foreground
             fontFamily: page.s.fontFamily
             onToggled: function(on) { page.switchSkill(modelData.name, on) }
-            Button {
+            ActionButton {
               visible: modelData.changed_outside === true
               text: "Keep"
               focusable: true
@@ -1643,7 +1644,7 @@ Column {
             details: page.skillDetails(modelData, false)
             foreground: page.s.foreground
             fontFamily: page.s.fontFamily
-            Button {
+            ActionButton {
               text: "Give a copy to " + page.name + "…"
               bordered: true
               focusable: true
@@ -1655,7 +1656,7 @@ Column {
                            : "Copies it into " + page.name + "'s skills folder, after asking."
               onClicked: page.askImport(modelData, page.target)
             }
-            Button {
+            ActionButton {
               text: "Give a copy to Communal…"
               focusable: true
               enabled: modelData.copy_problem === "" && !skillImporter.running
@@ -1738,7 +1739,7 @@ Column {
     Flow {
       width: parent.width
       spacing: Style.space(8)
-      Button {
+      ActionButton {
         text: "Open " + page.name + "'s skills folder"
         bordered: true
         focusable: true
@@ -1746,7 +1747,7 @@ Column {
         fontFamily: page.s.fontFamily
         onClicked: page.openSkills()
       }
-      Button {
+      ActionButton {
         text: "Rescan"
         focusable: true
         foreground: page.s.foreground
@@ -1755,7 +1756,7 @@ Column {
         tooltipText: "Look again for skills outside Agent Voice"
         onClicked: page.loadCatalog()
       }
-      Button {
+      ActionButton {
         text: "Communal skills →"
         focusable: true
         foreground: page.s.foreground
@@ -1798,7 +1799,7 @@ Column {
     font.family: page.s.fontFamily
     font.pixelSize: Style.font.caption
   }
-  Button {
+  ActionButton {
     visible: page.tab === "notes" && !page.reserved
     text: "Change on " + page.name + "'s Agents card →"
     bordered: true
@@ -1902,7 +1903,7 @@ Column {
             font.family: page.s.fontFamily
             font.pixelSize: Style.font.caption
           }
-          Button {
+          ActionButton {
             id: cancelTask
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
@@ -1951,7 +1952,7 @@ Column {
       font.family: page.s.fontFamily
       font.pixelSize: Style.font.body
     }
-    Button {
+    ActionButton {
       visible: !page.s.saveChats
       text: "Go to Chats →"
       focusable: true
@@ -2506,7 +2507,7 @@ Column {
               font.family: "monospace"
               font.pixelSize: Style.font.caption
             }
-            Button {
+            ActionButton {
               id: flagRemove
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
@@ -2570,7 +2571,7 @@ Column {
             fontFamily: page.s.fontFamily
             onConfirmed: page.confirmFlag()
           }
-          Button {
+          ActionButton {
             visible: page.launchArgs.length > 0 || !page.launchArgsReadable
             text: "Clear all"
             bordered: true
@@ -2581,7 +2582,7 @@ Column {
             onClicked: page.putLaunch("extraArgs", [])
           }
         }
-        Button {
+        ActionButton {
           visible: !page.launchArgsReadable
           text: "Clear them"
           bordered: true
@@ -2707,7 +2708,7 @@ Column {
             foreground: page.s.foreground
             font.family: "monospace"
           }
-          Button {
+          ActionButton {
             text: "Set"
             bordered: true
             focusable: true
@@ -2767,7 +2768,7 @@ Column {
           height: Math.max(implicitHeight, cwdLink.height)
           verticalAlignment: Text.AlignVCenter
         }
-        Button {
+        ActionButton {
           id: cwdLink
           text: "Change on Agents page →"
           focusable: true
@@ -2874,14 +2875,14 @@ Column {
 
     // Phase M17: the hung-turn limit, per agent (an endpoint's is on the
     // Agents page, with the rest of its endpoint).
-    KnobRow {
+    SliderRow {
       objectName: "set-idleTimeoutS"
       width: parent.width
       visible: !page.reserved && !page.endpointAgent
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
       label: "Stop a turn after"
-      description: "Seconds with nothing at all from its program. A turn that is still producing " +
+      hint: "Seconds with nothing at all from its program. A turn that is still producing " +
                    "output is never stopped." +
                    (page.program === "agy" ? " Antigravity counts it from the start of the turn." : "")
       value: page.launchIdle
@@ -2922,7 +2923,7 @@ Column {
           height: Math.max(implicitHeight, timeoutLink.visible ? timeoutLink.height : 0)
           verticalAlignment: Text.AlignVCenter
         }
-        Button {
+        ActionButton {
           id: timeoutLink
           visible: page.run !== null && page.run.endpoint !== undefined && page.run.endpoint !== null
           text: "Change on Agents page →"
@@ -2960,7 +2961,7 @@ Column {
             font.pixelSize: Style.font.caption
           }
         }
-        Button {
+        ActionButton {
           text: "Tools & skills →"
           focusable: true
           foreground: page.s.foreground
@@ -3001,7 +3002,7 @@ Column {
             height: Math.max(implicitHeight, revealButton.height)
             verticalAlignment: Text.AlignVCenter
           }
-          Button {
+          ActionButton {
             id: revealButton
             visible: page.told !== null && page.told.pieces.length > 0
             text: page.revealPrompt ? "Hide all" : "Show all"
@@ -3064,7 +3065,7 @@ Column {
             font.pixelSize: Style.font.caption
           }
         }
-        Button {
+        ActionButton {
           text: "Open full log"
           iconText: "\u{f0219}"
           bordered: true
@@ -3153,7 +3154,7 @@ Column {
         Flow {
           width: parent.width
           spacing: Style.space(8)
-          Button {
+          ActionButton {
             text: "Open folder"
             iconText: "\u{f0770}"
             bordered: true
@@ -3163,7 +3164,7 @@ Column {
             fontFamily: page.s.fontFamily
             onClicked: page.openFolder(page.folderPath)
           }
-          Button {
+          ActionButton {
             text: "Export"
             iconText: "\u{f0207}"
             tooltipText: "Copy its role, personality, instructions and skills to a new folder in Downloads"
@@ -3176,7 +3177,7 @@ Column {
           }
           // Phase M17: a new agent from this one. What the copy holds is the
           // daemon's decision (agent_manage.py); it is made switched off.
-          Button {
+          ActionButton {
             text: "Duplicate"
             iconText: "\u{f018f}"
             tooltipText: page.s.voiceAgents.length >= page.s.maxAgents
@@ -3316,7 +3317,7 @@ Column {
               font.family: page.s.fontFamily
               font.pixelSize: Style.font.caption
             }
-            Button {
+            ActionButton {
               id: restoreButton
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
@@ -3369,7 +3370,7 @@ Column {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(6)
-              Button {
+              ActionButton {
                 text: "Open"
                 bordered: true
                 focusable: true
@@ -3407,8 +3408,9 @@ Column {
       textFormat: Text.PlainText
       color: page.s.foreground
       font.family: page.s.fontFamily
+      font.pixelSize: Style.font.body
     }
-    Button {
+    ActionButton {
       text: "Undo"
       iconText: "\u{f054c}"
       bordered: true
@@ -3434,8 +3436,9 @@ Column {
       textFormat: Text.PlainText
       color: page.s.foreground
       font.family: page.s.fontFamily
+      font.pixelSize: Style.font.body
     }
-    Button {
+    ActionButton {
       text: "Undo"
       iconText: "\u{f054c}"
       bordered: true

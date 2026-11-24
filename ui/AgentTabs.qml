@@ -46,6 +46,10 @@ FocusScope {
   }
 
   activeFocusOnTab: true
+  Accessible.role: Accessible.PageTabList
+  Accessible.name: "Agents"
+  Accessible.description: { var i = indexOf(current); return i >= 0 ? "Open: " + String(agents[i].label || agents[i].id) : "" }
+  Accessible.focusable: true
   implicitHeight: list.height
   width: parent ? parent.width : 300
 

@@ -70,7 +70,7 @@ Column {
           font.family: pv.fontFamily
           font.pixelSize: Style.font.caption
         }
-        Button {
+        ActionButton {
           anchors.verticalCenter: partLabel.verticalCenter
           visible: pv.concealed && !pv.revealAll && String(modelData.text || "") !== ""
           text: pv.revealed[index] === true ? "Hide" : "Show"

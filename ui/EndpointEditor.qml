@@ -224,7 +224,7 @@ Column {
           font.family: ed.fontFamily
           onEditingFinished: if (text.trim() !== ed.model) ed.edited("endpointModel", text.trim())
         }
-        Button {
+        ActionButton {
           id: listButton
           text: modelsProc.running ? "Asking…" : "List models"
           bordered: true
@@ -286,7 +286,7 @@ Column {
           function onKeyClearedChanged() { parent.text = "" }
         }
       }
-      Button {
+      ActionButton {
         id: saveKey
         text: "Save"
         bordered: true
@@ -294,7 +294,7 @@ Column {
         fontFamily: ed.fontFamily
         onClicked: ed.saveKey()
       }
-      Button {
+      ActionButton {
         id: clearKey
         visible: ed.keyShown !== ""
         text: "Clear"
@@ -320,11 +320,11 @@ Column {
     onToggled: ed.edited("endpointIsAgent", !checked)
   }
 
-  KnobRow {
+  SliderRow {
     width: parent.width
     foreground: ed.foreground; fontFamily: ed.fontFamily
     label: "Gives up after"
-    description: ed.timeoutS > 0 ? "Seconds with nothing from it before the turn ends."
+    hint: ed.timeoutS > 0 ? "Seconds with nothing from it before the turn ends."
                                  : "Default: 120s, or 300s for an agent. A slow local model may need more."
     value: ed.timeoutS
     minimum: 0; maximum: 600; stepSize: 10
@@ -332,11 +332,11 @@ Column {
     onCommitted: function(v) { ed.edited("endpointTimeoutS", Math.round(v)) }
   }
 
-  KnobRow {
+  SliderRow {
     width: parent.width
     foreground: ed.foreground; fontFamily: ed.fontFamily
     label: "Turns remembered"
-    description: "Earlier turns sent again with each request. Each one is re-read, and re-billed on a paid service."
+    hint: "Earlier turns sent again with each request. Each one is re-read, and re-billed on a paid service."
     value: ed.historyTurns
     minimum: 0; maximum: 50; stepSize: 1
     onCommitted: function(v) { ed.edited("endpointHistoryTurns", Math.round(v)) }
@@ -345,7 +345,7 @@ Column {
   Row {
     width: parent.width
     spacing: Style.space(10)
-    Button {
+    ActionButton {
       id: testButton
       text: testProc.running ? "Testing…" : "Test connection"
       bordered: true

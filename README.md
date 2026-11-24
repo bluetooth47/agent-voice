@@ -1632,7 +1632,6 @@ agent-voice/              <- also the plugin directory once installed
                           Agent details and Communal
   pages/                  one file per settings page, Overview to About
   ui/                     the controls the pages are built from
-  KnobRow.qml             shared slider row
   install.sh
   requirements.txt                   core: vosk, whisper, piper
   requirements-openwakeword.txt      optional second wake engine

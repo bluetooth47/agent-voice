@@ -17,6 +17,9 @@ import qs.Ui
 // The switch shows the new position the moment it is clicked: `checked`
 // comes from the settings store, which shows a change before shell.json
 // has it (ui/SettingsStore).
+//
+// The switch takes the keyboard (ui/FocusSwitch, master plan M29): Tab
+// reaches it, Space flips it, and a screen reader hears the row's label.
 SettingRow {
   id: row
 
@@ -25,11 +28,13 @@ SettingRow {
 
   signal toggled()
 
-  ToggleSwitch {
+  FocusSwitch {
     checked: row.checked
     busy: row.busy
     foreground: row.foreground
     accent: row.accent
+    accessibleName: row.label
+    Accessible.description: row.applies ? row.hint : row.disabledReason
     onToggled: row.toggled()
   }
 }

@@ -24,6 +24,8 @@ FocusScope {
   property string value: ""
   property var options: []
   property string placeholder: "choose"
+  // What a screen reader calls it when `label` is empty (master plan M29).
+  property string accessibleName: ""
   property string disabledReason: ""
   property string tooltip: ""
   property int holdMs: 5000
@@ -60,6 +62,10 @@ FocusScope {
   }
 
   activeFocusOnTab: true
+  Accessible.role: Accessible.ComboBox
+  Accessible.name: accessibleName !== "" ? accessibleName : (label !== "" ? label : placeholder)
+  Accessible.description: disabledReason !== "" ? disabledReason : shown
+  Accessible.focusable: true
   implicitWidth: natural
   implicitHeight: face.implicitHeight
   opacity: enabled && disabledReason === "" ? 1 : 0.5

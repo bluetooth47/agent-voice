@@ -1,8 +1,8 @@
-// The slider bugs, reproduced. A KnobRow inside a short scrolling list, the
+// The slider bugs, reproduced. A SliderRow (KnobRow until M29) inside a short scrolling list, the
 // way Settings.qml holds them, with the shell.json round trip faked: a
 // commit lands back in `value` 800ms later, about what `omarchy bar set`
 // plus the jq reload takes. Every 40ms it logs what the handle shows
-// (PanelSlider.liveValue), what the label shows (KnobRow.shown) and whether
+// (PanelSlider.liveValue), what the label shows (SliderRow.shown) and whether
 // the slider thinks it is still being dragged.
 //
 // It drives itself with synthetic mouse events (QtTest's TestEvent, delivered
@@ -18,6 +18,7 @@ import qs.Commons as Commons
 import qs.Ui
 import QtTest
 import "plugin"
+import "plugin/ui"
 
 ShellRoot {
   Backdrop { }
@@ -49,7 +50,7 @@ ShellRoot {
           id: column
           width: parent.width
           spacing: 20
-          KnobRow {
+          SliderRow {
             id: knob
             objectName: "knob"
             width: parent.width

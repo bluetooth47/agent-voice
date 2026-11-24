@@ -111,7 +111,7 @@ Column {
     spacing: Style.space(6)
     Repeater {
       model: search.filters
-      Button {
+      ActionButton {
         required property var modelData
         readonly property bool on: search.isActive(String(modelData.id))
         text: String(modelData.label || modelData.id)

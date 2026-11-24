@@ -683,6 +683,7 @@ Column {
     height: viewChoice.implicitHeight
     SegmentedChoice {
       id: viewChoice
+      accessibleName: "Show the crew as"
       anchors.left: parent.left
       options: [{ value: "map", label: "Map", tooltip: "The crew drawn: drag to link, click to change." },
                 { value: "table", label: "Table", tooltip: "Every link in a row, every agent with its quarantine switch." }]
@@ -1084,7 +1085,7 @@ Column {
       Flow {
         width: parent.width
         spacing: Style.space(8)
-        Button {
+        ActionButton {
           readonly property bool there: linkInspector.from !== "" && page.linkOf(linkInspector.to, linkInspector.from) !== null
           text: there ? "Go to " + page.labelOf(linkInspector.to) + " → " + page.labelOf(linkInspector.from) : "Also allow the reverse"
           bordered: true
@@ -1170,7 +1171,7 @@ Column {
           fontFamily: page.s.fontFamily
           onChanged: function(v) { agentInspector.linkTo = v }
         }
-        Button {
+        ActionButton {
           text: "Add link"
           bordered: true
           focusable: true
@@ -1193,7 +1194,7 @@ Column {
         onConfirmed: page.quarantineAgent(agentInspector.aid)
         onCancelled: page.quarantineCancelled(agentInspector.aid)
       }
-      Button {
+      ActionButton {
         visible: agentInspector.held
         text: "Release"
         bordered: true
@@ -1316,7 +1317,7 @@ Column {
         fontFamily: page.s.fontFamily
         onChanged: function(v) { adder.addTo = v }
       }
-      Button {
+      ActionButton {
         text: "Add link"
         bordered: true
         focusable: true
@@ -1389,7 +1390,7 @@ Column {
             fontFamily: page.s.fontFamily
             onConfirmed: page.quarantineAgent(arow.aid)
           }
-          Button {
+          ActionButton {
             id: releaseButton
             visible: arow.held
             anchors.right: parent.right
@@ -1457,9 +1458,10 @@ Column {
     }
     Row {
       spacing: Style.space(8)
-      ToggleSwitch {
+      FocusSwitch {
         // Found by name by bench/preview/targets/crew.qml.
         objectName: "askFirst"
+        accessibleName: "Ask me first"
         checked: ed.link !== null && ed.link.askFirst === true
         foreground: ed.pg.s.foreground
         accent: ed.pg.s.accent

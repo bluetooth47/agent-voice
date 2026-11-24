@@ -212,9 +212,9 @@ Column {
     fontFamily: page.s.fontFamily
   }
 
-  SettingsGroup {
+  Card {
     width: parent.width
-    title: "THIS INSTALL"
+    title: "This install"
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
 
@@ -298,7 +298,7 @@ Column {
       fontFamily: page.s.fontFamily
       Row {
         spacing: Style.space(8)
-        Button {
+        ActionButton {
           objectName: "showReport"
           text: page.reportShown ? "Hide" : "Show"
           bordered: true
@@ -308,7 +308,7 @@ Column {
           tooltipText: "Show here exactly what Copy puts on the clipboard"
           onClicked: page.showReport()
         }
-        Button {
+        ActionButton {
           objectName: "copyDiagnostics"
           text: copier.running ? "Copying…" : "Copy"
           iconText: "\u{f018f}"
@@ -351,7 +351,7 @@ Column {
             : "Asks the remote this copy was installed from for its newest commit. Nothing is sent but that question, and only when you click."
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      Button {
+      ActionButton {
         objectName: "checkUpdates"
         text: updater.running ? "Checking…" : "Check"
         bordered: true
@@ -373,7 +373,7 @@ Column {
             "Each starts from what is set now; skipping changes nothing."
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      Button {
+      ActionButton {
         objectName: "runSetup"
         text: "Run setup"
         bordered: true
@@ -385,9 +385,9 @@ Column {
     }
   }
 
-  SettingsGroup {
+  Card {
     width: parent.width
-    title: "RUNS HERE, AND WHAT GOES OUT"
+    title: "Runs here, and what goes out"
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
 
@@ -455,7 +455,7 @@ Column {
               }).join(" · ") + ". Answering is not the same as an agent using it."
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      Button {
+      ActionButton {
         objectName: "probeLocal"
         text: prober.running ? "Looking…" : "Look"
         bordered: true
@@ -468,9 +468,9 @@ Column {
     }
   }
 
-  SettingsGroup {
+  Card {
     width: parent.width
-    title: "VOICE COMMANDS"
+    title: "Voice commands"
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
 
@@ -525,9 +525,9 @@ Column {
     }
   }
 
-  SettingsGroup {
+  Card {
     width: parent.width
-    title: "CHANGES, LICENSE, README"
+    title: "Changes, license, README"
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
 
@@ -553,7 +553,7 @@ Column {
           { name: "LICENSE", label: "License (MIT)" },
           { name: "README.md", label: "README" }
         ]
-        Button {
+        ActionButton {
           required property var modelData
           text: modelData.label
           bordered: true

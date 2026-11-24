@@ -393,7 +393,7 @@ Rectangle {
 
     Row {
       spacing: Style.space(8)
-      Button {
+      ActionButton {
         text: sheet.sending ? "Sending…" : "Send"
         bordered: true
         focusable: true
@@ -403,7 +403,7 @@ Rectangle {
         foreground: sheet.s.foreground
         onClicked: sheet.send()
       }
-      Button {
+      ActionButton {
         text: "Cancel"
         bordered: true
         focusable: true

@@ -144,8 +144,8 @@ def test_the_three_states_are_distinguishable_on_screen():
     # something else again.
     listening = page("Listening")
     at = listening.index('label: "Only wake for my voice"')
-    box = listening[listening.rindex("SettingsGroup {", 0, at):]
-    box = box[:box.index("SettingsGroup {", 20)]
+    box = listening[listening.rindex("Card {", 0, at):]
+    box = box[:box.index("Card {", 20)]
     assert "In use for" in box
     assert "switched off" in box and "The training is kept." in box
     assert "Not trained for" in box

@@ -86,7 +86,7 @@ ShellRoot {
         return i.textFormat !== undefined && i.text !== undefined && String(i.text).indexOf(s) >= 0
       }).length
     }
-    // A row by its label (SettingRow, ToggleRow, KnobRow), and a button in it.
+    // A row by its label (SettingRow, ToggleRow, SliderRow), and a button in it.
     function row(label) {
       return find(content(), function(i) {
         return i.label !== undefined && String(i.label) === label &&

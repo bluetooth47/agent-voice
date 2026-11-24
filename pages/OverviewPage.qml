@@ -172,8 +172,9 @@ Column {
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
 
-    ToggleSwitch {
+    FocusSwitch {
       anchors.verticalCenter: parent.verticalCenter
+      accessibleName: "Voice service"
       visible: page.s.engineInstalled
       checked: page.s.serviceActive
       busy: page.s.serviceBusy
@@ -184,7 +185,7 @@ Column {
 
   // The most important control in the interface when a turn is running:
   // it kills the agent's whole process group, not just the talking.
-  Button {
+  ActionButton {
     visible: page.s.turnRunning
     text: "Stop " + (page.s.lastWho || page.s.mainAgent || "the agent")
     iconText: "\u{f06d7}"
@@ -215,7 +216,7 @@ Column {
       fontFamily: page.s.fontFamily
       onClicked: page.s.runSetup(String(page.s.setupMarker.step || "mic"))
     }
-    Button {
+    ActionButton {
       id: notNow
       objectName: "setupNotNow"
       anchors.verticalCenter: parent.verticalCenter
@@ -228,10 +229,10 @@ Column {
     }
   }
 
-  SettingsGroup {
+  Card {
     width: parent.width
     visible: page.s.problems.length > 0
-    title: "NEEDS ATTENTION"
+    title: "Needs attention"
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
 
@@ -265,16 +266,19 @@ Column {
       Text {
         id: numbersTitle
         anchors.verticalCenter: parent.verticalCenter
-        text: page.week ? "THE LAST 7 DAYS" : "TODAY"
-        color: page.s.dim
+        // A Card's title, in words and weight (master plan M29: the last
+        // capitalised heading left on a page).
+        text: page.week ? "The last 7 days" : "Today"
+        textFormat: Text.PlainText
+        color: page.s.foreground
         font.family: page.s.fontFamily
-        font.pixelSize: Style.font.caption
+        font.pixelSize: Style.font.body
         font.bold: true
-        font.letterSpacing: 1
       }
       SegmentedChoice {
         id: range
         objectName: "overviewRange"
+        accessibleName: "Numbers for"
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
         holdMs: 0
@@ -400,6 +404,7 @@ Column {
     }
     MiniBars {
       objectName: "wakeBars"
+      accessibleName: "Wakes by hour"
       width: parent.width
       values: page.part ? page.part.wake_hours : []
       labels: page.hourLabels()
@@ -432,7 +437,7 @@ Column {
     Item {
       width: parent.width
       height: Math.max(muteButton.implicitHeight, gateLink.implicitHeight)
-      Button {
+      ActionButton {
         id: muteButton
         objectName: "muteButton"
         anchors.left: parent.left
@@ -445,29 +450,23 @@ Column {
         fontFamily: page.s.fontFamily
         onClicked: page.s.toggleMic()
       }
-      Text {
+      TextLink {
         id: gateLink
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
         text: "Listening settings ›"
-        color: gateMouse.containsMouse ? page.s.foreground : page.s.dim
+        foreground: page.s.foreground
+        accent: page.s.accent
+        dim: page.s.dim
         font.family: page.s.fontFamily
-        font.pixelSize: Style.font.caption
-        MouseArea {
-          id: gateMouse
-          anchors.fill: parent
-          anchors.margins: -Style.space(4)
-          hoverEnabled: true
-          cursorShape: Qt.PointingHandCursor
-          onClicked: page.s.goTo("listening", "")
-        }
+        onActivated: page.s.goTo("listening", "")
       }
     }
   }
 
-  SettingsGroup {
+  Card {
     width: parent.width
-    title: "AGENTS"
+    title: "Agents"
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
 
@@ -531,28 +530,25 @@ Column {
 
   // "last chat ›" on an agent's card: opens its newest saved chat on the
   // Chats page. Drawn only for a chat that is really there.
-  component LastChatLink: Text {
+  component LastChatLink: TextLink {
+    id: chatLink
     property string chatId: ""
+    property string who: ""
     visible: chatId !== ""
     anchors.verticalCenter: parent ? parent.verticalCenter : undefined
     text: "last chat ›"
-    color: chatMouse.containsMouse ? page.s.foreground : page.s.dim
+    accessibleName: "Open " + (who !== "" ? who + "'s" : "its") + " last chat"
+    foreground: page.s.foreground
+    accent: page.s.accent
+    dim: page.s.dim
     font.family: page.s.fontFamily
-    font.pixelSize: Style.font.caption
-    MouseArea {
-      id: chatMouse
-      anchors.fill: parent
-      anchors.margins: -Style.space(4)
-      hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
-      onClicked: page.s.showChat(parent.chatId)
-    }
+    onActivated: page.s.showChat(chatLink.chatId)
   }
 
-  SettingsGroup {
+  Card {
     width: parent.width
     visible: page.s.lastTranscript !== ""
-    title: "LAST EXCHANGE"
+    title: "Last exchange"
     foreground: page.s.foreground
     fontFamily: page.s.fontFamily
 
@@ -601,7 +597,7 @@ Column {
         font.pixelSize: Style.font.body
       }
     }
-    Button {
+    ActionButton {
       text: "Open the whole conversation"
       iconText: "\u{f0b79}"
       bordered: true

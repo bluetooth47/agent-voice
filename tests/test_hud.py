@@ -202,15 +202,16 @@ def test_the_switch_opens_the_first_group_on_its_page():
     from qml_sources import page
     display = _code(ROOT / "pages" / "OtherSettingsPage.qml")
     toggle = display.index('label: "Show what it heard and what it answered"')
-    # Group titles are capitals; the page's own title is not one of them.
-    titles = [m.start() for m in re.finditer(r'\n\s+title: "[A-Z][A-Z &-]+"', display)]
+    # Each group is a Card with a title (M29: they were SettingsGroups with
+    # capitals); the page's own title is a PageHeader's.
+    titles = [m.start() for m in re.finditer(r'\n  Card \{', display)]
     assert len(titles) > 1, "the page should be grouped"
     assert titles[0] < toggle < titles[1], "the switch has fallen below another group"
 
     # The switch and the one number it governs are a single setting described
     # twice: how long it stays means nothing when it is not shown. One box.
-    readout = display.index('title: "ON-SCREEN READOUT"')
-    box = display[readout:display.index("SettingsGroup {", readout)]
+    readout = display.index('title: "On-screen readout"')
+    box = display[readout:display.index("Card {", readout)]
     assert "hudLingerMs" in box, "the duration belongs with its switch"
     assert readout < toggle < display.index("hudLingerMs"), \
         "the switch should open the box its duration sits in"
@@ -218,9 +219,9 @@ def test_the_switch_opens_the_first_group_on_its_page():
     # And the knob is dimmed rather than the box hidden, or turning the
     # readout off would take away the only way to turn it back on. Dimmed
     # rather than hidden at all, so the page does not jump.
-    knob = box[box.index("KnobRow {"):]
-    assert 'enabled: page.s.setting("hud", true) === true' in knob
-    assert "visible:" not in box[:box.index("KnobRow {")]
+    knob = box[box.index("SliderRow {"):]
+    assert 'disabledReason: page.s.setting("hud", true) === true ? ""' in knob
+    assert "visible:" not in box[:box.index("SliderRow {")]
     assert page("OtherSettings")
 
 
