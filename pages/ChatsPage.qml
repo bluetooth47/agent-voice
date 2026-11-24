@@ -133,6 +133,7 @@ Column {
     fontFamily: page.s.fontFamily
 
     ToggleRow {
+      objectName: "set-saveChats"
       width: parent.width
       label: "Save conversations"
       hint: "Keep chats on disk so they can be browsed and continued later. Readable by you alone."
@@ -150,6 +151,7 @@ Column {
     }
 
     SettingRow {
+      objectName: "set-chatRetention"
       width: parent.width
       stacked: true
       visible: page.saving
@@ -177,6 +179,7 @@ Column {
     // agent in a quiet side turn once it has been quiet two minutes
     // (daemon/chat_names.py). The cost is the measured one (FINDINGS §52).
     SettingRow {
+      objectName: "set-chatSummaries"
       width: parent.width
       stacked: true
       visible: page.saving
@@ -208,6 +211,7 @@ Column {
     }
 
     ToggleRow {
+      objectName: "set-keepHistory"
       width: parent.width
       label: "Keep this session's conversation"
       hint: "“This session” below. In memory only, readable by you alone, gone at logout."
@@ -268,6 +272,7 @@ Column {
       }
 
       DangerButton {
+        objectName: "deleteAllChats"
         id: purgeButton
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter

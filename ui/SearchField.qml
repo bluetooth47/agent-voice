@@ -37,10 +37,17 @@ Column {
 
   signal searched(string text)
   signal filterToggled(string id, bool on)
+  // Settings search (M28): Enter, and Up/Down while typing, for a list of
+  // results under the box. The Chats page ignores both.
+  signal submitted(string text)
+  signal stepped(int delta)
+  // Whether Up/Down belong to that list. Off, they pass on as before.
+  property bool stepsList: false
 
   function isActive(id) { return active && active.indexOf(id) >= 0 }
   function clear() { search.text = ""; debounce.stop(); searched("") }
-  function focusField() { field.forceActiveFocus() }
+  function focusField() { field.forceActiveFocus(); field.selectAll() }
+  readonly property bool fieldFocused: field.activeFocus
 
   spacing: Style.space(6)
 
@@ -60,7 +67,9 @@ Column {
       leftPadding: horizontalPadding + Style.space(18)
       rightPadding: horizontalPadding + (text !== "" ? Style.space(22) : 0)
       onTextEdited: debounce.restart()
-      onAccepted: { debounce.stop(); search.searched(text) }
+      onAccepted: { debounce.stop(); search.searched(text); search.submitted(text) }
+      Keys.onUpPressed: function(e) { e.accepted = search.stepsList; if (search.stepsList) search.stepped(-1) }
+      Keys.onDownPressed: function(e) { e.accepted = search.stepsList; if (search.stepsList) search.stepped(1) }
       Keys.onEscapePressed: function(e) {
         if (text === "") { e.accepted = false; return }
         search.clear()

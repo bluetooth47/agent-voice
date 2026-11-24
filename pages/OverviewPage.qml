@@ -163,6 +163,7 @@ Column {
   // seconds to come back. The microphone card below has the other control,
   // the mute, which releases the mic and keeps everything warm.
   StatusCard {
+    objectName: "serviceSwitch"
     width: parent.width
     icon: !page.s.serviceActive || page.s.vState === "off" ? "\u{f036d}" : "\u{f036c}"
     title: "Voice service"
@@ -192,6 +193,39 @@ Column {
     accent: page.s.urgent
     fontFamily: page.s.fontFamily
     onClicked: page.s.stopTurn()
+  }
+
+  // Master plan M28: first-run setup that was skipped or closed part way.
+  // A line here, never setup itself again: it is offered by itself once.
+  // "Not now" stops the reminding; About → Run setup again still runs it.
+  Row {
+    objectName: "setupReminder"
+    width: parent.width
+    visible: page.s.setupUnfinished
+    spacing: Style.space(10)
+    StatusCard {
+      width: parent.width - notNow.width - parent.spacing
+      icon: "\u{f0493}"
+      title: "Setup is not finished"
+      subtitle: "Left at step " + (Math.max(0, page.s.setupSteps.indexOf(String(page.s.setupMarker.step || "mic"))) + 1) +
+                " of 4."
+      status: "finish ›"
+      clickable: true
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onClicked: page.s.runSetup(String(page.s.setupMarker.step || "mic"))
+    }
+    Button {
+      id: notNow
+      objectName: "setupNotNow"
+      anchors.verticalCenter: parent.verticalCenter
+      text: "Not now"
+      bordered: true
+      focusable: true
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      onClicked: page.s.dismissSetup()
+    }
   }
 
   SettingsGroup {
@@ -400,6 +434,7 @@ Column {
       height: Math.max(muteButton.implicitHeight, gateLink.implicitHeight)
       Button {
         id: muteButton
+        objectName: "muteButton"
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
         visible: page.s.serviceActive

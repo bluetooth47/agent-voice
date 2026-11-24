@@ -32,6 +32,7 @@ SearchField 1.0 SearchField.qml
 SegmentedChoice 1.0 SegmentedChoice.qml
 SendSheet 1.0 SendSheet.qml
 SettingRow 1.0 SettingRow.qml
+SettingsSearch 1.0 SettingsSearch.qml
 SettingsStore 1.0 SettingsStore.qml
 SidebarNav 1.0 SidebarNav.qml
 SkillCard 1.0 SkillCard.qml

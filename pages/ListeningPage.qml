@@ -350,6 +350,7 @@ Column {
       }
 
       SettingRow {
+        objectName: "set-adaptiveGate"
         width: parent.width
         label: "Gate"
         hint: page.adaptive
@@ -393,6 +394,7 @@ Column {
       }
 
       SettingRow {
+        objectName: "set-gateSpeed"
         width: parent.width
         visible: page.adaptive
         stacked: true
@@ -424,6 +426,7 @@ Column {
       // gate fixed (the default) it is the stage's only control, and the meter
       // is there to set it by eye.
       KnobRow {
+        objectName: "set-micThresholdDb"
         width: parent.width
         foreground: page.s.foreground; fontFamily: page.s.fontFamily
         label: page.adaptive ? "Fixed gate (until it has heard the room)" : "Microphone gate"
@@ -458,6 +461,7 @@ Column {
         fontFamily: page.s.fontFamily
 
         KnobRow {
+          objectName: "set-gateMarginDb"
           width: parent.width
           foreground: page.s.foreground; fontFamily: page.s.fontFamily
           label: "Margin above the room"
@@ -537,6 +541,7 @@ Column {
       fontFamily: page.s.fontFamily
 
       SettingRow {
+        objectName: "set-engine"
         width: parent.width
         stacked: true
         label: "Engine"
@@ -619,6 +624,7 @@ Column {
       // Each engine's sensitivity. Vosk has none of its own here: its grammar
       // confidence is a decision, so it is in stage 4.
       KnobRow {
+        objectName: "set-owwThresholdPct"
         width: parent.width
         visible: page.s.owwLive
         foreground: page.s.foreground; fontFamily: page.s.fontFamily
@@ -639,6 +645,7 @@ Column {
       // sherpa-onnx shares Vosk's phrase -- both take it as text -- but not its
       // confidence bar: it has a keyword threshold of its own.
       KnobRow {
+        objectName: "set-sherpaThresholdPct"
         width: parent.width
         visible: page.s.sherpaLive
         foreground: page.s.foreground; fontFamily: page.s.fontFamily
@@ -679,6 +686,7 @@ Column {
         visible: page.s.sherpaLive
 
         KnobRow {
+          objectName: "set-shortNameBoostPct"
           width: parent.width
           foreground: page.s.foreground; fontFamily: page.s.fontFamily
           label: "Short-name boost"
@@ -789,6 +797,7 @@ Column {
           // it was written and nothing passed it, so the only way to stop verifying
           // was to delete the .joblib -- which also threw the training away.
           ToggleRow {
+            objectName: "set-useVerifier"
             width: parent.width
             label: "Only wake for my voice"
             hint: "Off lets anyone wake it. Your training stays on disk."
@@ -922,6 +931,7 @@ Column {
         fontFamily: page.s.fontFamily
 
         KnobRow {
+          objectName: "set-crossCheckMinMs"
           width: parent.width
           foreground: page.s.foreground; fontFamily: page.s.fontFamily
           label: "Shortest burst"
@@ -936,6 +946,7 @@ Column {
         }
 
         KnobRow {
+          objectName: "set-crossCheckMaxMs"
           width: parent.width
           foreground: page.s.foreground; fontFamily: page.s.fontFamily
           label: "Longest burst"
@@ -951,6 +962,7 @@ Column {
         }
 
         KnobRow {
+          objectName: "set-crossCheckTrailingWords"
           width: parent.width
           visible: page.ccEngines !== "vosk"
           foreground: page.s.foreground; fontFamily: page.s.fontFamily
@@ -968,6 +980,7 @@ Column {
         }
 
         ToggleRow {
+          objectName: "set-crossCheckWhisperHint"
           width: parent.width
           visible: page.ccEngines !== "vosk"
           label: "Tell Whisper the names"
@@ -995,6 +1008,7 @@ Column {
       fontFamily: page.s.fontFamily
 
       SettingRow {
+        objectName: "set-wakeDecision"
         width: parent.width
         stacked: true
         label: "When a wake counts"
@@ -1052,6 +1066,7 @@ Column {
       // Vosk's own bar: with no second check, its grammar's confidence is
       // the decision.
       KnobRow {
+        objectName: "set-wakeConfidencePct"
         width: parent.width
         visible: !page.s.owwLive && !page.s.sherpaLive
         foreground: page.s.foreground; fontFamily: page.s.fontFamily
@@ -1087,6 +1102,7 @@ Column {
   // --- testing it ------------------------------------------------------------------
   // Not a stage: it runs the whole pipeline, as set above.
   SettingsGroup {
+    objectName: "wakeTestGroup"
     width: parent.width
     title: "TEST MY WAKE WORD"
     foreground: page.s.foreground

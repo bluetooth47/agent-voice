@@ -60,6 +60,9 @@ FocusScope {
 
   function reveal() {
     Qt.callLater(function() {
+      // The page may have been left (and this destroyed) in between: Settings
+      // search opens an agent's tab and moves on within a frame (M28).
+      if (!tabs || typeof tabs.indexOf !== "function") return
       var i = tabs.indexOf(tabs.current)
       if (i >= 0) list.positionViewAtIndex(i, ListView.Contain)
     })

@@ -6,6 +6,28 @@ Newest first. The version in `manifest.json` has been 0.2.0 throughout the
 redesign round; builds are told apart by commit (About shows both the
 settings' and the service's).
 
+## M28 · Settings search, and first-run setup (2026-11-23)
+
+- **Settings search**: a box at the top of the settings sidebar (Ctrl+F).
+  "pause" finds the pause that ends a turn; Enter opens its page, unfolds the
+  Advanced section it is folded in, scrolls to it, outlines it and puts the
+  keyboard on it. Every setting is in the index, one agent's settings once
+  per agent, with the words people look for them by; a setting not shown for
+  the current choice (an engine's threshold) still opens its page and says
+  why it is not there. A test fails when a setting has no entry, or its
+  entry names a page other than the one that changes it.
+- **First-run setup**: on a fresh install (no settings, no agent folder, the
+  service never started) the settings open on four steps: microphone (level
+  and gate), wake word (engine, phrase, and three tries through the wake
+  test), your agent (the programs found, a name), done. Each step starts
+  from what is set and writes only what is changed in it; Skip changes
+  nothing. Never on a configured install, and only once by itself: the
+  Overview offers to finish it, and About has **Run setup again**. A marker
+  in `~/.local/state/agentvoice/setup.json` remembers it, outside the
+  settings; an older build ignores it.
+- Fixed: a deep link to Communal's "Who gets it" or "Preview" tab opened
+  Rules instead (the summons did not know the two tabs M15 added).
+
 ## M27 · Agents speak up when background work finishes (2026-11-23)
 
 - **When background work finishes, the agent that started it says one short

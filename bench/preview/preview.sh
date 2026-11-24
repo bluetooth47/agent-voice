@@ -38,6 +38,10 @@
 #                  on PATH becomes a stub that answers is-active with yes and
 #                  does nothing else, so no real service is started or
 #                  stopped. For screenshots of states the machine is not in.
+#   --service-off  show the daemon as never started (M28: a fresh install,
+#                  for first-run setup): a scratch runtime directory with no
+#                  state file, and an `agentvoice` stub that answers
+#                  is-active with no. Starting the service is logged.
 #   --live-config  give it a scratch copy of shell.json (XDG_CONFIG_HOME points
 #                  at it) and make the stub *apply* each `bar set` there with
 #                  jq, so a write comes back through the store's reload the
@@ -60,7 +64,7 @@ repo=$(cd "$here/../.." && pwd)
 shell_src="${OMARCHY_PATH:-/usr/share/omarchy}/shell"
 themes="${OMARCHY_PATH:-/usr/share/omarchy}/themes"
 
-theme="" out="" size="" wait=3 shots=1 gap=1.5 arg="" keep=0 state="" live=0 scratch=0 cfgfile=""
+theme="" out="" size="" wait=3 shots=1 gap=1.5 arg="" keep=0 state="" live=0 scratch=0 cfgfile="" off=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --theme) theme=$2; shift 2 ;;
@@ -71,11 +75,12 @@ while [ $# -gt 0 ]; do
     --gap) gap=$2; shift 2 ;;
     --arg) arg=$2; shift 2 ;;
     --state) state=$(realpath "$2"); shift 2 ;;
+    --service-off) off=1; shift ;;
     --keep) keep=1; shift ;;
     --live-config) live=1; shift ;;
     --config) cfgfile=$(realpath "$2"); live=1; shift 2 ;;
     --scratch-data) scratch=1; shift ;;
-    -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,38p' "$0"; exit 0 ;;
     -*) echo "unknown option: $1" >&2; exit 2 ;;
     *) break ;;
   esac
@@ -160,6 +165,15 @@ EOF
 chmod +x "$tmp/bin/omarchy"
 
 runtime_env=()
+if [ "$off" -eq 1 ] && [ -n "$state" ]; then echo "--service-off and --state contradict each other" >&2; exit 2; fi
+if [ "$off" -eq 1 ]; then
+  mkdir -p "$tmp/run/agentvoice"
+  chmod 700 "$tmp/run"
+  printf '#!/usr/bin/env bash\n[ "${1:-}" = is-active ] && echo no\nexit 0\n' > "$tmp/bin/agentvoice.rest"
+  chmod +x "$tmp/bin/agentvoice.rest"
+  runtime_env=(XDG_RUNTIME_DIR="$tmp/run"
+               WAYLAND_DISPLAY="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/${WAYLAND_DISPLAY:-wayland-0}")
+fi
 if [ -n "$state" ]; then
   mkdir -p "$tmp/run/agentvoice"
   chmod 700 "$tmp/run"
@@ -513,6 +527,8 @@ else
 fi
 
 [ "$live" -eq 1 ] && cp "$tmp/config/omarchy/shell.json" "$out.shell.json.after"
+# First-run setup's marker (M28), if a preview wrote one.
+if [ -f "$tmp/xdgstate/agentvoice/setup.json" ]; then cp "$tmp/xdgstate/agentvoice/setup.json" "$out.setup.json"; else rm -f "$out.setup.json"; fi
 # The Crew map's layout, if a preview saved one.
 if [ -f "$tmp/xdgstate/agentvoice/crew-layout.json" ]; then cp "$tmp/xdgstate/agentvoice/crew-layout.json" "$out.layout.json"; else rm -f "$out.layout.json"; fi
 

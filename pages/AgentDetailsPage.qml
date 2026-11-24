@@ -1061,6 +1061,7 @@ Column {
   }
 
   Column {
+    objectName: "toolsTab"
     id: toolsTab
     width: parent.width
     spacing: Style.space(10)
@@ -1404,6 +1405,7 @@ Column {
     }
 
     Text {
+      objectName: "skillsHeading"
       width: parent.width
       topPadding: Style.space(8)
       text: "Skills"
@@ -2447,6 +2449,7 @@ Column {
     // at launch; one refused is never saved, and one saved past the page
     // stops its program from starting, with the reason, until removed.
     SettingRow {
+      objectName: "set-extraArgs"
       id: flagsRow
       width: parent.width
       stacked: true
@@ -2618,6 +2621,7 @@ Column {
 
     // Phase M17: environment variables, in a 0600 file. Names only are shown.
     SettingRow {
+      objectName: "agentEnv"
       id: envRow
       width: parent.width
       stacked: true
@@ -2811,6 +2815,7 @@ Column {
     // session (the daemon decides, turn by turn); Start fresh ends this
     // agent's conversation only, and its "allow all in this chat" with it.
     ToggleRow {
+      objectName: "set-resume"
       width: parent.width
       visible: !page.reserved && !page.endpointAgent
       label: "Resume its conversation"
@@ -2870,6 +2875,7 @@ Column {
     // Phase M17: the hung-turn limit, per agent (an endpoint's is on the
     // Agents page, with the rest of its endpoint).
     KnobRow {
+      objectName: "set-idleTimeoutS"
       width: parent.width
       visible: !page.reserved && !page.endpointAgent
       foreground: page.s.foreground

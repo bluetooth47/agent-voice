@@ -8,7 +8,10 @@ shows the gate, the Agents card names the voice) is fine; a second control
 for it is the scattering coming back.
 
 The popup's five quick toggles and voice are the deliberate exception, and
-live in Panel.qml, not in pages/. Its permission level was one too until M3
+live in Panel.qml, not in pages/. First-run setup (Setup.qml, master plan
+M28) is the other: a walk through seven keys whose homes are the Listening
+and Agents pages, written through the overlay's put() and held below to
+exactly those seven. Its permission level was one too until M3
 removed it (bug D): permissions are per agent, with one home on the Agents
 page. So is the Voice page's
 library, whose "Use for" sets an agent's voice: it goes through the overlay's
@@ -151,7 +154,17 @@ OUTSIDE_WRITERS: dict[tuple[str, str], set[str]] = {
     ("Settings.qml", "function trainVerifier"): {"engine"},
     ("AgentFolders.qml", "function saveAgents"): {"voiceAgents"},
     ("Panel.qml", "*"): {"voice"},
+    # Master plan M28: first-run setup. Not a page: each of these keys keeps
+    # its one home (Listening, Agents) and setup is a guided shortcut to it.
+    ("Setup.qml", "*"): set(),          # filled from SETUP_KEYS below
 }
+
+# The keys first-run setup may write, and the only ones: the gate, the wake
+# word and the main agent's program and name. Never a permission level, an
+# agent folder, another agent, an endpoint or a voice.
+SETUP_KEYS = {"adaptiveGate", "micThresholdDb", "engine", "phrase", "owwModel",
+              "mainProgram", "mainName"}
+OUTSIDE_WRITERS[("Setup.qml", "*")] = SETUP_KEYS
 
 DEFAULTS_ONLY = {"agentEfforts", "agentModels", "mainTools", "permissions",
                  "voiceAgents", "wakeAlsoSounds",
@@ -322,7 +335,8 @@ def test_settings_written_outside_the_pages_go_through_named_functions():
     from qml_scan import scan
     declared = _declared() | _defaults_only()
     wrong = []
-    for name in ("Settings.qml", "Panel.qml", "AgentFolders.qml", "Chats.qml", "Hud.qml"):
+    for name in ("Settings.qml", "Panel.qml", "AgentFolders.qml", "Chats.qml", "Hud.qml",
+                 "Setup.qml"):
         path = ROOT / name
         if not path.exists():
             continue
@@ -360,3 +374,80 @@ def test_the_popup_no_longer_writes_a_permission_level():
         assert gone not in panel, gone
     agents = (ROOT / "pages" / "AgentsPage.qml").read_text()
     assert re.search(r'\b(?:put|putMap)\("permissions"', agents), "its one home"
+
+
+# --- first-run setup (master plan M28) ---------------------------------------
+
+def _setup_writes(path: Path) -> dict[str, list[int]]:
+    """Every key Setup.qml writes, with the lines, however it is written: a
+    put/set/putMap with a literal key, an `omarchy bar set`, or a put whose
+    key is not a literal at all (which could be anything)."""
+    from qml_scan import scan
+    s = scan(path)
+    out: dict[str, list[int]] = {}
+    for m in re.finditer(r"\b(?:put|set|putMap|resetKey)\(\s*([^,)]*)", s.nocomment):
+        if s.clean[m.start()] != s.src[m.start()]:
+            continue
+        arg = m.group(1).strip()
+        lit = re.fullmatch(r'"(\w+)"', arg)
+        key = lit.group(1) if lit else f"<not a literal: {arg}>"
+        out.setdefault(key, []).append(s.lineno(m.start()))
+    for m in re.finditer(r'"omarchy"\s*,\s*"bar"|omarchy bar set', s.nocomment):
+        out.setdefault("<omarchy bar>", []).append(s.lineno(m.start()))
+    return out
+
+
+def test_setup_writes_exactly_the_keys_it_is_allowed():
+    """The documented exception, held both ways: nothing outside SETUP_KEYS,
+    and each of them really written (a key dropped from setup should be
+    dropped from the list, so the list keeps saying what setup does)."""
+    writes = _setup_writes(ROOT / "Setup.qml")
+    assert set(writes) == SETUP_KEYS, {k: v for k, v in writes.items() if k not in SETUP_KEYS}
+
+
+def test_setup_reaches_nothing_else_that_changes_settings_or_folders():
+    """No agent list, folder, tool, skill or launch field, and no process but
+    the one read-only `agentvoice about backends`."""
+    from qml_scan import scan
+    s = scan(ROOT / "Setup.qml")
+    for call in ("updateAgent(", "saveAgents(", "folders.", "setAgentTool(", "setAgentSkill(",
+                 "setAgentField(", "assignVoice(", "removeEverything(", "resetKey("):
+        assert not s.calls(call), call
+    commands = re.findall(r"command:\s*(\[[^\]]*\])", s.nocomment)
+    assert commands == ['["agentvoice", "about", "backends", "--json"]'], commands
+
+
+def test_the_setup_exception_catches_a_key_it_may_not_write(tmp_path):
+    """Mutation: the same file with one more put, of a voice, and with a put
+    whose key is computed, each fails the rule above."""
+    src = (ROOT / "Setup.qml").read_text()
+    anchor = "  function setPhrase(text) {"
+    assert anchor in src
+    for extra, bad in (('    s.put("voice", "ryan-medium")\n', "voice"),
+                       ('    s.put(text, 1)\n', "<not a literal: text>")):
+        mutant = tmp_path / "Setup.qml"
+        mutant.write_text(src.replace(anchor, anchor + "\n" + extra, 1))
+        assert bad in set(_setup_writes(mutant)) - SETUP_KEYS
+
+
+def test_setup_is_offered_by_itself_only_when_everything_says_fresh():
+    """Risk in the plan: setup overwriting a working agent, or reappearing at
+    every login. It is offered by itself only when each of these is known to
+    say "fresh", and only for a summons that asked for nothing; dropping any
+    one of them fails here."""
+    s = (ROOT / "Settings.qml").read_text()
+    start = s.index("readonly property bool setupFresh:")
+    expr = s[start:s.index("onSetupFreshChanged", start)]
+    for term in ("setupMarkerRead", "setupMarker.status === undefined", "store.loaded",
+                 "Object.keys(defaults).length > 0", "folders.foldersRead", "serviceKnown",
+                 "engineInstalled", "!serviceActive", "!hasAgentFolder", "voiceAgents.length === 0",
+                 '!changed("mainName")', '!changed("mainProgram")', '!changed("phrase")',
+                 '!changed("engine")', '!changed("owwModel")'):
+        assert term in expr, term
+    offer = s[s.index("function offerSetup()"):]
+    offer = offer[:offer.index("\n  }")]
+    assert "!plainOpen || !setupFresh" in offer and "plainOpen = false" in offer
+    run = s[s.index("function runSetup("):]
+    run = run[:run.index("\n  }")]
+    # The marker is written the moment it is shown, so it is not offered again.
+    assert 'saveSetup("open"' in run

@@ -427,7 +427,7 @@ Item {
     id: activeProbe
     command: ["agentvoice", "is-active"]
     stdout: StdioCollector {
-      onStreamFinished: root.serviceActive = String(text).trim() === "yes"
+      onStreamFinished: { root.serviceActive = String(text).trim() === "yes"; root.serviceKnown = true }
     }
   }
   Timer {
@@ -950,6 +950,8 @@ Item {
     try {
       p = JSON.parse(payloadJson || "{}") || {}
       if (p.mode === "permission") mode = "permission"
+      // Master plan M28: first-run setup, asked for by name.
+      if (p.mode === "setup") mode = "setup"
       // The conversation view is the Chats page since phase M18; a summon
       // from an older bar or HUD still says "history".
       if (p.mode === "history") p.page = "chats"
@@ -959,6 +961,14 @@ Item {
     } catch (e) { p = {} }
 
     opened = true
+    // Only a summons that asked for nothing in particular may be taken over
+    // by first-run setup (offerSetup), and only this once.
+    plainOpen = mode === "settings" && !p.page && !p.focus && !p.chat && !p.id
+    if (mode === "setup") {
+      showPage("settings")
+      runSetup(String(p.step || "mic"))
+      return
+    }
     if (mode === "permission") {
       // Reset, both of them. `request` held the previous question until the
       // probe came back, and `secondsLeft` held the previous countdown --
@@ -989,11 +999,15 @@ Item {
       // A deep link: {"page": "agents", "agent": "sarah"} opens that card.
       if (mode === "settings") {
         goTo(String(p.page || "overview"), String(p.agent || ""),
-             /^(prompt|tools|notes|chats|advanced|rules|skills)$/.test(String(p.tab || "")) ? String(p.tab) : "")
+             // Every tab goTo() opens: Communal's "who" and "preview" (M15)
+             // were missing here, so a deep link to them landed on Rules.
+             /^(prompt|tools|notes|chats|advanced|rules|who|preview|skills)$/.test(String(p.tab || "")) ? String(p.tab) : "")
         // A setting's key and nothing else: it is compared, never run.
         if (/^[A-Za-z]{1,40}$/.test(String(p.focus || ""))) focusKey = String(p.focus)
       }
       showPage(mode)
+      setupFile.reload()
+      offerSetup()
     }
   }
 
@@ -1018,6 +1032,10 @@ Item {
     for (var i = 0; i < pages.length; i++) if (pages[i].id === pageId) known = true
     page = known ? pageId : "overview"
     focusKey = ""
+    // A search result's outline and note belong to the page it opened.
+    flashItem = null
+    revealing = null
+    searchNote = ""
     // {"page": "agentdetails", "agent": "sora"} opens that agent's details,
     // on its first tab unless "tab" names another.
     if (page === "agentdetails") {
@@ -1034,6 +1052,215 @@ Item {
     mode = "settings"
     Qt.callLater(function() { if (pageScroll) pageScroll.contentY = 0 })
   }
+
+  // --- first-run setup (master plan M28) -----------------------------------------
+  // Setup.qml, drawn in place of the sidebar and page while `mode` is
+  // "setup". Offered by itself once, on a fresh install: no marker yet, no
+  // agent folder (the daemon makes agents/main the first time it starts),
+  // the service not running, and none of the agent settings setup asks
+  // about changed. Every one of those must be known, not assumed: until the
+  // folders, the settings and the service have all answered, it is not
+  // offered. And never on a configured install, because any one of them
+  // says it is configured.
+  //
+  // The marker is UI state, outside the plugin and outside shell.json:
+  // $XDG_STATE_HOME/agentvoice/setup.json, {"status": open | skipped |
+  // done | dismissed, "step": mic | wake | agent | done}. It is written the
+  // moment setup is shown, so a setup closed with Esc is never put in front
+  // of anyone again by itself; the Overview offers to finish it instead. An
+  // older build does not read it. Skipping writes the marker and no setting.
+  readonly property string stateHome:
+      Quickshell.env("XDG_STATE_HOME") || ((Quickshell.env("HOME") || "") + "/.local/state")
+  readonly property string setupPath: stateHome + "/agentvoice/setup.json"
+  readonly property var setupSteps: ["mic", "wake", "agent", "done"]
+  property var setupMarker: ({})
+  property bool setupMarkerRead: false
+  property string setupStep: "mic"
+  // Whether `agentvoice is-active` has answered since the overlay loaded.
+  property bool serviceKnown: false
+  // Set by open() for a summons that asked for nothing in particular; the
+  // only kind setup may take over, and only once per summons.
+  property bool plainOpen: false
+  function parseSetup(text) {
+    var d
+    try { d = JSON.parse(String(text || "")) } catch (e) { return ({}) }
+    if (!d || typeof d !== "object" || Array.isArray(d)) return ({})
+    var status = ["open", "skipped", "done", "dismissed"].indexOf(d.status) >= 0 ? d.status : ""
+    var step = root.setupSteps.indexOf(d.step) >= 0 ? d.step : "mic"
+    // A file that exists but says nothing readable still counts as a
+    // marker: setup was seen, and is not to be put up again by itself.
+    return { status: status || "open", step: step }
+  }
+  FileView {
+    id: setupFile
+    path: root.setupPath
+    printErrors: false
+    watchChanges: true
+    property bool retried: false
+    onFileChanged: reload()
+    onLoaded: { root.setupMarker = root.parseSetup(text()); root.setupMarkerRead = true; root.offerSetup() }
+    onLoadFailed: { root.setupMarker = ({}); root.setupMarkerRead = true; root.offerSetup() }
+    // The folder may not be there on a first save: made, then once more.
+    onSaveFailed: if (!retried) { retried = true; setupDir.running = true }
+  }
+  property string setupPending: ""
+  Process {
+    id: setupDir
+    command: ["mkdir", "-p", root.setupPath.replace(/\/[^\/]*$/, "")]
+    onExited: if (root.setupPending !== "") setupFile.setText(root.setupPending)
+  }
+  function saveSetup(status, step) {
+    var text = JSON.stringify({ version: 1, status: status, step: step,
+                                at: new Date().toISOString() }) + "\n"
+    setupPending = text
+    root.setupMarker = { status: status, step: step }
+    setupFile.setText(text)
+  }
+  readonly property bool hasAgentFolder: {
+    for (var t in folders.folders) if (t !== "communal") return true
+    return false
+  }
+  readonly property bool setupFresh:
+      setupMarkerRead && setupMarker.status === undefined
+      // The manifest's defaults too: changed() reads every key as
+      // unchanged until they have loaded.
+      && store.loaded && Object.keys(defaults).length > 0 && folders.foldersRead && serviceKnown
+      && engineInstalled && !serviceActive && !hasAgentFolder
+      && voiceAgents.length === 0
+      && !changed("mainName") && !changed("mainProgram") && !changed("phrase")
+      && !changed("engine") && !changed("owwModel")
+  onSetupFreshChanged: offerSetup()
+  function offerSetup() {
+    if (!plainOpen || !setupFresh || !opened || mode !== "settings" || page !== "overview") return
+    plainOpen = false
+    runSetup("mic")
+  }
+  // From About's "Run setup again", the Overview's "Finish setting up" and
+  // a {"mode": "setup"} summons. Starts from what is set now.
+  function runSetup(step) {
+    plainOpen = false
+    setupStep = setupSteps.indexOf(step) >= 0 ? step : "mic"
+    mode = "setup"
+    saveSetup("open", setupStep)
+  }
+  function setupGo(step) {
+    if (setupSteps.indexOf(step) < 0) return
+    setupStep = step
+    saveSetup("open", step)
+  }
+  // Out of setup: "done" from its last step, "skipped" from any other,
+  // remembering where it was so it can be finished later. Nothing else.
+  function leaveSetup(status) {
+    saveSetup(status === "done" ? "done" : "skipped", setupStep)
+    mode = "settings"
+    goTo("overview", "")
+  }
+  // The Overview's "Not now" on its reminder: no more reminding.
+  function dismissSetup() { saveSetup("dismissed", String(setupMarker.step || "mic")) }
+  readonly property bool setupUnfinished: setupMarker.status === "open" || setupMarker.status === "skipped"
+
+  // --- settings search (master plan M28) ----------------------------------------
+  // A result from ui/SettingsSearch: open its page (and agent, and tab), then
+  // find its control by objectName, unfold whatever folds it away (an
+  // Advanced section, a folded card, an agent's strip), scroll to it, outline
+  // it for a moment and give it the keyboard. The page is built a moment
+  // after goTo(), and an agent's cards after the strip opens, so the search
+  // for the control is retried for about two seconds before giving up -- and
+  // giving up says so, under the search box.
+  property var revealing: null
+  property int revealTries: 0
+  property string searchNote: ""
+  // The agents as search lists them: the main one first, as "main".
+  readonly property var searchAgents: {
+    var out = [{ id: "main", label: root.mainLabel }]
+    for (var i = 0; i < root.voiceAgents.length; i++) {
+      var a = root.voiceAgents[i] || {}
+      out.push({ id: root.agentId(a), label: root.agentLabel(a) || "New agent" })
+    }
+    return out
+  }
+  function reveal(r) {
+    if (!r || typeof r !== "object") return
+    searchNote = ""
+    if (r.kind === "page" || String(r.anchor || "") === "") { goTo(String(r.page), ""); return }
+    goTo(String(r.page), String(r.agent || ""), String(r.tab || ""))
+    revealing = r
+    revealTries = 0
+    revealTimer.restart()
+  }
+  // Depth first through the visual tree, `item` included.
+  function findNamed(item, name) {
+    if (!item) return null
+    if (item.objectName === name) return item
+    var kids = item.children || []
+    for (var i = 0; i < kids.length; i++) {
+      var hit = findNamed(kids[i], name)
+      if (hit) return hit
+    }
+    return null
+  }
+  // The first thing under `item` (or it) that takes the keyboard.
+  function firstFocusable(item) {
+    if (!item || item.visible === false || item.enabled === false) return null
+    if (item.activeFocusOnTab === true) return item
+    var kids = item.children || []
+    for (var i = 0; i < kids.length; i++) {
+      var hit = firstFocusable(kids[i])
+      if (hit) return hit
+    }
+    return null
+  }
+  function shownOnScreen(item) {
+    for (var a = item; a && a !== pageLoader; a = a.parent)
+      if (a.visible === false) return false
+    return true
+  }
+  Timer {
+    id: revealTimer
+    interval: 120
+    onTriggered: root.revealStep()
+  }
+  function revealStep() {
+    var r = revealing
+    if (!r || !opened || mode !== "settings" || page !== String(r.page)) { revealing = null; return }
+    var top = pageLoader.item
+    var scope = top
+    if (top && String(r.page) === "agents" && String(r.agent || "") !== "")
+      scope = findNamed(top, "agent-" + String(r.agent))
+    var target = scope ? findNamed(scope, String(r.anchor)) : null
+    if (!target) {
+      if (++revealTries < 16) { revealTimer.restart(); return }
+      revealing = null
+      searchNote = "Could not find “" + String(r.label) + "” on this page."
+      return
+    }
+    // Unfold from the control outwards; a fold that opened lays out on the
+    // next frame, so look again after it before measuring anything.
+    var unfolded = false
+    for (var a = target.parent; a && a !== pageLoader; a = a.parent)
+      if (a.expanded === false && typeof a.flip === "function") { a.flip(); unfolded = true }
+    if (unfolded && ++revealTries < 16) { revealTimer.restart(); return }
+    revealing = null
+    var shown = target
+    if (!shownOnScreen(target)) {
+      while (shown && shown !== pageLoader && !shownOnScreen(shown)) shown = shown.parent
+      searchNote = "“" + String(r.label) + "” is not on screen right now" +
+                   (String(r.when || "") !== "" ? ": it is shown when " + String(r.when) + "." : ".")
+      if (!shown || shown === pageLoader) shown = top
+    }
+    flashItem = shown
+    flashBox.place()
+    flashOff.restart()
+    var y = shown.mapToItem(formScroll.contentItem, 0, 0).y
+    formScroll.contentY = Math.max(0, Math.min(y - Style.space(90), formScroll.contentHeight - formScroll.height))
+    flashBox.place()
+    var f = shown === target ? firstFocusable(target) : null
+    if (f) f.forceActiveFocus()
+    else card.forceActiveFocus()
+  }
+  // The outline drawn round the control found, for a moment.
+  property Item flashItem: null
+  Timer { id: flashOff; interval: 2600; onTriggered: root.flashItem = null }
 
   // Into the settings, from open(). Not from a permission prompt: that card
   // is a question with a countdown, and wandering off it is not an answer.
@@ -1826,7 +2053,8 @@ Item {
       // The settings get a sidebar and room beside it, the Chats page a
       // little more, for a list and a chat side by side (M18); the prompt is
       // one question.
-      width: Math.min(Style.space(root.mode === "permission" ? 560 : root.page === "chats" ? 980 : 880),
+      width: Math.min(Style.space(root.mode === "permission" ? 560 : root.mode === "setup" ? 880
+                                  : root.page === "chats" ? 980 : 880),
                       parent.width - Style.gapsOut * 2)
       height: root.mode === "permission"
               ? Math.min(Style.space(300), parent.height - Style.gapsOut * 2)
@@ -1845,6 +2073,12 @@ Item {
       // since Chats made eleven (M18) -- is still reachable from the keyboard.
       Keys.onPressed: function(e) {
         if (root.mode !== "settings" || !(e.modifiers & Qt.ControlModifier)) return
+        // Master plan M28: Ctrl+F is the search box at the top of the sidebar.
+        if (e.key === Qt.Key_F) {
+          settingsSearch.focusField()
+          e.accepted = true
+          return
+        }
         var n = root.pageForKey(e.key)
         if (n >= 0 && n < root.pages.length) {
           root.goTo(root.pages[n].id, "")
@@ -1867,7 +2101,7 @@ Item {
             id: titleText
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            text: root.mode === "permission" ? "Allow this?" : "Agent Voice"
+            text: root.mode === "permission" ? "Allow this?" : root.mode === "setup" ? "Set up Agent Voice" : "Agent Voice"
             color: root.mode === "permission" ? root.urgent : root.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.title
@@ -2071,10 +2305,29 @@ Item {
           width: parent.width
           height: body.height - y
 
+          // Master plan M28: search every page, above the page list.
+          SettingsSearch {
+            id: settingsSearch
+            anchors.left: parent.left
+            anchors.top: parent.top
+            width: sidebar.width
+            resultsWidth: Math.min(Style.space(440), settingsArea.width - Style.space(12))
+            pages: root.pages
+            agents: root.searchAgents
+            note: root.searchNote
+            foreground: root.foreground
+            accent: root.accent
+            urgent: root.urgent
+            background: root.background
+            fontFamily: root.fontFamily
+            onChosen: function(r) { root.reveal(r) }
+          }
+
           SidebarNav {
             id: sidebar
             anchors.left: parent.left
-            anchors.top: parent.top
+            anchors.top: settingsSearch.bottom
+            anchors.topMargin: Style.space(8)
             width: Style.space(170)
             pages: root.pages
             current: root.page
@@ -2115,7 +2368,7 @@ Item {
             Text {
               width: parent.width
               wrapMode: Text.WordWrap
-              text: "ctrl+1–9, 0 or pgup/pgdn to switch pages"
+              text: "ctrl+f to search · ctrl+1–9, 0 or pgup/pgdn to switch pages"
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -2155,6 +2408,35 @@ Item {
             QQC.ScrollBar.vertical: QQC.ScrollBar { policy: QQC.ScrollBar.AsNeeded }
             Component.onCompleted: root.pageScroll = formScroll
 
+            // Master plan M28: the outline round a control search found,
+            // in the scroller's content so it scrolls with the page. Placed
+            // again while it shows, because a fold opening moves the control.
+            Rectangle {
+              id: flashBox
+              objectName: "searchFlash"
+              z: 20
+              visible: root.flashItem !== null
+              color: "transparent"
+              radius: Style.cornerRadius
+              border.width: Math.max(2, Style.space(2))
+              border.color: root.accent
+              function place() {
+                var it = root.flashItem
+                if (!it) return
+                var p = it.mapToItem(formScroll.contentItem, 0, 0)
+                x = p.x - Style.space(4)
+                y = p.y - Style.space(4)
+                width = it.width + Style.space(8)
+                height = it.height + Style.space(8)
+              }
+              Timer {
+                interval: 150
+                repeat: true
+                running: flashBox.visible
+                onTriggered: flashBox.place()
+              }
+            }
+
             Loader {
               id: pageLoader
               width: formScroll.width - Style.space(14)
@@ -2186,6 +2468,19 @@ Item {
           Component { id: voicePage;        VoicePage { s: root } }
           Component { id: otherPage;        OtherSettingsPage { s: root } }
           Component { id: aboutPage;        AboutPage { s: root } }
+        }
+
+        // --- first-run setup, in place of the sidebar and page (M28) -----
+        // Built each time it is shown, so every step starts from what is
+        // set now.
+        Loader {
+          id: setupLoader
+          objectName: "setupLoader"
+          visible: root.mode === "setup"
+          active: root.opened && root.mode === "setup"
+          width: parent.width
+          height: body.height - y
+          sourceComponent: Component { Setup { s: root } }
         }
 
       }

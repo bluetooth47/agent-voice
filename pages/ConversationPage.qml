@@ -302,6 +302,7 @@ Column {
   }
 
   SettingRow {
+    objectName: "set-pace"
     width: parent.width
     label: "Pace"
     hint: page.preset === "patient" ? "Waits longer for you to start, pause and carry on. Good for thinking aloud."
@@ -342,6 +343,7 @@ Column {
       fontFamily: page.s.fontFamily
 
       ToggleRow {
+        objectName: "set-conversationMode"
         width: parent.width
         label: "Keep listening after a reply"
         hint: "Carry on without the wake word. Say the stop command, or stay quiet, to end it."
@@ -371,6 +373,7 @@ Column {
       }
 
       KnobRow {
+        objectName: "set-followUpMs"
         width: parent.width
         enabled: page.s.setting("conversationMode", true) === true
         opacity: enabled ? 1 : 0.45
@@ -470,6 +473,7 @@ Column {
       }
 
       KnobRow {
+        objectName: "set-openMicIdleMin"
         width: parent.width
         foreground: page.s.foreground; fontFamily: page.s.fontFamily
         label: "Closes after"
@@ -484,6 +488,7 @@ Column {
       }
 
       ToggleRow {
+        objectName: "set-openMicAddressedOnly"
         width: parent.width
         label: "Only answer if it's meant for you"
         hint: "It stays silent when what it heard was said to someone else, or came from a television."
@@ -499,6 +504,7 @@ Column {
       }
 
       ToggleRow {
+        objectName: "set-openMicAuto"
         width: parent.width
         label: "Open the mic after every wake"
         hint: "Every wake word starts an open conversation, as if you had asked for it by voice."
@@ -523,6 +529,7 @@ Column {
       fontFamily: page.s.fontFamily
 
       SettingRow {
+        objectName: "set-narration"
         width: parent.width
         stacked: true
         label: "Talk while it works"
@@ -556,6 +563,7 @@ Column {
       }
 
       KnobRow {
+        objectName: "set-narrationSilenceS"
         width: parent.width
         enabled: page.s.setting("narration", "off") !== "off"
         opacity: enabled ? 1 : 0.45
@@ -582,6 +590,7 @@ Column {
       fontFamily: page.s.fontFamily
 
       ToggleRow {
+        objectName: "set-fullStopAnytime"
         width: parent.width
         label: "Stop everything by voice, without the wake word"
         hint: "Stops every agent at once, even mid-thought. Not while it is speaking on speakers: the microphone is the reply's then."
@@ -599,6 +608,7 @@ Column {
       }
 
       ToggleRow {
+        objectName: "set-bargeOnHeadset"
         width: parent.width
         label: "Interrupt by talking, on a headset"
         hint: "On headphones it stops as soon as you talk over it, and what you say is your next request."
@@ -611,6 +621,7 @@ Column {
       }
 
       ToggleRow {
+        objectName: "set-bargeIn"
         width: parent.width
         label: "On speakers too"
         hint: "Laptop speakers usually drown you out. Measure first with: agentvoice calibrate"
@@ -634,6 +645,7 @@ Column {
         fontFamily: page.s.fontFamily
 
         KnobRow {
+          objectName: "set-bargeFactor"
           width: parent.width
           enabled: page.s.setting("bargeIn", false) === true
                    || page.s.setting("bargeOnHeadset", true) === true

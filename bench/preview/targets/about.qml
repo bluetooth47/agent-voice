@@ -130,7 +130,7 @@ ShellRoot {
                         "every command (" + (p && p.commandTable ? p.commandTable.commands.length : 0) + ")")
           overlay.check(overlay.text("Full stop  ·  on its own · no wake word needed") !== null, "Full stop, and where it counts")
           overlay.check(overlay.text("“stop everything”") !== null, "its phrases")
-          overlay.check(overlay.named("changelogTop") !== null && String(overlay.named("changelogTop").text).indexOf("M26 · Other settings") === 0
+          overlay.check(overlay.named("changelogTop") !== null && /^M\d+ · \S/.test(String(overlay.named("changelogTop").text))
                         && String(overlay.named("changelogTop").text).indexOf("**") < 0,
                         "the changelog's newest entry")
           overlay.readWrites()

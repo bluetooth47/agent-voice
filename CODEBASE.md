@@ -102,7 +102,10 @@ Hud.qml              layer-shell readout beside the bar during a turn (hidden at
                      shows the collaboration line ("Theo → Sora: passing")
 Settings.qml         the overlay: shared state `s`, SettingsStore, launch functions, permission prompt,
                      send sheet, sidebar frame, Ctrl+1..9/0/PgUp/PgDn page jumps, agentTint (an agent's
-                     colour from the theme accent); summon {"mode":"history"} opens the Chats page
+                     colour from the theme accent); summon {"mode":"history"} opens the Chats page;
+                     M28: settings search (`reveal()`), first-run setup's mode and marker
+Setup.qml            M28: first-run setup (microphone, wake word, your agent, done), writing only
+                     SETUP_KEYS through the overlay's put()
 AgentFolders.qml     add/remove/restore agent folders for every page (via `agentvoice agents`), so an
                      operation and its Undo outlive the page that started it
 Chats.qml            the chats browser (M18: one component, three places): list (search box ->
@@ -414,7 +417,34 @@ Notes and collaboration exist only for Claude Code and Codex
   to bring into view, `^[A-Za-z]{1,40}$` and nothing else; `goTo()` clears
   `focusKey`, the summon sets it after, and a page acts on the keys it holds
   (the Conversation page: its six timings) and ignores the rest.
-  Ctrl+1..9 jump to pages.
+  Ctrl+1..9 jump to pages. `{"mode":"setup","step":"wake"}` (M28) opens
+  first-run setup.
+- **Settings search** (M28): `ui/SettingsSearch.qml` at the top of the
+  sidebar (Ctrl+F), asking `ui/SettingsIndex.js`, one entry per setting
+  (label, key, synonyms → page, agent, tab, anchor). The anchor is an
+  `objectName` on the control (`set-<key>`, `agent-<field>` inside an
+  Agents card, which is itself `agent-<id>`, or an older name such as
+  `pauseKnob`). `Settings.reveal()` opens the page, finds the control
+  (`findNamed`, retried for ~2 s while the page builds), `flip()`s every
+  folded ancestor (an `AdvancedSection`, a foldable `Card`, an agent's
+  `HeaderStrip`), scrolls to it, outlines it (`flashBox`) and focuses the
+  first thing under it that takes the keyboard; a control hidden for the
+  current choice (an engine's threshold) says so under the box with the
+  entry's `when`. **A new setting needs an index entry and an anchor**:
+  `tests/test_settings_search.py` fails otherwise, and also when the entry
+  names a page other than the one that writes the key.
+- **First-run setup** (M28): root-level `Setup.qml`, drawn in place of the
+  sidebar and page while the overlay's `mode` is `"setup"`: microphone
+  (meter, gate), wake word (engine, phrase, three tries through the
+  daemon's wake test), your agent (program from `agentvoice about backends`,
+  name), done. Offered by itself once, only for a summons that asked for
+  nothing, when every one of these is known: no marker, settings loaded and
+  none of setup's agent keys changed, no agent folder, the service never
+  started (`setupFresh`). Also About → Run setup again, and the Overview's
+  "Setup is not finished" line. The marker is
+  `$XDG_STATE_HOME/agentvoice/setup.json` (`open` / `skipped` / `done` /
+  `dismissed`, and the step). Setup writes only `SETUP_KEYS` in
+  `tests/test_settings_pages.py`, each only when changed in it.
 - Read colours as `Commons.Color` (with `import qs.Commons as Commons`),
   never a bare `Color`. Any text from a transcript, a model reply, a folder
   file or an agent name needs `textFormat: Text.PlainText`.
@@ -422,6 +452,12 @@ Notes and collaboration exist only for Claude Code and Codex
   Tell the user first. Verify with a screenshot.
 - `bench/preview/preview.sh` renders any surface beside the live shell
   without touching it. Targets: settings, popup, knob, clicks, agents,
+  search (M28: Ctrl+F, "pause" to the folded pause knob, an agent's model,
+  a details tab, a Communal tab, a hidden control's note, old deep links,
+  nothing written; `--arg results|landed`, `,narrow`), setup (M28: `--arg
+  fresh` with `--config fresh.json --service-off`, `configured`, `reminder`,
+  `walk` with `--state`, or one step by name; the marker is copied to
+  `<out>.setup.json`),
   speakup (M27: the Speak up switch on three agents' Voice cards, each write
   checked; `--config crew3.json`),
   voices, gallery (every ui/ piece; `--arg narrow,long`, `danger`, `keys`),
@@ -485,7 +521,7 @@ Notes and collaboration exist only for Claude Code and Codex
 | `ChatsPage.qml` | M18: the Chats page. A foldable "Saving and privacy" card (folded once chats are saved, until opened): `saveChats`, `chatRetention`, `keepHistory` (moved from Display, same names), where the chats are and their size (`chats stats --json`, read on open, when the saved count moves and after a delete), and **Delete all saved chats** (a `DangerButton` stating the count and scope; `deleteAllChats()` starts `chats delete --all` from its `onConfirmed` only). M19: **Names and summaries** (`chatSummaries`, Off / By the chat's agent, with the measured cost). Under it `Chats { followSummon: true }`. |
 | `ConversationPage.qml` | M24: **Pace** (a `CompactSelector`: Patient / Balanced / Snappy, Custom named when the four timings are none of them; a timing never written reads as its shipped value, as the daemon does); a `CardGrid` of four `Card`s (two columns from 720 px): Follow-ups, **Open mic** (the live state from the state file's `open_mic` as `s.vOpenMic`, a Turn on / Turn off button whose one entry is `toggleOpenMic()`, which checks the service and says why when it cannot), While it works, Talking over it (`bargeFactor` under Advanced); **Three different stops** (open mic, a reply, the service, each saying what it leaves); **A turn, start to end** (`ui/TurnTimeline` from the live values, the limit note with **Raise it →**, and the six timings under Advanced, which a deep link `focus` or the note opens, scrolls to and outlines); **Voice commands** (`commandsInSentences`, and every command from `agentvoice commands --json`: no phrase is written on the page, `tests/test_conversation_page.py` holds it). Every number goes through `num()`, which reads a stored string the way `Config.get_int` does. |
 | `OtherSettingsPage.qml` | M26 (`DisplayPage.qml` until then; `goTo("display")` is an alias for its id `other`): **On-screen readout** (`hud`, `hudLingerMs`, the four M3 keys, Preview, `agentsPanel`); **Privacy** (the "Saved chats → Go to Chats" pointer, `yieldToRecorders`, `logSpeech` with ⚠, whose switch writes false at once and true only through `turnOnSpeechLog()`, called from a `ToolConfirm`'s `onConfirmed`; `keepStats` and **Clear stats** (a `DangerButton`; `clearStats()` starts `agentvoice stats clear` from its `onConfirmed` only), the lock line); **Keys** (read live from `agentvoice keys --json`, read only, with the bar icon's own clicks and **Open bindings file**: `omarchy-launch-editor` on a path checked by `bindingsPath()`); **Maintenance** (Repair or Install and the two add-ons through `fetchNow`, Remove Agent Voice as a `DangerButton` into `removeEverything()`, moved from About). Writes exactly the keys Display did. |
-| `AboutPage.qml` | M26: **This install** (`agentvoice about --json --plugin DIR`: the settings' build and the service's, commit, branch or "detached" or "unknown branch", install time, and whether their daemon files differ; the engine rows), **Copy diagnostics** (`agentvoice diagnostics copy`, and Show for the same report on the page), **Check for updates** (`about updates`, only from its button, naming the remote it asked); **Runs here, and what goes out** (`about backends`: what runs locally, each backend cloud/local with not found / installed / has answered a turn here, and who uses it; **Look**, `endpoint probe-local`, only from its button); **Voice commands** (the table from `agentvoice commands --json`, with the wake phrases); **Changes, license, README** (the newest `CHANGELOG.md` entry; each document opened read only in `less` with LESSSECURE through `omarchy-launch-tui`). Writes no setting. |
+| `AboutPage.qml` | M28: **Run setup again** (`s.runSetup("mic")`). M26: **This install** (`agentvoice about --json --plugin DIR`: the settings' build and the service's, commit, branch or "detached" or "unknown branch", install time, and whether their daemon files differ; the engine rows), **Copy diagnostics** (`agentvoice diagnostics copy`, and Show for the same report on the page), **Check for updates** (`about updates`, only from its button, naming the remote it asked); **Runs here, and what goes out** (`about backends`: what runs locally, each backend cloud/local with not found / installed / has answered a turn here, and who uses it; **Look**, `endpoint probe-local`, only from its button); **Voice commands** (the table from `agentvoice commands --json`, with the wake phrases); **Changes, license, README** (the newest `CHANGELOG.md` entry; each document opened read only in `less` with LESSSECURE through `omarchy-launch-tui`). Writes no setting. |
 
 ### 5.2 Building blocks (`ui/`)
 
@@ -507,7 +543,8 @@ Notes and collaboration exist only for Claude Code and Codex
 | `InfoRow.qml` | M26: a label and a plain-text value on one line, the About page's rows; `ok: false` draws the value urgent. |
 | `TurnTimeline.qml` | One turn drawn from its timings (lead-in, you talk up to the limit, the pause, the reply, the follow-up window), blocks growing with the square root of their time and a legend with the real numbers; a mark on "you talk" while turns were cut today. |
 | `StatTile.qml`, `MiniBars.qml` | One Overview number; per-hour bars with a readout line. |
-| `SearchField.qml` | Search box (debounced, Escape clears) with filter chips. |
+| `SearchField.qml` | Search box (debounced, Escape clears) with filter chips; `submitted` and `stepped` (M28) for a result list under it. |
+| `SettingsSearch.qml`, `SettingsIndex.js` | M28: Settings search. The index is plain JSON between `BEGIN`/`END ENTRIES` (key, key + field, field or action; page, agent, tab, anchor, words, when, advanced); `search()` ranks label words, then synonyms, then the key, agent and page names, every query word required. The piece shows up to twelve results over the page and hands one to `Settings.reveal()`. |
 | `ToggleChips.qml` | Row of on/off (optionally inherit) chips; a disabled chip says why. |
 | `EndpointEditor.qml` | Endpoint URL/model/key/test editor. |
 | `ExchangeItem.qml` | One exchange as bubbles (M18): you on the right, the named agent on the left in its `tint`; thinking folded; failed / stopped under it; agent-to-agent questions folded to one line that opens to both agents' bubbles. |

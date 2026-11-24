@@ -306,6 +306,7 @@ Column {
   }
 
   Column {
+    objectName: "communalWho"
     width: parent.width
     spacing: Style.space(10)
     visible: page.tab === "who"
@@ -538,6 +539,7 @@ Column {
     }
 
     ToggleRow {
+      objectName: "set-desktopTools"
       width: parent.width
       label: "Desktop tools"
       hint: "Claude Code agents can open apps, move and close windows, switch workspaces, " +
@@ -557,6 +559,7 @@ Column {
     }
 
     ToggleRow {
+      objectName: "set-browserTools"
       width: parent.width
       label: "Browser"
       hint: "Claude Code agents can use Claude in Chrome: your own browser, signed in as you."
@@ -575,6 +578,7 @@ Column {
     }
 
     ToggleRow {
+      objectName: "set-omarchySkill"
       width: parent.width
       label: "Omarchy skill"
       hint: "Agents know this machine's omarchy commands and keybindings, so “open a " +
@@ -592,6 +596,7 @@ Column {
     }
 
     ToggleRow {
+      objectName: "set-agentvoiceSkill"
       width: parent.width
       label: "Agent Voice skill"
       hint: "Agents can look up how Agent Voice works (its spoken commands, wake phrases and " +
@@ -640,6 +645,7 @@ Column {
       }
     }
     Text {
+      objectName: "sharedToolsList"
       width: parent.width
       wrapMode: Text.WordWrap
       textFormat: Text.PlainText

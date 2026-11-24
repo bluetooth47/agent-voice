@@ -219,6 +219,8 @@ def scan(path: Path) -> Scanned:
 def overlay_qml() -> list[Path]:
     """Every QML file the settings overlay and the bar widget are made of."""
     top = [ROOT / n for n in ("Settings.qml", "Chats.qml", "Panel.qml", "Hud.qml",
-                              "AgentFolders.qml", "KnobRow.qml", "SettingsGroup.qml")]
+                              "AgentFolders.qml", "KnobRow.qml", "SettingsGroup.qml",
+                              # Master plan M28: first-run setup, drawn by the overlay.
+                              "Setup.qml")]
     return ([p for p in top if p.exists()] + sorted((ROOT / "pages").glob("*.qml"))
             + sorted((ROOT / "ui").glob("*.qml")))

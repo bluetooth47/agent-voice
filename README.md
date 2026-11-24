@@ -43,6 +43,20 @@ under **Engine** in the settings and it offers to fetch it, or run the
 installer again with `--oww`. sherpa-onnx works the same way, with
 `--sherpa`: about 60MB, package and model.
 
+The first time the settings open after an install, before the service
+has ever run, they open on a short **setup**: the microphone (watch your
+level against the gate and set it), the wake word (pick the engine and the
+phrase, then say it three times and see how many woke it), and your agent
+(the coding agents found on this machine, and a name). Each step starts from
+what is set and changes only what you change; **Skip setup** changes
+nothing, and it is never put in front of you again by itself -- the Overview
+offers to finish it, and About has **Run setup again**. Whether it has been
+seen is kept in `~/.local/state/agentvoice/setup.json`, outside the settings.
+
+In the settings, **Ctrl+F** searches every page: type what you are looking
+for ("pause", "barge", "model") and Enter opens the page, unfolds whatever
+section holds it, and puts the keyboard on the control.
+
 The widget and the engine are two installs, because Omarchy runs
 nothing on a plugin's behalf: `plugin add` clones a directory and
 `plugin remove` deletes one, with no hook in between. So the widget owns
@@ -1611,8 +1625,9 @@ agent-voice/              <- also the plugin directory once installed
   Panel.qml               bar icon and its panel: switch, mute, agents,
                           quick switches, last exchange
   Hud.qml                 the readout beside the bar during a turn
-  Settings.qml            the overlay: shared state, the permission prompt
-                          and the page frame
+  Settings.qml            the overlay: shared state, the permission prompt,
+                          the page frame and settings search
+  Setup.qml               first-run setup, drawn by the overlay
   Chats.qml               the chats browser: the Chats page, and filtered on
                           Agent details and Communal
   pages/                  one file per settings page, Overview to About

@@ -103,6 +103,7 @@ Column {
     fontFamily: page.s.fontFamily
 
     ToggleRow {
+      objectName: "set-speakReplies"
       width: parent.width
       label: "Speak replies aloud"
       hint: "Off leaves the reply as text, in the readout and the conversation."
@@ -115,6 +116,7 @@ Column {
     }
 
     ToggleRow {
+      objectName: "set-chimes"
       width: parent.width
       label: "Sounds for listening, heard and done"
       hint: "A tone when the wake word lands, one when it has heard you, a chime when a long task ends."
@@ -177,6 +179,7 @@ Column {
   }
 
   SettingsGroup {
+    objectName: "voiceLibrary"
     width: parent.width
     title: "VOICES"
     foreground: page.s.foreground
@@ -308,6 +311,7 @@ Column {
     }
 
     SettingRow {
+      objectName: "set-model"
       width: parent.width
       stacked: true
       label: "Transcription model"
@@ -330,6 +334,7 @@ Column {
     }
 
     SettingRow {
+      objectName: "set-livePartials"
       width: parent.width
       stacked: true
       label: "Live transcript while you speak"

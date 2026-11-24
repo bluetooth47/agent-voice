@@ -133,6 +133,7 @@ Column {
     fontFamily: page.s.fontFamily
 
     ToggleRow {
+      objectName: "set-hud"
       width: parent.width
       label: "Show what it heard and what it answered"
       hint: "A panel by the bar from the wake word until shortly after the answer. Click it for the whole conversation."
@@ -147,6 +148,7 @@ Column {
     }
 
     KnobRow {
+      objectName: "set-hudLingerMs"
       width: parent.width
       // Dimmed, not hidden: hiding made the page jump, and left nothing to
       // say where the setting had gone.
@@ -169,6 +171,7 @@ Column {
     // with the switch, like the duration: they shape the floating readout
     // alone. Size and keeping the answer shape the popup too, so stay live.
     SettingRow {
+      objectName: "set-hudSize"
       width: parent.width
       label: "Size"
       hint: page.s.setting("hudSize", "locked") === "dynamic"
@@ -195,6 +198,7 @@ Column {
     }
 
     ToggleRow {
+      objectName: "set-hudKeepReply"
       width: parent.width
       // Not dimmed with the switch: like Size, it shapes the popup's
       // last-heard lines too.
@@ -211,6 +215,7 @@ Column {
     }
 
     SettingRow {
+      objectName: "set-hudPosition"
       width: parent.width
       disabledReason: page.s.setting("hud", true) === true ? "" : "Only while the readout is shown."
       label: "Position"
@@ -233,6 +238,7 @@ Column {
     }
 
     SettingRow {
+      objectName: "set-hudTextSize"
       width: parent.width
       disabledReason: page.s.setting("hud", true) === true ? "" : "Only while the readout is shown."
       label: "Text size"
@@ -263,6 +269,7 @@ Column {
       width: parent.width
       spacing: Style.space(10)
       Button {
+        objectName: "hudPreview"
         id: previewButton
         text: "Preview"
         iconText: "\u{f0208}"
@@ -288,6 +295,7 @@ Column {
     // Omarchy's Agents panel: also something on screen, so it sits with the
     // readout (its own group until M26).
     ToggleRow {
+      objectName: "set-agentsPanel"
       width: parent.width
       label: "Show each voice agent in Omarchy's Agents panel"
       hint: "A section per agent, saying what it is doing. Hover its info mark for what it runs on."
@@ -329,6 +337,7 @@ Column {
     }
 
     ToggleRow {
+      objectName: "set-yieldToRecorders"
       width: parent.width
       label: "Step aside when another app records"
       hint: "Stops listening during dictation, a call or a recording, and starts again after."
@@ -344,6 +353,7 @@ Column {
     }
 
     ToggleRow {
+      objectName: "set-logSpeech"
       width: parent.width
       label: "\u26a0 Write what is said to the system log"
       hint: page.s.setting("logSpeech", false) === true
@@ -388,6 +398,7 @@ Column {
 
     // Master plan M21: the Overview's numbers, and the one way to remove them.
     ToggleRow {
+      objectName: "set-keepStats"
       width: parent.width
       label: "Keep usage numbers for the Overview"
       hint: "Counts and timings only, never what was said. Kept 90 days."
@@ -468,6 +479,7 @@ Column {
   }
 
   SettingsGroup {
+    objectName: "keysGroup"
     width: parent.width
     title: "KEYS"
     foreground: page.s.foreground

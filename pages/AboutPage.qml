@@ -362,6 +362,27 @@ Column {
         onClicked: page.checkUpdates()
       }
     }
+
+    // Master plan M28: the first-run walk-through, on demand. It starts
+    // from what is set now and writes only what is changed in it, so running
+    // it on a working install changes nothing unless you change something.
+    SettingRow {
+      width: parent.width
+      label: "Run setup again"
+      hint: "The four steps a fresh install opens with: microphone, wake word, your agent, done. " +
+            "Each starts from what is set now; skipping changes nothing."
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      Button {
+        objectName: "runSetup"
+        text: "Run setup"
+        bordered: true
+        focusable: true
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onClicked: page.s.runSetup("mic")
+      }
+    }
   }
 
   SettingsGroup {

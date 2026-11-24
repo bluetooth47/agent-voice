@@ -1,0 +1,13 @@
+{
+  "bar": {
+    "layout": {
+      "left": [],
+      "center": [],
+      "right": [
+        {
+          "id": "duaneoca.agentvoice"
+        }
+      ]
+    }
+  }
+}

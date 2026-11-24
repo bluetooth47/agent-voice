@@ -383,6 +383,9 @@ Column {
   // ids, so the page comes in as `pg`.
   component AgentBlock: HeaderStrip {
     id: blk
+    // Master plan M28: Settings search finds a control inside one agent's
+    // block by this name first, then by the control's own ("agent-model").
+    objectName: "agent-" + agentId
 
     required property var pg
     property int agentIndex: -1
@@ -536,6 +539,7 @@ Column {
           readonly property real cell: columns === 2 ? (width - columnSpacing) / 2 : width
 
           SettingRow {
+            objectName: "agent-label"
             width: names.cell
             stacked: true
             label: "Name"
@@ -560,6 +564,7 @@ Column {
           }
 
           SettingRow {
+            objectName: "agent-name"
             width: names.cell
             stacked: true
             label: "Wake phrase"
@@ -598,6 +603,7 @@ Column {
         }
 
         SettingRow {
+          objectName: "agent-program"
           width: parent.width
           stacked: true
           label: "Runs on"
@@ -632,6 +638,7 @@ Column {
         // model it belongs to. Only the levels the model in force takes,
         // which the daemon publishes.
         SettingRow {
+          objectName: "agent-model"
           width: parent.width
           visible: !blk.endpoint
           stacked: true
@@ -704,6 +711,7 @@ Column {
       // The model, effort, permission and folder rows do not apply to one:
       // agentvoice offers an endpoint no tools.
       Card {
+        objectName: "agent-endpoint"
         visible: blk.endpoint
         title: "Endpoint"
         foreground: blk.s.foreground
@@ -750,6 +758,7 @@ Column {
         fontFamily: blk.s.fontFamily
 
         SettingRow {
+          objectName: "agent-level"
           width: parent.width
           stacked: true
           label: "Level"
@@ -821,6 +830,7 @@ Column {
         }
 
         SettingRow {
+          objectName: "agent-projectDir"
           width: parent.width
           stacked: true
           label: "Project folder"
@@ -849,6 +859,7 @@ Column {
         fontFamily: blk.s.fontFamily
 
         SettingRow {
+          objectName: "agent-voice"
           width: parent.width
           stacked: true
           label: "Voice"
@@ -929,6 +940,7 @@ Column {
         }
 
         KnobRow {
+          objectName: blk.isMain ? "agent-speed" : ""
           width: parent.width
           visible: blk.isMain
           foreground: blk.s.foreground; fontFamily: blk.s.fontFamily
@@ -949,6 +961,7 @@ Column {
         }
 
         SettingRow {
+          objectName: blk.isMain ? "" : "agent-speed"
           width: parent.width
           visible: !blk.isMain
           stacked: true
@@ -994,6 +1007,7 @@ Column {
         }
 
         SettingRow {
+          objectName: "agent-narration"
           width: parent.width
           visible: !blk.isMain
           stacked: true
@@ -1025,6 +1039,7 @@ Column {
 
         // Master plan M27: speaking up when background work finishes.
         ToggleRow {
+          objectName: "agent-speakWhenDone"
           width: parent.width
           label: "Speak up when work finishes"
           hint: blk.speakWhenDoneHint
@@ -1062,6 +1077,7 @@ Column {
 
       // --- Collaboration, notes & chats -------------------------------------------
       Card {
+        objectName: "agent-collab"
         title: "Collaboration, notes & chats"
         foreground: blk.s.foreground
         fontFamily: blk.s.fontFamily
@@ -1095,6 +1111,7 @@ Column {
         fontFamily: blk.s.fontFamily
 
         ToggleRow {
+          objectName: "agent-enabled"
           width: parent.width
           visible: !blk.isMain
           label: "On"
@@ -1120,6 +1137,7 @@ Column {
         // One dropdown per engine rather than one that swaps its options:
         // swapping left the previous engine's value displayed.
         SettingRow {
+          objectName: "set-owwModel"
           width: parent.width
           visible: blk.isMain && blk.s.owwLive
           stacked: true
@@ -1194,6 +1212,7 @@ Column {
   Row {
     spacing: Style.space(12)
     Button {
+      objectName: "addAgent"
       text: page.s.voiceAgents.length >= page.s.maxAgents
             ? "That is the most there can be (" + page.s.maxAgents + ")"
             : "Add an agent"
