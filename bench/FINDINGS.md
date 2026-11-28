@@ -2383,3 +2383,21 @@ checks are in memory; `omarchy-shell notifications isDnd` (measured 17 ms) and
 `notify-send` run only when there is something to announce. A warm process
 holding background work is kept past the five idle minutes, up to 30, which
 holds its ~230 MB (the figure in claude_code.py's own header) for that long.
+
+## 58. M31: what reading the skills costs, after the redesign
+
+Measured 2026-11-28 on the i7-1185G7, load 1.3 to 1.8, against the real
+machine's skills (37 found by Claude Code and Codex, three agents: Theo and
+Sora on Claude Code, Hazel on Codex). The installed daemon was running.
+
+- `agentvoice agents catalog main --json` (what Agent details reads for
+  its Tools & skills tab), 7 runs alternated with the same command from
+  `git archive 963e738`: **median 0.441 s at M31, 0.525 s at 963e738.**
+  M11 to M30 scanned the skills twice per read (`scan()` for the agent's
+  own view, then `lanes()`, which scans again for every lane); M31 scans
+  once and hands that scan to `grouping()`.
+- `agentvoice skills communal --json` (what Communal → Skills reads): the
+  scan itself 29.8 to 33.4 ms over three runs; 19 rows, 6 communal (two by
+  the automatic rule, four added by the user during the live check).
+
+No claim about the pages' own drawing time: not measured.
