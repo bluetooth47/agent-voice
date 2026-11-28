@@ -451,6 +451,7 @@ def test_keep_comes_from_the_communal_folders_copy(cfg_factory, tmp_path):
     assert got["folder"] is True
     assert got["stamp"] == {s["name"]: s for s in agentfs.skills(agentfs.COMMUNAL)}["lint"]["stamp"]
     assert got["changed_outside"] is True        # written by hand, as a person would
+    assert got["path"] == {s["name"]: s for s in agentfs.skills(agentfs.COMMUNAL)}["lint"]["path"]
 
 
 def test_a_name_nobody_has_is_kept_out_of_all_skills():

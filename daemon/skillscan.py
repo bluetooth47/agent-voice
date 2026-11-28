@@ -653,7 +653,8 @@ def grouping(cfg, scanned=None) -> dict:
         kept = in_folder.get(n) if "communal folder" in sources else None
         rows.append({"name": n, "description": first.get("description", ""),
                      "problem": first.get("problem", ""), "sources": sources,
-                     "path": first.get("path", ""), "folder": kept is not None,
+                     # The copy Keep acts on, when there is one (Codex pass 2).
+                     "path": (kept or first).get("path", ""), "folder": kept is not None,
                      "changed_outside": bool(kept and kept.get("changed_outside")),
                      "stamp": (kept or {}).get("stamp", ""),
                      "has": has, "excluded": excl, "lacks": lacks,
