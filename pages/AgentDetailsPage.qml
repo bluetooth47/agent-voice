@@ -844,6 +844,21 @@ Column {
     if (v === "on") return            // cannot be used, or nothing to approve
     if (v !== row.choice || row.changed) page.s.setAgentTool(page.target, id, v)
   }
+  // The one line under a found tool, when there is something to read: why
+  // it cannot be used, a change since it was turned on, or a ⚠ warning.
+  function toolAlert(r) {
+    if (!r.can) return r.why_not
+    if (r.changed) return "Changed since you turned it on, so it is off until you turn it on again."
+    if (r.shared_changed && r.choice === "inherit") return "Off: changed since it was turned on for every agent."
+    return String(r.asks || "").indexOf("⚠") === 0 ? r.asks : ""
+  }
+  // Behind the row's "?": the status in words, what it asks, and the rest.
+  function toolHelp(r) {
+    if (!r.can) return ""
+    return [page.toolStatus(r) + ".", String(r.asks || "").indexOf("⚠") === 0 ? "" : r.asks,
+            r.kind === "cli" ? "Told, not enforced: a shell can still run it." : "",
+            String(r.note || "")].filter(Boolean).join(" ")
+  }
   // One line: what it has, and where that comes from.
   function toolStatus(r) {
     if (!r.can) return r.why_not
@@ -1105,21 +1120,25 @@ Column {
     }
     Repeater {
       model: toolsTab.c ? toolsTab.c.tools : []
+      // One line each (M31, the user's ask): the name, and the buttons on
+      // its right, which already say what it is set to. Under it only why
+      // it cannot be used; what it asks and how it is given fold behind "?".
+      // Too narrow for one line, the buttons go underneath.
       SettingRow {
+        id: builtRow
         required property var modelData
         width: parent.width
-        stacked: true
+        stacked: width < Style.space(560)
         label: modelData.label
-        hint: !modelData.can ? modelData.why_not
-              : ((modelData.on ? "On" : "Off") +
-                 (modelData.choice === "inherit" ? ", as for every agent (Communal → Tools)" : ", " + page.name + "'s own") +
-                 (modelData.on && modelData.asks !== "" ? ". " + modelData.asks : ".") +
-                 (modelData.on && modelData.how !== "" ? " " + modelData.how : ""))
+        hint: !modelData.can ? modelData.why_not : ""
+        help: !modelData.can ? "" : [modelData.choice === "inherit" ? "Follows the switch for every agent (Communal → Tools)."
+                                                                    : page.name + "'s own switch.",
+                                     modelData.asks, modelData.how].filter(Boolean).join(" ")
         foreground: page.s.foreground
         fontFamily: page.s.fontFamily
         SegmentedChoice {
-          width: parent.width
-          wrap: true
+          width: builtRow.stacked ? builtRow.width : implicitWidth
+          wrap: builtRow.stacked
           enabled: modelData.can
           options: [
             { value: "inherit", label: "As every agent (" + (modelData.global ? "on" : "off") + ")" },
@@ -1225,16 +1244,24 @@ Column {
         spacing: Style.space(4)
         readonly property bool trusted: toolsTab.c && toolsTab.c.level === "trusted"
 
+        // One line (M31, the user's ask): name and kind, the buttons on
+        // the right. Under it only what needs reading: why it cannot be
+        // used, a change since it was turned on, or a ⚠ warning. The rest
+        // (what it asks, "told, not enforced", its last session) folds
+        // behind "?"; where it is defined is in the confirm before it is
+        // turned on, not on every row.
         SettingRow {
+          id: foundRow
           width: parent.width
-          stacked: true
+          stacked: width < Style.space(560)
           label: found.modelData.name + (found.modelData.kind === "cli" ? " · command-line tool" : " · MCP server")
-          hint: page.toolStatus(found.modelData)
+          hint: page.toolAlert(found.modelData)
+          help: page.toolHelp(found.modelData)
           foreground: page.s.foreground
           fontFamily: page.s.fontFamily
           SegmentedChoice {
-            width: parent.width
-            wrap: true
+            width: foundRow.stacked ? foundRow.width : implicitWidth
+            wrap: foundRow.stacked
             holdMs: 400
             enabled: found.modelData.can || found.modelData.choice !== "inherit"
             options: [
@@ -1247,31 +1274,6 @@ Column {
             fontFamily: page.s.fontFamily
             onCommitted: function(v) { page.askTool(found.modelData.id, v) }
           }
-        }
-        Text {
-          width: parent.width
-          visible: found.modelData.can && found.modelData.asks !== ""
-          wrapMode: Text.WordWrap
-          textFormat: Text.PlainText
-          text: found.modelData.asks + (found.modelData.kind === "cli" ? " Told, not enforced." : "") +
-                (String(found.modelData.note || "") !== "" ? " " + found.modelData.note : "")
-          color: found.modelData.asks.indexOf("⚠") === 0 ? page.s.urgent : page.s.dim
-          font.family: page.s.fontFamily
-          font.pixelSize: Style.font.caption
-        }
-        Text {
-          width: parent.width
-          wrapMode: Text.WrapAnywhere
-          textFormat: Text.PlainText
-          maximumLineCount: 4
-          elide: Text.ElideRight
-          text: found.modelData.defs.map(function(d) {
-            return (d.source !== "" ? d.source : d.where) + (d.project !== "" ? " (for " + d.project + ")" : "") +
-                   (found.modelData.kind === "mcp" ? ": " + d.command : "")
-          }).join("\n")
-          color: page.s.dim
-          font.family: page.s.fontFamily
-          font.pixelSize: Style.font.caption
         }
         ToolConfirm {
           width: parent.width

@@ -7,8 +7,8 @@
 //     --wait 90 --out /tmp/s skills
 //   grep PREVIEW /tmp/s.log; cat /tmp/s.writes
 //
-// With PREVIEW_ARG=shots it only opens Sora's Tools & skills tab, and with
-// shots-communal Communal → Skills, stepping down a screenful between shots
+// With PREVIEW_ARG=shots it only opens Sora's Tools & skills tab at its
+// skills (shots-tools: at its tools), and with shots-communal Communal → Skills, stepping down a screenful between shots
 // (`--arg shots --shots 6`), for screenshots.
 //
 // Agent details → Tools & skills shows Sora alone: From communal (the two
@@ -34,7 +34,7 @@ ShellRoot {
     // wide (narrow 520 shows the window the user called cramped).
     readonly property string mode: String(Quickshell.env("PREVIEW_ARG") || "").split(":")[0]
     readonly property int cardWidth: Number(String(Quickshell.env("PREVIEW_ARG") || "").split(":")[1] || 0)
-    readonly property bool shotsOnly: mode === "shots" || mode === "shots-communal"
+    readonly property bool shotsOnly: mode === "shots" || mode === "shots-tools" || mode === "shots-communal"
     Component.onCompleted: overlay.open(mode === "shots-communal"
                                         ? '{"page":"communal","tab":"skills"}'
                                         : '{"page":"agentdetails","agent":"sora","tab":"tools"}')
@@ -54,9 +54,10 @@ ShellRoot {
         var w = overlay.pageScroll ? overlay.pageScroll.Window.window : null
         var cardItem = w ? overlay.find(w.contentItem, function(i) { return i.objectName === "settingsCard" }) : null
         if (cardItem && overlay.cardWidth > 0) cardItem.width = overlay.cardWidth
-        var at = overlay.named(overlay.mode === "shots" ? "skillsHeading" : "communalSkills")
-        var ready = overlay.mode === "shots" ? overlay.named("fromCommunal") !== null
-                                             : overlay.named("communalList") !== null
+        var at = overlay.named(overlay.mode === "shots" ? "skillsHeading"
+                               : overlay.mode === "shots-tools" ? "toolsTab" : "communalSkills")
+        var ready = overlay.mode === "shots-communal" ? overlay.named("communalList") !== null
+                                                      : overlay.named("fromCommunal") !== null
         if (!at || !ready || !overlay.content()) return
         var f = overlay.pageScroll
         f.contentY = Math.max(0, Math.min(at.mapToItem(overlay.content(), 0, 0).y - 8, f.contentHeight - f.height))

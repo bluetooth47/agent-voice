@@ -720,3 +720,28 @@ def test_a_stale_approval_cannot_vouch_for_a_server_of_the_same_key(cfg_factory)
     assert tooldetect.switched_on_keys(cfg, "") == set()
     cfg = cfg_factory(mainTools={"mcp:docs_api": "on:" + FP})
     assert tooldetect.switched_on_keys(cfg, "") == {"docs_api"}
+
+
+def test_a_found_tool_is_one_line_with_only_what_needs_reading_under_it():
+    """M31, the user's ask during the live check: name and buttons on one
+    line; no definition path on the row (the confirm still shows where it
+    is defined and what it runs before anything is turned on); the status
+    in words behind "?", since the buttons already show it."""
+    from qml_scan import scan
+    page = ROOT / "pages" / "AgentDetailsPage.qml"
+    src = scan(page).nocomment
+    assert "found.modelData.defs.map(function(d) {\n            return (d.source" not in src
+    assert src.count("stacked: width < Style.space(560)") == 2
+    assert "hint: page.toolAlert(found.modelData)" in src and "help: page.toolHelp(found.modelData)" in src
+    assert '{ label: "Defined in", value: found.modelData.defs.map' in src     # the confirm keeps it
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    fns = function_source(page, "toolAlert")
+    for row, want in [({"can": False, "why_not": "Codex only"}, "Codex only"),
+                      ({"can": True, "changed": True}, "Changed since you turned it on, so it is off until "
+                                                       "you turn it on again."),
+                      ({"can": True, "asks": "⚠ Runs without asking."}, "⚠ Runs without asking."),
+                      ({"can": True, "asks": "Asks before each call."}, "")]:
+        out = subprocess.run(["node", "-e", fns + f"\nconsole.log(JSON.stringify(toolAlert({json.dumps(row)})))"],
+                             capture_output=True, text=True, timeout=30)
+        assert json.loads(out.stdout) == want, (row, out.stderr)
