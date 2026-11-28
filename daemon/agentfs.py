@@ -2199,7 +2199,7 @@ def catalog(agent_id: str, cfg) -> dict:
         found = skillscan.scan()
         skills_error = ""
     except Exception as e:      # noqa: BLE001 -- shown on the tab
-        found = {"skills": [], "problems": []}
+        found = {"skills": [], "problems": [], "ms": 0}
         skills_error = f"the skill scan failed ({type(e).__name__})"
     communal_on = cfg.takes_communal(me)
     entries = skillscan.agent_view(program, off, own, skills(COMMUNAL), found["skills"], delivery,
@@ -2214,7 +2214,7 @@ def catalog(agent_id: str, cfg) -> dict:
     except Exception as e:      # noqa: BLE001 -- shown on the tab
         shared, grouping_readable = set(), True
         skills_error = skills_error or f"reading which skills are communal failed ({type(e).__name__})"
-    skill_cards = skillscan.cards(entries, shared, communal_on)
+    skill_cards = skillscan.cards(entries, shared, communal_on, me)
     # Phase M10: the tools found on this machine, as this agent has them.
     # A scan that fails lists nothing (and says why): nothing is on then.
     import tooldetect

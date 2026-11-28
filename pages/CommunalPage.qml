@@ -889,9 +889,12 @@ Column {
     function onSaved(key) { if (page.tab === "skills") skillDelay.restart() }
   }
   readonly property var communalRows: (skillRows || []).filter(function(r) { return r.communal === true })
+  // Every skill some agent has. A name added to Communal that nobody has
+  // any more is only in the communal list, where it can be removed.
+  readonly property var heldRows: (skillRows || []).filter(function(r) { return (r.has || []).length > 0 })
   readonly property var shownRows: {
     var q = page.skillQuery.trim().toLowerCase()
-    var all = skillRows || []
+    var all = page.heldRows
     if (q === "") return all
     return all.filter(function(r) {
       return String(r.name).toLowerCase().indexOf(q) >= 0 ||
@@ -970,6 +973,8 @@ Column {
   }
   // The question before a change, under the card it was asked from: one
   // name in one list at a time (a communal skill is in both).
+  // A question left up when the setting stops being readable goes.
+  onSkillsReadableChanged: if (!skillsReadable) skillAsking = ""
   property string skillAsking: ""
   property string skillAskingIn: ""
   property bool skillAskingOn: false
@@ -986,6 +991,12 @@ Column {
   // Written only from the confirm's onConfirmed (tests/test_communal_skills.py).
   function setCommunal(r, on) {
     page.skillAsking = ""
+    // Read again at the moment of writing: the setting may have become
+    // unreadable while the question was up.
+    if (!page.skillsReadable) {
+      page.skillNote = "Not changed: which skills are communal cannot be read. Fix or remove communalSkills in shell.json."
+      return
+    }
     var next = page.communalEdited(page.s.setting("communalSkills", {}), r.name, on, r.auto === true)
     if (next === null) {
       page.skillNote = "Not changed: which skills are communal cannot be read. Fix or remove communalSkills in shell.json."
@@ -1166,9 +1177,9 @@ Column {
       objectName: "allSkills"
       width: parent.width
       visible: page.skillRows !== null
-      title: "All skills" + ((page.skillRows || []).length > 0
+      title: "All skills" + (page.heldRows.length > 0
                              ? " · " + (page.skillQuery.trim() !== "" ? page.shownRows.length + " of " : "") +
-                               page.skillRows.length : "")
+                               page.heldRows.length : "")
       subtitle: "Every skill any agent has, with a switch for Communal."
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily

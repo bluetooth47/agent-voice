@@ -413,3 +413,54 @@ def test_communal_edited(cur, name, on, auto, want):
     fn = function_source(COMMUNAL, "communalEdited")
     assert _node(fn, f"communalEdited({json.dumps(cur)}, {json.dumps(name)}, {json.dumps(on)}, "
                      f"{json.dumps(auto)})") == want
+
+
+# --- Codex review, pass 1 ---------------------------------------------------------
+
+def test_a_failed_scan_still_groups_agent_voices_own_skills(cfg_factory, tmp_path, monkeypatch):
+    """The catalog's fallback for a scan that raised has no timing in it;
+    the grouping of the folders it could read must not fail on that."""
+    own("main", "lint")
+    own("sora", "lint")
+    cfg = crew(cfg_factory, hazel={"agent": "endpoint"})
+
+    def broken():
+        raise OSError("no")
+    monkeypatch.setattr(skillscan, "scan", broken)
+    cat = agentfs.catalog("sora", cfg)
+    assert cat["skills_error"].startswith("the skill scan failed")
+    assert {c["name"]: c["section"] for c in cat["skill_cards"]}["lint"] == "communal"
+
+
+def test_a_communal_skill_the_agents_program_switched_off_is_its_own(cfg_factory, tmp_path):
+    everywhere(tmp_path)
+    settings = json.loads((claude_home() / "settings.json").read_text())
+    settings["skillOverrides"] = {"weekly": "off"}
+    (claude_home() / "settings.json").write_text(json.dumps(settings))
+    cfg = crew(cfg_factory, communalSkills={"add": ["weekly"]})
+    assert rows(cfg)["weekly"]["communal"]
+    card = {c["name"]: c for c in agentfs.catalog("sora", cfg)["skill_cards"]}["weekly"]
+    assert card["section"] == "own" and card["delivered"] is False
+
+
+def test_keep_comes_from_the_communal_folders_copy(cfg_factory, tmp_path):
+    machine(tmp_path)
+    own("main", "lint")
+    own("communal", "lint")
+    got = rows(crew(cfg_factory))["lint"]
+    assert got["folder"] is True
+    assert got["stamp"] == {s["name"]: s for s in agentfs.skills(agentfs.COMMUNAL)}["lint"]["stamp"]
+    assert got["changed_outside"] is True        # written by hand, as a person would
+
+
+def test_a_name_nobody_has_is_kept_out_of_all_skills():
+    src = scan(COMMUNAL).nocomment
+    assert "var all = page.heldRows" in src
+    assert "(r.has || []).length > 0" in src
+    assert "page.heldRows.length" in src
+
+
+def test_the_confirm_checks_readability_again_when_it_writes():
+    fn = function_source(COMMUNAL, "setCommunal")
+    assert fn.index("if (!page.skillsReadable)") < fn.index('page.s.put("communalSkills"')
+    assert "onSkillsReadableChanged: if (!skillsReadable) skillAsking = \"\"" in scan(COMMUNAL).nocomment

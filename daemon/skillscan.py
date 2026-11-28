@@ -590,8 +590,11 @@ def grouping(cfg, scanned=None) -> dict:
     `readable` False: `communalSkills` cannot be read, so the automatic rule
     alone applies and the page writes nothing over it."""
     scanned = scanned if scanned is not None else scan()
-    external = scanned["skills"]
+    external = scanned.get("skills") or []
     folder = agentfs.skills(agentfs.COMMUNAL)
+    # The communal folder's own entry of a name, for its Keep (whichever
+    # agent's copy happens to be listed first).
+    in_folder = {s["name"]: s for s in folder}
     choice = cfg.communal_skills()
     add = set(choice["add"]) if choice else set()
     remove = set(choice["remove"]) if choice else set()
@@ -647,12 +650,12 @@ def grouping(cfg, scanned=None) -> dict:
                 why = LACKS["folder"]
             lacks.append({"label": a["label"], "why": why})
         auto = is_auto(n, holders, agents)
+        kept = in_folder.get(n) if "communal folder" in sources else None
         rows.append({"name": n, "description": first.get("description", ""),
                      "problem": first.get("problem", ""), "sources": sources,
-                     "path": first.get("path", ""), "folder": first["source"] == agentfs.COMMUNAL,
-                     "changed_outside": bool(first.get("changed_outside"))
-                     if first["source"] == agentfs.COMMUNAL else False,
-                     "stamp": first.get("stamp", "") if first["source"] == agentfs.COMMUNAL else "",
+                     "path": first.get("path", ""), "folder": kept is not None,
+                     "changed_outside": bool(kept and kept.get("changed_outside")),
+                     "stamp": (kept or {}).get("stamp", ""),
                      "has": has, "excluded": excl, "lacks": lacks,
                      "auto": auto, "added": n in add, "removed": n in remove,
                      "communal": (auto and n not in remove) or n in add})
@@ -660,13 +663,17 @@ def grouping(cfg, scanned=None) -> dict:
             "agents": [{k: a[k] for k in ("id", "label", "program", "program_label", "enabled",
                                           "delivery", "takes_communal")} for a in agents],
             "readable": choice is not None,
-            "problems": scanned["problems"], "ms": scanned["ms"]}
+            "problems": scanned.get("problems") or [], "ms": scanned.get("ms", 0)}
 
 
-def cards(entries: list[dict], communal: set[str], takes_communal: bool) -> list[dict]:
+def cards(entries: list[dict], communal: set[str], takes_communal: bool,
+          agent_id: str | None = None) -> list[dict]:
     """One agent's Tools & skills tab (phase M31): one card per name, in
-    two sections. `section` "communal" for a name that is communal (when
-    the agent takes Communal at all), "own" for the rest. The card is the
+    two sections. `section` "communal" for a name that is communal and
+    that this agent has (has_names: not one its program's own settings
+    switched off), when it takes Communal at all; "own" for the rest.
+    `agent_id` is the agent's folder id, for has_names; None counts every
+    entry as had. The card is the
     entry the agent is given, or else its first; the others of that name
     (its own copy hiding the communal one, a second folder its CLI reads)
     are listed in `also`, with why each is not the one given. Pure."""
@@ -681,12 +688,14 @@ def cards(entries: list[dict], communal: set[str], takes_communal: bool) -> list
             first[n] = s
         else:
             rest.setdefault(n, []).append(s)
+    had = set(has_names(entries, agent_id, takes_communal)) if agent_id is not None \
+        else set(first)
     out = []
     for n, s in first.items():
         also = [{"where": o.get("source_label") or ("communal folder" if o["source"] == agentfs.COMMUNAL
                                                      else "its own folder"),
                  "why": o.get("why") or ""} for o in rest.get(n, [])]
-        section = "communal" if takes_communal and n in communal else "own"
+        section = "communal" if takes_communal and n in communal and n in had else "own"
         out.append({**s, "section": section, "also": also})
     return out
 
