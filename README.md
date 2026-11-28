@@ -825,41 +825,42 @@ their own settings; their tab says so.
 
 ### Skills on this machine
 
-Agent Details → **Tools & skills** shows every skill on the machine as a
-card in its owner's lane: one lane per agent (its own skills, and the ones
-its program finds by itself), **Communal**, and **Unused**. Unfold a card
-for its description, where it lives, its size, any problem, and who gets it.
+Agent Details → **Tools & skills** shows the selected agent's skills, in two
+parts. **From communal** holds the communal skills it has, each with an
+**Exclude** that takes it out for that agent alone (and **Include again**).
+Below them are **its own skills**: the ones in its folder and the ones its
+program finds by itself, each with a switch. Unfold a card for its
+description, where it lives, its size, any problem, and any other copy of
+the same name it has.
 
 Claude Code and Codex find skills by themselves -- Claude Code in
 `~/.claude/skills`, your claude.ai account's synced skills and enabled
 plugins; Codex in `~/.codex/skills` and `~/.agents/skills` -- and every
 agent on those programs has always seen them. Nothing changes about that
-by default. What is new is a **switch on every card an agent would get**,
-its own, the communal ones and those: off takes the skill out of what
-that agent's program offers it (Claude Code's own skill switch, which its
-Skill tool then refuses; Codex's `skills.config`), and out of what Agent
-Voice gives it. The file itself is not touched, and an agent that can read
-files can still open it, so the page never calls that hiding. An Agent
-Voice skill beats one the program finds of the same name, so an agent never
-has two.
+by default. Off (or Exclude) takes the skill out of what that agent's
+program offers it (Claude Code's own skill switch, which its Skill tool
+then refuses; Codex's `skills.config`), and out of what Agent Voice gives
+it. The file itself is not touched, and an agent that can read files can
+still open it, so the page never calls that hiding. An Agent Voice skill
+beats one the program finds of the same name, so an agent never has two.
 
-**Unused** holds skills found outside Agent Voice that no agent gets. Give
-one to an agent, or to Communal, and it gets a **checked copy** -- no links
-inside, no hooks, within the size limits -- after a question that says who
-gets it. Agent Voice never edits, moves or deletes a skill it did not make.
+**Communal** → **Skills** chooses which skills are communal. A skill every
+agent already has (every agent whose program takes skills and that takes
+Communal) is communal by itself. Below the communal ones is every skill any
+agent has, with a search field and a switch: switch one on to add it to
+Communal, or use **Remove…** to take one out. Both ask first. Communal is a
+grouping, not a copy: an agent whose program does not have a skill does not
+get it, and each skill says who that is and why. Removing a skill every
+agent has puts it back under each agent's own skills, still on, and keeps it
+out of Communal until you add it back; nothing is switched off. Which skills
+are communal is the `communalSkills` setting.
 
-**Moving a skill.** Drag a card from one lane to another to move it, or
-hold Ctrl to copy it; every card also has a **Move to…** button (Menu or
-Ctrl+M from the keyboard) that does both. Communal → Skills has the same
-lanes. Moving a skill into Communal asks first ("every agent will get this
-skill"), and so does moving one out of a quarantined agent. A name already
-taken where it would land is refused, with the reason. **Undo** is offered
-for ten seconds, and works only while neither side has changed since, so it
-never loses an edit; from a terminal, `agentvoice skills history` and
-`agentvoice skills undo OP` do the same at any time. A move is staged and
-published in one step, and one cut short by a crash is finished or put back
-before any agent sees either side. A skill found outside Agent Voice is
-only ever copied in, never moved.
+A skill kept in Agent Voice's communal skills folder is different: it is
+given to every agent that takes Communal. From a terminal, `agentvoice
+skills import`, `move`, `copy`, `undo` and `history` still give an agent or
+Communal a checked copy of a skill or move one between Agent Voice's folders
+(into Communal only with `--confirm`); the pages no longer do. Agent Voice
+never edits, moves or deletes a skill it did not make.
 
 **Notes are topics.** Each note is one subject (a shopping list, the garden,
 how the house runs), and agents are told to add to a topic's note rather than

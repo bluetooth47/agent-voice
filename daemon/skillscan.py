@@ -33,6 +33,7 @@ together. An Agent Voice skill (own or communal) of the same name as one the
 CLI finds hides the CLI's, so an agent never has two of one name.
 
     python skillscan.py lanes [AGENT] [--json]
+    python skillscan.py communal [--json]                      # phase M31: the grouping
     python skillscan.py import SOURCE_ID|PATH TO [--confirm]   # TO: an agent id or communal
     python skillscan.py move|copy FROM NAME TO [--confirm]      # phase M12, transfer.py
     python skillscan.py undo OP
@@ -510,6 +511,186 @@ def lanes(cfg, texts=None) -> dict:
             "problems": scanned["problems"], "ms": scanned["ms"]}
 
 
+# --- Communal as a grouping (phase M31) ---------------------------------------
+
+#: Why an agent does not have a skill, as Communal → Skills says it.
+LACKS = {
+    "none": "takes no skills",
+    "opted": "takes nothing from Communal",
+    "user_off": "switched off in your own {program} settings",
+    "missing": "{program} has no skill of this name",
+    "folder": "not in its skills folder",
+}
+
+
+def _agents(cfg) -> list[dict]:
+    """Every agent, main first, with what decides how it takes skills."""
+    out = [{"id": agentfs.MAIN, "agent_id": "", "label": cfg.main_label(
+        " ".join(cfg.get_str("phrase").lower().split())), "enabled": True}]
+    out += [{"id": a["id"], "agent_id": a["id"], "label": a["label"],
+             "enabled": a.get("enabled", True)} for a in cfg.all_agents()]
+    for a in out:
+        a["program"] = agentfs.program_of(a["agent_id"] or agentfs.MAIN, cfg)
+        a["delivery"] = agentfs.delivery_of(a["program"])[0]
+        a["takes_communal"] = cfg.takes_communal(a["id"])
+        a["program_label"] = agentfs.PROGRAM_LABELS.get(a["program"], a["program"] or "No program")
+    return out
+
+
+def has_names(view: list[dict], agent_id: str, takes_communal: bool) -> dict[str, dict]:
+    """The skills an agent *has*, by name, from its agent_view: its own
+    folder's, the communal folder's when it takes Communal, and each its
+    CLI finds by itself and would offer -- not a second copy of a name, not
+    one switched off in the CLI's own settings, which Agent Voice cannot
+    switch on. Its own `skillsOff` does not matter here: a skill it
+    excluded is still one it has. Each name maps to its first entry."""
+    out: dict[str, dict] = {}
+    for s in view:
+        if s.get("native"):
+            if s.get("duplicate") or s.get("user_off"):
+                continue
+        elif s["source"] == agentfs.COMMUNAL:
+            if not takes_communal:
+                continue
+        elif s["source"] != agent_id:
+            continue
+        out.setdefault(s["name"], s)
+    return out
+
+
+def counted(agent: dict) -> bool:
+    """Whether an agent counts towards "every agent has it": its program
+    takes skills and it takes Communal, switched on or not (the user's
+    decision, 2026-11-27)."""
+    return agent["delivery"] != "none" and agent["takes_communal"]
+
+
+def is_auto(name: str, holders: dict[str, dict], agents: list[dict]) -> bool:
+    """A skill every counted agent has is communal by itself -- when there
+    are at least two of them: with one, every skill it has would be
+    "communal" and the word would mean nothing. Pure."""
+    ids = [a["id"] for a in agents if counted(a)]
+    return len(ids) >= 2 and all(name in holders.get(i, {}) for i in ids)
+
+
+def communal_names(rows: list[dict]) -> set[str]:
+    """The names that are communal now, from grouping()'s rows."""
+    return {r["name"] for r in rows if r["communal"]}
+
+
+def grouping(cfg, scanned=None) -> dict:
+    """Communal → Skills, as a grouping (phase M31): every skill any agent
+    has (and any name added that none has now), each with who has it, who
+    excluded it, who does not have it and why, whether every agent has it
+    (`auto`) and whether it is communal. Communal changes nobody's skills:
+    an agent whose program lacks a communal skill is not given a copy, and
+    the row names it instead.
+
+    {"rows": [...], "agents": [...], "readable": bool, "problems", "ms"}.
+    `readable` False: `communalSkills` cannot be read, so the automatic rule
+    alone applies and the page writes nothing over it."""
+    scanned = scanned if scanned is not None else scan()
+    external = scanned["skills"]
+    folder = agentfs.skills(agentfs.COMMUNAL)
+    choice = cfg.communal_skills()
+    add = set(choice["add"]) if choice else set()
+    remove = set(choice["remove"]) if choice else set()
+    agents = _agents(cfg)
+    holders: dict[str, dict[str, dict]] = {}
+    excluded: dict[str, set[str]] = {}
+    for a in agents:
+        off = cfg.skills_off_for(a["agent_id"])
+        view = agent_view(a["program"], off, agentfs.skills(a["id"]), folder, external,
+                          a["delivery"], a["takes_communal"])
+        holders[a["id"]] = has_names(view, a["id"], a["takes_communal"]) \
+            if a["delivery"] != "none" else {}
+        excluded[a["id"]] = set(holders[a["id"]]) if off is None else \
+            {n for n in holders[a["id"]] if n in off}
+    names: dict[str, dict] = {}
+    for a in agents:
+        for n, s in holders[a["id"]].items():
+            names.setdefault(n, s)
+    for n in add:
+        names.setdefault(n, {"name": n, "description": "", "source": "", "problem": ""})
+    def native_somewhere(name: str) -> bool:
+        return any(s["name"] == name for s in external)
+
+    rows = []
+    for n in sorted(names):
+        first = names[n]
+        has, lacks, excl = [], [], []
+        sources: list[str] = []
+        for a in agents:
+            mine = holders[a["id"]].get(n)
+            if mine is not None:
+                has.append(a["label"])
+                if a["id"] in excluded and n in excluded[a["id"]]:
+                    excl.append(a["label"])
+                where = (mine.get("source_label") if mine.get("native")
+                         else "communal folder" if mine["source"] == agentfs.COMMUNAL
+                         else f"{a['label']}'s folder")
+                if where and where not in sources:
+                    sources.append(where)
+                continue
+            if a["delivery"] == "none":
+                why = LACKS["none"]
+            elif not a["takes_communal"]:
+                why = LACKS["opted"]
+            elif any(s["name"] == n and s.get("user_off") and FAMILY.get(a["program"]) == s["family"]
+                     for s in external):
+                why = LACKS["user_off"].format(program=a["program_label"])
+            elif native_somewhere(n):
+                why = LACKS["missing"].format(program=a["program_label"])
+            else:
+                # Only ever in an agent's own Agent Voice folder: no program
+                # finds it by itself, so it is not the program that lacks it.
+                why = LACKS["folder"]
+            lacks.append({"label": a["label"], "why": why})
+        auto = is_auto(n, holders, agents)
+        rows.append({"name": n, "description": first.get("description", ""),
+                     "problem": first.get("problem", ""), "sources": sources,
+                     "path": first.get("path", ""), "folder": first["source"] == agentfs.COMMUNAL,
+                     "changed_outside": bool(first.get("changed_outside"))
+                     if first["source"] == agentfs.COMMUNAL else False,
+                     "stamp": first.get("stamp", "") if first["source"] == agentfs.COMMUNAL else "",
+                     "has": has, "excluded": excl, "lacks": lacks,
+                     "auto": auto, "added": n in add, "removed": n in remove,
+                     "communal": (auto and n not in remove) or n in add})
+    return {"rows": rows,
+            "agents": [{k: a[k] for k in ("id", "label", "program", "program_label", "enabled",
+                                          "delivery", "takes_communal")} for a in agents],
+            "readable": choice is not None,
+            "problems": scanned["problems"], "ms": scanned["ms"]}
+
+
+def cards(entries: list[dict], communal: set[str], takes_communal: bool) -> list[dict]:
+    """One agent's Tools & skills tab (phase M31): one card per name, in
+    two sections. `section` "communal" for a name that is communal (when
+    the agent takes Communal at all), "own" for the rest. The card is the
+    entry the agent is given, or else its first; the others of that name
+    (its own copy hiding the communal one, a second folder its CLI reads)
+    are listed in `also`, with why each is not the one given. Pure."""
+    first: dict[str, dict] = {}
+    rest: dict[str, list[dict]] = {}
+    for s in entries:
+        n = s["name"]
+        if n not in first:
+            first[n] = s
+        elif s.get("delivered") and not first[n].get("delivered"):
+            rest.setdefault(n, []).append(first[n])
+            first[n] = s
+        else:
+            rest.setdefault(n, []).append(s)
+    out = []
+    for n, s in first.items():
+        also = [{"where": o.get("source_label") or ("communal folder" if o["source"] == agentfs.COMMUNAL
+                                                     else "its own folder"),
+                 "why": o.get("why") or ""} for o in rest.get(n, [])]
+        section = "communal" if takes_communal and n in communal else "own"
+        out.append({**s, "section": section, "also": also})
+    return out
+
+
 def _card_id(s: dict) -> str:
     """A card's id across lanes: for a skill a CLI finds by itself, the one
     skill it is to that CLI (native_key, so a second copy of a name is not
@@ -579,6 +760,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("lanes", help="every skill, in its owner's lane")
     p.add_argument("--json", action="store_true")
+    p = sub.add_parser("communal", help="every skill, who has it, and which are communal")
+    p.add_argument("--json", action="store_true")
     p = sub.add_parser("import", help="give an agent or Communal a copy of a skill found here")
     p.add_argument("source", help="its id, from `lanes --json`, or a folder's path (with a /)")
     p.add_argument("to", help="an agent's folder id, or communal")
@@ -615,6 +798,25 @@ def main(argv: list[str] | None = None) -> int:
                 print("Unused")
                 for s in got["unused"]:
                     print(f"  {safe(s['name'])}  [{safe(s['source_label'])}]  {safe(s['id'])}")
+                for p in got["problems"]:
+                    print(f"  ! {safe(p)}")
+            return 0
+        if a.cmd == "communal":
+            from runtime import Config
+            got = grouping(Config())
+            if a.json:
+                print(json.dumps(got))
+            else:
+                from speech_text import safe_for_terminal as safe
+                if not got["readable"]:
+                    print("! communalSkills cannot be read: only skills every agent has are communal")
+                for r in got["rows"]:
+                    mark = "communal" if r["communal"] else "        "
+                    why = (" (every agent has it)" if r["auto"] and r["communal"] else
+                           " (added)" if r["added"] else " (removed)" if r["removed"] else "")
+                    lacks = "; ".join(f"{x['label']}: {x['why']}" for x in r["lacks"])
+                    print(safe(f"{mark}  {r['name']}{why}  has: {', '.join(r['has']) or 'nobody'}"
+                               + (f"  lacks: {lacks}" if lacks else "")))
                 for p in got["problems"]:
                     print(f"  ! {safe(p)}")
             return 0

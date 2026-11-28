@@ -85,6 +85,7 @@
       "crewLinks": [],
       "crewQuarantine": [],
       "communalOff": [],
+      "communalSkills": {},
       "endpointUrl": "",
       "endpointModel": "",
       "endpointIsAgent": false,

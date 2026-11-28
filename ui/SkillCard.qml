@@ -96,7 +96,7 @@ Rectangle {
   activeFocusOnTab: true
   Accessible.role: Accessible.ListItem
   Accessible.name: card.title
-  Accessible.description: "Ctrl+M opens Move to"
+  Accessible.description: draggable ? "Ctrl+M opens Move to" : ""
   Accessible.focusable: true
   opacity: dragging && !copying ? 0.4 : 1
   Keys.onMenuPressed: card.openMenu()

@@ -133,6 +133,7 @@ var ENTRIES = [
 {"key": "agentvoiceSkill", "label": "Agent Voice skill", "page": "communal", "tab": "tools", "anchor": "set-agentvoiceSkill", "words": "agent voice skill every agent"},
 {"key": "sharedTools", "label": "Tools found on this machine", "page": "communal", "tab": "tools", "anchor": "sharedToolsList", "words": "mcp servers detected found shared tools cli"},
 {"key": "communalOff", "label": "Who gets Communal", "page": "communal", "tab": "who", "anchor": "communalWho", "words": "communal opt out who gets rules shared"},
+{"key": "communalSkills", "label": "Communal skills", "page": "communal", "tab": "skills", "anchor": "communalList", "words": "communal skills shared group every agent remove add search"},
 
 {"key": "crewLinks", "label": "Crew links", "page": "crew", "anchor": "crewMap", "words": "crew map links who may reach collaboration delegate"},
 {"key": "crewQuarantine", "label": "Quarantine", "page": "crew", "anchor": "quarantineZone", "words": "quarantine isolate untrusted crew"},

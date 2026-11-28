@@ -196,8 +196,10 @@ def test_the_buttons_that_confirm_are_danger_buttons():
     notes (combineNotes, in the table above), or, since M20, let an agent
     search every saved chat (chatSearchPicked("all"), held further in
     test_chat_search.py), or, since M26, write what is said to the journal
-    (turnOnSpeechLog, held below) -- never one of the other destructive
-    commands above."""
+    (turnOnSpeechLog, held below), or, since M31, add a skill to Communal or
+    take it out (setCommunal, held in test_communal_skills.py) -- never one
+    of the other destructive commands above. (M31 took importSkill and
+    transferSkill off the pages; the names stay allowed for nothing.)"""
     wrong = []
     for path in overlay_qml():
         s = scan(path)
@@ -206,7 +208,7 @@ def test_the_buttons_that_confirm_are_danger_buttons():
             if el == "ToolConfirm":
                 body = s.src[m.end():m.end() + 400].split("onCancelled")[0]
                 if not re.search(r"\b(setAgentTool|putShared|importSkill|transferSkill|transferNote|"
-                                 r"combineNotes|commitImport|chatSearchPicked|turnOnSpeechLog)\(", body) or \
+                                 r"combineNotes|commitImport|chatSearchPicked|turnOnSpeechLog|setCommunal)\(", body) or \
                         re.search(r"agents\W+trash|chats\W+delete|--uninstall|remove|reset", body):
                     wrong.append(f"{path.relative_to(ROOT)}:{s.lineno(m.start())} ToolConfirm "
                                  f"doing something other than a tool switch")

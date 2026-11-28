@@ -635,20 +635,19 @@ def test_reading_the_lanes_is_not_asked():
     assert hook.orders_write("Bash", {"command": "agentvoice skills lanes --json"}) == ""
 
 
-def test_the_import_is_reached_only_from_its_confirm():
-    from qml_scan import scan
-    details = scan(ROOT / "pages" / "AgentDetailsPage.qml")
-    calls = [m.start() for m in __import__("re").finditer(r"\bimportSkill\(", details.nocomment)
-             if details.clean[m.start()] == details.src[m.start()]
-             and not details.nocomment[max(0, m.start() - 9):m.start()].endswith("function ")]
-    handlers = sorted(details.handler_of(p) for p in calls)
-    assert handlers == ["onConfirmed"]
-    assert details.element_of(next(p for p in calls if details.handler_of(p) == "onConfirmed")) == "ToolConfirm"
-    # The command itself is built in that one function.
-    assert details.src.count('"skills", "import"') == 1
-    for path in (ROOT / "pages").glob("*.qml"):
-        if path.name != "AgentDetailsPage.qml":
-            assert '"import"' not in path.read_text(), path.name
+def test_the_import_stays_a_cli_verb_and_no_page_reaches_it():
+    """Phase M31 took Give a copy off Agent details (the user's decision,
+    2026-11-27); `agentvoice skills import` stays, refusing a copy into
+    Communal without --confirm (tested above), until the delegation flow
+    decides how it comes back. No page builds it."""
+    from qml_scan import overlay_qml, scan
+    for path in overlay_qml():
+        assert '"skills", "import"' not in scan(path).nocomment, path.name
+    import contextlib
+    import io
+    with contextlib.redirect_stdout(io.StringIO()) as out, pytest.raises(SystemExit):
+        skillscan.main(["import", "--help"])
+    assert "--confirm" in out.getvalue()
 
 
 # --- the overlay function ------------------------------------------------------------------

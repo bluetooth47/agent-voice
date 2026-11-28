@@ -232,6 +232,47 @@ def communal_off_choice(raw) -> frozenset[str] | None:
     return frozenset(raw)
 
 
+#: `communalSkills` (phase M31): the skill names the person added to
+#: Communal, and the ones taken out of it that every agent has. More than
+#: anyone sets by hand; a longer list is unreadable.
+MAX_COMMUNAL_SKILLS = 256
+
+
+def communal_skills_choice(raw) -> dict | None:
+    """`communalSkills` as written (phase M31): {"add": [...], "remove":
+    [...]}, skill names. Communal is a grouping, not a delivery: a skill
+    every agent that takes skills already has is communal by itself
+    (skillscan.grouping), "add" makes one communal that is not, and
+    "remove" keeps one out of that automatic rule until it is added back.
+    Neither list gives or withholds a skill from anyone; an agent's own
+    `skillsOff` does that. A missing key or null is neither. Anything else
+    -- not a map, another key, an entry that is not a name, a name in both
+    lists, more than MAX_COMMUNAL_SKILLS in one -- is None: unreadable,
+    which the caller reads as the automatic rule alone, and the page then
+    writes nothing over it."""
+    if raw is None:
+        return {"add": [], "remove": []}
+    if not isinstance(raw, dict) or not set(raw) <= {"add", "remove"}:
+        return None
+    out: dict[str, list[str]] = {}
+    for key in ("add", "remove"):
+        names = raw.get(key)
+        if names is None:
+            names = []
+        if not isinstance(names, list) or len(names) > MAX_COMMUNAL_SKILLS:
+            return None
+        got: list[str] = []
+        for name in names:
+            if not isinstance(name, str) or not SKILL_REF.fullmatch(name):
+                return None
+            if name not in got:
+                got.append(name)
+        out[key] = got
+    if set(out["add"]) & set(out["remove"]):
+        return None
+    return out
+
+
 #: The hung-turn limit (phase M17): seconds of complete silence from an
 #: agent's program before its turn is stopped. The bounds of the control.
 IDLE_TIMEOUT_MIN, IDLE_TIMEOUT_MAX, IDLE_TIMEOUT_DEFAULT = 30, 600, 90
@@ -496,6 +537,12 @@ DEFAULTS = {
     # on Communal → Who gets it. No TOML alias: the fallback config has no
     # Communal page.
     "communalOff": [],
+    # Phase M31: which skills are communal, beyond the ones every agent
+    # already has (communal_skills_choice). A grouping only: no copy is
+    # made and nobody is given or denied a skill by it. A map, so
+    # defaults-only in the manifest; written on Communal → Skills. No TOML
+    # alias: the fallback config has no Communal page.
+    "communalSkills": {},
     "conversationMode": True,
     "yieldToRecorders": True,
     "logSpeech": False,
@@ -1177,6 +1224,15 @@ class Config:
             return frozenset()
         got = communal_off_choice(self._values.get("communalOff"))
         return got if got is not None else frozenset()
+
+    def communal_skills(self) -> dict | None:
+        """`communalSkills` (phase M31): {"add": [...], "remove": [...]},
+        or None when it or the settings cannot be read -- then the
+        automatic rule alone decides what is communal, which gives and
+        withholds nothing. Read fresh by whoever asks."""
+        if not self.settings_readable():
+            return None
+        return communal_skills_choice(self._values.get("communalSkills"))
 
     def takes_communal(self, agent_id: str | None) -> bool:
         """Whether this agent is told the communal rules and defaults and

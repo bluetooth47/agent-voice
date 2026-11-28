@@ -241,7 +241,7 @@ for c in bash dirname readlink python3; do
 done
 # And the skills those CLIs find by themselves (M11): two of Claude Code's
 # (one over the size a skill may be copied at), a claude.ai synced one, one
-# of Codex's and one in ~/.agents/skills -- whose home is a scratch one, so
+# of Codex's and one in ~/.agents/skills (and, since M31, one in both) -- whose home is a scratch one, so
 # the person's own ~/.agents/skills is never read either.
 mkskill() {  # folder name description [extra-bytes]
   mkdir -p "$1"
@@ -255,6 +255,9 @@ mkskill "$tmp/claude/skills/big-guide" big-guide "A long style guide." 21000
 mkskill "$tmp/claude/skills/synced/bucket/docx" docx "Make and edit Word documents."
 mkskill "$tmp/codex/skills/deploy-site" deploy-site "Deploy the website. Use when asked to ship it."
 mkskill "$tmp/home/.agents/skills/crash-notes" crash-notes "Read a core dump and say why a program crashed."
+# M31: one both programs have, so it is communal by itself (every agent has it).
+mkskill "$tmp/claude/skills/screen-notes" screen-notes "Take notes from a screenshot. Use when asked what is on screen."
+mkskill "$tmp/codex/skills/screen-notes" screen-notes "Take notes from a screenshot. Use when asked what is on screen."
 real_python="${AGENTVOICE_PYTHON:-$HOME/.local/share/agentvoice/venv/bin/python}"
 [ -x "$real_python" ] || real_python=python3
 real_config="${XDG_CONFIG_HOME:-$HOME/.config}"

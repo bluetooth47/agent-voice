@@ -2197,14 +2197,24 @@ def catalog(agent_id: str, cfg) -> dict:
     off = cfg.skills_off_for("" if me == MAIN else me)
     try:
         found = skillscan.scan()
-        lanes = skillscan.lanes(cfg)
         skills_error = ""
     except Exception as e:      # noqa: BLE001 -- shown on the tab
-        found, lanes = {"skills": [], "problems": []}, None
+        found = {"skills": [], "problems": []}
         skills_error = f"the skill scan failed ({type(e).__name__})"
     communal_on = cfg.takes_communal(me)
     entries = skillscan.agent_view(program, off, own, skills(COMMUNAL), found["skills"], delivery,
                                    communal_on)
+    # Phase M31: which of them are communal, a grouping over every agent
+    # (skillscan.grouping), and one card per name in its section. Nothing
+    # here changes what the agent is given.
+    try:
+        group = skillscan.grouping(cfg, found)
+        shared = skillscan.communal_names(group["rows"])
+        grouping_readable = group["readable"]
+    except Exception as e:      # noqa: BLE001 -- shown on the tab
+        shared, grouping_readable = set(), True
+        skills_error = skills_error or f"reading which skills are communal failed ({type(e).__name__})"
+    skill_cards = skillscan.cards(entries, shared, communal_on)
     # Phase M10: the tools found on this machine, as this agent has them.
     # A scan that fails lists nothing (and says why): nothing is on then.
     import tooldetect
@@ -2224,9 +2234,11 @@ def catalog(agent_id: str, cfg) -> dict:
             "level": level, "tools": tools, "notes": notes_row, "collab": collab_row,
             "chats": chats_row,
             "skills": entries,
+            "skill_cards": skill_cards,
             "takes_communal": communal_on,
             "skills_readable": off is not None,
-            "skill_lanes": lanes, "skills_error": skills_error,
+            "communal_readable": grouping_readable,
+            "skills_error": skills_error,
             "skills_problems": found.get("problems") or [],
             "skills_note": skillscan.UNMANAGED.get(program, ""),
             "delivery": delivery, "delivery_how": how,

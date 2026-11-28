@@ -837,14 +837,18 @@ Column {
     page.putShared("cli:" + name, "off")
   }
 
-  // --- Skills (Phase 13) ------------------------------------------------------------
-  // The shared skills, and which agents get each: since M11 from `skills
-  // lanes`, the daemon's own resolution -- every agent whose program can
-  // take skills, unless it has its own of the same name or switched it off
-  // on its Tools & skills tab -- and how each agent takes them at all.
-  property var skillList: null
-  property var skillLanes: []
+  // --- Skills (Phase 13; a grouping since M31) -------------------------------------
+  // Every skill an agent has, who has it, and which are communal, from
+  // `skills communal`, the daemon's own reading (skillscan.grouping). A skill
+  // every agent that takes skills already has is communal by itself;
+  // `communalSkills` adds others and keeps one out of that rule. Communal
+  // gives nobody a copy and withholds nothing: each agent's Exclude, on its
+  // own Tools & skills tab, is what does that.
+  property var skillRows: null
+  property var skillAgents: []
+  property bool skillsReadable: true
   property string skillError: ""
+  property string skillQuery: ""
   readonly property string skillWatch: page.watch + JSON.stringify(s.vAgentFiles) +
                                        JSON.stringify(s.folders.folders)
   onSkillWatchChanged: skillDelay.restart()
@@ -859,15 +863,16 @@ Column {
   }
   Process {
     id: skillReader
-    command: ["agentvoice", "skills", "lanes", "--json"]
+    command: ["agentvoice", "skills", "communal", "--json"]
     stdout: StdioCollector {
       onStreamFinished: {
         var d
         try { d = JSON.parse(String(text)) } catch (e) { return }
-        if (!d || !Array.isArray(d.communal) || !Array.isArray(d.lanes)) return
+        if (!d || !Array.isArray(d.rows) || !Array.isArray(d.agents)) return
         page.skillError = ""
-        page.skillList = d.communal
-        page.skillLanes = d.lanes
+        page.skillRows = d.rows
+        page.skillAgents = d.agents
+        page.skillsReadable = d.readable !== false
       }
     }
     stderr: StdioCollector {
@@ -877,66 +882,129 @@ Column {
       }
     }
   }
-  // Phase M11: each agent, and how it takes the communal skills -- or why
-  // it takes none (master plan, M11: "marks each agent whose backend
-  // cannot take skills and why").
-  function takesLine(l) {
+  // The command reads shell.json from disk, which the store writes a moment
+  // after the page shows a change: read again once a save has landed.
+  Connections {
+    target: page.s.store
+    function onSaved(key) { if (page.tab === "skills") skillDelay.restart() }
+  }
+  readonly property var communalRows: (skillRows || []).filter(function(r) { return r.communal === true })
+  readonly property var shownRows: {
+    var q = page.skillQuery.trim().toLowerCase()
+    var all = skillRows || []
+    if (q === "") return all
+    return all.filter(function(r) {
+      return String(r.name).toLowerCase().indexOf(q) >= 0 ||
+             String(r.description || "").toLowerCase().indexOf(q) >= 0
+    })
+  }
+  // An agent that cannot be part of Communal at all, and why: it takes no
+  // skills, or it takes nothing from Communal (master plan, M11: "marks
+  // each agent whose backend cannot take skills and why").
+  function outsideLine(l) {
     if (l.delivery === "none")
-      return l.program === "endpoint" ? "takes no skills: an endpoint runs nothing on this machine"
-             : l.program === "" ? "takes no skills: no program is chosen" : "takes no skills: Agent Voice cannot run " + l.program
-    if (l.delivery === "plugin") return "loads each one itself when a request needs it"
-    return "is told a list and reads a skill's file when it needs it (" + l.program_label + " cannot load Agent Voice's skills itself)"
-  }
-  // Who does not get one communal skill, and why.
-  function notGiven(skill) {
-    var out = []
-    for (var i = 0; i < skillLanes.length; i++) {
-      var l = skillLanes[i]
-      if (!l.enabled || (skill.gets || []).indexOf(l.label) >= 0) continue
-      var own = (l.skills || []).some(function(x) { return x.source === l.id && x.name === skill.name })
-      out.push(l.label + (l.delivery === "none" ? " (takes no skills)"
-                          : l.takes_communal === false ? " (takes nothing from Communal)"
-                          : own ? " (has its own)" : " (switched off)"))
-    }
-    return out
-  }
-  // Phase M12: Communal and each agent's own skills as lanes; a card dragged
-  // (Ctrl copies) or sent from its Move to… goes through the SkillMover,
-  // which asks first when it widens (into Communal, out of a quarantined
-  // agent) and offers Undo.
-  function ownSkills(l) { return (l.skills || []).filter(function(x) { return x.source === l.id }) }
-  function laneOf(id) {
-    if (id === "communal") return page.skillList || []
-    var l = page.skillLanes.filter(function(x) { return x.id === id })
-    return l.length > 0 ? page.ownSkills(l[0]) : []
-  }
-  function skillLabel(id) {
-    if (id === "communal") return "Communal"
-    var l = page.skillLanes.filter(function(x) { return x.id === id })
-    return l.length > 0 ? l[0].label : id
-  }
-  function skillRefusal(p, to) {
-    if (!p || !p.name) return "Not a skill."
-    if (p.problem !== "") return "It has a problem, so it is not moved until it is fixed: " + p.problem
-    if (page.laneOf(to).some(function(x) { return x.name === p.name }))
-      return page.skillLabel(to) + " already has a skill named " + p.name + "."
+      return l.label + " takes no skills: " + (l.program === "endpoint" ? "an endpoint runs nothing on this machine"
+             : l.program === "" ? "no program is chosen" : "Agent Voice cannot run " + l.program) + "."
+    if (l.takes_communal === false)
+      return l.label + " takes nothing from Communal (Who gets it), so it is left out here and keeps its skills as its own."
     return ""
   }
-  function keepsOwn(name, to) {
-    if (to !== "communal") return []
-    return page.skillLanes.filter(function(l) {
-      return page.ownSkills(l).some(function(x) { return x.name === name })
-    }).map(function(l) { return l.id })
+  function joinNames(xs) {
+    if (xs.length <= 1) return xs.join("")
+    return xs.slice(0, -1).join(", ") + " and " + xs[xs.length - 1]
   }
-  function skillDropped(p, copy, from, to) {
-    var why = page.skillRefusal(p, to)
-    if (why !== "") { page.skillNote = why; return }
+  // Who does not have a skill, grouped by why: "Theo and Sora (Claude Code
+  // has no skill of this name); Hazel (takes no skills)".
+  function lacksText(lacks) {
+    var whys = [], who = {}
+    for (var i = 0; i < lacks.length; i++) {
+      if (!(lacks[i].why in who)) { who[lacks[i].why] = []; whys.push(lacks[i].why) }
+      who[lacks[i].why].push(lacks[i].label)
+    }
+    return whys.map(function(w) {
+      var n = who[w]
+      return (n.length <= 1 ? n.join("") : n.slice(0, -1).join(", ") + " or " + n[n.length - 1]) + " (" + w + ")"
+    }).join("; ")
+  }
+  // Who has a skill, who does not and why, and who excluded it.
+  function rowStatus(r) {
+    var has = r.has || [], lacks = r.lacks || [], excl = r.excluded || []
+    var out = has.length === 0 ? "No agent has it now."
+              : (lacks.length === 0 ? "Every agent has it: " : "Has it: ") + page.joinNames(has) + "."
+    if (lacks.length > 0) out += " Not " + page.lacksText(lacks) + "."
+    if (excl.length > 0) out += " Excluded by " + page.joinNames(excl) + "."
+    if (r.problem) out += " " + r.problem
+    return out
+  }
+  // `communalSkills` with one name added to or taken out of Communal, or
+  // null when what is there cannot be read (then nothing is written over
+  // it). Out of Communal, a skill every agent has goes on "remove", so the
+  // automatic rule leaves it out until it is added back; into Communal it
+  // comes off "remove", and goes on "add" unless every agent has it.
+  function communalEdited(cur, name, on, auto) {
+    var re = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(:[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$/
+    if (!re.test(String(name)) || (on !== true && on !== false)) return null
+    if (cur === undefined || cur === null) cur = {}
+    if (typeof cur !== "object" || Array.isArray(cur)) return null
+    var keys = Object.keys(cur)
+    for (var k = 0; k < keys.length; k++) if (keys[k] !== "add" && keys[k] !== "remove") return null
+    function names(v) {
+      if (v === undefined || v === null) return []
+      if (!Array.isArray(v) || v.length > 256) return null
+      var out = []
+      for (var i = 0; i < v.length; i++) {
+        if (typeof v[i] !== "string" || !re.test(v[i])) return null
+        if (out.indexOf(v[i]) < 0) out.push(v[i])
+      }
+      return out
+    }
+    var add = names(cur.add), remove = names(cur.remove)
+    if (add === null || remove === null) return null
+    for (var j = 0; j < add.length; j++) if (remove.indexOf(add[j]) >= 0) return null
+    add = add.filter(function(n) { return n !== name })
+    remove = remove.filter(function(n) { return n !== name })
+    if (on && auto !== true) add.push(name)
+    if (!on && auto === true) remove.push(name)
+    if (add.length > 256 || remove.length > 256) return null
+    return { add: add, remove: remove }
+  }
+  // The question before a change, under the card it was asked from: one
+  // name in one list at a time (a communal skill is in both).
+  property string skillAsking: ""
+  property string skillAskingIn: ""
+  property bool skillAskingOn: false
+  function askCommunal(r, on, list) {
     page.skillNote = ""
-    skillMover.request(p.name, from, to, copy, page.keepsOwn(p.name, to))
+    if (!page.skillsReadable) {
+      page.skillNote = "Not changed: which skills are communal cannot be read. Fix or remove communalSkills in shell.json."
+      return
+    }
+    page.skillAskingOn = on
+    page.skillAskingIn = list
+    page.skillAsking = r.name
   }
-  readonly property var skillLaneList: [{ id: "communal", label: "Communal",
-                                          reason: "Every agent will get it; asks first" }]
-                                       .concat(skillLanes.map(function(l) { return { id: l.id, label: l.label } }))
+  // Written only from the confirm's onConfirmed (tests/test_communal_skills.py).
+  function setCommunal(r, on) {
+    page.skillAsking = ""
+    var next = page.communalEdited(page.s.setting("communalSkills", {}), r.name, on, r.auto === true)
+    if (next === null) {
+      page.skillNote = "Not changed: which skills are communal cannot be read. Fix or remove communalSkills in shell.json."
+      return
+    }
+    page.s.put("communalSkills", next)
+  }
+  function confirmLines(r, on) {
+    if (on) {
+      var lacks = r.lacks || []
+      return [{ label: "Who has it", value: (r.has || []).length > 0 ? page.joinNames(r.has) : "No agent has it now" },
+              { label: "Who doesn't", value: lacks.length > 0 ? page.lacksText(lacks) : "Every agent has it" },
+              { label: "What changes", value: "It is listed under From communal for each agent that has " +
+                "it, where each can exclude it. No agent is given a copy it does not have already." }]
+    }
+    return [{ label: "What changes", value: "It goes back to each agent's own skills, still on wherever " +
+              "it was on. Nothing is switched off." +
+              (r.auto === true ? " Every agent has it, so it stays out of Communal until you add it back." : "") }]
+  }
 
   property string skillNote: ""
   Process {
@@ -966,14 +1034,9 @@ Column {
       }
     }
   }
-  function labelOf(id) {
-    if (id === "main") return s.mainLabel
-    for (var i = 0; i < s.voiceAgents.length; i++)
-      if (s.agentId(s.voiceAgents[i] || {}) === id) return s.agentLabel(s.voiceAgents[i]) || id
-    return id
-  }
 
   Column {
+    objectName: "communalSkills"
     width: parent.width
     spacing: Style.space(10)
     visible: page.tab === "skills"
@@ -981,32 +1044,30 @@ Column {
     Text {
       width: parent.width
       wrapMode: Text.WordWrap
-      text: "Given to every agent whose program can take skills: Claude Code loads each one " +
-            "itself when a request needs it; Codex, Gemini, Antigravity and Copilot are told a list " +
-            "and read a skill's file when they need it; an endpoint gets none. An agent with its " +
-            "own skill of the same name gets its own instead, and any agent can switch one off " +
-            "on its Tools & skills tab. Drag a card between lanes to move it (hold Ctrl to copy), " +
-            "or use its Move to…; Undo is offered for ten seconds."
+      text: "A communal skill is one the agents share. Nothing is copied: an agent whose program " +
+            "does not have it does not get it, and each skill says who that is. A skill every agent " +
+            "already has is communal by itself. Each agent can exclude a communal skill on its own " +
+            "Tools & skills tab."
       color: page.s.dim
       font.family: page.s.fontFamily
       font.pixelSize: Style.font.caption
     }
     Repeater {
-      model: page.skillLanes
+      model: page.skillAgents.filter(function(l) { return page.outsideLine(l) !== "" })
       Text {
         required property var modelData
         width: parent.width
         wrapMode: Text.WordWrap
         textFormat: Text.PlainText
-        text: modelData.label + (modelData.enabled ? "" : " (switched off)") + " " + page.takesLine(modelData) + "."
-        color: modelData.delivery === "none" ? page.s.urgent : page.s.foreground
+        text: page.outsideLine(modelData)
+        color: modelData.delivery === "none" ? page.s.urgent : page.s.dim
         font.family: page.s.fontFamily
         font.pixelSize: Style.font.caption
       }
     }
     Text {
       width: parent.width
-      visible: page.skillList === null || page.skillError !== ""
+      visible: page.skillRows === null || page.skillError !== ""
       wrapMode: Text.WordWrap
       textFormat: Text.PlainText
       text: page.skillError !== "" ? "Could not read the skills: " + page.skillError : "Reading…"
@@ -1014,52 +1075,69 @@ Column {
       font.family: page.s.fontFamily
       font.pixelSize: Style.font.caption
     }
-    // "No shared skills yet." stood here in Qt's default size, larger than
-    // anything else on any page, saying what the Communal lane's own empty
-    // line says (M29).
-    Flow {
-      id: communalLanes
+    Text {
       width: parent.width
-      visible: page.skillList !== null
-      spacing: Style.space(10)
-      readonly property real laneWidth: width >= Style.space(760) ? (width - spacing) / 2 : width
+      visible: page.skillRows !== null && !page.skillsReadable
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: "Which skills are communal cannot be read (communalSkills in shell.json), so only the " +
+            "ones every agent has are shown as communal, and nothing here can be changed until it is " +
+            "fixed or removed. Nobody is given or denied a skill because of it."
+      color: page.s.urgent
+      font.family: page.s.fontFamily
+      font.pixelSize: Style.font.caption
+    }
 
-      DropLane {
-        width: communalLanes.laneWidth
-        laneId: "communal"
-        title: "Communal"
-        subtitle: "Every agent's, unless it has its own of the same name or switches it off."
-        count: (page.skillList || []).length
-        emptyText: "No shared skills yet. Drag one here from an agent's lane to give it to every agent."
-        refuse: function(p, copy, from) { return page.skillRefusal(p, "communal") }
-        onReceived: function(p, copy, from) { page.skillDropped(p, copy, from, "communal") }
-        foreground: page.s.foreground
-        fontFamily: page.s.fontFamily
-        Repeater {
-          model: page.skillList || []
+    Card {
+      objectName: "communalList"
+      width: parent.width
+      visible: page.skillRows !== null
+      title: "Communal skills" + (page.communalRows.length > 0 ? " · " + page.communalRows.length : "")
+      subtitle: "Shared by every agent that has them."
+      foreground: page.s.foreground
+      fontFamily: page.s.fontFamily
+      Text {
+        width: parent.width
+        visible: page.communalRows.length === 0
+        wrapMode: Text.WordWrap
+        textFormat: Text.PlainText
+        text: "None yet. Switch one on under All skills; a skill every agent has is communal by itself."
+        color: page.s.dim
+        font.family: page.s.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+      Repeater {
+        model: page.communalRows
+        Column {
+          required property var modelData
+          width: parent.width
+          spacing: Style.space(6)
           SkillCard {
-            required property var modelData
-            readonly property var missing: page.notGiven(modelData)
             width: parent.width
-            draggable: true
-            laneId: "communal"
-            payload: ({ name: modelData.name, from: "communal", problem: modelData.problem || "" })
-            lanes: page.skillLaneList
-            onMoveRequested: function(to, copy) { page.skillDropped(payload, copy, "communal", to) }
             title: modelData.name
             subtitle: modelData.description
-            status: modelData.problem !== "" ? "Not given to any agent: " + modelData.problem
-                    : "Given to " + ((modelData.gets || []).length > 0 ? modelData.gets.join(", ") : "no agent") +
-                      "." + (missing.length > 0 ? " Not to " + missing.join(", ") + "." : "") +
-                      (modelData.changed_outside === true ? " Added or changed outside Settings." : "")
+            badge: modelData.added === true ? "added" : "every agent has it"
+            status: page.rowStatus(modelData)
             statusUrgent: modelData.problem !== ""
-            details: [{ label: "Where", value: modelData.path || "" }]
+            details: [{ label: "Found in", value: (modelData.sources || []).join(", ") || "nowhere now" }]
+                     .concat(modelData.path ? [{ label: "Where", value: modelData.path }] : [])
             foreground: page.s.foreground
             fontFamily: page.s.fontFamily
+            ActionButton {
+              text: "Remove…"
+              bordered: true
+              focusable: true
+              enabled: page.skillsReadable
+              foreground: page.s.foreground
+              fontFamily: page.s.fontFamily
+              fontSize: Style.font.caption
+              tooltipText: "Take it out of Communal, after asking. Each agent keeps it as its own."
+              onClicked: page.askCommunal(modelData, false, "communal")
+            }
             // Made or edited by hand (a skill always is): Keep saves this
             // version, so the outside-change notice goes (Phase 13).
             ActionButton {
-              visible: modelData.changed_outside === true
+              visible: modelData.folder === true && modelData.changed_outside === true
               text: "Keep"
               focusable: true
               enabled: !skillKeeper.running
@@ -1070,58 +1148,86 @@ Column {
               onClicked: page.keepSkill(modelData.name, modelData.stamp)
             }
           }
-        }
-      }
-
-      Repeater {
-        model: page.skillLanes
-        DropLane {
-          id: agentLane
-          required property var modelData
-          width: communalLanes.laneWidth
-          laneId: modelData.id
-          title: modelData.label
-          subtitle: "Its own skills folder. Its switches are on its own Tools & skills tab."
-          count: page.ownSkills(modelData).length
-          emptyText: "No skills of its own."
-          refuse: function(p, copy, from) { return page.skillRefusal(p, laneId) }
-          onReceived: function(p, copy, from) { page.skillDropped(p, copy, from, laneId) }
-          foreground: page.s.foreground
-          fontFamily: page.s.fontFamily
-          Repeater {
-            model: page.ownSkills(agentLane.modelData)
-            SkillCard {
-              required property var modelData
-              width: parent.width
-              draggable: true
-              laneId: agentLane.laneId
-              payload: ({ name: modelData.name, from: agentLane.laneId, problem: modelData.problem || "" })
-              lanes: page.skillLaneList
-              onMoveRequested: function(to, copy) { page.skillDropped(payload, copy, agentLane.laneId, to) }
-              title: modelData.name
-              subtitle: modelData.description
-              status: modelData.problem !== "" ? "Not given: " + modelData.problem : ""
-              statusUrgent: modelData.problem !== ""
-              details: [{ label: "Where", value: modelData.path || "" }]
-              foreground: page.s.foreground
-              fontFamily: page.s.fontFamily
-            }
+          ToolConfirm {
+            visible: page.skillAsking === modelData.name && page.skillAskingIn === "communal"
+            title: "Remove " + modelData.name + " from Communal?"
+            lines: page.confirmLines(modelData, false)
+            confirmText: "Remove"
+            foreground: page.s.foreground
+            fontFamily: page.s.fontFamily
+            onConfirmed: page.setCommunal(modelData, false)
+            onCancelled: page.skillAsking = ""
           }
         }
       }
     }
-    SkillMover {
-      id: skillMover
+
+    Card {
+      objectName: "allSkills"
       width: parent.width
-      labels: {
-        var out = { communal: "Communal" }
-        page.skillLanes.forEach(function(l) { out[l.id] = l.label })
-        return out
-      }
-      quarantined: page.s.setting("crewQuarantine", [])
+      visible: page.skillRows !== null
+      title: "All skills" + ((page.skillRows || []).length > 0
+                             ? " · " + (page.skillQuery.trim() !== "" ? page.shownRows.length + " of " : "") +
+                               page.skillRows.length : "")
+      subtitle: "Every skill any agent has, with a switch for Communal."
       foreground: page.s.foreground
       fontFamily: page.s.fontFamily
-      onChanged: { page.s.folders.refresh(); page.loadSkills() }
+      SearchField {
+        width: parent.width
+        placeholder: "Search skills"
+        foreground: page.s.foreground
+        fontFamily: page.s.fontFamily
+        onSearched: function(t) { page.skillQuery = t }
+      }
+      Text {
+        width: parent.width
+        visible: page.shownRows.length === 0
+        wrapMode: Text.WordWrap
+        textFormat: Text.PlainText
+        text: page.skillQuery.trim() !== "" ? "No skill matches “" + page.skillQuery.trim() + "”."
+                                           : "No agent has any skill."
+        color: page.s.dim
+        font.family: page.s.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+      Repeater {
+        model: page.shownRows
+        Column {
+          required property var modelData
+          width: parent.width
+          spacing: Style.space(6)
+          SkillCard {
+            width: parent.width
+            title: modelData.name
+            subtitle: modelData.description
+            // One place, and how many more: a long badge squeezes the name.
+            badge: (modelData.sources || []).length > 1 ? modelData.sources[0] + " +" + (modelData.sources.length - 1)
+                                                         : (modelData.sources || []).join("")
+            status: page.rowStatus(modelData)
+            statusUrgent: modelData.problem !== ""
+            details: [{ label: "Found in", value: (modelData.sources || []).join(", ") || "nowhere now" }]
+                     .concat(modelData.path ? [{ label: "Where", value: modelData.path }] : [])
+            switchable: page.skillsReadable
+            checked: modelData.communal === true
+            switchTooltip: modelData.communal === true ? "In Communal. Switch off to take it out, after asking."
+                                                       : "Not in Communal. Switch on to add it, after asking."
+            foreground: page.s.foreground
+            fontFamily: page.s.fontFamily
+            onToggled: function(on) { page.askCommunal(modelData, on, "all") }
+          }
+          ToolConfirm {
+            visible: page.skillAsking === modelData.name && page.skillAskingIn === "all"
+            title: page.skillAskingOn ? "Add " + modelData.name + " to Communal?"
+                                      : "Remove " + modelData.name + " from Communal?"
+            lines: page.confirmLines(modelData, page.skillAskingOn)
+            confirmText: page.skillAskingOn ? "Add to Communal" : "Remove"
+            foreground: page.s.foreground
+            fontFamily: page.s.fontFamily
+            onConfirmed: page.setCommunal(modelData, page.skillAskingOn)
+            onCancelled: page.skillAsking = ""
+          }
+        }
+      }
     }
     Text {
       width: parent.width
@@ -1136,17 +1242,17 @@ Column {
     Text {
       width: parent.width
       wrapMode: Text.WordWrap
-      text: "A skill is a folder holding SKILL.md, which starts with a line of ---, then " +
-            "“name:” (the folder's name) and “description:” (one line on when to use it, at most " +
-            "300 characters), then ---, then the instructions. Scripts beside it are run by each " +
-            "agent at its own permission level, never by Agent Voice. Changes apply on each " +
-            "agent's next turn."
+      text: "Agent Voice's communal skills folder is separate: a skill kept there is given to every " +
+            "agent that takes Communal. A skill is a folder holding SKILL.md, which starts with a line " +
+            "of ---, then “name:” (the folder's name) and “description:” (one line on when to use it, " +
+            "at most 300 characters), then ---, then the instructions. Scripts beside it are run by each " +
+            "agent at its own permission level, never by Agent Voice."
       color: page.s.dim
       font.family: page.s.fontFamily
       font.pixelSize: Style.font.caption
     }
     ActionButton {
-      text: "Open the skills folder"
+      text: "Open the communal skills folder"
       iconText: "\u{f0770}"
       bordered: true
       focusable: true

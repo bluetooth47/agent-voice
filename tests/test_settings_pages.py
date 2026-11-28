@@ -181,7 +181,10 @@ DEFAULTS_ONLY = {"agentEfforts", "agentModels", "mainTools", "permissions",
                  "communalOff",
                  # Phase M17: the main agent's extra flags, a list written on
                  # Agent details → Advanced.
-                 "mainExtraArgs"}
+                 "mainExtraArgs",
+                 # Phase M31: which skills are communal beyond the ones every
+                 # agent has, a map written on Communal → Skills.
+                 "communalSkills"}
 
 # A key or an agent field whose one writer is an overlay function, and the
 # one page that calls it (phase M10). The page is its home: a call from any

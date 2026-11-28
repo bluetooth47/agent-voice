@@ -38,7 +38,6 @@ SettingsSearch 1.0 SettingsSearch.qml
 SettingsStore 1.0 SettingsStore.qml
 SidebarNav 1.0 SidebarNav.qml
 SkillCard 1.0 SkillCard.qml
-SkillMover 1.0 SkillMover.qml
 SliderRow 1.0 SliderRow.qml
 StageBlock 1.0 StageBlock.qml
 StarterChips 1.0 StarterChips.qml

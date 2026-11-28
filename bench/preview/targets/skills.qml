@@ -1,28 +1,28 @@
-// Skills on this machine, lanes and a switch per skill (master plan, M11),
-// driven by synthetic clicks through the real settings store, the real
-// `agentvoice agents catalog` and the real `agentvoice skills import`, on
-// the synthetic machine preview.sh makes and the folders skills.seed.py
-// writes (never the person's own):
+// The two skill screens as phase M31 made them, driven by synthetic clicks
+// through the real settings store, the real `agentvoice agents catalog` and
+// the real `agentvoice skills communal`, on the synthetic machine preview.sh
+// makes and the folders skills.seed.py writes (never the person's own):
 //
 //   preview.sh --config bench/preview/configs/skills3.json --scratch-data \
 //     --wait 90 --out /tmp/s skills
 //   grep PREVIEW /tmp/s.log; cat /tmp/s.writes
 //
-// With PREVIEW_ARG=shots it only opens Sora's tab and steps down a
-// screenful between shots (`--arg shots --shots 6`), for screenshots.
+// With PREVIEW_ARG=shots it only opens Sora's Tools & skills tab, and with
+// shots-communal Communal → Skills, stepping down a screenful between shots
+// (`--arg shots --shots 6`), for screenshots.
 //
-// Sora's lane: her own, the broken one listed with why, and the three
-// Claude Code finds by itself (one hidden by the communal skill of its
-// name). Switching big-guide off writes her skillsOff and, since Theo has
-// it off too, moves it to Unused, where it says it is too long to copy.
-// crash-notes (Hazel switched it off) is given to Sora as a copy: the
-// confirm names the source and who gets it, Cancel copies nothing, Give a
-// copy makes it hers. A communal one is switched off and on for her alone.
-// Communal → Skills says how each agent takes them.
+// Agent details → Tools & skills shows Sora alone: From communal (the two
+// communal-folder skills and screen-notes, which every agent's program
+// has), then her own. Exclude and Include again write her skillsOff; so
+// does her own switch. Communal → Skills lists the communal ones, then every
+// skill with a search and a switch: adding docx asks (who has it, Hazel does
+// not), writes nothing before the answer or on Cancel, and Add to Communal
+// writes communalSkills.add; Remove on screen-notes asks and writes
+// communalSkills.remove. Back on Sora's tab, docx is under From communal and
+// screen-notes under her own, still on.
 import QtQuick
 import QtTest
 import Quickshell
-import Quickshell.Io
 import "plugin"
 
 ShellRoot {
@@ -30,12 +30,38 @@ ShellRoot {
 
   Settings {
     id: overlay
-    readonly property bool shotsOnly: Quickshell.env("PREVIEW_ARG") === "shots"
-    Component.onCompleted: overlay.open('{"page":"agentdetails","agent":"sora","tab":"tools"}')
+    // "shots", "shots-communal", either with ":WIDTH" to draw the card that
+    // wide (narrow 520 shows the window the user called cramped).
+    readonly property string mode: String(Quickshell.env("PREVIEW_ARG") || "").split(":")[0]
+    readonly property int cardWidth: Number(String(Quickshell.env("PREVIEW_ARG") || "").split(":")[1] || 0)
+    readonly property bool shotsOnly: mode === "shots" || mode === "shots-communal"
+    Component.onCompleted: overlay.open(mode === "shots-communal"
+                                        ? '{"page":"communal","tab":"skills"}'
+                                        : '{"page":"agentdetails","agent":"sora","tab":"tools"}')
 
     Loader {
       active: overlay.shotsOnly
       sourceComponent: Component { Scroller { target: overlay } }
+    }
+    // Shots: the card drawn at the asked width, and the page started at the
+    // skills (they sit under the tools on Agent details), once they are read.
+    property bool placed: false
+    Timer {
+      interval: 300
+      repeat: true
+      running: overlay.shotsOnly && !overlay.placed
+      onTriggered: {
+        var w = overlay.pageScroll ? overlay.pageScroll.Window.window : null
+        var cardItem = w ? overlay.find(w.contentItem, function(i) { return i.objectName === "settingsCard" }) : null
+        if (cardItem && overlay.cardWidth > 0) cardItem.width = overlay.cardWidth
+        var at = overlay.named(overlay.mode === "shots" ? "skillsHeading" : "communalSkills")
+        var ready = overlay.mode === "shots" ? overlay.named("fromCommunal") !== null
+                                             : overlay.named("communalList") !== null
+        if (!at || !ready || !overlay.content()) return
+        var f = overlay.pageScroll
+        f.contentY = Math.max(0, Math.min(at.mapToItem(overlay.content(), 0, 0).y - 8, f.contentHeight - f.height))
+        overlay.placed = true
+      }
     }
     TestEvent { id: input }
 
@@ -66,30 +92,31 @@ ShellRoot {
       console.warn("PREVIEW click " + label)
       input.mouseClick(item, item.width / 2, item.height / 2, Qt.LeftButton, Qt.NoModifier, -1)
     }
-    function details() { return find(content(), function(i) { return i.importSkill !== undefined && i.switchSkill !== undefined }) }
-    function lane(id) { return find(content(), function(i) { return i.laneId === id && i.received !== undefined }) }
+    function named(name) { return find(content(), function(i) { return i.objectName === name }) }
+    function details() { return find(content(), function(i) { return i.switchSkill !== undefined && i.communalStatus !== undefined }) }
+    function communal() { return find(content(), function(i) { return i.setCommunal !== undefined && i.communalRows !== undefined }) }
     function card(within, name) {
       return find(within, function(i) { return i.switchable !== undefined && i.details !== undefined && String(i.title) === name })
     }
     function toggleOf(c) { return c ? find(c, function(i) { return i.trackWidth !== undefined && i.toggled !== undefined }) : null }
     function button(within, text) { return find(within, function(i) { return i.clicked !== undefined && String(i.text) === text }) }
     function confirmBox() { return find(content(), function(i) { return i.confirmText !== undefined && i.lines !== undefined }) }
+    function search() { return find(content(), function(i) { return i.searched !== undefined && i.placeholder !== undefined }) }
+    // Key events never reach the preview window, so the text is set and the
+    // field's own signal sent, as typing then a pause would.
+    function type(t) { var f = search(); if (!f) { check(false, "found the search"); return } f.text = t; f.searched(t) }
     function soraOff() {
       for (var i = 0; i < overlay.voiceAgents.length; i++)
         if (overlay.agentId(overlay.voiceAgents[i]) === "sora") return overlay.voiceAgents[i].skillsOff || []
       return []
     }
-    function skillsOf(field) {
+    function grouping() { return JSON.stringify(overlay.setting("communalSkills", {})) }
+    function cards(section) {
       var d = details()
-      return d && d.catalog ? d.catalog[field] : null
+      var all = d && d.catalog && d.catalog.agent === "sora" ? d.catalog.skill_cards || [] : []
+      return all.filter(function(x) { return x.section === section }).map(function(x) { return x.name }).sort().join()
     }
-
-    Process {
-      id: probe
-      property int code: -1
-      command: ["test", "-f", Quickshell.env("PREVIEW_DATA") + "/agents/sora/skills/crash-notes/SKILL.md"]
-      onExited: function(c) { probe.code = c }
-    }
+    function rowNames(list) { return (list || []).map(function(r) { return r.name }).sort().join() }
 
     property int step: 0
     property int warm: 0
@@ -101,103 +128,131 @@ ShellRoot {
       onTriggered: {
         if (!overlay.store.loaded || ++overlay.warm < 3) return
         overlay.step++
-        var d, c, box, sk, names, lanes, unused, text
+        var c, box, d, row
+        var text = ""
         switch (overlay.step) {
         case 1:
+          overlay.check(overlay.cards("communal") === "house-style,screen-notes,weekly-report",
+                        "Sora's From communal: the communal folder's two and screen-notes (" + overlay.cards("communal") + ")")
+          overlay.check(overlay.cards("own") === "big-guide,docx,half-done,tea-timer",
+                        "her own: her folder's and Claude Code's, nothing of another agent's (" + overlay.cards("own") + ")")
           d = overlay.details()
-          sk = d && d.catalog ? d.catalog.skills : []
-          names = sk.map(function(x) { return x.source + ":" + x.name }).sort()
-          overlay.check(JSON.stringify(names) === JSON.stringify([
-            "claude-synced:docx", "claude-user:big-guide", "claude-user:weekly-report",
-            "communal:house-style", "communal:weekly-report", "sora:half-done", "sora:tea-timer"]),
-                        "Sora's tab lists her own, the communal and Claude Code's own, nothing real (" + names.join(", ") + ")")
-          var broken = sk.filter(function(x) { return x.name === "half-done" })[0]
-          overlay.check(broken && !broken.delivered && broken.problem.indexOf("description") >= 0,
-                        "a broken skill is listed, given to nobody, with why")
-          var hidden = sk.filter(function(x) { return x.source === "claude-user" && x.name === "weekly-report" })[0]
-          overlay.check(hidden && hidden.shadowed && !hidden.delivered, "Claude Code's weekly-report is hidden by the communal one")
-          unused = (overlay.skillsOf("skill_lanes") || {}).unused || []
-          // crash-notes: Hazel switched it off, and she is the only Codex
-          // agent; weekly-report: every Claude agent gets the communal one
-          // of that name instead.
-          overlay.check(unused.map(function(x) { return x.name }).sort().join() === "crash-notes,weekly-report",
-                        "Unused holds the ones nobody gets (" + unused.map(function(x) { return x.name }).join() + ")")
-          overlay.click(overlay.toggleOf(overlay.card(overlay.lane("sora"), "big-guide")), "big-guide → off for Sora")
+          row = d && d.catalog ? d.catalog.skill_cards.filter(function(x) { return x.name === "weekly-report" })[0] : null
+          overlay.check(row && row.source === "communal" && row.also.length === 1 && row.also[0].where === "~/.claude/skills",
+                        "one weekly-report card, the communal one, with Claude Code's copy under Also in")
+          overlay.check(overlay.named("fromCommunal") !== null && overlay.named("ownSkills") !== null,
+                        "two sections, and no lane of any other agent")
+          overlay.click(overlay.button(overlay.card(overlay.named("fromCommunal"), "screen-notes"), "Exclude"),
+                        "screen-notes → Exclude for Sora")
           break
         case 2:
-          overlay.check(JSON.stringify(overlay.soraOff()) === '["big-guide"]',
-                        "the switch wrote her skillsOff (" + JSON.stringify(overlay.soraOff()) + ")")
+          overlay.check(JSON.stringify(overlay.soraOff()) === '["screen-notes"]',
+                        "Exclude wrote her skillsOff (" + JSON.stringify(overlay.soraOff()) + ")")
           break
         case 3:
           break                         // the store saves, the catalog reads it again
         case 4:
-          unused = (overlay.skillsOf("skill_lanes") || {}).unused || []
-          var big = unused.filter(function(x) { return x.name === "big-guide" })[0]
-          overlay.check(big && big.copy_problem.indexOf("longer than") >= 0,
-                        "big-guide is Unused now, and says it is too long to copy")
-          overlay.click(overlay.button(overlay.card(overlay.lane("unused"), "crash-notes"), "Give a copy to Sora…"),
-                        "crash-notes → Give a copy to Sora")
+          c = overlay.card(overlay.named("fromCommunal"), "screen-notes")
+          overlay.check(c && String(c.status).indexOf("Excluded for Sora") === 0, "the card says it is excluded for her")
+          overlay.click(overlay.button(c, "Include again"), "screen-notes → Include again")
           break
         case 5:
-          box = overlay.confirmBox()
-          text = box ? box.title + JSON.stringify(box.lines) + box.warning : ""
-          overlay.check(box !== null, "giving a skill asks first")
-          overlay.check(String(text).indexOf(".agents/skills/crash-notes") >= 0 && String(text).indexOf("Sora only") >= 0,
-                        "the confirm says where it is copied from and who gets it")
-          probe.running = true
+          overlay.check(JSON.stringify(overlay.soraOff()) === "[]", "Include again took it off her list")
+          overlay.click(overlay.toggleOf(overlay.card(overlay.named("ownSkills"), "docx")), "docx → off for Sora")
           break
         case 6:
-          overlay.check(probe.code === 1, "nothing is copied before the answer")
-          overlay.click(overlay.button(overlay.confirmBox(), "Cancel"), "Cancel")
+          overlay.check(JSON.stringify(overlay.soraOff()) === '["docx"]', "her own switch writes the same list")
           break
         case 7:
-          overlay.check(overlay.confirmBox() === null, "Cancel closes it")
-          probe.running = true
           break
         case 8:
-          overlay.check(probe.code === 1, "Cancel copied nothing")
-          overlay.click(overlay.button(overlay.card(overlay.lane("unused"), "crash-notes"), "Give a copy to Sora…"),
-                        "Give a copy to Sora, again")
+          overlay.click(overlay.toggleOf(overlay.card(overlay.named("ownSkills"), "docx")), "docx → on again")
           break
         case 9:
-          overlay.click(overlay.button(overlay.confirmBox(), "Give a copy"), "Give a copy")
+          overlay.check(JSON.stringify(overlay.soraOff()) === "[]", "and back on")
+          overlay.goTo("communal", "", "skills")
           break
         case 10:
           break
         case 11:
-          probe.running = true
+          c = overlay.communal()
+          overlay.check(c && overlay.rowNames(c.communalRows) === "house-style,screen-notes,weekly-report",
+                        "Communal skills: the three every agent has (" + (c ? overlay.rowNames(c.communalRows) : "") + ")")
+          overlay.check(c && c.skillRows.length === 10, "All skills lists every skill an agent has (" + (c ? c.skillRows.length : 0) + ")")
+          row = c ? c.skillRows.filter(function(r) { return r.name === "deploy-site" })[0] : null
+          overlay.check(row && JSON.stringify(row.has) === '["Hazel"]' && row.lacks.length === 2 &&
+                        row.lacks[0].why === "Claude Code has no skill of this name",
+                        "deploy-site: Hazel has it, and it says why Theo and Sora do not")
+          overlay.type("tea")
           break
         case 12:
-          overlay.check(probe.code === 0, "Give a copy put crash-notes in Sora's folder")
-          sk = overlay.skillsOf("skills") || []
-          var mine = sk.filter(function(x) { return x.source === "sora" && x.name === "crash-notes" })[0]
-          overlay.check(mine && mine.delivered && mine.changed_outside === false,
-                        "it is hers, given, and not marked changed outside Settings")
-          overlay.click(overlay.toggleOf(overlay.card(overlay.lane("communal"), "house-style")), "house-style → off for Sora")
+          c = overlay.communal()
+          overlay.check(c && overlay.rowNames(c.shownRows) === "tea-timer", "the search finds tea-timer alone")
+          overlay.type("docx")
           break
         case 13:
-          overlay.check(overlay.soraOff().indexOf("house-style") >= 0, "a communal skill is switched off for her alone")
+          overlay.click(overlay.toggleOf(overlay.card(overlay.named("allSkills"), "docx")), "docx → into Communal")
           break
         case 14:
+          box = overlay.confirmBox()
+          text = box ? String(box.title) + JSON.stringify(box.lines) : ""
+          overlay.check(box !== null && box.title === "Add docx to Communal?", "adding asks first")
+          overlay.check(String(text).indexOf("Theo and Sora") >= 0 && String(text).indexOf("Hazel (Codex has no skill of this name)") >= 0 &&
+                        String(text).indexOf("No agent is given a copy") >= 0,
+                        "the confirm names who has it, who does not, and that nothing is copied")
+          overlay.check(overlay.grouping() === "{}", "nothing is written before the answer")
+          overlay.click(overlay.button(box, "Cancel"), "Cancel")
           break
         case 15:
-          overlay.click(overlay.toggleOf(overlay.card(overlay.lane("communal"), "house-style")), "house-style → on again")
+          overlay.check(overlay.confirmBox() === null && overlay.grouping() === "{}", "Cancel closes it and writes nothing")
+          overlay.click(overlay.toggleOf(overlay.card(overlay.named("allSkills"), "docx")), "docx → into Communal, again")
           break
         case 16:
-          overlay.check(overlay.soraOff().indexOf("house-style") < 0 && overlay.soraOff().indexOf("big-guide") >= 0,
-                        "and back on, leaving big-guide off (" + JSON.stringify(overlay.soraOff()) + ")")
-          overlay.goTo("communal", "", "skills")
+          overlay.click(overlay.button(overlay.confirmBox(), "Add to Communal"), "Add to Communal")
           break
         case 17:
+          overlay.check(overlay.grouping() === '{"add":["docx"],"remove":[]}', "it wrote communalSkills.add (" + overlay.grouping() + ")")
+          overlay.type("")
           break
         case 18:
-          c = overlay.find(overlay.content(), function(i) { return i.skillLanes !== undefined && i.takesLine !== undefined })
-          lanes = c ? c.skillLanes : []
-          overlay.check(lanes.length === 3, "Communal → Skills reads every agent's lane")
-          var hz = lanes.filter(function(l) { return l.id === "hazel" })[0]
-          overlay.check(hz && c.takesLine(hz).indexOf("told a list") >= 0, "and says Hazel (Codex) is told a list")
-          var hs = (c ? c.skillList : []).filter(function(x) { return x.name === "house-style" })[0]
-          overlay.check(hs && hs.gets.length === 3, "house-style goes to all three again (" + (hs ? hs.gets.join(", ") : "") + ")")
+          break
+        case 19:
+          c = overlay.communal()
+          row = c ? c.communalRows.filter(function(r) { return r.name === "docx" })[0] : null
+          overlay.check(row && row.added === true, "docx is communal now, marked added")
+          overlay.click(overlay.button(overlay.card(overlay.named("communalList"), "screen-notes"), "Remove…"),
+                        "screen-notes → Remove…")
+          break
+        case 20:
+          box = overlay.confirmBox()
+          text = box ? String(box.title) + JSON.stringify(box.lines) : ""
+          overlay.check(box !== null && box.title === "Remove screen-notes from Communal?", "Remove asks first")
+          overlay.check(String(text).indexOf("Nothing is switched off") >= 0 && String(text).indexOf("until you add it back") >= 0,
+                        "and says it goes back to each agent, still on, and stays out until added back")
+          overlay.click(overlay.button(box, "Remove"), "Remove")
+          break
+        case 21:
+          overlay.check(overlay.grouping() === '{"add":["docx"],"remove":["screen-notes"]}',
+                        "it wrote communalSkills.remove (" + overlay.grouping() + ")")
+          break
+        case 22:
+          break
+        case 23:
+          c = overlay.communal()
+          overlay.check(c && overlay.rowNames(c.communalRows) === "docx,house-style,weekly-report",
+                        "screen-notes is out of Communal (" + (c ? overlay.rowNames(c.communalRows) : "") + ")")
+          overlay.goTo("agentdetails", "sora", "tools")
+          break
+        case 24:
+          break
+        case 25:
+          overlay.check(overlay.cards("communal") === "docx,house-style,weekly-report",
+                        "back on Sora's tab, docx is under From communal (" + overlay.cards("communal") + ")")
+          d = overlay.details()
+          row = d && d.catalog ? d.catalog.skill_cards.filter(function(x) { return x.name === "screen-notes" })[0] : null
+          overlay.check(row && row.section === "own" && row.on === true && row.delivered === true,
+                        "and screen-notes is her own again, still on and given")
+          overlay.check(JSON.stringify(overlay.soraOff()) === "[]", "nothing was switched off for her")
           console.warn("PREVIEW DONE " + overlay.passed + " passed, " + overlay.failed + " failed")
           Qt.quit()
           break

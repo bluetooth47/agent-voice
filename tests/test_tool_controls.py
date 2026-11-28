@@ -606,9 +606,9 @@ def test_nothing_turns_a_found_tool_on_outside_a_confirm():
     # The only other writes: built-in chips, and askTool's off/inherit.
     assert sorted(handlers_writing(details, r"setAgentTool\(")) == [
         "function askTool", "onCommitted", "onConfirmed"]
-    # Two since M11: this one, and the skill import's (whose onConfirmed
-    # gives a copy, never a tool switch: test_a_skill_is_copied_in_only_from_its_confirm).
-    assert src.count("ToolConfirm {") == 2
+    # One again since M31, which took the skill import (M11's second
+    # ToolConfirm) off the page.
+    assert src.count("ToolConfirm {") == 1
 
 
 def test_the_tools_tab_writes_through_set_agent_tool_alone():
